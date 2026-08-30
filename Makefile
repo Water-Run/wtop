@@ -147,6 +147,10 @@ bundle-dir: native locales $(LUAI_STAMP)
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAI) -b --dir \
 		src/wtop.lua -o dist/wtop --lua '$(LUA)' --lua-prefix '$(LUA_PREFIX)' \
 		--target-os linux --max-deps 300 $(LOCALE_INCLUDES) -- --version
+	@find dist/wtop -type d -exec chmod 0755 {} +
+	@find dist/wtop -type f -exec chmod a+r {} +
+	@chmod 0755 dist/wtop/wtop
+	@find dist/wtop/.luai/native -type f -exec chmod 0755 {} +
 
 bundle-file: native locales $(LUAI_STAMP)
 	mkdir -p dist
@@ -157,6 +161,9 @@ bundle-file: native locales $(LUAI_STAMP)
 	mv -f dist/.wtop-onefile.next dist/wtop-onefile
 
 test-bundle-dir: resource-check-full bundle-dir
+	@test -z "$$(find dist/wtop -type d ! -perm -005 -print -quit)"
+	@test -z "$$(find dist/wtop -type f ! -perm -004 -print -quit)"
+	@test -x dist/wtop/wtop
 	@WTOP_EXECUTABLE='$(CURDIR)/dist/wtop/wtop' WTOP_ROOT='$(CURDIR)' python3 tests/pty_smoke.py
 
 test-bundle-file: resource-check-full bundle-file
