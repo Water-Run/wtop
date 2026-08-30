@@ -57,10 +57,13 @@ equal(chinese:t("process.count", { count = 8 }), "8 个进程", "Chinese plural"
 local traditional = assert(I18n.new({ locale = "zh-TW" }))
 equal(traditional:t("tabs.overview"), "總覽", "preview translation")
 equal(traditional:t("actions.cancel"), "取消", "complete preview translation")
+equal(traditional:t("widgets.cpu_identity"), "CPU 識別資訊", "new preview translation")
+equal(traditional:t("compute.cpu_family", { value = "x" }), "标识：x",
+  "new preview message fallback")
 local diagnostics = traditional:diagnostics()
 equal(table.concat(diagnostics.fallback_chain, ","), "zh-TW,zh-CN,en-US", "fallback chain")
 equal(diagnostics.status, "preview", "diagnostic status")
-equal(diagnostics.missing_messages, 0, "complete preview catalog")
+equal(diagnostics.missing_messages, 5, "preview catalog coverage")
 
 local regional_fallback = assert(I18n.new({ locale = "fr-CA" }))
 equal(regional_fallback:locale(), "fr-FR", "language alias fallback")

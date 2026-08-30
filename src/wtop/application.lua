@@ -1,6 +1,7 @@
 local Engine = require("wtop.engine")
 local Export = require("wtop.export")
 local Config = require("wtop.config")
+local Privilege = require("wtop.privilege")
 local json = require("wtop.format.json")
 local native = require("wtop.native")
 
@@ -9,9 +10,18 @@ local M = {}
 local function resolve_options(options)
     options = options or {}
     if type(options) ~= "table" then error("application options must be a table", 2) end
-    local file_config, status = Config.load()
+    local privilege = type(options.privilege) == "table" and options.privilege
+        or Privilege.identity()
+    local file_config, status
+    if privilege.via_sudo then
+        file_config = Config.defaults()
+        status = { state = "default", reason = "sudo session ignores file configuration" }
+    else
+        file_config, status = Config.load()
+    end
     local resolved = Config.resolve(options, file_config)
     resolved.config_status = status
+    resolved.privilege = privilege
     return resolved
 end
 
@@ -56,6 +66,7 @@ function M.snapshot(options)
     local result = Export.snapshot(collected.snapshot, {
         process_limit = 50,
         configuration = resolved.config_status,
+        privilege = resolved.privilege,
     })
     result.capabilities = Export.capabilities(collected.capabilities)
     write_json(result)
@@ -70,6 +81,7 @@ function M.agent(options)
         workload_limit = 5,
         configuration = resolved.config_status,
         capabilities = collected.capabilities,
+        privilege = resolved.privilege,
     })
     write_json(result)
     return 0

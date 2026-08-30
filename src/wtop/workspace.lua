@@ -69,6 +69,7 @@ local function build_pages(tabs, i18n)
             widget("gpu_overview", "metric", translated(i18n, "metrics.gpu", "GPU"), 65),
             widget("frequency_overview", "metric", translated(i18n, "metrics.frequency", "Frequency"), 62),
             widget("temperature_overview", "metric", translated(i18n, "metrics.temperature", "Temperature"), 60),
+            widget("power_overview", "metric", translated(i18n, "metrics.power", "Power"), 58),
         }),
         processes = page("processes", tabs, {
             widget("process_table", "table", translated(i18n, "widgets.processes_cpu", "Processes - CPU descending"),
@@ -76,6 +77,8 @@ local function build_pages(tabs, i18n)
         }),
         compute = page("compute", tabs, {
             widget("cpu_total", "metric", translated(i18n, "widgets.cpu_utilization", "CPU utilization"), 100),
+            widget("cpu_identity", "text", translated(i18n, "widgets.cpu_identity", "CPU identity"),
+                96, { width = 42, height = 9 }),
             widget("load_summary", "text", translated(i18n, "widgets.load_average", "Load average"),
                 80, { width = 22, height = 6 }),
             widget("memory_detail", "text", translated(i18n, "widgets.memory_detail", "Memory detail"),
@@ -86,6 +89,8 @@ local function build_pages(tabs, i18n)
                 70, { width = 58, height = 10 }),
             widget("sensor_table", "table", translated(i18n, "widgets.sensors", "Sensors"),
                 65, { width = 56, height = 10 }),
+            widget("power_table", "table", translated(i18n, "widgets.power_zones", "Power zones"),
+                64, { width = 62, height = 10 }),
         }),
         storage = page("storage", tabs, {
             widget("storage_summary", "metric", translated(i18n, "widgets.storage_throughput", "Storage throughput"), 100),

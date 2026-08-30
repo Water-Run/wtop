@@ -28,7 +28,7 @@ function Page.new(specification)
     widgets = specification.widgets or {},
     tabs = specification.tabs or {},
     registry = registry,
-    theme_name = specification.theme or "water-dark",
+    theme_name = specification.theme or Theme.DEFAULT,
     header = specification.header ~= false,
     footer = specification.footer ~= false,
     brand = specification.brand,

@@ -1,5 +1,6 @@
 local json = require("wtop.format.json")
 local native = require("wtop.native")
+local Privilege = require("wtop.privilege")
 local system = require("wtop.system")
 local version = require("wtop.version")
 
@@ -31,9 +32,8 @@ function M.collect(options)
     options = options or {}
     if type(options) ~= "table" then error("diagnose options must be a table", 2) end
     local uname = native.uname()
-    local real_uid, effective_uid = native.uid()
-    if type(real_uid) ~= "number" then real_uid = nil end
-    if type(effective_uid) ~= "number" then effective_uid = nil end
+    local privilege = type(options.privilege) == "table" and options.privilege
+        or Privilege.identity()
     local report = {
         application = {
             name = version.name,
@@ -47,8 +47,14 @@ function M.collect(options)
             reason = native.error,
         },
         identity = {
-            uid = real_uid,
-            effective_uid = effective_uid,
+            mode = privilege.mode,
+            uid = privilege.uid,
+            effective_uid = privilege.effective_uid,
+            original_uid = privilege.original_uid,
+            root = privilege.root == true,
+            elevated = privilege.elevated == true,
+            via_sudo = privilege.via_sudo == true,
+            requested = privilege.requested == true,
         },
         terminal = {
             stdin_tty = native.isatty(0),
@@ -56,9 +62,13 @@ function M.collect(options)
         },
         sources = {
             proc_stat = probe_file("/proc/stat"),
+            proc_cpuinfo = probe_file("/proc/cpuinfo"),
             proc_meminfo = probe_file("/proc/meminfo"),
             proc_pressure = probe_file("/proc/pressure/cpu"),
             sys_block = probe_file("/sys/block"),
+            sys_cpufreq = probe_file("/sys/devices/system/cpu/cpufreq"),
+            sys_hwmon = probe_file("/sys/class/hwmon"),
+            sys_powercap = probe_file("/sys/class/powercap"),
             drm = probe_file("/sys/class/drm"),
             cgroup_v2 = probe_file("/sys/fs/cgroup/cgroup.controllers"),
             perf_pmu = probe_file("/sys/bus/event_source/devices"),
@@ -114,6 +124,8 @@ function M.run(options)
         " ", tostring(report.platform.machine or ""), "\n")
     io.write("  Native:   ", report.native.state, " (", tostring(report.native.version), ")\n")
     io.write("  UID:      ", tostring(report.identity.effective_uid), "\n")
+    io.write("  Access:   ", tostring(report.identity.mode),
+        report.identity.via_sudo and " (sudo)" or "", "\n")
     io.write("  TTY:      stdin=", tostring(report.terminal.stdin_tty),
         " stdout=", tostring(report.terminal.stdout_tty), "\n")
     print_section("Sources", report.sources)

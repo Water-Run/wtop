@@ -27,6 +27,8 @@ if [ -x "$prefix/bin/lua" ]; then
     exit 0
 fi
 
+"$project_dir/tools/check_resources.sh" build
+
 mkdir -p "$project_dir/.tools/downloads" "$project_dir/.tools/src"
 
 if [ ! -f "$archive" ]; then
@@ -55,7 +57,17 @@ if [ ! -f "$source_dir/Makefile" ]; then
     tar -xzf "$archive" -C "$project_dir/.tools/src"
 fi
 
-jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
-make -C "$source_dir" -j "$jobs" linux
+wtop_detected_jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+wtop_build_jobs=${WTOP_BUILD_JOBS:-2}
+case "$wtop_build_jobs" in
+    ''|*[!0-9]*|0)
+        echo "wtop: WTOP_BUILD_JOBS must be a positive integer" >&2
+        exit 2
+        ;;
+esac
+if [ "$wtop_build_jobs" -gt "$wtop_detected_jobs" ]; then
+    wtop_build_jobs=$wtop_detected_jobs
+fi
+make -C "$source_dir" -j "$wtop_build_jobs" linux
 make -C "$source_dir" install INSTALL_TOP="$prefix"
 "$prefix/bin/lua" -e 'assert(_VERSION == "Lua 5.5"); print(_VERSION)'

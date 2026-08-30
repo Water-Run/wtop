@@ -11,6 +11,7 @@ Engine.__index = Engine
 
 local HISTORY_KEYS = {
     "cpu",
+    "cpu_power",
     "memory",
     "pressure",
     "disk_read",
@@ -32,11 +33,13 @@ local DEFAULT_HISTORY_CAPACITY = math.ceil(
     HISTORY_WINDOW_MS / UpdateFrequency.MIN_INTERVAL_MS) + 16
 
 local INTERVAL_FLOORS_MS = {
+    cpu_info = 30000,
     process = 1000,
     connections = 2000,
     gpu = 500,
     cpufreq = 1000,
     hwmon = 1000,
+    powercap = 1000,
     mounts = 5000,
     cgroup = 2000,
 }
@@ -46,6 +49,7 @@ local INTERVAL_FLOORS_MS = {
 -- making a system monitor consume the resources it is meant to observe.
 local BACKGROUND_INTERVALS_MS = {
     cpu = 2000,
+    cpu_info = 60000,
     memory = 5000,
     pressure = 2000,
     disk = 3000,
@@ -55,6 +59,7 @@ local BACKGROUND_INTERVALS_MS = {
     gpu = 5000,
     cpufreq = 5000,
     hwmon = 5000,
+    powercap = 5000,
     mounts = 30000,
     cgroup = 10000,
 }
@@ -62,10 +67,13 @@ local BACKGROUND_INTERVALS_MS = {
 local TAB_COLLECTORS = {
     overview = {
         cpu = true, memory = true, pressure = true, disk = true,
-        network = true, gpu = true, cpufreq = true, hwmon = true,
+        network = true, gpu = true, cpufreq = true, hwmon = true, powercap = true,
     },
     processes = { cpu = true, memory = true, process = true },
-    compute = { cpu = true, memory = true, pressure = true, cpufreq = true, hwmon = true },
+    compute = {
+        cpu = true, cpu_info = true, memory = true, pressure = true,
+        cpufreq = true, hwmon = true, powercap = true,
+    },
     storage = { disk = true, mounts = true },
     network = { network = true, connections = true },
     gpu = { gpu = true, hwmon = true },
@@ -85,11 +93,14 @@ local TAB_WIDGET_COLLECTORS = {
         pressure_overview = { "pressure" }, disk_overview = { "disk" },
         network_overview = { "network" }, gpu_overview = { "gpu" },
         frequency_overview = { "cpufreq" }, temperature_overview = { "hwmon" },
+        power_overview = { "powercap" },
     },
     processes = { process_table = { "cpu", "memory", "process" } },
     compute = {
-        cpu_total = { "cpu" }, load_summary = { "cpu" }, memory_detail = { "memory" },
+        cpu_total = { "cpu" }, cpu_identity = { "cpu_info" },
+        load_summary = { "cpu" }, memory_detail = { "memory" },
         core_table = { "cpu" }, cpufreq_table = { "cpufreq" }, sensor_table = { "hwmon" },
+        power_table = { "powercap" },
     },
     storage = {
         storage_summary = { "disk" }, disk_table = { "disk" }, smart_hint = {},
@@ -284,8 +295,8 @@ function Engine.new(options)
     })
     local collectors = options.collectors or Collectors.new_all(options.collector_options)
     local ordered = {
-        "cpu", "memory", "pressure", "disk", "network", "connections", "process", "gpu",
-        "cpufreq", "hwmon", "mounts", "cgroup",
+        "cpu", "cpu_info", "memory", "pressure", "disk", "network", "connections",
+        "process", "gpu", "cpufreq", "hwmon", "powercap", "mounts", "cgroup",
     }
     local foreground_floors = {}
     local background_targets = {}
@@ -421,6 +432,7 @@ function Engine:_record_history(snapshot, completed)
         })
     end
     record("cpu", "cpu", cpu)
+    record("cpu_power", "powercap", snapshot.power and snapshot.power.total_power_watts)
     record("memory", "memory", memory)
     record("pressure", "pressure", pressure_value(snapshot.pressure))
     record("disk_read", "disk", sum_devices(disks, "read_bytes_per_second"))

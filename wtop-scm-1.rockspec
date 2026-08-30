@@ -19,7 +19,7 @@ description = {
     ]],
     homepage = "https://github.com/Water-Run/wtop",
     issues_url = "https://github.com/Water-Run/wtop/issues",
-    license = "MPL-2.0",
+    license = "EUPL-1.2",
     maintainer = "WaterRun <linzhangrun49@gmail.com>",
     labels = {
         "linux",

@@ -40,6 +40,11 @@ assert(Sysfs.hex_id(" 0x10de \n") == 0x10de)
 assert(Sysfs.hex_id("0x10de trailing") == nil)
 assert(Sysfs.millidegrees_to_celsius(math.huge) == nil)
 assert(System.find_executable("tool", "relative:/also-relative") == nil)
+assert(System.default_executable_path(0, function() return "/tmp/untrusted" end)
+    == System.ROOT_EXECUTABLE_PATH,
+    "root helper lookup must ignore the caller's PATH")
+assert(System.default_executable_path(1000, function() return "/opt/trusted/bin" end)
+    == "/opt/trusted/bin")
 assert(System.read_file("/proc/self/stat", 0) == nil)
 assert(System.read_file("bad\0path", 16) == nil)
 
@@ -71,6 +76,8 @@ local fs_entry, fs_error, fs_truncated = FS.default:list("/proc/self", 1)
 assert(fs_entry and #fs_entry == 1 and fs_error == nil and fs_truncated == true)
 assert(type(assert(native.readlink("/proc/self/exe"))) == "string")
 assert(type(assert(native.readfile("/proc/self/stat", 65536))) == "string")
+assert(type(assert(native.readfile("/sys/devices/system/cpu/online", 256))) == "string",
+    "bounded reader must use generated sysfs content instead of its synthetic st_size")
 local special_content, special_error, special_errno = native.readfile("/dev/null", 16)
 assert(special_content == nil and type(special_error) == "string" and special_errno == 22,
     "bounded reader must reject devices/FIFOs instead of blocking")
@@ -92,6 +99,25 @@ assert(not pcall(native.isatty, -1))
 assert(not pcall(native.poll, 60001))
 assert(not pcall(native.write, "", 2147483648))
 assert(not pcall(native.mkdir, "/tmp/wtop-invalid-mode", 4294967296))
+assert(not pcall(native.execve, {}, {}))
+assert(not pcall(native.execve, { "relative" }, {}))
+assert(not pcall(native.execve, { "/does/not/run" }, { "INVALID-NAME=value" }))
+assert(not pcall(native.execve, { "/does/not/run\0suffix" }, {}))
+assert(not pcall(native.execve, { "/does/not/run", 7 }, {}),
+    "execve must reject numeric argv entries instead of coercing them to strings")
+assert(not pcall(native.execve, { "/does/not/run" }, { 7 }),
+    "execve must reject numeric environment entries instead of coercing them to strings")
+local excessive_argv = { "/does/not/run" }
+for index = 2, 513 do excessive_argv[index] = "x" end
+assert(not pcall(native.execve, excessive_argv, {}))
+local excessive_environment = {}
+for index = 1, 65 do excessive_environment[index] = "V" .. index .. "=x" end
+assert(not pcall(native.execve, { "/does/not/run" }, excessive_environment))
+assert(not pcall(native.execve,
+    { "/does/not/run", string.rep("x", 1024 * 1024) }, {}),
+    "execve must enforce the shared argv/environment byte budget before execution")
+assert(not pcall(native.execve, { "/does/not/run" },
+    { "VALUE=" .. string.rep("x", 1024 * 1024) }))
 
 local self_stat_file = assert(io.open("/proc/self/stat", "rb"))
 local self_stat = assert(Parsers.process_stat(assert(self_stat_file:read("*a"))))

@@ -2,7 +2,30 @@
 local Theme = {}
 Theme.__index = Theme
 
+-- Lua's official logo defines its planet colour as RGB (0, 0, 0.5), or
+-- #000080. The default palette anchors its background to that exact blue and
+-- lifts interactive accents enough to remain readable against it.
+local LUA_BLUE = "#000080"
+local DEFAULT_NAME = "lua-blue"
+
 local palettes = {
+  ["lua-blue"] = {
+    ["surface.base"] = LUA_BLUE,
+    ["surface.raised"] = "#070743",
+    ["surface.focus"] = "#121B62",
+    ["surface.header"] = "#0B1252",
+    ["surface.row_alt"] = "#090948",
+    ["surface.selected"] = "#173C99",
+    ["text.primary"] = "#F3F6FF",
+    ["text.muted"] = "#ABB7D8",
+    ["text.inverse"] = "#020420",
+    ["accent.primary"] = "#80AFFF",
+    ["metric.good"] = "#4CD8B1",
+    ["metric.warn"] = "#FFD166",
+    ["metric.critical"] = "#FF6B88",
+    ["chart.secondary"] = "#C39BFF",
+    ["border.subtle"] = "#354C9C",
+  },
   ["water-dark"] = {
     ["surface.base"] = "#080C12",
     ["surface.raised"] = "#0E151F",
@@ -215,7 +238,7 @@ function Theme.new(name_or_options, capabilities)
     end
     options = {name = name_or_options, capabilities = capabilities}
   end
-  local name = options.name or "water-dark"
+  local name = options.name or DEFAULT_NAME
   local palette = options.palette or palettes[name]
   if not palette then
     error("unknown theme: " .. tostring(name), 2)
@@ -313,6 +336,8 @@ function Theme.available()
 end
 
 Theme.palettes = palettes
+Theme.DEFAULT = DEFAULT_NAME
+Theme.LUA_BLUE = LUA_BLUE
 Theme.nearest16 = nearest16
 Theme.nearest256 = nearest256
 Theme.colour_mode = colour_mode

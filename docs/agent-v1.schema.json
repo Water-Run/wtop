@@ -11,6 +11,7 @@
     "sequence",
     "captured_unix_ns",
     "captured_monotonic_ns",
+    "privilege",
     "overall",
     "metrics",
     "signals",
@@ -34,6 +35,20 @@
     "sequence": { "type": "integer", "minimum": 0 },
     "captured_unix_ns": { "type": "integer", "minimum": 0 },
     "captured_monotonic_ns": { "type": "integer", "minimum": 0 },
+    "privilege": {
+      "type": "object",
+      "properties": {
+        "mode": { "enum": ["user", "root", "unknown"] },
+        "uid": { "type": "integer", "minimum": 0 },
+        "effective_uid": { "type": "integer", "minimum": 0 },
+        "original_uid": { "type": "integer", "minimum": 0 },
+        "root": { "type": "boolean" },
+        "elevated": { "type": "boolean" },
+        "via_sudo": { "type": "boolean" },
+        "requested": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
     "overall": {
       "type": "object",
       "required": ["state", "signal_count"],
@@ -45,7 +60,7 @@
     },
     "metrics": {
       "type": "object",
-      "required": ["cpu", "memory", "pressure", "storage", "network", "gpu", "processes"],
+      "required": ["cpu", "memory", "pressure", "storage", "network", "gpu", "power", "sensors", "processes"],
       "properties": {
         "cpu": { "$ref": "#/$defs/metricObject" },
         "memory": { "$ref": "#/$defs/metricObject" },
@@ -53,6 +68,8 @@
         "storage": { "$ref": "#/$defs/metricObject" },
         "network": { "$ref": "#/$defs/metricObject" },
         "gpu": { "$ref": "#/$defs/metricObject" },
+        "power": { "$ref": "#/$defs/metricObject" },
+        "sensors": { "$ref": "#/$defs/metricObject" },
         "processes": { "$ref": "#/$defs/metricObject" }
       },
       "additionalProperties": true
@@ -75,13 +92,14 @@
     },
     "top": {
       "type": "object",
-      "required": ["processes", "disks", "interfaces", "workloads", "gpus"],
+      "required": ["processes", "disks", "interfaces", "workloads", "gpus", "sensors"],
       "properties": {
         "processes": { "type": "array", "maxItems": 10, "items": { "type": "object" } },
         "disks": { "type": "array", "maxItems": 5, "items": { "type": "object" } },
         "interfaces": { "type": "array", "maxItems": 5, "items": { "type": "object" } },
         "workloads": { "type": "array", "maxItems": 5, "items": { "type": "object" } },
-        "gpus": { "type": "array", "maxItems": 5, "items": { "type": "object" } }
+        "gpus": { "type": "array", "maxItems": 5, "items": { "type": "object" } },
+        "sensors": { "type": "array", "maxItems": 50, "items": { "type": "object" } }
       },
       "additionalProperties": true
     },

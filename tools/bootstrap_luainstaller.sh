@@ -23,6 +23,8 @@ if [ -z "$local_rockspec" ] && [ -x "$luai" ] && [ -f "$installed_rockspec" ] \
     exit 0
 fi
 
+"$project_dir/tools/check_resources.sh" build
+
 if [ ! -x "$lua_prefix/bin/lua" ]; then
     "$project_dir/tools/bootstrap_lua.sh"
 fi

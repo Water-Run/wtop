@@ -1,152 +1,108 @@
-# wtop 实施计划与当前状态
+# wtop Implementation Plan and Current Status
 
-## 1. 定位
+## 1. Positioning
 
-wtop（WaterRun's top）是 Linux-only 的现代 TUI 性能工作台。目标是把
-“现在发生了什么”“为什么变慢”“哪个进程或设备相关”和“可以安全做什么”
-放进同一个响应式界面。
+wtop (WaterRun's top) is a modern Linux-only TUI performance workbench. Its goal is to put “what is happening now,” “why is it slow,” “which process or device is involved,” and “what can be done safely” into one responsive interface.
 
-当前版本是 `0.1.0-dev` development preview，不是已经完成的 0.1 release。
-首条 CPU/内存/PSI → Snapshot → ViewModel → responsive TUI → luainstaller
-纵向切片已经工作；后续重点是补齐功能、硬件后端和发布证据，而不是继续把
-设计文档当作现状。
+The current version is the `0.1.0-dev` development preview, not a completed 0.1 release. The first vertical slice—CPU/memory/PSI → Snapshot → ViewModel → responsive TUI → luainstaller—is operational. Current work focuses on features, hardware backends, and release evidence instead of presenting design documents as implemented behavior. CPU/GPU identity and telemetry are becoming substantially richer, but the project does not claim parity with CPU-Z, GPU-Z, AIDA64, or HWiNFO.
 
-## 2. 状态定义
+## 2. Status Definitions
 
-- **已实现**：存在运行时代码和自动测试，当前开发主机可执行。
-- **部分实现**：基础路径可用，但 UI、provider、权限或平台矩阵不完整。
-- **计划**：设计文档中存在，当前运行时尚未交付。
+- **Implemented**: runtime code and automated tests exist, and the feature executes on the current development host.
+- **Partially implemented**: the basic path works, but UI, provider, permission, or platform coverage is incomplete.
+- **Planned**: described by design, but not delivered by the current runtime.
 
-“已实现”不等于已经通过所有发行版、内核、终端或真实硬件验证。
+“Implemented” does not imply validation across every distribution, kernel, terminal, or physical hardware configuration.
 
-## 3. 原始需求映射
+## 3. Original-Requirement Mapping
 
-| 原始要求 | 当前状态 | 下一阶段缺口 |
+| Original requirement | Current status | Next-stage gap |
 | --- | --- | --- |
-| 美观的现代 TUI | 已实现自有 cell grid/diff、四种主题、颜色降级和响应式页面 | 视觉打磨、完整 overlay、更多终端矩阵 |
-| 不同比例窗口适配 | 已覆盖 tiny、窄高、宽矮、宽高及四种 PTY 尺寸 | 连续 resize、tmux/SSH、更多极端尺寸 |
-| 可自定义布局 | 固定 Widget 可四向移动、调整 split 比例、撤销/重做，并按 schema v2 持久化 | Widget 增删/替换、拖拽、导入/导出、恢复/备份 |
-| 多选项卡 | Overview、Processes、Compute、Storage & I/O、Network、GPU、Workloads、Insights 八个固定标签可用 | 标签增删/重命名/排序和多工作区 |
-| i18n | 安全 YAML、内置 plural rule、formatter、生成 registry、主 TUI 字符串、逐 key 回退和有界 XDG 用户 catalog 加载已实现 | 技术 reason 本地化、伪语言、RTL |
-| 更强性能监控 | CPU、内存、PSI、磁盘、挂载点、网络/socket、进程、CPUFreq、hwmon、cgroup v2 和 DRM/sysfs GPU 已实现 | NUMA/RAPL、路由、systemd/容器语义、线程/PSS 与跨资源关联 |
-| 深度查看 | 可选设备 SMART/NVMe、实验性 `perf stat` RAM PMU 采样、sshd Inspector 可用 | 统一资源导航、完整 session/event provider、PMU 平台映射和校验 |
-| GPU | DRM 设备、AMD sysfs/DPM、Intel i915/xe 频率、DRM fdinfo 进程表与 hwmon 温度/功率关联已实现 | client/region 钻取、NVML、AMD SMI、Level Zero、MIG/tile |
-| 性能释放/动作 | 诊断优先；TUI 只暴露带 PID 身份复验的 `SIGTERM` | 明确定义产品范围，再决定 STOP/CONT、renice 或调优协议 |
-| Linux Only | rockspec、Make/bootstrap、C 编译期和统一 CLI 入口拒绝非 Linux，数据层只实现 Linux | 最低内核/发行版基线 |
-| 使用 Lua | 业务、采集、UI、配置和 i18n 使用 PUC Lua | 保持 5.4 语法子集与 5.5 发布 ABI |
-| LuaRocks 安装 | Linux-only `scm-1` rockspec、隔离安装与已安装 CLI smoke 已实现 | 发布版本化 rock |
-| luainstaller | onedir/onefile、显式 locale include、锁定 payload 校验和 `make checksums` 已存在 | 多架构/libc、最终候选重建、SBOM/signing |
+| Attractive modern TUI | Custom cell grid/diff, five themes, color fallback, and responsive pages are implemented | Visual refinement, complete overlays, broader terminal matrix |
+| Different window aspect ratios | tiny, narrow-tall, wide-short, wide-tall, and multiple PTY dimensions are covered | Continuous resize, tmux/SSH, more extreme dimensions |
+| Customizable layout | Fixed widgets can move in four directions, adjust split ratios, undo/redo, and persist through schema v2 | Add/remove/replace widgets, drag-and-drop, import/export, recovery/backup |
+| Multiple tabs | Eight fixed tabs—Overview, Processes, Compute, Storage & I/O, Network, GPU, Workloads, Insights—work | Add/remove/rename/reorder tabs and multiple workspaces |
+| i18n | Safe YAML, built-in plural rules, formatter, generated registry, main-TUI messages, per-key fallback, and bounded XDG user-catalog loading are implemented | Technical-reason localization, pseudolocale, RTL |
+| Stronger performance monitoring | CPU usage and identity/topology/cache, memory, PSI, disk, mounts, network/sockets, processes, CPUFreq, hwmon, powercap, cgroup v2, and DRM/sysfs GPU are implemented | NUMA, routes, systemd/container semantics, threads/PSS, cross-resource links |
+| Deep inspection | Selectable SMART/NVMe, experimental `perf stat` RAM PMU sampling, and sshd Inspectors work | Unified resource navigation, complete session/event providers, PMU platform mapping and validation |
+| GPU | DRM devices, PCI IDs/link metadata, AMD sysfs/DPM, Intel i915/xe frequencies, DRM fdinfo utilization/process tables, and hwmon temperature/power joins are implemented | Client/region drill-down, NVML, AMD SMI, Level Zero, MIG/tile |
+| Performance release/actions | Diagnostics first; the TUI exposes only `SIGTERM` with PID identity revalidation | Define product scope before adding STOP/CONT, renice, or tuning protocols |
+| Linux Only | The rockspec, Make/bootstrap, C compile gate, and unified CLI entry reject non-Linux platforms; the data layer is Linux-specific | Minimum kernel/distribution baseline |
+| Lua | Business logic, collection, UI, configuration, and i18n use PUC Lua | Retain the Lua 5.4 syntax subset and Lua 5.5 release ABI |
+| LuaRocks installation | Linux-only `scm-1` rockspec, isolated installation, and installed-CLI smoke paths exist | Versioned release rock |
+| luainstaller | onedir/onefile, explicit locale inclusion, locked payload validation, and `make checksums` exist | Multi-architecture/libc, final-candidate rebuild, SBOM/signing |
 
-## 4. 当前实现基线
+## 4. Current Implementation Baseline
 
-### 4.1 运行时
+### 4.1 Runtime
 
-- PUC Lua 5.5.1 是发布 toolchain；LuaJIT 不受支持。
-- 源码避免 5.5 独有语法，纯 Lua 单元测试同时跑 5.4。
-- 项目内 `wtop_native.so` 使用 C17 和 Lua C API，当前承担：
-  - raw terminal、poll、resize/退出信号与恢复；
-  - monotonic/realtime clock；
-  - 绝对 argv 子进程、最小环境、进程组清理、取消、timeout 和输出上限；
-  - Linux 文件系统辅助、原子写入、pidfd identity signal、wcwidth 等窄接口；
-  - nonblocking/no-follow 的有界 regular-file reader：默认 4 MiB、显式最大
-    64 MiB，拒绝最终 symlink、设备、FIFO 和超限输入。
-- 当前没有 `luv`、第三方 `terminal.lua` 或其他运行时 LuaRock 依赖。
-- native 默认以 `-O2 -g0` 构建，且 Makefile 是模块 target 的依赖，构建规则变化会
-  触发重编译。
-- Scheduler 使用单线程 deadline 调度；进程/CPUFreq/hwmon 采样下限
-  1000 ms，socket/cgroup 下限 2000 ms，挂载点下限 5000 ms，GPU 下限
-  500 ms，失败任务退避。非当前页面使用更慢的背景间隔。
+- PUC Lua 5.5.1 is the release toolchain; LuaJIT is unsupported.
+- Source avoids 5.5-only syntax, and pure-Lua unit tests also run under 5.4.
+- The repository's `wtop_native.so` uses C17 and the Lua C API. It currently handles:
+  - raw terminal, poll, resize/exit signals, and restoration;
+  - monotonic/realtime clocks;
+  - absolute-argv subprocesses, minimal environment, process-group cleanup, cancellation, timeout, and output limits;
+  - Linux filesystem helpers, atomic writes, pidfd identity signaling, `wcwidth`, UID queries, and `execve`;
+  - bounded nonblocking/no-follow regular-file reading: 4 MiB by default, explicit maximum 64 MiB, with final symlinks, devices, FIFOs, and oversized input rejected while regular-file-shaped procfs/sysfs pseudo-files remain supported.
+- There are currently no runtime `luv`, third-party `terminal.lua`, or other LuaRock dependencies.
+- Native builds default to `-O2 -g0`; the Makefile is also a module-target dependency, so build-rule changes trigger recompilation.
+- The Scheduler uses single-threaded deadline scheduling. Process/CPUFreq/hwmon floors are 1000 ms, socket/cgroup floors 2000 ms, mount floors 5000 ms, and GPU floors 500 ms, with failed-task backoff. Inactive pages use slower background intervals.
+- Resource-sensitive build/test entry points run a preflight guard that evaluates available memory, swap headroom, memory PSI, and load per CPU. Guarded Make validation targets are declared nonparallel; an unhealthy host is refused rather than adding pressure after an OOM event.
 
 ### 4.2 UI
 
-- 标签：Overview、Processes、Compute、Storage & I/O、Network、GPU、
-  Workloads、Insights。
-- Widget：metric、sparkline、table、text、panel、tab/status bar。
-- 虚拟 cell grid 按显示列宽绘制，diff renderer 只输出变化 runs。
-- 支持键盘、基础鼠标、bracketed paste 解码、resize 和终端能力降级。
-- 当前布局编辑在同一页面内对固定 Widget 执行四向移动、split 比例
-  调整和最多 50 步的每页撤销/重做。不能增删或替换 Widget。
-- 响应式默认几何会按实际矩形选择信息最丰富的可用 form；紧凑窗口先换轴/重排，
-  空间仍不足才保留焦点或高优先级分支。standard 最多两列、wide-short 最多四列、
-  wide-tall 最多三列。实际 placement 同时驱动 ViewModel 和 collector
-  可见性；隐藏表不建模，无其他可见 Widget 需要的 collector 转背景间隔。
-- 进程页已提供文字搜索、固定排序循环、PPID 树、选中项详情和确认
-  `SIGTERM`；它仍不是完整的 htop 式进程浏览器。
+- Tabs: Overview, Processes, Compute, Storage & I/O, Network, GPU, Workloads, Insights.
+- Widgets: metric, sparkline, table, text, panel, tab/status bar.
+- A virtual cell grid draws by display-column width; the diff renderer emits only changed runs.
+- Keyboard, basic mouse, bracketed-paste decoding, resize, and terminal-capability fallback are supported.
+- Current layout editing moves fixed widgets in four directions, adjusts split ratios, and stores up to 50 undo/redo steps per page. Widgets cannot be added, removed, or replaced.
+- Responsive default geometry selects the richest available form for the actual rectangle. Compact windows first switch axes/reflow, then retain the focused or higher-priority branch only when space is still insufficient. Standard uses up to two columns, wide-short up to four, and wide-tall up to three. Actual placement drives both ViewModel and collector visibility: hidden tables are not modeled, and collectors unneeded by any visible widget fall back to background intervals.
+- The process page provides text search, a fixed sort cycle, PPID tree, selected-item details, and confirmed `SIGTERM`. It is not yet a complete htop-style process browser.
+- An elevated invocation is identified in status/diagnostic output. Direct `sudo wtop` and explicit `--sudo`/`--elevate` re-execution are supported without a resident root daemon.
 
-### 4.3 数据
+### 4.3 Data
 
-- CPU：`/proc/stat`、`/proc/loadavg`。
-- 内存：`/proc/meminfo`、`/proc/vmstat`。
-- 压力：`/proc/pressure/{cpu,memory,io}`。
-- 磁盘：`/proc/diskstats` 和 sysfs block size。
-- 网络：`/proc/net/dev` 和 `/sys/class/net`。
-- 连接：`/proc/net/{tcp,tcp6,udp,udp6,unix}`；只在 Network 页连接表实际
-  placement 可见时执行有界 `/proc/<pid>/fd` owner 扫描。
-- 进程：`/proc/<pid>/stat`、status；详情接口可读取 cmdline/io/cgroup。默认
-  collector 上限 8192 个 PID，TUI 模型上限 2048 行。
-- CPU 频率：cpufreq policy sysfs。
-- 传感器：`/sys/class/hwmon`；挂载点：`/proc/self/mountinfo` 和 `statvfs`。
-  网络文件系统、autofs、FUSE/`fuse.*`、fuseblk 与 virtiofs 默认跳过可能阻塞的
-  statvfs，只保留 mountinfo 元数据并标 partial/estimated。其余默认原生调用共享
-  50 ms 后续调用预算，但已进入的单次 statvfs 不可抢占。
-- Workloads：`/sys/fs/cgroup` 下的 cgroup v2 文件，默认深度上限 16、节点
-  上限 4096。
-- GPU：`/sys/class/drm/card*`/render nodes、PCI identity、AMD busy/VRAM/DPM、
-  Intel i915/xe 频率和 `/proc/<pid>/fdinfo` DRM client 计数。GPU 采集器只记录
-  hwmon 关联键、不重复读取传感器；ViewModel 已按 hwmon `class`/`device_target`
-  回填温度/功率并提供 GPU 进程表。交互 fdinfo 只在该进程表实际 placement 可见
-  时扫描；snapshot 仍强制完整扫描。
+- CPU usage: `/proc/stat`, `/proc/loadavg`.
+- CPU identity: `/proc/cpuinfo` plus bounded CPU topology/cache sysfs for vendor/model, architecture fields, packages, physical cores, logical threads, online/present/isolated sets, and cache inventory. Per-core implementer/part, capacity, kernel core type, maximum frequency, and SMT width form explicit heterogeneous core-type groups across x86, ARM, RISC-V, and other kernel-exposed architectures; repeated shared-cache CPU lists are parsed once.
+- Memory: `/proc/meminfo`, `/proc/vmstat`.
+- Pressure: `/proc/pressure/{cpu,memory,io}`.
+- Disk: `/proc/diskstats` and block-size sysfs.
+- Network: `/proc/net/dev` and `/sys/class/net`.
+- Connections: `/proc/net/{tcp,tcp6,udp,udp6,unix}`. Bounded `/proc/<pid>/fd` owner scanning occurs only when the Network-page connection table has an actual placement.
+- Processes: `/proc/<pid>/stat` and status; the detail interface can read cmdline/io/cgroup. The default collector limit is 8192 PIDs and the TUI-model limit 2048 rows.
+- CPU frequency: cpufreq policy sysfs.
+- Sensors: `/sys/class/hwmon`, including temperatures, fans, voltage, current, power, energy, thresholds, alarms, and faults. Known kernel/hardware sentinel values are filtered instead of being presented as plausible physical measurements.
+- Power: powercap sysfs zone hierarchy, energy counters, direct power, and constraints. Energy deltas use monotonic timestamps and handle counter wrap/reset. CPU package/socket totals select one complete backend tree while retaining same-backend multi-socket roots; platform/`psys` selects one representative, and unknown or ambiguous roots remain unaggregated. Inaccessible energy files remain denied/unavailable rather than zero.
+- Mounts: `/proc/self/mountinfo` and `statvfs`. Network filesystems, autofs, FUSE/`fuse.*`, fuseblk, and virtiofs skip potentially blocking statvfs by default, retaining mountinfo metadata and marking partial/estimated. Other native calls share a 50 ms admission budget, but a call already in progress cannot be preempted.
+- Workloads: cgroup v2 files under `/sys/fs/cgroup`, to a default depth of 16 and at most 4096 nodes.
+- GPU: `/sys/class/drm/card*`/render nodes, PCI identity and bounded local `pci.ids` names, PCIe/runtime metadata, AMD busy/VRAM/DPM, Intel i915/xe frequency, and DRM client counters in `/proc/<pid>/fdinfo`. A clearly sourced fdinfo aggregate can supply utilization where a hardware busy counter is absent. The collector records hwmon association keys but does not reread sensors; the ViewModel joins temperature/power through hwmon `class`/`device_target` and provides a GPU process table. Interactive fdinfo scanning occurs only when that table is actually placed; snapshots still force the full scan.
 
-进程模型之外，连接、挂载点、workload 和 GPU 进程表各最多建模 512 行。采集
-预算命中使用 `partial`/`truncated`；单纯 UI 行上限不改写 collector quality。
-进程/GPU 进程和连接状态提供总数线索，挂载点/workload 当前没有单独的 512-row
-显示截断提示。Insights 没有前台 collector，不会为装饰性进程/GPU 数以 1 Hz
-重新采样，只使用已有背景快照。
+Outside the process model, connection, mount, workload, and GPU-process tables each model at most 512 rows. Collector-budget exhaustion sets `partial`/`truncated`; a UI-only row limit does not rewrite collector quality. Process/GPU-process and connection status provide total-count clues, while mounts/workloads currently lack a separate 512-row display-cap indicator. Insights has no foreground collector and uses existing background snapshots rather than resampling decorative process/GPU counts at 1 Hz.
 
-所有 collector 返回 status、quality、timestamp、duration、source 和 reason；
-首个 counter 样本、reset、设备变化和缺失值不会伪装成零。
+Every collector returns status, quality, timestamp, duration, source, and reason. First counter samples, resets, device changes, invalid sensor sentinels, and missing values are never disguised as zero.
 
-### 4.4 Inspector 与动作
+### 4.4 Inspectors and Actions
 
-- SMART/NVMe 先从 `/sys/class/block` 枚举最多 256 个候选，由用户选择后调用
-  `smartctl --json=c --nocheck=standby --all`；带 timeout、输出上限、60 秒缓存、
-  serial mask 和设备路径校验。目前不使用 `smartctl --scan-open` 或 bridge 类型探测。
-- RAM bandwidth Inspector 的 formula v4 会发现名称匹配的 PMU，并通过外部
-  `perf stat -a -A`/`sleep` 对有限 data/CAS 事件作一次约 250 ms 系统级短采样。
-  每个 PMU 控制实例用自己的 CSV runtime 计算后求和；Intel free-running/CAS
-  替代族整族择一，相同 descriptor alias 去重。缺实例、单方向、部分事件或
-  multiplex 标为 estimated。纯 EINVAL/event-open 失败返回 unavailable，并在
-  `perf_event_paranoid` 提示可能相关时附 `permission_may_be_required`；只有明确
-  权限诊断归 denied。启动 probe 不执行 `perf` 或验证权限。它没有 CPU family/model
-  映射、multiplex 校正、socket/channel 拆分或连续图。理论值 API 只在调用方提供
-  可信速率/通道/总线宽度时返回，默认 TUI 实体未提供这些数据。
-- sshd Inspector 可组合 systemd、进程和 `/proc/net/tcp*` 证据。默认应用
-  没有 session/journal provider 时，对应 section 明确 unavailable。
-- TUI 进程动作只发送 `SIGTERM`；Lua 层复验 PID/starttime，原生层持有 pidfd
-  再次核验并发信号，关闭 PID 重用窗口。
+- SMART/NVMe enumerates at most 256 candidates under `/sys/class/block`, lets the user select one, and calls `smartctl --json=c --nocheck=standby --all` with a timeout, output limit, 60-second cache, masked serial, and validated device path. It does not currently use `smartctl --scan-open` or bridge-type detection.
+- RAM-bandwidth Inspector formula v4 discovers matching PMUs and runs one approximately 250 ms system-wide sample through external `perf stat -a -A`/`sleep` for a limited set of data/CAS events. It calculates each controller instance using its own CSV runtime, chooses one Intel free-running/CAS substitute family, and deduplicates identical descriptor aliases. Missing instances/directions, partial events, or multiplexing yield estimated quality. Plain EINVAL/event-open failure yields unavailable, adding `permission_may_be_required` only when evidence such as `perf_event_paranoid` supports it; only explicit permission diagnostics yield denied. The startup probe does not execute `perf` or validate permissions. It has no CPU family/model mapping, multiplex correction, socket/channel split, or continuous chart. The theoretical-value API returns a value only when a caller supplies trusted rate/channel/bus-width inputs, which the default TUI does not.
+- The sshd Inspector can combine systemd, process, and `/proc/net/tcp*` evidence. With no session/journal provider in the default application, those sections are explicitly unavailable.
+- The TUI process action sends only `SIGTERM`: Lua revalidates PID/starttime, then native code holds a pidfd, revalidates again, and signals, closing the PID-reuse window.
+- Privilege elevation applies to the entire invocation, not an individual Inspector. Re-execution uses a fixed system `sudo` path, the original process argv, and a sanitized environment, and occurs before raw-terminal entry.
 
-### 4.5 配置、i18n 与输出
+### 4.5 Configuration, i18n, and Output
 
-- `config.yml` 使用 config schema v1；`layout.yml` 写入二叉 split 树的 layout
-  schema v2，并兼容读取线性顺序的 v1。两者都使用受限 YAML profile，布局通过
-  原生原子写入。
-- CLI/config theme 严格限制为四个内置精确名称。locale tag 先做语法拒绝与
-  规范化；合法未知 tag 可由 TUI 的 XDG 用户 catalog 提供，而不是强制属于内置表。
-- 内置 locale 从 YAML 确定性生成 Lua modules，registry 使用字面量
-  `require`。
-- `en-US`、`zh-CN` 为 stable；其余首批八种语言为 preview 并逐 key 回退。
-- CLI 提供 TUI、`--snapshot` JSON 和 `--diagnose`。
-- TUI 启动时有界加载 XDG 自定义 locale 文件；`--snapshot`/`--diagnose`
-  不创建 translator，也不扫描该目录。
-- JSON snapshot 默认遮罩 socket 远程 IP，并以遮罩后的 endpoint 重建导出连接
-  ID，防止内部 ID 泄露完整远端；它仍不遮罩远程端口、本地地址、Unix socket
-  路径或网卡 MAC。TUI 网络页显示完整 endpoint，当前无遮罩开关。
-- JSON snapshot 还导出不含 `path` 字段的 `configuration.state` 与可选
-  `configuration.reason`，供脚本区分 loaded/default/error/unavailable。
-- 严格 JSON decoder 默认限制 4 MiB、深度 64、100000 个 value node，并线性
-  扫描数字；encoder 将字符串值和 object key 中的非法 UTF-8 替换为 U+FFFD。
+- `config.yml` uses configuration schema v1. `layout.yml` writes binary split-tree layout schema v2 and can read the linear-order v1. Both use restricted YAML profiles; layout writes are native and atomic.
+- CLI/config themes are limited strictly to five exact built-in names. Locale tags are syntactically validated and normalized; a valid unknown tag can be provided by a TUI XDG user catalog instead of having to exist in the built-in list.
+- Built-in locales are deterministically generated from YAML into Lua modules, and the registry uses literal `require`.
+- `en-US` and `zh-CN` are stable. The initial eight additional languages are preview and fall back key by key.
+- The CLI provides TUI, `--snapshot` JSON, `--agent` JSON, and `--diagnose`.
+- The TUI loads bounded XDG custom-locale files at startup. `--snapshot`/`--diagnose` do not create a translator or scan that directory.
+- JSON snapshots mask remote socket IPs by default and rebuild exported connection IDs from masked endpoints, preventing full remote addresses from leaking through internal IDs. Remote ports, local addresses, Unix socket paths, and interface MAC addresses remain unmasked. The Network-page TUI displays full endpoints and has no masking switch.
+- Snapshot JSON exports `configuration.state` and optional `configuration.reason` without the internal `path`, allowing scripts to distinguish loaded/default/error/unavailable.
+- Snapshot, diagnose, and agent output include bounded privilege identity metadata so callers can distinguish ordinary, direct-sudo, and explicitly elevated execution.
+- The strict JSON decoder defaults to 4 MiB, depth 64, and 100000 value nodes with linear numeric scanning. The encoder replaces invalid UTF-8 in string values and object keys with U+FFFD.
 
-### 4.6 当前验证入口
+### 4.6 Current Validation Entry Points
 
 ```bash
 make check
@@ -159,166 +115,145 @@ make test-bundle-dir
 make checksums
 ```
 
-`make test` 当前包含 36 个 Lua 5.5 单元/fixture 测试文件与响应式/色深真实 PTY matrix；
-`make test-54` 验证纯 Lua 5.4 兼容子集。默认 luainstaller 1.3.0-1 payload 由
-`tools/luainstaller-1.3.0.sha256` 锁定；相邻工作树不会自动使用，绝对路径
-`WTOP_LUAINSTALLER_ROCKSPEC` 才是显式开发 opt-in。`make checksums` 只为两个
-bundle 可执行入口生成 `dist/SHA256SUMS`。打包验证目前仍以 Fedora glibc x86_64
-开发主机为主，不是正式发布，最低 glibc 尚未承诺。
+`make test` currently contains 41 Lua 5.5 unit/fixture test files plus the responsive/color-depth real-PTY matrix; `make test-54` checks the pure-Lua 5.4-compatible subset. Hardware fixtures cover heterogeneous ARM, hybrid x86, RISC-V, large shared CPU-cache lists, powercap deltas/wrap/reset/constraints and overlapping `psys`, GPU PCI/fdinfo behavior, and invalid hwmon sentinels without requiring the development host to expose each device. Privilege and preflight tests cover CLI parsing, identity metadata, sanitized re-execution construction, cgroup v2 limits, and output integration without triggering an interactive password prompt.
 
-## 5. 0.1 release 目标
+Selected build and test Make targets run a lightweight resource precheck first and are kept nonparallel at the orchestration layer. The `build`, `test`, and `full` profiles inspect the tighter host/cgroup memory and Swap headroom, host/cgroup memory PSI, and load per CPU. An explicit environment override exists for deliberate operator use, but the normal path refuses to start resource-intensive work on an unhealthy host.
 
-以下标记描述相对“可发布 0.1”的完成度：
+The default luainstaller `1.3.0-1` payload is locked by `tools/luainstaller-1.3.0.sha256`. An adjacent worktree is never selected automatically; an absolute `WTOP_LUAINSTALLER_ROCKSPEC` is the explicit development opt-in. `make checksums` covers only the two bundle executable entry points in `dist/SHA256SUMS`. Packaging evidence currently comes mainly from a Fedora glibc x86_64 development host, is not a formal release, and makes no minimum-glibc commitment.
 
-- [x] Linux-only Lua 5.5.1 toolchain 与原生终端恢复。
-- [x] CPU、内存、PSI、磁盘、挂载点、网络/socket、基础进程、CPUFreq、
-  hwmon、cgroup v2 和通用 DRM collectors。
-- [x] 响应式八标签框架、cell diff、主题和基础鼠标。
-- [x] 配置、layout schema v2 树持久化（兼容 v1）、JSON snapshot 和 diagnose。
-- [x] YAML i18n 编译、stable/preview 目录与逐 key 回退。
-- [x] onedir/onefile build target。
-- [x] 默认 luainstaller payload hash 校验，以及两个 bundle 入口的 checksum target。
-- [x] Linux-only LuaRocks 安装、隔离 tree smoke test 与 MPL-2.0 仓库许可证。
-- [~] 进程页：已有文字搜索、固定排序循环、PPID 树、详情 overlay 与确认
-  SIGTERM；线程、PSS/USS、组合过滤、列管理和跨资源跳转未完成。
-- [~] 布局编辑：已有方向树移动、比例、撤销/重做；Widget 增删/替换、拖拽、
-  导入/导出、备份/恢复未完成。
-- [~] Inspector：三个原型可用；导航、provider 和真实主机覆盖不足。
-- [~] GPU：DRM/sysfs/fdinfo、进程摘要表与 hwmon 温度/功率回填可用；三家
-  vendor API、fan 展示和 client/frequency-domain/memory-region 钻取尚未实现。
-- [~] 完整 i18n：主 TUI、表头、帮助和 Inspector 标签已接入；provider 原始
-  字段 ID/reason、preview 翻译完整度、伪语言与 RTL 尚未完成。
-- [x] Workloads/cgroup v2 页面与 collector 基础路径。
-- [x] CPUFreq、通用 hwmon 与挂载点容量基础路径。
-- [~] GPU 的 class/device_target 传感器关联已实现；更通用的设备拓扑关联、
-  systemd/容器语义与更完整进程数据仍未完成。
-- [ ] 性能预算实测与回归门禁。
-- [ ] glibc aarch64、最低 glibc/kernel 和计划中的 musl 发行证据。
-- [ ] 真实 NVIDIA/AMD/Intel 与无 GPU 硬件矩阵。
+## 5. 0.1 Release Goals
 
-### 5.1 安全边界
+The following marks describe completion relative to a releasable 0.1:
 
-0.1 保持普通用户、默认只读，不引入常驻 root daemon。任何进程动作必须：
+- [x] Linux-only Lua 5.5.1 toolchain and native terminal restoration.
+- [x] CPU usage/identity, memory, PSI, disk, mounts, network/sockets, basic processes, CPUFreq, hwmon, powercap, cgroup v2, and generic DRM collectors.
+- [x] Responsive eight-tab frame, cell diff, themes, and basic mouse.
+- [x] Configuration, layout schema v2 tree persistence (v1-compatible), JSON snapshot, and diagnose.
+- [x] YAML i18n compilation, stable/preview catalogs, and per-key fallback.
+- [x] onedir/onefile build targets.
+- [x] Default luainstaller payload-hash validation and checksum target for both bundle entry points.
+- [x] Linux-only LuaRocks installation, isolated-tree smoke test, and EUPL-1.2 repository license.
+- [~] Processes page: text search, fixed sort cycle, PPID tree, detail overlay, and confirmed SIGTERM exist; threads, PSS/USS, combined filters, column management, and cross-resource navigation remain unfinished.
+- [~] Layout editing: directional tree moves, ratio adjustment, undo/redo exist; add/remove/replace widgets, drag-and-drop, import/export, and backup/recovery remain unfinished.
+- [~] Inspectors: three prototypes work; navigation, providers, and real-host coverage are insufficient.
+- [~] GPU: DRM/sysfs/fdinfo, PCI naming/link metadata, a process-summary table, fdinfo utilization fallback, and hwmon temperature/power fill-in work; three vendor APIs, fan display, and client/frequency-domain/memory-region drill-down are not implemented.
+- [~] Complete i18n: main TUI, headers, help, and Inspector labels are connected; raw provider field IDs/reasons, preview completeness, pseudolocale, and RTL remain unfinished.
+- [x] Workloads/cgroup v2 page and collector base path.
+- [x] CPUFreq, generic hwmon, powercap, and mount-capacity base paths.
+- [~] GPU class/device_target sensor joins are implemented; broader device-topology joins, systemd/container semantics, and richer process data remain unfinished.
+- [ ] Measured performance budgets and regression gates.
+- [ ] glibc aarch64, minimum glibc/kernel, and planned musl release evidence.
+- [ ] Real NVIDIA/AMD/Intel and no-GPU hardware matrix.
 
-1. 保存 `(pid, starttime)` 身份；
-2. 执行前重新读取 `/proc/<pid>/stat`；
-3. 通过 `pidfd_open` 固定原进程，再核验 starttime，并使用
-   `pidfd_send_signal`；
-4. 拒绝 PID 1、wtop 自身和身份变化；
-5. 显示目标并要求明确确认；
-6. 返回逐目标错误，不把无权限伪装成成功。
+### 5.1 Safety Boundary
 
-是否在 0.1 继续开放 SIGKILL、STOP/CONT 或 renice，需要单独的 UI、安全和
-测试评审；底层存在能力不代表产品已经承诺暴露。
+0.1 remains ordinary-user and read-only by default and introduces no resident root daemon. Direct sudo and explicit whole-process elevation are optional. Any process action must:
 
-## 6. 非目标
+1. retain `(pid, starttime)` identity;
+2. reread `/proc/<pid>/stat` before execution;
+3. bind the original process with `pidfd_open`, revalidate starttime, and use `pidfd_send_signal`;
+4. reject PID 1, wtop itself, and changed identity;
+5. display the target and require explicit confirmation;
+6. return per-target errors instead of presenting permission failure as success.
 
-- macOS、Windows、BSD。
-- 集群、远程 agent 和长期指标数据库。
-- 自动清理缓存、自动杀进程或“一键加速”。
-- 固件更新、分区/文件系统修复等破坏性设备管理。
-- 必须存在的特权 helper。
-- 稳定第三方插件 ABI。
-- Kubernetes 编排级视图。
-- 保证所有 GPU/驱动暴露同一组指标。
+Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, security, and test review. A low-level capability does not constitute a product promise.
 
-## 7. 后续路线
+## 6. Non-Goals
 
-### 阶段 A：development preview 稳定化
+- macOS, Windows, or BSD.
+- Clusters, remote agents, or a long-term metrics database.
+- Automatic cache clearing, automatic process termination, or “one-click acceleration.”
+- Destructive device management such as firmware updates or partition/filesystem repair.
+- A mandatory privileged helper or resident root daemon.
+- A stable third-party plugin ABI.
+- Kubernetes orchestration-level views.
+- A guarantee that every GPU/driver exposes the same metric set.
 
-- 本地化 provider 技术 reason，加入伪语言和 locale layout tests。
-- 将 onefile PTY、clean-env、locale `--check` 加入标准 CI。
-- 增加 crash/signal/continuous-resize、tmux 和 SSH 场景。
-- 建立可重复性能 benchmark，校准 CPU、RSS、首屏和输入延迟预算。
-- 为配置/布局增加显式迁移工具、备份和更清晰的错误恢复；当前只是
-  layout v1 兼容读取和 v2 重写。
-- 为 TUI 连接表增加隐私遮罩/导出策略，并为 JSON 中的端口、本地地址、
-  Unix socket 路径与 MAC 建立明确契约。
+## 7. Roadmap
 
-### 阶段 B：0.1 功能补齐
+### Phase A: Stabilize the Development Preview
 
-- 进程组合过滤、可选排序方向、线程/PSS/USS、namespace 和完整详情导航。
-- Widget 增删/替换、拖拽、布局导入/导出与标签/工作区管理。
-- 为 cgroup v2/Workloads 增加展开/折叠、详情、systemd unit 和容器语义。
-- 将现有 GPU hwmon `class`/`device_target` 关联扩展为更通用的 CPUFreq、传感器、
-  挂载点与设备拓扑关联，并定义 fan/rail/board-power 语义。
-- NVML、AMD SMI、Level Zero 动态 provider 与 fake library tests。
-- 将现有 GPU 进程摘要扩展为 client/引擎/memory-region 钻取和主进程详情反向跳转。
-- 为 RAM PMU 建立 CPU family/model 事件白名单、multiplex 校正、分 socket/controller
-  聚合和真实硬件误差门禁；在此之前继续标为实验性。
-- SMART、RAM bandwidth、服务 Inspector 的统一资源导航。
+- Localize technical provider reasons and add pseudolocale and locale-layout tests.
+- Add onefile PTY, clean-environment, and locale `--check` to standard CI.
+- Add crash/signal/continuous-resize, tmux, and SSH scenarios.
+- Establish repeatable performance benchmarks and calibrate CPU, RSS, first-frame, and input-latency budgets.
+- Add explicit migration tools, backup, and clearer error recovery for configuration/layout; current behavior only reads layout v1 compatibly and rewrites v2.
+- Add a privacy masking/export policy to the TUI connection table and define explicit JSON contracts for ports, local addresses, Unix socket paths, and MAC addresses.
 
-### 阶段 C：0.2
+### Phase B: Complete 0.1 Features
 
-- 多 GPU/MIG/tile 的 vendor 语义与更完整的 GPU 进程关联。
-- systemd unit、容器、线程、PSS/USS 和进程 I/O 深化。
-- RAPL、节流原因、传感器与洞察规则。
-- 第二批语言和布局导入导出。
-- glibc x86_64/aarch64 的稳定发行矩阵。
+- Process combined filters, optional sort direction, threads/PSS/USS, namespaces, and complete detail navigation.
+- Add/remove/replace widgets, drag-and-drop, layout import/export, and tab/workspace management.
+- Add expand/collapse, details, systemd-unit, and container semantics to cgroup v2/Workloads.
+- Extend the current GPU hwmon `class`/`device_target` join into broader CPUFreq, sensor, mount, and device-topology links, and define fan/rail/board-power semantics.
+- Dynamic NVML, AMD SMI, and Level Zero providers with fake-library tests.
+- Extend GPU process summaries into client/engine/memory-region drill-down and reverse navigation to host-process detail.
+- Establish CPU family/model event allowlists, multiplex correction, per-socket/controller aggregation, and real-hardware error gates for RAM PMU; keep it experimental until then.
+- Unify resource navigation for SMART, RAM-bandwidth, and service Inspectors.
 
-### 阶段 D：0.3 及以后
+### Phase C: 0.2
 
-- 指标录制与回放。
-- 可选 perf/eBPF 后端、热点调用栈和火焰图。
-- 跨资源时间线关联和告警规则。
-- EDAC/ECC、DIMM/NUMA、RAID/LVM/ZFS、PCI/USB 等扩展 Inspector。
-- 只有在明确用户需求和权限模型后，才评估独立最小权限调优 helper。
+- Vendor semantics for multiple GPUs/MIG/tiles and richer GPU-process linkage.
+- Deeper systemd units, containers, threads, PSS/USS, and process I/O.
+- Throttle reasons, power-limit semantics, richer sensors, and insight rules.
+- A second language wave and layout import/export.
+- Stable glibc x86_64/aarch64 release matrix.
 
-## 8. 性能目标
+### Phase D: 0.3 and Later
 
-以下仍是待实测和校准的 release 目标，不是当前结果：
+- Metric recording and replay.
+- Optional perf/eBPF backends, hot call stacks, and flame graphs.
+- Cross-resource timeline correlation and alert rules.
+- Extended EDAC/ECC, DIMM/NUMA, RAID/LVM/ZFS, and PCI/USB Inspectors.
+- Evaluate an independent least-privilege tuning helper only after a clear user need and permission model exist.
 
-| 场景 | 目标 |
+## 8. Performance Goals
+
+These remain unmeasured and uncalibrated release goals, not current results:
+
+| Scenario | Goal |
 | --- | --- |
-| 1000 进程、默认 1 秒采样 | 平均 CPU 小于一个核心的 2% |
-| 空闲仪表盘 | RSS 小于 60 MiB |
-| 输入到画面 | p95 小于 50 ms |
-| 首屏 | 冷启动小于 500 ms |
-| 无数据变化 | 不执行全屏重绘 |
-| 历史数据 | 定长，不能随运行时间无限增长 |
-| 采集失败 | 单个 collector 退避，不阻塞其他 collector |
+| 1000 processes at default 1-second sampling | Average CPU below 2% of one core |
+| Idle dashboard | RSS below 60 MiB |
+| Input to display | p95 below 50 ms |
+| First frame | Cold start below 500 ms |
+| No data change | No full-screen redraw |
+| Historical data | Fixed-size; never grows without bound over runtime |
+| Collector failure | Back off one collector without blocking others |
 
-当前实现已经具备定长 ring、diff output、collector duration、scheduler backoff、
-首屏隐藏源延后和 GPU fdinfo 按实际进程表 placement 启停。在当前 x86_64 开发主机的一次
-safe-mode 实测中，Overview 的 probe+当前页首次采样约 91 ms，切到 GPU 后完整
-fdinfo 首次采样约 104 ms；这些单机数值不是跨机器 release 证明，仍需可重复的
-CPU/RSS/输入延迟 benchmark。
+The implementation already has fixed rings, diff output, collector durations, scheduler backoff, first-frame deferral for hidden sources, GPU fdinfo toggled by actual process-table placement, and pre-test resource health checks. In one safe-mode measurement on the current x86_64 development host, Overview probe plus initial active-page sampling took about 91 ms, and the first full fdinfo sample after switching to GPU took about 104 ms. These single-host values are not cross-machine release evidence; repeatable CPU/RSS/input-latency benchmarks are still needed.
 
-## 9. 0.1 发布门禁
+## 9. 0.1 Release Gates
 
-- 单元、fixture、PTY、clean-env、onedir 和 onefile 测试通过。
-- `/proc` 竞态、PID 消失、counter reset、设备热拔插和权限错误不终止应用。
-- stable locale 覆盖与占位符一致；preview 状态不被误报为稳定翻译。
-- 所有核心可见字符串完成 i18n；CJK 和伪语言不破坏布局。
-- 无 GPU、无 PSI、无 hwmon、无 systemd 和无外部 helper 均可降级启动。
-- TUI/导出的 socket、session、设备标识和进程字段经过隐私评审；遮罩契约
-  和完整值的显式选择已文档化并测试。
-- 实验性 RAM PMU 结果不被冒充为通用精确测量；对声明支持的每个平台
-  有事件公式、权限、multiplex 和实机对照证据。
-- 原生模块 ABI、架构、`ldd` 和最低 glibc/kernel 基线有可复验证据。
-- glibc x86_64 与 aarch64 目标分别完成原生构建和 PTY smoke。
-- 真实性能预算在声明支持的最低/典型主机上通过。
-- 发行物包含 checksum、SBOM、第三方通知和可追溯构建信息。
+- Unit, fixture, PTY, clean-environment, onedir, and onefile tests pass after the resource precheck confirms sufficient headroom.
+- `/proc` races, PID disappearance, counter resets, device hotplug, and permission errors do not terminate the application.
+- Stable-locale coverage and placeholders are consistent; preview status is not misrepresented as stable translation.
+- Every core visible string is internationalized; CJK and pseudolocale text do not break layout.
+- No GPU, PSI, hwmon, systemd, or external helper still allows degraded startup.
+- TUI/exported socket, session, device-identity, and process fields complete privacy review; masking contracts and explicit full-value choices are documented and tested.
+- Experimental RAM PMU results are not presented as universally precise measurements; every claimed platform has event-formula, permission, multiplexing, and real-host comparison evidence.
+- Native-module ABI, architecture, `ldd`, and minimum glibc/kernel baseline have reproducible evidence.
+- glibc x86_64 and aarch64 targets each complete native builds and PTY smoke tests.
+- Real performance budgets pass on the minimum and typical supported hosts.
+- Release artifacts include checksums, an SBOM, third-party notices, and traceable build metadata.
 
-## 10. 已固化与待决策
+## 10. Fixed Decisions and Open Questions
 
-已固化：
+Fixed:
 
-- Linux-only、PUC Lua 5.5.1 发布 ABI、Lua 5.4 语法子集。
-- 自有 cell grid/diff renderer 和窄 C 原生终端 backend。
-- 单线程 deadline scheduler；当前不引入 luv。
-- YAML 权威 locale → deterministic Lua modules → literal registry。
-- luainstaller 先 onedir、再 onefile；每个 arch/libc 原生构建。
+- Linux-only, PUC Lua 5.5.1 release ABI, and Lua 5.4 syntax subset.
+- Custom cell grid/diff renderer and narrow C native terminal backend.
+- Single-threaded deadline scheduler; no current `luv` introduction.
+- YAML authoritative locales → deterministic Lua modules → literal registry.
+- luainstaller builds onedir first, then onefile; each architecture/libc is built natively.
+- EUPL-1.2 licensing.
 
-仍待决策或证据：
+Open decisions or missing evidence:
 
-- 最低 Linux kernel、glibc 和发行版基线。
-- 正式 release 的 SBOM、签名与二进制再分发记录。
-- 0.1 GPU 的精确能力下限（通用 DRM 是否足够，还是必须包含 vendor API）
-  与真实硬件池。
-- “性能释放”最终包含哪些 profiling、进程管理或调优能力。
-- 0.1 是否接受当前只有原始 cgroup v2 语义的 Workloads 页，还是必须先加入
-  systemd/容器标识、展开/折叠和详情。
-- 0.1 是否保留实验性 `perf stat` RAM bandwidth Inspector，以及它的平台支持
-  声明和默认开关。
-- stable 翻译的维护者、人工评审和终端截图流程。
+- Minimum Linux kernel, glibc, and distribution baseline.
+- Formal-release SBOM, signing, and binary-redistribution records.
+- Exact minimum GPU capability for 0.1—whether generic DRM is sufficient or a vendor API is required—and the real-hardware pool.
+- Which profiling, process-management, or tuning capabilities “performance release” ultimately includes.
+- Whether 0.1 accepts Workloads with raw cgroup v2 semantics only or first requires systemd/container identity, expand/collapse, and details.
+- Whether to retain the experimental `perf stat` RAM-bandwidth Inspector in 0.1, including platform claims and default enablement.
+- Maintainers, human review, and terminal-screenshot workflow for stable translations.

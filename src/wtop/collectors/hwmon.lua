@@ -133,6 +133,16 @@ local function normalized_number(fs, path, scale, maximum_abs_raw)
   return raw / scale
 end
 
+local function plausible_sensor_value(spec, value)
+  -- NVMe and several firmware-backed hwmon drivers expose their protocol
+  -- sentinels as -273.15 C or roughly 65,000 C. They are not measurements or
+  -- useful thresholds and must not dominate tables and alert calculations.
+  if spec.kind == "temperature" and (value <= -200 or value >= 1000) then
+    return false
+  end
+  return true
+end
+
 local function boolean_number(fs, path)
   local value, err = normalized_number(fs, path, 1, 1)
   if value == nil then
@@ -301,6 +311,10 @@ local function read_channel(fs, base, group, options)
       end
     else
       local value, err = normalized_number(fs, path, spec.scale, options.max_abs_raw_value)
+      if value ~= nil and not plausible_sensor_value(spec, value) then
+        value = nil
+        err = { kind = "parse_error", message = "implausible_sensor_value", path = path }
+      end
       if value == nil then
         channel.errors[attribute] = error_record(err, path)
       elseif spec.thresholds[attribute] then
@@ -453,5 +467,6 @@ end
 
 Hwmon.sensor_specs = SENSOR_SPECS
 Hwmon.normalize_target = normalize_target
+Hwmon.plausible_sensor_value = plausible_sensor_value
 
 return Hwmon

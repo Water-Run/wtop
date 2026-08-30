@@ -79,9 +79,22 @@ end
 
 local state = "1"
 local files = {
+  ["/usr/share/hwdata/pci.ids"] = table.concat({
+    "1002  Advanced Micro Devices, Inc. [AMD/ATI]",
+    "\t73bf  Navi 21 [Radeon RX 6800/6800 XT / 6900 XT]",
+    "8086  Intel Corporation",
+    "\t46a6  Alder Lake-P Integrated Graphics Controller",
+    "\t\t17aa 3801  Lenovo Alder Lake-P board",
+    "17aa  Lenovo",
+    "\t3801  Conflicting top-level device name",
+  }, "\n") .. "\n",
   ["/drm/card0/device/uevent"] = "DRIVER=amdgpu\nPCI_SLOT_NAME=0000:03:00.0\n",
   ["/drm/card0/device/vendor"] = "0x1002\n",
   ["/drm/card0/device/device"] = "0x73bf\n",
+  ["/drm/card0/device/current_link_speed"] = "Unknown\n",
+  ["/drm/card0/device/current_link_width"] = "0\n",
+  ["/drm/card0/device/max_link_speed"] = "Unknown\n",
+  ["/drm/card0/device/max_link_width"] = "255\n",
   ["/drm/card0/dev"] = "226:0\n",
   ["/drm/card0/device/gpu_busy_percent"] = "71\n",
   ["/drm/card0/device/mem_busy_percent"] = "42\n",
@@ -99,6 +112,18 @@ local files = {
   ["/drm/card1/device/uevent"] = "DRIVER=i915\nPCI_SLOT_NAME=0000:00:02.0\n",
   ["/drm/card1/device/vendor"] = "0x8086\n",
   ["/drm/card1/device/device"] = "0x46a6\n",
+  ["/drm/card1/device/class"] = "0x030000\n",
+  ["/drm/card1/device/revision"] = "0x0c\n",
+  ["/drm/card1/device/subsystem_vendor"] = "0x17aa\n",
+  ["/drm/card1/device/subsystem_device"] = "0x3801\n",
+  ["/drm/card1/device/boot_vga"] = "1\n",
+  ["/drm/card1/device/numa_node"] = "-1\n",
+  ["/drm/card1/device/current_link_speed"] = "8.0 GT/s PCIe\n",
+  ["/drm/card1/device/current_link_width"] = "8\n",
+  ["/drm/card1/device/max_link_speed"] = "16.0 GT/s PCIe\n",
+  ["/drm/card1/device/max_link_width"] = "16\n",
+  ["/drm/card1/device/power/runtime_status"] = "active\n",
+  ["/drm/card1/device/modalias"] = "pci:v00008086d000046A6sv000017AAsd00003801bc03sc00i00\n",
   ["/drm/card1/dev"] = "226:1\n",
   ["/drm/card1/gt/gt0/rps_act_freq_mhz"] = "450\n",
   ["/drm/card1/gt/gt0/rps_cur_freq_mhz"] = "300\n",
@@ -198,6 +223,57 @@ assert(parsed.memory.resident.system0 == 48 * 1024 * 1024)
 local dpm = assert(GPU.parse_dpm_states(fixture("gpu/amdgpu-pp-dpm-sclk"), "graphics"))
 assert(dpm.current_hz == 1800000000 and dpm.minimum_hz == 500000000 and dpm.maximum_hz == 1800000000)
 
+local pci_vendor, pci_device = GPU.parse_pci_ids_name(
+  files["/usr/share/hwdata/pci.ids"], 0x8086, 0x46a6
+)
+assert(pci_vendor == "Intel Corporation")
+assert(pci_device == "Alder Lake-P Integrated Graphics Controller")
+local nested_vendor, nested_device, nested_subsystem = GPU.parse_pci_ids_name(table.concat({
+  "8086  Intel Corporation",
+  "\ta7a8  Raptor Lake-P UHD Graphics",
+  "\t\t17aa 38b8  Lenovo integrated subsystem",
+  "17aa  Lenovo",
+  "\t38b8  Conflicting top-level subsystem device",
+}, "\n"), 0x8086, 0xa7a8, 0x17aa, 0x38b8)
+assert(nested_vendor == "Intel Corporation")
+assert(nested_device == "Raptor Lake-P UHD Graphics")
+assert(nested_subsystem == "Lenovo integrated subsystem",
+  "a nested subsystem name must not be replaced by the subsystem vendor's top-level device")
+local uppercase_vendor, vendor_only = GPU.parse_pci_ids_name(table.concat({
+  "ABCD  Example Vendor\1",
+  "\t0001  First Device",
+  "DCBA  Other Vendor",
+  "\t0002  Must Not Match",
+}, "\n"), 0xabcd, 0x0002)
+assert(uppercase_vendor == "Example Vendor�" and vendor_only == nil,
+  "PCI lookup must stay inside the selected vendor section and sanitize names")
+assert(GPU.parse_pci_ids_name(nil, 0x8086, 0x46a6) == nil)
+assert(GPU.parse_pci_ids_name("8086  Intel\n", "8086", 0x46a6) == nil)
+
+assert(GPU.parse_fdinfo(nil) == nil)
+local missing_driver, missing_driver_error = GPU.parse_fdinfo("drm-client-id: 1\n")
+assert(missing_driver == nil and missing_driver_error == "drm_driver_missing")
+local malformed_fdinfo = assert(GPU.parse_fdinfo(table.concat({
+  "drm-driver: i915",
+  "drm-pdev: not-a-bdf",
+  "drm-client-id: -1",
+  "drm-engine-capacity-render: 0",
+  "drm-engine-render: 1 ticks",
+  "drm-maxfreq-render: 2 rpm",
+  "drm-curfreq-render: 3 GHz",
+  "drm-active-vram: 2 KB",
+  "drm-total-cycles-render: -1",
+  "drm-memory-vram: 4 MiB",
+  "drm-resident-vram: 5 MiB",
+  "drm-unknown-field: ignored",
+}, "\n")))
+assert(malformed_fdinfo.parse_errors == 7)
+assert(malformed_fdinfo.pci_bdf == nil and malformed_fdinfo.client_id == nil)
+assert(malformed_fdinfo.current_frequency_hz.render == 3000000000)
+assert(malformed_fdinfo.memory.active.vram == nil)
+assert(malformed_fdinfo.memory.resident.vram == 5 * 1024 * 1024,
+  "standard resident memory must override the legacy drm-memory alias")
+
 -- Values that cannot remain exact Lua integers are rejected instead of being
 -- rounded before rate and memory calculations.
 local oversized_fdinfo = assert(GPU.parse_fdinfo(table.concat({
@@ -229,6 +305,24 @@ assert(amd.stable_id == "pci:0000:03:00.0" and amd.card == "card0")
 assert(amd.render_nodes[1] == "renderD128" and #amd.drm_nodes == 2)
 assert(intel.render_nodes[1] == "renderD129" and #intel.drm_nodes == 2)
 assert(amd.metrics.utilization_percent == 71 and amd.metrics.memory_busy_percent == 42)
+assert(amd.metrics.utilization_source == "sysfs")
+assert(amd.vendor_name == "Advanced Micro Devices, Inc. [AMD/ATI]")
+assert(amd.model_name == "Navi 21 [Radeon RX 6800/6800 XT / 6900 XT]")
+assert(amd.pci.current_link_speed == nil and amd.pci.current_link_width == nil)
+assert(amd.pci.maximum_link_speed == nil and amd.pci.maximum_link_width == nil)
+assert(intel.vendor_name == "Intel Corporation")
+assert(intel.model_name == "Alder Lake-P Integrated Graphics Controller")
+assert(intel.pci.class_id == 0x030000 and intel.pci.revision == 0x0c)
+assert(intel.pci.class_name == "VGA compatible controller")
+assert(intel.pci.subsystem_vendor_id == 0x17aa and intel.pci.subsystem_device_id == 0x3801)
+assert(intel.pci.subsystem_vendor_name == "Lenovo")
+assert(intel.pci.subsystem_model_name == "Lenovo Alder Lake-P board")
+assert(intel.pci.boot_vga and intel.pci.numa_node == -1)
+assert(intel.pci.current_link_speed == "8.0 GT/s PCIe" and intel.pci.current_link_width == 8)
+assert(intel.pci.maximum_link_speed == "16.0 GT/s PCIe" and intel.pci.maximum_link_width == 16)
+assert(intel.pci.runtime_status == "active")
+assert(intel.pci.modalias == "pci:v00008086d000046A6sv000017AAsd00003801bc03sc00i00")
+assert(intel.pci.pci_ids_source == "/usr/share/hwdata/pci.ids")
 assert(amd.metrics.memory_total_bytes == 17179869184 and amd.metrics.memory_used_bytes == 4294967296)
 assert(amd.metrics.visible_memory_total_bytes == 8589934592 and amd.metrics.gtt_used_bytes == 1073741824)
 assert(amd.metrics.frequency_graphics_hz == 1800000000)
@@ -278,6 +372,10 @@ near(intel_client.engines.render.cycle_utilization_percent, 20)
 local node_client = assert(intel.processes.clients_by_id["0000:00:02.0:i915:10"])
 near(node_client.engines.copy.cycle_utilization_percent, 10)
 near(node_client.engines.copy.utilization_percent, 10)
+near(intel.metrics.utilization_percent, 10)
+assert(intel.metrics.utilization_source == "drm_fdinfo")
+assert(intel.metrics.process_memory_bytes == 72 * 1024 * 1024)
+assert(intel.metrics.process_memory_source == "drm_fdinfo")
 
 -- DRM engine counters may temporarily move backwards.  The standard says to
 -- retain the prior high water mark until the reported value catches up.
@@ -368,6 +466,12 @@ assert(limited_amd.frequencies.domains[1].id == "graphics")
 assert((read_counts["/drm/card0/device/pp_dpm_mclk"] or 0) == memory_clock_reads)
 assert(frequency_limited.data.truncated)
 
+local invalid_scan_policy = collector:sample({
+  fs = fs, now_ns = function() return now end, scan_gpu_processes = "yes",
+})
+assert(invalid_scan_policy.status == "error")
+assert(invalid_scan_policy.reason == "invalid_gpu_process_scan_policy")
+
 -- Sysfs integer attributes use unsigned decimal syntax.  Lua's tonumber()
 -- also accepts exponents, hexadecimal and trailing tokens, none of which are
 -- valid values for these kernel attributes.
@@ -394,6 +498,80 @@ assert(malformed_fields["frequency.gt0.actual"] == "expected_unsigned_integer")
 files["/drm/card0/device/gpu_busy_percent"] = saved_busy
 files["/drm/card0/device/mem_info_vram_total"] = saved_memory
 files["/drm/card1/gt/gt0/rps_act_freq_mhz"] = saved_frequency
+
+-- Denied and malformed optional PCI attributes must remain absent without
+-- manufacturing plausible values; permission failures stay visible in the
+-- bounded issue list and degrade only the affected device.
+local saved_vendor = files["/drm/card1/device/vendor"]
+local saved_class = files["/drm/card1/device/class"]
+local saved_boot = files["/drm/card1/device/boot_vga"]
+local saved_runtime = files["/drm/card1/device/power/runtime_status"]
+files["/drm/card1/device/vendor"] = "not-a-pci-id\n"
+files["/drm/card1/device/class"] = function()
+  return nil, { kind = "denied", message = "permission denied", path = "/drm/card1/device/class" }
+end
+files["/drm/card1/device/boot_vga"] = "2\n"
+files["/drm/card1/device/power/runtime_status"] = function()
+  return nil, { kind = "denied", message = "permission denied",
+    path = "/drm/card1/device/power/runtime_status" }
+end
+local degraded_static = GPU.new({
+  drm_path = "/drm", proc_path = "/proc", scan_processes = false,
+}):sample(context)
+local degraded_intel = assert(degraded_static.data.by_id["0000:00:02.0"])
+assert(degraded_intel.vendor_id == nil and degraded_intel.vendor == "unknown")
+assert(degraded_intel.identity_quality == "estimated")
+assert(degraded_intel.pci.class_id == nil and degraded_intel.pci.boot_vga == nil)
+assert(degraded_intel.pci.runtime_status == nil and degraded_intel.partial)
+local degraded_issues = {}
+for _, issue in ipairs(degraded_intel.issues) do degraded_issues[issue.field] = issue end
+assert(degraded_issues["identity.class"].status == "denied")
+assert(degraded_issues["pci.boot_vga"].reason == "number_out_of_range")
+assert(degraded_issues["power.runtime_status"].status == "denied")
+files["/drm/card1/device/vendor"] = saved_vendor
+files["/drm/card1/device/class"] = saved_class
+files["/drm/card1/device/boot_vga"] = saved_boot
+files["/drm/card1/device/power/runtime_status"] = saved_runtime
+
+-- pci.ids lookup falls through denied/missing candidates once, caches the
+-- bounded database, and still reports numeric PCI identity when no name exists.
+local fallback_reads = {}
+local fallback_files = {
+  ["/pci/first"] = function()
+    return nil, { kind = "denied", message = "permission denied", path = "/pci/first" }
+  end,
+  ["/pci/second"] = "1234  Fallback Vendor\n\t5678  Fallback GPU\n",
+  ["/fallback/card0/device/uevent"] = "DRIVER=example\nPCI_SLOT_NAME=0000:05:00.0\n",
+  ["/fallback/card0/device/vendor"] = "0x1234\n",
+  ["/fallback/card0/device/device"] = "0x5678\n",
+  ["/fallback/card0/dev"] = "226:5\n",
+}
+local fallback_fs = fake_fs(fallback_files, {
+  ["/fallback"] = { "card0" },
+}, {
+  ["/fallback/card0/device"] = "../../../0000:05:00.0",
+  ["/fallback/card0/device/driver"] = "../../../../bus/pci/drivers/example",
+}, {}, fallback_reads, {})
+local fallback_collector = GPU.new({
+  drm_path = "/fallback", proc_path = "/empty-proc", scan_processes = false,
+  pci_ids_paths = { "/pci/first", "/pci/second" },
+})
+local fallback_sample = fallback_collector:sample({ fs = fallback_fs, now_ns = function() return 1 end })
+local fallback_gpu = assert(fallback_sample.data.by_id["0000:05:00.0"])
+assert(fallback_gpu.vendor_name == "Fallback Vendor" and fallback_gpu.model_name == "Fallback GPU")
+assert(fallback_gpu.pci.pci_ids_source == "/pci/second")
+fallback_files["/pci/second"] = "1234  Changed Vendor\n\t5678  Changed GPU\n"
+local cached_fallback = fallback_collector:sample({ fs = fallback_fs, now_ns = function() return 2 end })
+assert(cached_fallback.data.by_id["0000:05:00.0"].model_name == "Fallback GPU")
+assert(fallback_reads["/pci/first"] == 1 and fallback_reads["/pci/second"] == 1)
+
+local denied_inventory_fs = fake_fs({}, {}, {}, {
+  ["/denied-drm"] = { kind = "denied", message = "permission denied", path = "/denied-drm" },
+}, {}, {})
+local denied_inventory = GPU.new({
+  drm_path = "/denied-drm", proc_path = "/proc", scan_processes = false,
+}):probe({ fs = denied_inventory_fs })
+assert(denied_inventory.state == "denied" and not denied_inventory.available)
 
 -- Exercise calculations at the signed integer boundary.  Multiplication by
 -- 100 and addition used to wrap before Lua promoted anything to a float.

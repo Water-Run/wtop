@@ -44,6 +44,21 @@ assert(#storage_models.mount_table.rows == 512)
 assert(storage_models.mount_table.rows[1].mount == "/mnt/0001")
 assert(storage_models.mount_table.rows[512].mount == "/mnt/0512")
 
+local sensors = snapshot()
+sensors.sensors.devices = { { name = "device", channels = {} } }
+for index = 1, 600 do
+  sensors.sensors.devices[1].channels[index] = {
+    type = "temperature", index = index, label = string.format("sensor-%04d", index),
+    input = index, quality = "fresh", alarm = index == 600,
+  }
+end
+local sensor_models = ViewModel.build(engine, sensors, translator, {}, "compute", nil,
+  { sensor_table = true })
+assert(#sensor_models.sensor_table.rows == 512)
+assert(sensor_models.sensor_table.rows[1].sensor == "sensor-0600"
+  and sensor_models.sensor_table.rows[1].alarm,
+  "bounded sensor selection must retain alarms even when they occur after the first 512 channels")
+
 local workloads = snapshot()
 for index = 1, 600 do
   workloads.workloads.workloads[index] = {

@@ -1,6 +1,13 @@
 package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
 
 local Config = require("wtop.config")
+local Application = require("wtop.application")
+local Theme = require("wtop.ui.theme")
+
+local defaults = Config.defaults()
+assert(Theme.DEFAULT == "lua-blue")
+assert(defaults.theme == Theme.DEFAULT)
+assert(assert(Config.parse("schema_version: 1\n")).theme == Theme.DEFAULT)
 
 local parsed = assert(Config.parse([[
 schema_version: 1
@@ -42,5 +49,14 @@ local resolved = Config.resolve({
 assert(resolved.interval_ms == 100)
 assert(resolved.color == false)
 assert(resolved.theme == "water-light")
+
+local sudo_options = Application.resolve_options({
+    privilege = { root = true, via_sudo = true },
+    explicit = { theme = true },
+    theme = "water-light",
+})
+assert(sudo_options.theme == "water-light")
+assert(sudo_options.config_status.state == "default")
+assert(sudo_options.config_status.reason == "sudo session ignores file configuration")
 
 return true

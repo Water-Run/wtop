@@ -32,6 +32,7 @@ local fallback = {
     end,
     poll = unavailable("poll"),
     run = unavailable("run"),
+    execve = unavailable("execve"),
     write = function(value)
         if type(value) ~= "string" then return nil, "write value must be a string" end
         local ok, result, write_error = pcall(io.stdout.write, io.stdout, value)

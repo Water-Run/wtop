@@ -1,6 +1,7 @@
 local version = require("wtop.version")
 local I18n = require("wtop.i18n")
 local Platform = require("wtop.platform")
+local Privilege = require("wtop.privilege")
 local Theme = require("wtop.ui.theme")
 
 local M = {}
@@ -16,6 +17,8 @@ Options:
       --diagnose         Print capability diagnostics and exit
       --snapshot         Print one machine-readable snapshot and exit
       --agent            Print compact LLM/agent context JSON and exit
+      --sudo             Restart through sudo for privileged collection
+      --elevate          Alias for --sudo
       --lang LOCALE      Select UI locale (for example zh-CN or en-US)
       --theme NAME       Select theme
       --interval MS      Sampling interval (100..10000, default 1000)
@@ -51,6 +54,7 @@ function M.parse(argv)
     }
 
     local command_option
+    local elevation_option
     local function select_command(command, item)
         if command_option then
             return nil, "command options cannot be combined: " .. command_option .. " and " .. item
@@ -81,6 +85,13 @@ function M.parse(argv)
         elseif item == "--agent" then
             local ok, command_error = select_command("agent", item)
             if not ok then return nil, command_error end
+        elseif item == "--sudo" or item == "--elevate" then
+            if elevation_option then
+                return nil, "elevation options cannot be repeated or combined: "
+                    .. elevation_option .. " and " .. item
+            end
+            elevation_option = item
+            options.elevate = true
         elseif item == "--safe-mode" then
             options.safe_mode = true
             options.explicit.safe_mode = true
@@ -145,16 +156,41 @@ local function run_tui(options)
     return application.run(options)
 end
 
-function M.run(argv)
+function M.requires_elevation(options, identity)
+    return type(options) == "table" and options.elevate == true
+        and options.command ~= "help" and options.command ~= "version"
+        and type(identity) == "table" and identity.root ~= true
+end
+
+function M.run(argv, dependencies)
+    dependencies = dependencies or {}
+    if type(dependencies) ~= "table" then error("CLI dependencies must be a table", 2) end
     local options, parse_error = M.parse(argv)
     if not options then
         io.stderr:write("wtop: ", parse_error, "\nTry 'wtop --help'.\n")
         return 2
     end
 
-    local _, platform_error = Platform.require_linux()
+    local platform = dependencies.platform or Platform
+    local privilege_module = dependencies.privilege or Privilege
+    local _, platform_error = platform.require_linux()
     if platform_error then
         io.stderr:write("wtop: ", platform_error, "\n")
+        return 1
+    end
+
+    local identity = privilege_module.identity()
+    if type(identity) ~= "table" then
+        io.stderr:write("wtop: cannot determine process privilege\n")
+        return 1
+    end
+    identity.requested = options.elevate == true
+    options.privilege = identity
+
+    if M.requires_elevation(options, identity) then
+        local elevated, elevation_error = privilege_module.elevate()
+        if elevated then return 0 end
+        io.stderr:write("wtop: cannot elevate: ", tostring(elevation_error), "\n")
         return 1
     end
 

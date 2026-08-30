@@ -2,6 +2,7 @@ local Snapshot = {}
 
 local RESOURCE_KEYS = {
   cpu = true,
+  cpu_info = true,
   memory = true,
   pressure = true,
   disks = true,
@@ -11,6 +12,7 @@ local RESOURCE_KEYS = {
   gpus = true,
   cpu_frequency = true,
   sensors = true,
+  power = true,
   mounts = true,
   workloads = true,
 }
@@ -21,6 +23,7 @@ local ID_TO_RESOURCE = {
   process = "processes",
   cpufreq = "cpu_frequency",
   hwmon = "sensors",
+  powercap = "power",
   cgroup = "workloads",
   psi = "pressure",
 }
@@ -60,6 +63,7 @@ function Snapshot.new(sequence, timestamp_ns)
     sequence = sequence,
     timestamp_ns = timestamp_ns,
     cpu = {},
+    cpu_info = {},
     memory = {},
     pressure = {},
     disks = {},
@@ -69,6 +73,7 @@ function Snapshot.new(sequence, timestamp_ns)
     gpus = {},
     cpu_frequency = {},
     sensors = {},
+    power = {},
     mounts = {},
     workloads = {},
     quality = {},

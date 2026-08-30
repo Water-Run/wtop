@@ -8,6 +8,16 @@ local GPU = {}
 GPU.__index = GPU
 
 local MAX_DIRECTORY_LIMIT = 2147483647
+local PCI_IDS_PATHS = {
+  "/usr/share/hwdata/pci.ids",
+  "/usr/share/misc/pci.ids",
+}
+local DISPLAY_CLASS_NAMES = {
+  [0x030000] = "VGA compatible controller",
+  [0x030100] = "XGA compatible controller",
+  [0x030200] = "3D controller",
+  [0x038000] = "Display controller",
+}
 
 local function finite_number(value)
   return type(value) == "number" and value == value
@@ -108,6 +118,81 @@ local function safe_text(value)
   return value ~= "" and value or nil
 end
 
+local function parse_pci_ids_name(content, vendor_id, device_id, subsystem_vendor_id,
+    subsystem_device_id)
+  if type(content) ~= "string" or type(vendor_id) ~= "number"
+      or (device_id ~= nil and type(device_id) ~= "number")
+      or (subsystem_vendor_id ~= nil and type(subsystem_vendor_id) ~= "number")
+      or (subsystem_device_id ~= nil and type(subsystem_device_id) ~= "number") then
+    return nil, nil, nil
+  end
+  local wanted_vendor = string.format("%04x", vendor_id):lower()
+  local wanted_device = device_id and string.format("%04x", device_id):lower() or nil
+  local wanted_subsystem_vendor = subsystem_vendor_id
+    and string.format("%04x", subsystem_vendor_id):lower() or nil
+  local wanted_subsystem_device = subsystem_device_id
+    and string.format("%04x", subsystem_device_id):lower() or nil
+  local vendor_name, device_name, subsystem_name
+  local in_device = false
+  for line in content:gmatch("[^\r\n]+") do
+    local listed_vendor, listed_vendor_name = line:match("^(%x%x%x%x)%s%s+(.+)$")
+    if listed_vendor then
+      if vendor_name then break end
+      if listed_vendor:lower() == wanted_vendor then
+        vendor_name = safe_text(listed_vendor_name)
+        if not wanted_device then break end
+      end
+    elseif vendor_name then
+      local listed_subvendor, listed_subdevice, listed_subsystem_name =
+        line:match("^\t\t(%x%x%x%x)%s+(%x%x%x%x)%s%s+(.+)$")
+      if in_device and listed_subvendor
+          and listed_subvendor:lower() == wanted_subsystem_vendor
+          and listed_subdevice:lower() == wanted_subsystem_device then
+        subsystem_name = safe_text(listed_subsystem_name)
+        break
+      end
+      local listed_device, listed_device_name = line:match("^\t(%x%x%x%x)%s%s+(.+)$")
+      if listed_device then
+        if in_device then break end
+        if listed_device:lower() == wanted_device then
+          device_name = safe_text(listed_device_name)
+          in_device = true
+          if not wanted_subsystem_vendor or not wanted_subsystem_device then break end
+        end
+      end
+    end
+  end
+  return vendor_name, device_name, subsystem_name
+end
+
+local function pci_names(self, fs, vendor_id, device_id, subsystem_vendor_id,
+    subsystem_device_id)
+  if not vendor_id then return nil, nil, nil end
+  local key = table.concat({ string.format("%04x", vendor_id),
+    device_id and string.format("%04x", device_id) or "-",
+    subsystem_vendor_id and string.format("%04x", subsystem_vendor_id) or "-",
+    subsystem_device_id and string.format("%04x", subsystem_device_id) or "-" }, ":")
+  local cached = self._pci_name_cache[key]
+  if cached then return cached.vendor, cached.device, cached.subsystem end
+  if self._pci_ids_content == nil then
+    self._pci_ids_content = false
+    for _, path in ipairs(self.pci_ids_paths) do
+      local content = fs:read(path, self.max_pci_ids_bytes)
+      if content then
+        self._pci_ids_content = content
+        self._pci_ids_source = path
+        break
+      end
+    end
+  end
+  local vendor, device, subsystem = parse_pci_ids_name(
+    self._pci_ids_content ~= false and self._pci_ids_content or nil,
+    vendor_id, device_id, subsystem_vendor_id, subsystem_device_id)
+  cached = { vendor = vendor, device = device, subsystem = subsystem }
+  self._pci_name_cache[key] = cached
+  return vendor, device, subsystem
+end
+
 local function scaled_number(value, multiplier)
   if type(value) ~= "number" or type(multiplier) ~= "number" then
     return nil
@@ -150,6 +235,26 @@ local function add_issue(issues, field, err, path, fallback)
   }
 end
 
+local function optional_signed_number(fs, path, issues, field, minimum, maximum)
+  local content, err = fs:read(path, 256)
+  if not content then
+    if not is_optional_absence(err) then add_issue(issues, field, err, path) end
+    return nil
+  end
+  local raw = Common.trim(content)
+  if type(raw) ~= "string" or not raw:match("^[+-]?%d+$") then
+    add_issue(issues, field, { kind = "parse_error", message = "expected_integer" }, path)
+    return nil
+  end
+  local value = tonumber(raw)
+  if not value or math.type(value) ~= "integer"
+      or (minimum and value < minimum) or (maximum and value > maximum) then
+    add_issue(issues, field, { kind = "parse_error", message = "number_out_of_range" }, path)
+    return nil
+  end
+  return value
+end
+
 local function optional_text(fs, path, issues, field, limit)
   local content, err = fs:read(path, limit or 4096)
   if not content then
@@ -162,6 +267,20 @@ local function optional_text(fs, path, issues, field, limit)
   if not value then
     add_issue(issues, field, { kind = "parse_error", message = "empty_value" }, path)
   end
+  return value
+end
+
+local function optional_link_speed(fs, path, issues, field)
+  local value = optional_text(fs, path, issues, field, 256)
+  if value and (value:lower() == "unknown" or value:lower() == "n/a") then return nil end
+  return value
+end
+
+local function optional_link_width(fs, path, issues, field)
+  local value = optional_signed_number(fs, path, issues, field, 0, 1024)
+  -- PCI core uses 0 and 255 when a link width is not meaningful, notably for
+  -- integrated GPUs. Do not present those protocol values as x0 or x255.
+  if value == 0 or value == 255 then return nil end
   return value
 end
 
@@ -1125,6 +1244,19 @@ local function finalize_processes(device, scan)
   device.capabilities.processes = #device.processes.clients > 0
   device.capabilities.process_memory = next(aggregate.memory_summary) ~= nil
   device.quality.processes = scan.quality
+  if device.metrics.utilization_percent == nil
+      and finite_number(aggregate.utilization_percent) then
+    device.metrics.utilization_percent = aggregate.utilization_percent
+    device.metrics.utilization_source = "drm_fdinfo"
+    device.capabilities.utilization = true
+    device.quality.utilization = scan.quality == "fresh" and "estimated" or scan.quality
+  end
+  local process_memory = aggregate.memory_summary.resident_bytes
+    or aggregate.memory_summary.total_bytes
+  if finite_number(process_memory) then
+    device.metrics.process_memory_bytes = process_memory
+    device.metrics.process_memory_source = "drm_fdinfo"
+  end
   if scan.quality == "partial" or scan.status == "denied" then
     device.partial = true
   end
@@ -1138,6 +1270,7 @@ local function build_device(self, fs, drm_path, card_name, used_ids)
   local device_text = optional_text(fs, primary.device_path .. "/device", issues, "identity.device", 256)
   local vendor_id = Sysfs.hex_id(vendor_text)
   local device_id = Sysfs.hex_id(device_text)
+  local pci_vendor_name, pci_device_name = pci_names(self, fs, vendor_id, device_id)
   local bdf = primary.pci_bdf
   local driver = primary.driver
   local id = bdf or (primary.device_target and ((driver or "drm") .. "@" .. primary.device_target)) or card_name
@@ -1161,6 +1294,8 @@ local function build_device(self, fs, drm_path, card_name, used_ids)
     vendor_id = vendor_id,
     device_id = device_id,
     vendor = Sysfs.vendor_name(vendor_id),
+    vendor_name = pci_vendor_name,
+    model_name = pci_device_name,
     driver = driver or uevent.DRIVER,
     identity_quality = identity_quality,
     drm_nodes = {
@@ -1183,9 +1318,54 @@ local function build_device(self, fs, drm_path, card_name, used_ids)
     source = primary.class_path,
   }
 
+  local subsystem_vendor_text = optional_text(
+    fs, device.device_path .. "/subsystem_vendor", issues, "identity.subsystem_vendor", 256)
+  local subsystem_device_text = optional_text(
+    fs, device.device_path .. "/subsystem_device", issues, "identity.subsystem_device", 256)
+  local revision_text = optional_text(
+    fs, device.device_path .. "/revision", issues, "identity.revision", 256)
+  local class_text = optional_text(
+    fs, device.device_path .. "/class", issues, "identity.class", 256)
+  local boot_vga = optional_signed_number(
+    fs, device.device_path .. "/boot_vga", issues, "pci.boot_vga", 0, 1)
+  local subsystem_vendor_id = Sysfs.hex_id(subsystem_vendor_text)
+  local subsystem_device_id = Sysfs.hex_id(subsystem_device_text)
+  local subsystem_vendor_name = pci_names(self, fs, subsystem_vendor_id)
+  local _, _, subsystem_model_name = pci_names(self, fs, vendor_id, device_id,
+    subsystem_vendor_id, subsystem_device_id)
+  local class_id = Sysfs.hex_id(class_text)
+  device.pci = {
+    class_id = class_id,
+    class_name = class_id and DISPLAY_CLASS_NAMES[class_id & 0xffff00] or nil,
+    revision = Sysfs.hex_id(revision_text),
+    subsystem_vendor_id = subsystem_vendor_id,
+    subsystem_device_id = subsystem_device_id,
+    subsystem_vendor_name = subsystem_vendor_name,
+    subsystem_model_name = subsystem_model_name,
+    numa_node = optional_signed_number(
+      fs, device.device_path .. "/numa_node", issues, "pci.numa_node", -1, 2147483647),
+    current_link_speed = optional_link_speed(
+      fs, device.device_path .. "/current_link_speed", issues, "pci.current_link_speed"),
+    current_link_width = optional_link_width(
+      fs, device.device_path .. "/current_link_width", issues, "pci.current_link_width"),
+    maximum_link_speed = optional_link_speed(
+      fs, device.device_path .. "/max_link_speed", issues, "pci.maximum_link_speed"),
+    maximum_link_width = optional_link_width(
+      fs, device.device_path .. "/max_link_width", issues, "pci.maximum_link_width"),
+    runtime_status = optional_text(
+      fs, device.device_path .. "/power/runtime_status", issues, "power.runtime_status", 256),
+    modalias = optional_text(
+      fs, device.device_path .. "/modalias", issues, "identity.modalias", 4096),
+    pci_ids_source = self._pci_ids_source,
+  }
+  if boot_vga ~= nil then device.pci.boot_vga = boot_vga == 1 end
+
   device.metrics.utilization_percent = optional_number(
     fs, device.device_path .. "/gpu_busy_percent", issues, "utilization", 0, 100
   )
+  if device.metrics.utilization_percent ~= nil then
+    device.metrics.utilization_source = "sysfs"
+  end
   device.metrics.memory_busy_percent = optional_number(
     fs, device.device_path .. "/mem_busy_percent", issues, "memory_busy", 0, 100
   )
@@ -1280,6 +1460,15 @@ function GPU.new(options)
   if options.scan_processes ~= nil and type(options.scan_processes) ~= "boolean" then
     error("scan_processes must be a boolean", 2)
   end
+  if options.pci_ids_paths ~= nil and type(options.pci_ids_paths) ~= "table" then
+    error("pci_ids_paths must be an array", 2)
+  end
+  local pci_ids_paths = {}
+  for index, path in ipairs(options.pci_ids_paths or PCI_IDS_PATHS) do
+    if index > 8 then error("pci_ids_paths must contain at most 8 paths", 2) end
+    pci_ids_paths[index] = Common.absolute_path("pci_ids_paths[" .. index .. "]", path)
+  end
+  if #pci_ids_paths == 0 then error("pci_ids_paths must not be empty", 2) end
   return setmetatable({
     id = "gpu",
     default_interval_ms = Common.positive_integer("interval_ms", options.interval_ms, 1000),
@@ -1301,6 +1490,10 @@ function GPU.new(options)
     max_fdinfo_bytes = positive_integer(
       "max_fdinfo_bytes", options.max_fdinfo_bytes, 256 * 1024, 64 * 1024 * 1024),
     max_clients = positive_integer("max_clients", options.max_clients, 8192, 262144),
+    max_pci_ids_bytes = positive_integer(
+      "max_pci_ids_bytes", options.max_pci_ids_bytes, 8 * 1024 * 1024, 64 * 1024 * 1024),
+    pci_ids_paths = pci_ids_paths,
+    _pci_name_cache = {},
     _method_style = true,
   }, GPU)
 end
@@ -1418,6 +1611,7 @@ end
 
 GPU.enumerate = enumerate
 GPU.parse_fdinfo = parse_fdinfo
+GPU.parse_pci_ids_name = parse_pci_ids_name
 GPU.parse_dpm_states = parse_dpm_states
 
 return GPU

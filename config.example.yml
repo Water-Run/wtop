@@ -6,8 +6,8 @@ schema_version: 1
 # fr-FR, de-DE, pt-BR, ru-RU.
 locale: "en-US"
 
-# water-dark, water-light, high-contrast, colorblind
-theme: "water-dark"
+# lua-blue (default), water-dark, water-light, high-contrast, colorblind
+theme: "lua-blue"
 
 # Milliseconds; accepted range is 100..10000. Interactive TUI uses the nearest named rate.
 interval_ms: 1000

@@ -6,8 +6,7 @@ local EMPTY_PROCESS_SOURCE = {}
 local PROCESS_VIEW_CACHE = setmetatable({}, { __mode = "k" })
 local TABLE_ROW_LIMIT = 512
 
-local function bounded_best_values(values, limit, better)
-    local heap = {}
+local function bounded_best_add(heap, limit, better, value)
     local function worse(left, right) return better(right, left) end
     local function sift_up(index)
         while index > 1 do
@@ -28,14 +27,19 @@ local function bounded_best_values(values, limit, better)
             index = child
         end
     end
+    if #heap < limit then
+        heap[#heap + 1] = value
+        sift_up(#heap)
+    elseif better(value, heap[1]) then
+        heap[1] = value
+        sift_down(1)
+    end
+end
+
+local function bounded_best_values(values, limit, better)
+    local heap = {}
     for _, value in ipairs(values or {}) do
-        if #heap < limit then
-            heap[#heap + 1] = value
-            sift_up(#heap)
-        elseif better(value, heap[1]) then
-            heap[1] = value
-            sift_down(1)
-        end
+        bounded_best_add(heap, limit, better, value)
     end
     table.sort(heap, better)
     return heap
@@ -300,13 +304,26 @@ local function gpu_rows(snapshot, format)
         end
         local temperature_celsius = metrics.temperature_celsius or joined_temperature
         local power_watts = metrics.power_watts or joined_power
+        local memory_used = metrics.memory_used_bytes or metrics.process_memory_bytes
+        local memory_total = metrics.memory_total_bytes
+        local memory_text = "—"
+        if memory_used then
+            memory_text = bytes(format, memory_used)
+            if memory_total then memory_text = memory_text .. " / " .. bytes(format, memory_total) end
+        end
+        local pci = gpu.pci or {}
+        local pcie = pci.current_link_speed
+        if pci.current_link_width then
+            pcie = (pcie and (pcie .. " ") or "") .. "x" .. tostring(pci.current_link_width)
+        end
         rows[#rows + 1] = {
-            gpu = gpu.card or gpu.id,
-            vendor = gpu.vendor or "?",
+            gpu = gpu.model_name or gpu.card or gpu.id,
+            vendor = gpu.vendor_name or gpu.vendor or "?",
             driver = gpu.driver or "?",
             utilization = percent(format, metrics.utilization_percent),
-            memory = metrics.memory_used_bytes and (bytes(format, metrics.memory_used_bytes)
-                .. " / " .. bytes(format, metrics.memory_total_bytes)) or "—",
+            memory = memory_text,
+            frequency = frequency(format, metrics.frequency_current_hz),
+            pcie = pcie or "—",
             temperature = temperature_celsius
                 and formatted(function() return assert(format:temperature(temperature_celsius)) end)
                 or "—",
@@ -470,23 +487,24 @@ end
 
 local function sensor_rows(snapshot, format)
     local rows = {}
+    local function better(left, right)
+        if left.alarm ~= right.alarm then return left.alarm end
+        if left.device == right.device then return left.sensor < right.sensor end
+        return left.device < right.device
+    end
     for _, device in ipairs(snapshot.sensors and snapshot.sensors.devices or {}) do
         for _, channel in ipairs(device.channels or {}) do
-            rows[#rows + 1] = {
+            bounded_best_add(rows, TABLE_ROW_LIMIT, better, {
                 device = device.name or device.class or "?",
                 sensor = channel.label or (channel.type .. " " .. tostring(channel.index)),
                 type = channel.type,
                 value = sensor_value(channel, format),
                 status = channel.fault and "FAULT" or (channel.alarm and "ALARM" or channel.quality or "—"),
                 alarm = channel.alarm == true or channel.fault == true,
-            }
+            })
         end
     end
-    table.sort(rows, function(left, right)
-        if left.alarm ~= right.alarm then return left.alarm end
-        if left.device == right.device then return left.sensor < right.sensor end
-        return left.device < right.device
-    end)
+    table.sort(rows, better)
     return rows
 end
 
@@ -540,6 +558,109 @@ local function workload_rows(snapshot, format)
     return rows
 end
 
+local function cpu_identity_text(snapshot, format, i18n)
+    local cpu_info = snapshot.cpu_info or {}
+    local identity = cpu_info.identity or {}
+    local topology = cpu_info.topology or {}
+    if not identity.model_name and not identity.vendor and not topology.threads then
+        return translated(i18n, "ui.no_data", "No data")
+    end
+    local cache_labels = {}
+    for _, cache in ipairs(cpu_info.cache_summary or {}) do
+        cache_labels[#cache_labels + 1] = tostring(cache.id or "?") .. " "
+            .. bytes(format, cache.total_size_bytes)
+    end
+    local features = {}
+    for index = 1, math.min(12, #(identity.flags or {})) do
+        features[#features + 1] = identity.flags[index]
+    end
+    local family = table.concat({
+        tostring(identity.vendor or "—"),
+        "family " .. tostring(identity.family or "—"),
+        "model " .. tostring(identity.model or "—"),
+        "stepping " .. tostring(identity.stepping or "—"),
+    }, " · ")
+    local model_line = tostring(identity.model_name or "—")
+    if identity.heterogeneous and #(cpu_info.core_types or {}) > 1 then
+        local type_labels = {}
+        for index = 1, math.min(8, #cpu_info.core_types) do
+            local core_type = cpu_info.core_types[index]
+            local label = core_type.model_name or core_type.vendor or "CPU"
+            if core_type.part and not label:find(core_type.part, 1, true) then
+                label = label .. " part " .. tostring(core_type.part)
+            end
+            if core_type.cpu_capacity then
+                label = label .. " cap " .. tostring(core_type.cpu_capacity)
+            end
+            if core_type.maximum_frequency_hz then
+                label = label .. " max " .. frequency(format, core_type.maximum_frequency_hz)
+            end
+            if core_type.threads_per_core then
+                label = label .. " " .. tostring(core_type.threads_per_core) .. "T/core"
+            end
+            local count_label = core_type.physical_core_count
+                and (tostring(core_type.physical_core_count) .. "C/") or ""
+            count_label = count_label .. tostring(core_type.logical_cpu_count or 0) .. "T"
+            type_labels[#type_labels + 1] = label .. " ×" .. count_label
+        end
+        if #cpu_info.core_types > #type_labels then type_labels[#type_labels + 1] = "…" end
+        model_line = table.concat(type_labels, " · ")
+    end
+    return table.concat({
+        model_line,
+        translated(i18n, "compute.cpu_family",
+            "Identity: {value}", { value = family }),
+        translated(i18n, "compute.cpu_topology",
+            "Topology: {sockets} socket · {cores} cores · {threads} threads", {
+                sockets = topology.sockets or 0,
+                cores = topology.physical_cores or 0,
+                threads = topology.threads or 0,
+            }),
+        translated(i18n, "compute.cpu_cache",
+            "Cache: {value}", { value = #cache_labels > 0 and table.concat(cache_labels, " · ") or "—" }),
+        translated(i18n, "compute.cpu_microcode",
+            "Microcode: {value}", { value = identity.microcode or "—" }),
+        translated(i18n, "compute.cpu_features",
+            "Features: {value}", { value = #features > 0 and table.concat(features, " ") or "—" }),
+    }, "\n")
+end
+
+local function power_rows(snapshot, format)
+    local rows = {}
+    for _, zone in ipairs(snapshot.power and snapshot.power.zones or {}) do
+        if #rows >= TABLE_ROW_LIMIT then break end
+        local constraint = zone.constraints and zone.constraints[1]
+        local power = type(zone.power_watts) == "number"
+            and formatted(function()
+                return assert(format:number(zone.power_watts, { precision = 2 }))
+            end) .. " W" or "—"
+        local energy = type(zone.energy_joules) == "number"
+            and formatted(function()
+                return assert(format:number(zone.energy_joules, { precision = 1 }))
+            end) .. " J" or "—"
+        local limit = constraint and type(constraint.power_limit_watts) == "number"
+            and formatted(function()
+                return assert(format:number(constraint.power_limit_watts, { precision = 1 }))
+            end) .. " W" or "—"
+        rows[#rows + 1] = {
+            zone = zone.name or zone.id or "?",
+            domain = zone.source_kind or "—",
+            power = power,
+            energy = energy,
+            limit = limit,
+            source = zone.power_source or zone.power_quality or "—",
+            state = zone.enabled == false and "disabled" or (zone.quality or "—"),
+            aggregate = zone.aggregate == true,
+        }
+    end
+    table.sort(rows, function(left, right)
+        if left.aggregate ~= right.aggregate then return left.aggregate end
+        if left.domain ~= right.domain then return left.domain < right.domain end
+        return left.zone < right.zone
+    end)
+    return rows
+end
+
 function M.build(engine, snapshot, i18n, capabilities, active_tab, process_controller, visible_widgets)
     local format = i18n.format
     local function visible(widget_id)
@@ -587,12 +708,15 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         and cpufreq_rows(snapshot, format) or {}
     local sensor_table_rows = (not active_tab or active_tab == "compute") and visible("sensor_table")
         and sensor_rows(snapshot, format) or {}
+    local power_table_rows = (not active_tab or active_tab == "compute") and visible("power_table")
+        and power_rows(snapshot, format) or {}
     local mount_table_rows = (not active_tab or active_tab == "storage") and visible("mount_table")
         and mount_rows(snapshot, format) or {}
     local workload_table_rows = (not active_tab or active_tab == "workloads") and visible("workload_table")
         and workload_rows(snapshot, format) or {}
     local average_frequency = Engine.average_cpu_frequency(snapshot.cpu_frequency)
     local maximum_temperature = Engine.maximum_temperature(snapshot.sensors)
+    local cpu_power = snapshot.power and snapshot.power.total_power_watts
     local workload_root = snapshot.workloads and snapshot.workloads.summary
         and snapshot.workloads.summary.root
 
@@ -645,6 +769,11 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             display_value = temperature(format, maximum_temperature),
             history = engine:history_values("temperature"), quality = quality(snapshot, "sensors"),
         },
+        power_overview = {
+            label = translated(i18n, "metrics.power", "Power"),
+            display_value = type(cpu_power) == "number" and string.format("%.1f W", cpu_power) or "—",
+            history = engine:history_values("cpu_power"), quality = quality(snapshot, "power"),
+        },
         process_table = {
             columns = {
                 { key = "pid", label = "PID" .. (process_status.sort_key == "pid"
@@ -671,6 +800,9 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             value = cpu_value,
             display_value = percent(format, cpu_value),
             history = engine:history_values("cpu"), quality = quality(snapshot, "cpu"), min = 0, max = 100,
+        },
+        cpu_identity = {
+            text = cpu_identity_text(snapshot, format, i18n),
         },
         load_summary = {
             text = snapshot.cpu and snapshot.cpu.load and string.format(
@@ -710,6 +842,25 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "status", label = translated(i18n, "metrics.state", "State"), width = 12, min_width = 8 },
             },
             rows = sensor_table_rows,
+        },
+        power_table = {
+            columns = {
+                { key = "zone", label = translated(i18n, "metrics.device", "Zone"),
+                    width = 18, min_width = 10 },
+                { key = "domain", label = translated(i18n, "metrics.type", "Domain"),
+                    width = 15, min_width = 9 },
+                { key = "power", label = translated(i18n, "metrics.power", "Power"),
+                    width = 12, min_width = 9, align = "right" },
+                { key = "energy", label = translated(i18n, "metrics.energy", "Energy"),
+                    width = 14, min_width = 9, align = "right" },
+                { key = "limit", label = translated(i18n, "metrics.maximum", "Limit"),
+                    width = 12, min_width = 9, align = "right" },
+                { key = "source", label = translated(i18n, "metrics.source", "Source"),
+                    width = 14, min_width = 9, full_only = true },
+                { key = "state", label = translated(i18n, "metrics.state", "State"),
+                    width = 11, min_width = 8, full_only = true },
+            },
+            rows = power_table_rows,
         },
         memory_detail = {
             text = table.concat({
@@ -802,12 +953,16 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         },
         gpu_table = {
             columns = {
-                { key = "gpu", label = "GPU", width = 10, min_width = 6 },
-                { key = "vendor", label = translated(i18n, "metrics.vendor", "Vendor"), width = 10, min_width = 8 },
+                { key = "gpu", label = "GPU", width = 30, min_width = 12 },
+                { key = "vendor", label = translated(i18n, "metrics.vendor", "Vendor"), width = 18, min_width = 8 },
                 { key = "driver", label = translated(i18n, "metrics.driver", "Driver"), width = 12, min_width = 8 },
                 { key = "utilization", label = translated(i18n, "metrics.utilization", "Util"), width = 10, min_width = 8,
                     align = "right" },
-                { key = "memory", label = "VRAM", width = 20, min_width = 12, align = "right" },
+                { key = "memory", label = translated(i18n, "metrics.memory", "Memory"),
+                    width = 20, min_width = 12, align = "right" },
+                { key = "frequency", label = translated(i18n, "metrics.frequency", "Frequency"),
+                    width = 13, min_width = 9, align = "right", full_only = true },
+                { key = "pcie", label = "PCIe", width = 18, min_width = 9, full_only = true },
                 { key = "temperature", label = translated(i18n, "metrics.temperature", "Temp"), width = 10,
                     min_width = 8, align = "right" },
                 { key = "power", label = translated(i18n, "metrics.power", "Power"), width = 10, min_width = 8,

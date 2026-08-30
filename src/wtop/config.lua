@@ -54,7 +54,7 @@ end
 function M.defaults()
     return {
         schema_version = 1,
-        theme = "water-dark",
+        theme = Theme.DEFAULT,
         interval_ms = 1000,
         safe_mode = false,
         color = true,

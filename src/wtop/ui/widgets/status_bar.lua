@@ -23,6 +23,10 @@ function M.render(grid, area, state, context)
   local unicode = not (context.capabilities and context.capabilities.unicode == false)
   local separator = unicode and " · " or " | "
   local right = state.error or state.message
+  if state.privilege and state.privilege.root == true then
+    local marker = state.privilege.via_sudo and "root/sudo" or "root"
+    right = right and (marker .. separator .. tostring(right)) or marker
+  end
   local has_priority_message = right ~= nil or (state.filter and state.filter ~= "")
   if not right and state.data_age then right = tostring(state.data_age) end
   if state.filter and state.filter ~= "" then

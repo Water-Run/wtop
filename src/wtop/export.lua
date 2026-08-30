@@ -55,6 +55,124 @@ local function export_cpu(cpu)
     return result
 end
 
+local function copy_array(values)
+    local result = json.array({})
+    for index, value in ipairs(values or {}) do result[index] = value end
+    return result
+end
+
+local function export_issues(issues)
+    local result = json.array({})
+    for index, issue in ipairs(issues or {}) do
+        result[index] = copy_fields(issue, {
+            "field", "status", "reason", "source", "errno",
+        })
+    end
+    return result
+end
+
+local function export_cpu_info(cpu_info)
+    local result = json.object({
+        schema = cpu_info and cpu_info.schema,
+        truncated = cpu_info and cpu_info.truncated == true or false,
+    })
+    result.identity = copy_fields(cpu_info and cpu_info.identity, {
+        "model_name", "vendor", "family", "model", "stepping", "microcode",
+        "implementer", "architecture", "variant", "part", "flags_count", "flags_truncated",
+        "core_type_count", "heterogeneous",
+    })
+    result.identity.flags = copy_array(cpu_info and cpu_info.identity and cpu_info.identity.flags)
+    local topology = cpu_info and cpu_info.topology or {}
+    result.topology = copy_fields(topology, {
+        "sockets", "physical_cores", "threads", "online_threads",
+        "threads_per_core_minimum", "threads_per_core_maximum", "quality", "truncated",
+    })
+    for _, key in ipairs({
+        "online_cpu_list", "present_cpu_list", "possible_cpu_list", "isolated_cpu_list",
+    }) do
+        result.topology[key] = copy_array(topology[key])
+    end
+    result.topology.logical_cpus = json.array({})
+    for index, cpu in ipairs(topology.logical_cpus or {}) do
+        local output = copy_fields(cpu, {
+            "id", "online", "package_id", "die_id", "cluster_id", "core_id", "core_key",
+            "cpu_capacity", "kernel_core_type", "maximum_frequency_hz", "threads_in_core",
+            "core_type_id", "source",
+        })
+        output.thread_siblings = copy_array(cpu.thread_siblings)
+        result.topology.logical_cpus[index] = output
+    end
+    result.core_types = json.array({})
+    for index, core_type in ipairs(cpu_info and cpu_info.core_types or {}) do
+        local output = copy_fields(core_type, {
+            "id", "model_name", "vendor", "family", "model", "stepping", "implementer",
+            "architecture", "variant", "part", "cpu_capacity", "kernel_core_type",
+            "threads_per_core", "maximum_frequency_hz", "physical_core_count",
+            "logical_cpu_count",
+        })
+        output.logical_cpu_ids = copy_array(core_type.logical_cpu_ids)
+        result.core_types[index] = output
+    end
+    result.caches = json.array({})
+    for index, cache in ipairs(cpu_info and cpu_info.caches or {}) do
+        local output = copy_fields(cache, {
+            "id", "cache_id", "level", "type", "size", "size_bytes", "shared_cpu_list_text",
+            "coherency_line_size_bytes", "ways_of_associativity", "number_of_sets",
+            "physical_line_partition", "source",
+        })
+        output.shared_cpu_list = copy_array(cache.shared_cpu_list)
+        result.caches[index] = output
+    end
+    result.cache_summary = json.array({})
+    for index, cache in ipairs(cpu_info and cpu_info.cache_summary or {}) do
+        result.cache_summary[index] = copy_fields(cache, {
+            "id", "level", "type", "instances", "total_size_bytes",
+            "minimum_size_bytes", "maximum_size_bytes",
+        })
+    end
+    result.issues = export_issues(cpu_info and cpu_info.issues)
+    return result
+end
+
+local function export_power(power)
+    local result = json.object({
+        schema = power and power.schema,
+        total_power_watts = power and power.total_power_watts,
+        measured_aggregate_zones = power and power.measured_aggregate_zones,
+        aggregate_strategy = power and power.aggregate_strategy,
+        aggregate_source_kind = power and power.aggregate_source_kind,
+        aggregate_zone_count = power and power.aggregate_zone_count,
+        aggregate_complete = power and power.aggregate_complete,
+        platform_power_watts = power and power.platform_power_watts,
+        measured_platform_zones = power and power.measured_platform_zones,
+        platform_aggregate_strategy = power and power.platform_aggregate_strategy,
+        platform_aggregate_source_kind = power and power.platform_aggregate_source_kind,
+        denied_zones = power and power.denied_zones,
+        truncated = power and power.truncated == true or false,
+        zones = json.array({}),
+    })
+    for index, zone in ipairs(power and power.zones or {}) do
+        local output = copy_fields(zone, {
+            "id", "name", "source_kind", "parent_id", "enabled", "energy_joules",
+            "maximum_energy_range_joules", "observed_at_ns", "power_watts",
+            "power_source", "power_quality", "quality", "truncated", "aggregate", "source",
+            "platform_aggregate", "aggregate_domain",
+        })
+        output.constraints = json.array({})
+        for constraint_index, constraint in ipairs(zone.constraints or {}) do
+            output.constraints[constraint_index] = copy_fields(constraint, {
+                "id", "name", "power_limit_watts", "maximum_power_watts",
+                "minimum_power_watts", "time_window_seconds", "maximum_time_window_seconds",
+                "minimum_time_window_seconds", "source",
+            })
+        end
+        output.issues = export_issues(zone.issues)
+        result.zones[index] = output
+    end
+    result.issues = export_issues(power and power.issues)
+    return result
+end
+
 local function export_memory(memory)
     local result = copy_fields(memory, {
         "total_bytes", "available_bytes", "used_bytes", "free_bytes",
@@ -301,8 +419,10 @@ local function export_gpus(gpus)
     for index, device in ipairs(gpus and gpus.devices or {}) do
         local exported = copy_fields(device, {
             "id", "card", "pci_bdf", "vendor_id", "device_id", "vendor", "driver",
-            "stable_id", "primary_node", "identity_quality", "partial", "source",
+            "vendor_name", "model_name", "stable_id", "primary_node",
+            "identity_quality", "partial", "source",
         })
+        exported.pci = copy_object(device.pci)
         exported.capabilities = copy_object(device.capabilities)
         exported.metrics = copy_object(device.metrics)
         exported.quality = copy_object(device.quality)
@@ -320,6 +440,7 @@ local function export_gpus(gpus)
         end
         exported.frequencies = export_gpu_frequencies(device.frequencies)
         exported.processes = export_gpu_processes(device.processes)
+        exported.issues = export_issues(device.issues)
         result.devices[index] = exported
     end
     return result
@@ -367,6 +488,7 @@ local function export_sensors(sensors)
             })
             output.readings = copy_object(channel.readings)
             output.thresholds = copy_object(channel.thresholds)
+            output.errors = copy_object(channel.errors)
             exported.channels[channel_index] = output
         end
         result.devices[device_index] = exported
@@ -512,6 +634,13 @@ function M.capabilities(capabilities)
     return result
 end
 
+function M.privilege(privilege)
+    return copy_fields(privilege, {
+        "mode", "uid", "effective_uid", "original_uid", "root",
+        "elevated", "via_sudo", "requested",
+    })
+end
+
 function M.snapshot(snapshot, options)
     if type(snapshot) ~= "table" then snapshot = {} end
     if type(options) ~= "table" then options = {} end
@@ -525,8 +654,10 @@ function M.snapshot(snapshot, options)
         captured_monotonic_ns = snapshot.timestamp_ns,
         captured_unix_ns = native.realtime_ns(),
         configuration = configuration,
+        privilege = M.privilege(options.privilege),
         quality = export_quality(snapshot.quality),
         cpu = export_cpu(snapshot.cpu),
+        cpu_info = export_cpu_info(snapshot.cpu_info),
         memory = export_memory(snapshot.memory),
         pressure = export_pressure(snapshot.pressure),
         disks = export_disks(snapshot.disks),
@@ -537,6 +668,7 @@ function M.snapshot(snapshot, options)
         gpus = export_gpus(snapshot.gpus),
         cpu_frequency = export_cpu_frequency(snapshot.cpu_frequency),
         sensors = export_sensors(snapshot.sensors),
+        power = export_power(snapshot.power),
         mounts = export_mounts(snapshot.mounts),
         workloads = export_workloads(snapshot.workloads, options.workload_limit),
     })
@@ -585,14 +717,16 @@ end
 -- only decision-relevant metrics, bounded top lists, quality and signals.
 function M.agent(snapshot, options)
     if type(options) ~= "table" then options = {} end
-    local process_limit = bounded_limit(options.process_limit, 10, 100, 1)
-    local device_limit = bounded_limit(options.device_limit, 5, 50, 1)
-    local workload_limit = bounded_limit(options.workload_limit, 5, 100, 1)
+    -- These maxima are part of agent-v1.schema.json, not merely defaults.
+    local process_limit = bounded_limit(options.process_limit, 10, 10, 1)
+    local device_limit = bounded_limit(options.device_limit, 5, 5, 1)
+    local workload_limit = bounded_limit(options.workload_limit, 5, 5, 1)
     local full = M.snapshot(snapshot, {
         process_limit = process_limit,
         connection_limit = 0,
         workload_limit = workload_limit,
         configuration = options.configuration,
+        privilege = options.privilege,
     })
 
     local signals = json.array({})
@@ -619,7 +753,18 @@ function M.agent(snapshot, options)
 
     local cpu_total = full.cpu and full.cpu.total or {}
     local cpu_load = full.cpu and full.cpu.load or {}
-    local logical_cpus = #(full.cpu and full.cpu.cores or {})
+    local cpu_identity = full.cpu_info and full.cpu_info.identity or {}
+    local cpu_topology = full.cpu_info and full.cpu_info.topology or {}
+    local logical_cpus = cpu_topology.threads or #(full.cpu and full.cpu.cores or {})
+    local cpu_core_types = json.array({})
+    for index = 1, math.min(#(full.cpu_info and full.cpu_info.core_types or {}), device_limit) do
+        cpu_core_types[index] = copy_fields(full.cpu_info.core_types[index], {
+            "id", "model_name", "vendor", "family", "model", "stepping", "implementer",
+            "architecture", "variant", "part", "cpu_capacity", "kernel_core_type",
+            "threads_per_core", "maximum_frequency_hz", "physical_core_count",
+            "logical_cpu_count",
+        })
+    end
     threshold("cpu", "high_utilization", cpu_total.utilization, 75, 90, "percent",
         "CPU utilization is elevated")
     threshold("cpu", "high_iowait", cpu_total.iowait, 10, 20, "percent",
@@ -706,15 +851,85 @@ function M.agent(snapshot, options)
         return device.metrics and device.metrics.utilization_percent
     end)
     for index, device in ipairs(ranked_gpus) do
-        local output = copy_fields(device, { "id", "card", "vendor", "driver", "quality", "partial" })
+        local output = copy_fields(device, {
+            "id", "card", "vendor", "vendor_name", "model_name", "driver", "quality", "partial",
+        })
+        output.pci = copy_fields(device.pci, {
+            "class_id", "class_name", "revision", "subsystem_vendor_id", "subsystem_device_id",
+            "subsystem_vendor_name", "subsystem_model_name",
+            "boot_vga", "numa_node", "current_link_speed", "current_link_width",
+            "maximum_link_speed", "maximum_link_width", "runtime_status",
+        })
         output.metrics = copy_fields(device.metrics, {
-            "utilization_percent", "vram_used_bytes", "vram_total_bytes",
-            "temperature_celsius", "power_watts",
+            "utilization_percent", "utilization_source",
+            "memory_used_bytes", "memory_total_bytes", "process_memory_bytes",
+            "frequency_current_hz", "temperature_celsius", "power_watts",
         })
         gpu_summaries[index] = output
     end
     threshold("gpu", "high_utilization", maximum_gpu_utilization, 85, 97, "percent",
         "GPU utilization is elevated")
+
+    local temperature_count, fan_count, sensor_power_count = 0, 0, 0
+    local top_temperatures = json.array({})
+    local threshold_temperature
+    for _, device in ipairs(full.sensors and full.sensors.devices or {}) do
+        for _, channel in ipairs(device.channels or {}) do
+            if channel.type == "temperature" and finite_number(channel.input) then
+                temperature_count = temperature_count + 1
+                local temperature = json.object({
+                    device_id = device.id,
+                    device = device.name,
+                    channel_id = channel.id,
+                    label = channel.label,
+                    temperature_celsius = channel.input,
+                    quality = channel.quality,
+                    thresholds = copy_fields(channel.thresholds, { "max", "crit", "emergency" }),
+                })
+                top_temperatures[#top_temperatures + 1] = temperature
+                local critical = temperature.thresholds and (temperature.thresholds.crit
+                    or temperature.thresholds.emergency)
+                local warning = temperature.thresholds and temperature.thresholds.max
+                local severity
+                if finite_number(critical) and temperature.temperature_celsius >= critical then
+                    severity = "critical"
+                elseif finite_number(warning) and temperature.temperature_celsius >= warning then
+                    severity = "warning"
+                end
+                if severity and (not threshold_temperature
+                    or severity_rank[severity] > severity_rank[threshold_temperature.severity]
+                    or (severity == threshold_temperature.severity
+                        and temperature.temperature_celsius
+                            > threshold_temperature.temperature_celsius))
+                then
+                    threshold_temperature = {
+                        severity = severity,
+                        temperature_celsius = temperature.temperature_celsius,
+                    }
+                end
+                table.sort(top_temperatures, function(left, right)
+                    if left.temperature_celsius == right.temperature_celsius then
+                        return tostring(left.device_id or "") .. tostring(left.channel_id or "")
+                            < tostring(right.device_id or "") .. tostring(right.channel_id or "")
+                    end
+                    return left.temperature_celsius > right.temperature_celsius
+                end)
+                if #top_temperatures > device_limit then top_temperatures[#top_temperatures] = nil end
+            elseif channel.type == "fan" and finite_number(channel.input) then
+                fan_count = fan_count + 1
+            elseif channel.type == "power" and finite_number(channel.input) then
+                sensor_power_count = sensor_power_count + 1
+            end
+        end
+    end
+    local hottest = top_temperatures[1]
+    if threshold_temperature then
+        local critical = threshold_temperature.severity == "critical"
+        add_signal("sensors", "temperature_threshold", threshold_temperature.severity,
+            threshold_temperature.temperature_celsius, "celsius",
+            critical and "A temperature sensor reached its critical threshold"
+                or "A temperature sensor exceeded its maximum threshold")
+    end
 
     local top_workloads = json.array({})
     for index, workload in ipairs(full.workloads and full.workloads.items or {}) do
@@ -784,6 +999,7 @@ function M.agent(snapshot, options)
         sequence = full.sequence,
         captured_unix_ns = full.captured_unix_ns,
         captured_monotonic_ns = full.captured_monotonic_ns,
+        privilege = full.privilege,
         overall = json.object({ state = state, signal_count = #signals }),
         metrics = json.object({
             cpu = json.object({
@@ -797,6 +1013,14 @@ function M.agent(snapshot, options)
                 load_15 = cpu_load.fifteen,
                 running_processes = full.cpu and full.cpu.processes_running,
                 blocked_processes = full.cpu and full.cpu.processes_blocked,
+                model_name = cpu_identity.model_name,
+                vendor = cpu_identity.vendor,
+                heterogeneous = cpu_identity.heterogeneous,
+                core_type_count = cpu_identity.core_type_count,
+                core_types = cpu_core_types,
+                physical_cores = cpu_topology.physical_cores,
+                sockets = cpu_topology.sockets,
+                power_watts = full.power and full.power.total_power_watts,
             }),
             memory = json.object({
                 used_bytes = memory.used_bytes,
@@ -822,6 +1046,25 @@ function M.agent(snapshot, options)
                 device_count = #gpu_devices,
                 maximum_utilization_percent = maximum_gpu_utilization,
             }),
+            power = json.object({
+                total_watts = full.power and full.power.total_power_watts,
+                measured_aggregate_zones = full.power and full.power.measured_aggregate_zones,
+                aggregate_zone_count = full.power and full.power.aggregate_zone_count,
+                aggregate_complete = full.power and full.power.aggregate_complete,
+                aggregate_strategy = full.power and full.power.aggregate_strategy,
+                aggregate_source_kind = full.power and full.power.aggregate_source_kind,
+                platform_watts = full.power and full.power.platform_power_watts,
+                measured_platform_zones = full.power and full.power.measured_platform_zones,
+                platform_aggregate_strategy = full.power and full.power.platform_aggregate_strategy,
+                platform_aggregate_source_kind = full.power and full.power.platform_aggregate_source_kind,
+                denied_zones = full.power and full.power.denied_zones,
+            }),
+            sensors = json.object({
+                temperature_count = temperature_count,
+                fan_count = fan_count,
+                power_count = sensor_power_count,
+                maximum_temperature_celsius = hottest and hottest.temperature_celsius,
+            }),
             processes = json.object({ total = full.processes and full.processes.total }),
         }),
         signals = signals,
@@ -831,6 +1074,7 @@ function M.agent(snapshot, options)
             interfaces = top_interfaces,
             workloads = top_workloads,
             gpus = gpu_summaries,
+            sensors = top_temperatures,
         }),
         data_quality = data_quality,
         unavailable_sources = unavailable_sources,

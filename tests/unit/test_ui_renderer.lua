@@ -19,6 +19,29 @@ local function equal(actual, expected, message)
   end
 end
 
+local function rgb(hex)
+  return tonumber(hex:sub(2, 3), 16), tonumber(hex:sub(4, 5), 16),
+    tonumber(hex:sub(6, 7), 16)
+end
+
+local function linear_channel(value)
+  value = value / 255
+  if value <= 0.04045 then return value / 12.92 end
+  return ((value + 0.055) / 1.055) ^ 2.4
+end
+
+local function luminance(hex)
+  local red, green, blue = rgb(hex)
+  return 0.2126 * linear_channel(red) + 0.7152 * linear_channel(green)
+    + 0.0722 * linear_channel(blue)
+end
+
+local function contrast(left, right)
+  local brighter, darker = luminance(left), luminance(right)
+  if brighter < darker then brighter, darker = darker, brighter end
+  return (brighter + 0.05) / (darker + 0.05)
+end
+
 -- Unicode measurement keeps terminal grapheme groups intact.
 equal(Width.display_width("abc"), 3)
 equal(Width.display_width("中文"), 4)
@@ -77,6 +100,34 @@ assert(table_grid:row_text(1):find("CPU", 1, true),
   "minimum-first allocation must preserve later key columns")
 
 -- Semantic theme values degrade without changing Widget-level token usage.
+local default_theme = Theme.new()
+equal(Theme.DEFAULT, "lua-blue")
+equal(default_theme.name, Theme.DEFAULT)
+equal(Theme.LUA_BLUE, "#000080")
+equal(default_theme:token("surface.base"), Theme.LUA_BLUE)
+assert(contrast(default_theme:token("text.primary"), Theme.LUA_BLUE) >= 7,
+  "primary text must retain enhanced contrast on Lua blue")
+assert(contrast(default_theme:token("text.muted"), Theme.LUA_BLUE) >= 4.5,
+  "muted text must retain normal-text contrast on Lua blue")
+assert(contrast(default_theme:token("accent.primary"), Theme.LUA_BLUE) >= 4.5,
+  "the lifted Lua-blue accent must remain legible on the branded background")
+
+local lua_truecolour = Theme.new({capabilities = {truecolor = true}})
+local lua_accent = lua_truecolour:colour("accent.primary")
+equal(lua_accent.mode, "rgb")
+equal(lua_accent.r, 128)
+equal(lua_accent.g, 175)
+equal(lua_accent.b, 255)
+local lua_colour256 = Theme.new({capabilities = {colors = 256}})
+equal(lua_colour256:colour("surface.base").index, 18)
+equal(lua_colour256:colour("surface.selected").index, 24)
+equal(lua_colour256:colour("accent.primary").index, 111)
+local lua_colour16 = Theme.new({capabilities = {colors = 16}})
+equal(lua_colour16:colour("surface.base").index, 0)
+equal(lua_colour16:colour("surface.selected").index, 4)
+equal(lua_colour16:colour("accent.primary").index, 12)
+equal(lua_colour16:colour("text.primary").index, 15)
+
 local truecolour = Theme.new("water-dark", {truecolor = true})
 equal(truecolour.mode, "truecolor")
 equal(truecolour:colour("accent.primary").mode, "rgb")
@@ -87,11 +138,11 @@ assert(colour256:colour("accent.primary").index >= 0
 local colour16 = Theme.new("water-dark", {colors = 16})
 equal(colour16.mode, "16")
 assert(colour16:colour("accent.primary").index < 16)
-local mono = Theme.new("water-dark", {no_color = true})
+local mono = Theme.new({capabilities = {no_color = true}})
 equal(mono.mode, "mono")
 assert(mono:style("metric.critical", nil, {bold = true}).fg == nil)
 assert(mono:style("metric.critical", nil, {bold = true}).bold)
-for _, name in ipairs({"water-dark", "water-light", "high-contrast", "colorblind"}) do
+for _, name in ipairs({"lua-blue", "water-dark", "water-light", "high-contrast", "colorblind"}) do
   assert(Theme.new(name, {colors = 16}):colour("text.primary"))
 end
 assert(not pcall(Theme.new, {name = "water-dark", overrides = {["accent.primary"] = {300, 0, 0}}}),

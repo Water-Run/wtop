@@ -304,7 +304,14 @@ end
 
 local function run_loop(options, backend, renderer, engine, translator)
     local terminal_capabilities = backend.capabilities()
-    local layout_orders, layout_status, layout_trees = LayoutStore.load(Workspace.default_orders())
+    local default_orders = Workspace.default_orders()
+    local layout_orders, layout_status, layout_trees
+    if options.privilege and options.privilege.via_sudo then
+        layout_orders = default_orders
+        layout_status = { state = "default", reason = "sudo session ignores persisted layout" }
+    else
+        layout_orders, layout_status, layout_trees = LayoutStore.load(default_orders)
+    end
     local workspace = Workspace.new({
         active_tab = options.active_tab,
         orders = layout_orders,
@@ -473,6 +480,7 @@ local function run_loop(options, backend, renderer, engine, translator)
         local status = {
             message = status_message,
             error = persisted_error,
+            privilege = options.privilege,
             filter = workspace.active == "processes" and models.process_table.status_text or nil,
             hints = {
                 { key = "1–8", id = "actions.tabs", fallback = "Tabs" },
@@ -828,7 +836,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             models = render_frame()
         end
     end
-    if workspace.dirty then
+    if workspace.dirty and not (options.privilege and options.privilege.via_sudo) then
         local saved, save_error = LayoutStore.save(
             workspace:orders(), layout_status and layout_status.path, workspace:trees())
         if not saved then
@@ -859,7 +867,11 @@ function M.run(options)
         io.stderr:write("wtop: i18n initialization failed: ", tostring(translation_error), "\n")
         return 1
     end
-    options.locale_report = UserCatalogs.load(translator)
+    if options.privilege and options.privilege.via_sudo then
+        options.locale_report = { state = "skipped", loaded = {}, errors = {} }
+    else
+        options.locale_report = UserCatalogs.load(translator)
+    end
     local terminal = Terminal.new(native)
     local backend = UI.Backend.new(terminal)
     local frequency_index = UpdateFrequency.nearest_index(options.interval_ms or 1000)

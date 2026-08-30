@@ -42,6 +42,9 @@
 #endif
 
 #define READFILE_CHUNK_BYTES (16 * 1024)
+#define EXEC_MAX_ARGUMENTS 512
+#define EXEC_MAX_ENVIRONMENT 64
+#define EXEC_MAX_BYTES (1024 * 1024)
 
 typedef struct terminal_state {
     int active;
@@ -670,6 +673,7 @@ static int l_run(lua_State *L) {
         size_t length;
         const char *value;
         lua_rawgeti(L, 1, (lua_Integer)index + 1);
+        luaL_checktype(L, -1, LUA_TSTRING);
         value = luaL_checklstring(L, -1, &length);
         if (strlen(value) != length) {
             free(arguments);
@@ -964,6 +968,115 @@ static int l_run(lua_State *L) {
     return 1;
 }
 
+static int valid_environment_assignment(const char *value, size_t length) {
+    size_t separator = 0;
+    if (length < 2 || !(value[0] == '_' || (value[0] >= 'A' && value[0] <= 'Z')
+        || (value[0] >= 'a' && value[0] <= 'z'))) {
+        return 0;
+    }
+    while (separator < length && value[separator] != '=') {
+        unsigned char character = (unsigned char)value[separator];
+        if (!(character == '_' || (character >= 'A' && character <= 'Z')
+            || (character >= 'a' && character <= 'z')
+            || (separator > 0 && character >= '0' && character <= '9'))) {
+            return 0;
+        }
+        ++separator;
+    }
+    return separator > 0 && separator < length;
+}
+
+static int l_execve(lua_State *L) {
+    size_t argument_count;
+    size_t environment_count;
+    size_t total_bytes = 0;
+    char **arguments;
+    char **environment;
+
+    luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_checktype(L, 2, LUA_TTABLE);
+    argument_count = lua_rawlen(L, 1);
+    environment_count = lua_rawlen(L, 2);
+    if (argument_count < 1 || argument_count > EXEC_MAX_ARGUMENTS) {
+        return luaL_argerror(L, 1, "argv must contain 1..512 strings");
+    }
+    if (environment_count > EXEC_MAX_ENVIRONMENT) {
+        return luaL_argerror(L, 2, "environment must contain at most 64 strings");
+    }
+
+    for (size_t index = 0; index < argument_count; ++index) {
+        size_t length;
+        const char *value;
+        lua_rawgeti(L, 1, (lua_Integer)index + 1);
+        luaL_checktype(L, -1, LUA_TSTRING);
+        value = luaL_checklstring(L, -1, &length);
+        if (strlen(value) != length) {
+            lua_pop(L, 1);
+            return luaL_argerror(L, 1, "argv strings cannot contain NUL bytes");
+        }
+        if (length > EXEC_MAX_BYTES - total_bytes) {
+            lua_pop(L, 1);
+            return luaL_argerror(L, 1, "argv and environment exceed 1 MiB");
+        }
+        total_bytes += length;
+        if (index == 0 && value[0] != '/') {
+            lua_pop(L, 1);
+            return luaL_argerror(L, 1, "argv[1] must be an absolute path");
+        }
+        lua_pop(L, 1);
+    }
+    for (size_t index = 0; index < environment_count; ++index) {
+        size_t length;
+        const char *value;
+        lua_rawgeti(L, 2, (lua_Integer)index + 1);
+        luaL_checktype(L, -1, LUA_TSTRING);
+        value = luaL_checklstring(L, -1, &length);
+        if (strlen(value) != length || !valid_environment_assignment(value, length)) {
+            lua_pop(L, 1);
+            return luaL_argerror(L, 2, "environment entries must be NAME=value without NUL bytes");
+        }
+        if (length > EXEC_MAX_BYTES - total_bytes) {
+            lua_pop(L, 1);
+            return luaL_argerror(L, 2, "argv and environment exceed 1 MiB");
+        }
+        total_bytes += length;
+        lua_pop(L, 1);
+    }
+
+    arguments = (char **)calloc(argument_count + 1, sizeof(char *));
+    environment = (char **)calloc(environment_count + 1, sizeof(char *));
+    if (!arguments || !environment) {
+        free(arguments);
+        free(environment);
+        return luaL_error(L, "calloc: out of memory");
+    }
+    for (size_t index = 0; index < argument_count; ++index) {
+        lua_rawgeti(L, 1, (lua_Integer)index + 1);
+        arguments[index] = (char *)lua_tolstring(L, -1, NULL);
+        lua_pop(L, 1);
+    }
+    for (size_t index = 0; index < environment_count; ++index) {
+        lua_rawgeti(L, 2, (lua_Integer)index + 1);
+        environment[index] = (char *)lua_tolstring(L, -1, NULL);
+        lua_pop(L, 1);
+    }
+
+    /* The elevation path normally runs before terminal_start().  Restoring
+     * here as a second safety boundary also makes future callers unable to
+     * leave sudo's password prompt in raw mode or on the alternate screen. */
+    restore_handlers();
+    emergency_terminal_restore();
+    (void)fflush(NULL);
+    execve(arguments[0], arguments, environment);
+    {
+        int saved_errno = errno;
+        free(arguments);
+        free(environment);
+        errno = saved_errno;
+    }
+    return push_errno(L, "execve");
+}
+
 static int l_monotonic_ns(lua_State *L) {
     struct timespec time_value;
     if (clock_gettime(CLOCK_MONOTONIC, &time_value) != 0) {
@@ -1214,10 +1327,10 @@ static int l_readfile(lua_State *L) {
         errno = EINVAL;
         return push_errno(L, "readfile_not_regular");
     }
-    if (metadata.st_size > 0 && (uintmax_t)metadata.st_size > (uintmax_t)limit) {
-        errno = EFBIG;
-        return push_errno(L, "readfile_limit");
-    }
+    /* procfs and sysfs regularly report a page-sized st_size for files whose
+     * generated contents are only a few bytes.  Do not reject those pseudo
+     * files from metadata alone; the bounded loop below still reads at most
+     * limit + 1 bytes and detects genuinely oversized content. */
     luaL_buffinit(L, &output);
     while (length <= limit) {
         size_t remaining = limit + 1 - length;
@@ -1522,6 +1635,7 @@ static const luaL_Reg functions[] = {
     {"poll", l_poll},
     {"write", l_write},
     {"run", l_run},
+    {"execve", l_execve},
     {"monotonic_ns", l_monotonic_ns},
     {"realtime_ns", l_realtime_ns},
     {"sleep_ms", l_sleep_ms},

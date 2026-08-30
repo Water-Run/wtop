@@ -30,17 +30,28 @@ LOCALE_INCLUDES := $(foreach file,$(LOCALE_SOURCES),--include $(file))
 CFLAGS_NATIVE ?= -O2 -g0
 CFLAGS_NATIVE += -std=c17 -fPIC -Wall -Wextra -Werror
 
-.PHONY: all toolchain luainstaller native locales check test test-54 test-55 test-pty run \
+.NOTPARALLEL: all native locales check test test-all test-fast test-54 test-55 test-pty test-pty-quick test-luarocks \
+	toolchain luainstaller luarocks-install bundle-dir bundle-file \
+	test-bundle-dir test-bundle-file
+
+.PHONY: all resource-check resource-check-full toolchain luainstaller native locales check test test-all test-fast \
+	test-54 test-55 test-pty test-pty-quick run \
 	diagnose snapshot bundle-dir bundle-file test-bundle-dir test-bundle-file checksums \
 	rock-build rock-install rockspec-check luarocks-install test-luarocks
 
 all: native locales
 
+resource-check:
+	@./tools/check_resources.sh test
+
+resource-check-full:
+	@./tools/check_resources.sh full
+
 toolchain: $(LUA_STAMP)
 
 luainstaller: $(LUAI_STAMP)
 
-native: $(NATIVE_MODULE)
+native: resource-check $(NATIVE_MODULE)
 
 $(LUA_STAMP): tools/bootstrap_lua.sh
 	@./tools/bootstrap_lua.sh >/dev/null
@@ -54,24 +65,39 @@ $(NATIVE_MODULE): native/wtop_native.c Makefile $(LUA_STAMP)
 	@mkdir -p $(NATIVE_DIR)
 	@$(CC) $(CFLAGS_NATIVE) -shared -I$(LUA_PREFIX)/include -o $@ $<
 
-locales: $(LUA_STAMP)
+locales: resource-check $(LUA_STAMP)
 	@if [ -f tools/compile_locales.lua ]; then \
 		LUA_PATH='$(LUA_PATH_DEV)' $(LUA) tools/compile_locales.lua >/dev/null; \
 	fi
 
-check: native locales
+check: resource-check native locales
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAC) -p $$(find src tools tests -type f -name '*.lua' -print)
+	@sh -n tools/*.sh
+	@python3 -c 'import pathlib; [compile(path.read_bytes(), str(path), "exec") for path in pathlib.Path("tests").rglob("*.py")]'
+	@python3 -c 'import json; json.load(open("docs/agent-v1.schema.json", encoding="utf-8"))'
 
-test: test-55 test-pty
+test: resource-check-full test-55 test-pty
 
-test-55: native locales
+# Release-style validation: both Lua ABIs, source PTY, LuaRocks, and both
+# luainstaller artifact forms. Every prerequisite remains serial and gated.
+test-all: resource-check-full check test-54 test-55 test-pty rockspec-check \
+	test-luarocks test-bundle-dir test-bundle-file
+
+# Short feedback loop: isolated Lua files plus a representative PTY subset.
+test-fast: resource-check test-55 test-pty-quick
+
+test-55: resource-check native locales
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUA) tests/run.lua $(TEST_FILES)
 
-test-54:
+test-54: resource-check
+	@lua -e 'assert(_VERSION == "Lua 5.4", "test-54 requires Lua 5.4, got " .. _VERSION)'
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH=';;' lua tests/run.lua $(TEST_FILES)
 
-test-pty: native locales
+test-pty: resource-check-full native locales
 	@WTOP_LUA='$(LUA)' WTOP_ROOT='$(CURDIR)' python3 tests/pty_smoke.py
+
+test-pty-quick: resource-check native locales
+	@WTOP_PTY_PROFILE=quick WTOP_LUA='$(LUA)' WTOP_ROOT='$(CURDIR)' python3 tests/pty_smoke.py
 
 run: native locales
 	@LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUA) src/wtop.lua
@@ -84,7 +110,7 @@ snapshot: native locales
 
 # rock-build and rock-install are the LuaRocks "make" backend entry points.
 # End users should invoke LuaRocks (or luarocks-install), not these targets directly.
-rock-build:
+rock-build: resource-check
 	@test -n "$(LUA_INCDIR)" || { echo "wtop: LUA_INCDIR is required" >&2; exit 1; }
 	@mkdir -p "$(ROCK_BUILD_DIR)"
 	$(CC) $(CFLAGS) -std=c17 -fPIC -Wall -Wextra -Werror -shared \
@@ -99,12 +125,12 @@ rock-install:
 	@cp "$(ROCK_NATIVE_MODULE)" "$(LIBDIR)/wtop_native.so"
 	@cp src/wtop.lua "$(BINDIR)/wtop"
 	@chmod 755 "$(BINDIR)/wtop" "$(LIBDIR)/wtop_native.so"
-	@cp LICENSE README.md config.example.yml "$(PREFIX)/doc/"
+	@cp LICENSE README.md README-zh.md config.example.yml "$(PREFIX)/doc/"
 
 rockspec-check:
 	@luarocks lint "$(ROCKSPEC)"
 
-luarocks-install: $(LUA_STAMP)
+luarocks-install: resource-check-full $(LUA_STAMP)
 	@command -v luarocks >/dev/null 2>&1 || \
 		{ echo "wtop: LuaRocks >= 3.13 is required" >&2; exit 1; }
 	luarocks --lua-version=5.5 --lua-dir="$(LUA_PREFIX)" --tree="$(WTOP_ROCK_TREE)" \
@@ -113,6 +139,8 @@ luarocks-install: $(LUA_STAMP)
 test-luarocks: luarocks-install
 	@"$(WTOP_ROCK_TREE)/bin/wtop" --version | grep -qx 'wtop 0.1.0-dev'
 	@"$(WTOP_ROCK_TREE)/bin/wtop" --diagnose | grep -q 'Platform: Linux'
+	@"$(WTOP_ROCK_TREE)/bin/wtop" --snapshot | python3 tests/json_contract_smoke.py snapshot
+	@"$(WTOP_ROCK_TREE)/bin/wtop" --agent | python3 tests/json_contract_smoke.py agent
 
 bundle-dir: native locales $(LUAI_STAMP)
 	mkdir -p dist
@@ -128,10 +156,10 @@ bundle-file: native locales $(LUAI_STAMP)
 		--target-os linux --max-deps 300 $(LOCALE_INCLUDES) -- --version
 	mv -f dist/.wtop-onefile.next dist/wtop-onefile
 
-test-bundle-dir: bundle-dir
+test-bundle-dir: resource-check-full bundle-dir
 	@WTOP_EXECUTABLE='$(CURDIR)/dist/wtop/wtop' WTOP_ROOT='$(CURDIR)' python3 tests/pty_smoke.py
 
-test-bundle-file: bundle-file
+test-bundle-file: resource-check-full bundle-file
 	@WTOP_EXECUTABLE='$(CURDIR)/dist/wtop-onefile' WTOP_ROOT='$(CURDIR)' python3 tests/pty_smoke.py
 
 checksums:

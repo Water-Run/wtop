@@ -135,6 +135,15 @@ assert(compact_frequency_grid:row_text(1):find("更新频率：非常高", 1, tr
   "40-column terminals must retain the complete longest Chinese frequency label")
 assert(compact_frequency_metadata.tabs.frequency.width == 16)
 
+local privileged_grid = Overview.new():render(80, 24, {
+  active_tab = "overview",
+  capabilities = {unicode = false},
+  widgets = {},
+  status = {privilege = {root = true, via_sudo = true}},
+})
+assert(privileged_grid:row_text(24):find("root/sudo", 1, true),
+  "elevated TUI sessions must remain visibly marked")
+
 -- Page chrome consumes the injected translator facade without importing a
 -- concrete locale module, so compiled YAML catalogues remain an app concern.
 local translated_page = Overview.new()

@@ -34,6 +34,7 @@ SIZES = (
 EDIT_MARKERS = (b"LAYOUT", "布局".encode())
 SEARCH_MARKERS = (b"Search", "搜索".encode())
 PROCESS_DETAIL_MARKERS = (b"Process details", "进程详情".encode())
+LUA_BLUE_BACKGROUND = b"48;2;0;0;128"
 PAGE_MARKERS = {
     1: ("CPU", "内存", "温度"),
     2: ("进程 - CPU 降序",),
@@ -300,6 +301,13 @@ def _run_session(
                     or action_index != 1
                     or any(marker in output for marker in EDIT_MARKERS)
                 )
+                and (
+                    not exercise
+                    or action_index != 17
+                    # Do not close a newly opened overlay before a slower
+                    # collection/render turn has made it observable.
+                    or any(marker in output for marker in PROCESS_DETAIL_MARKERS)
+                )
             ):
                 action = actions[action_index]
                 if action is None:
@@ -321,7 +329,11 @@ def _run_session(
         if status is None:
             os.kill(pid, signal.SIGKILL)
             _, status = os.waitpid(pid, 0)
-            raise AssertionError(f"wtop PTY session {columns}x{rows} timed out")
+            tail = output[-4000:].decode("utf-8", "replace")
+            raise AssertionError(
+                f"wtop PTY session {columns}x{rows} timed out at action "
+                f"{action_index}/{len(actions)}\n{tail}"
+            )
     finally:
         os.close(master)
 
@@ -413,8 +425,50 @@ def run_session(
         )
 
 
+def run_ascii_profile() -> bytes:
+    output = run_session(
+        100,
+        30,
+        exercise=False,
+        terminal_environment={
+            "TERM": "dumb",
+            "COLORTERM": None,
+            "LC_ALL": "C",
+            "LC_CTYPE": "C",
+            "LANG": "C",
+        },
+        cli_options=("--no-color", "--lang", "en-US"),
+    )
+    assert all(value < 128 for value in output), (
+        "ASCII terminal profile received non-ASCII bytes"
+    )
+    assert b";2;" not in output and not re.search(rb"(?:38|48);5;\d+", output), (
+        "no-colour profile emitted coloured SGR"
+    )
+    return output
+
+
 def main() -> None:
+    profile = os.environ.get("WTOP_PTY_PROFILE", "full")
+    if profile not in ("full", "quick"):
+        raise SystemExit("WTOP_PTY_PROFILE must be 'full' or 'quick'")
+
     captures = []
+    if profile == "quick":
+        captures.append(run_session(80, 24, exercise=False))
+        print("PTY 80x24 overview: ok")
+        captures.append(run_session(180, 45, exercise=False, final_page=6))
+        print("PTY 180x45 GPU page: ok")
+        run_ascii_profile()
+        print("PTY 100x30 ASCII/no-colour profile: ok")
+        assert any("进程".encode() in capture or "概览".encode() in capture for capture in captures), (
+            "zh-CN catalog was not visible in the quick PTY profile"
+        )
+        assert any(LUA_BLUE_BACKGROUND in capture for capture in captures), (
+            "default PTY profile did not emit the canonical Lua-blue background"
+        )
+        return
+
     for index, (columns, rows) in enumerate(SIZES):
         captures.append(
             run_session(
@@ -479,28 +533,13 @@ def main() -> None:
     )
     print("PTY 100x30 truecolour/high-contrast theme: ok")
 
-    ascii_mono = run_session(
-        100,
-        30,
-        exercise=False,
-        terminal_environment={
-            "TERM": "dumb",
-            "COLORTERM": None,
-            "LC_ALL": "C",
-            "LC_CTYPE": "C",
-            "LANG": "C",
-        },
-        cli_options=("--no-color", "--lang", "en-US"),
-    )
-    assert all(value < 128 for value in ascii_mono), (
-        "ASCII terminal profile received non-ASCII bytes"
-    )
-    assert b";2;" not in ascii_mono and not re.search(rb"(?:38|48);5;\d+", ascii_mono), (
-        "no-colour profile emitted coloured SGR"
-    )
+    run_ascii_profile()
     print("PTY 100x30 ASCII/no-colour profile: ok")
     assert any("进程".encode() in capture or "概览".encode() in capture for capture in captures), (
         "zh-CN catalog was not visible in any PTY frame"
+    )
+    assert any(LUA_BLUE_BACKGROUND in capture for capture in captures), (
+        "default PTY profile did not emit the canonical Lua-blue background"
     )
 
 

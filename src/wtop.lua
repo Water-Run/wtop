@@ -4,6 +4,9 @@ local entry_path = tostring(arg and arg[0] or "")
 local entry_dir = entry_path:match("^(.*)[/\\][^/\\]+$")
 if entry_dir and entry_dir ~= "" then
     package.path = entry_dir .. "/?.lua;" .. entry_dir .. "/?/init.lua;" .. package.path
+    -- A source-tree relaunch through sudo deliberately drops LUA_CPATH. Keep
+    -- the project-native module discoverable without trusting that variable.
+    package.cpath = entry_dir .. "/../build/native/?.so;" .. package.cpath
 end
 
 local cli = require("wtop.cli")

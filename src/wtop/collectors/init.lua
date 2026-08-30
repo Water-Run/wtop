@@ -2,6 +2,7 @@ local M = {}
 
 local constructors = {
   cpu = require("wtop.collectors.cpu"),
+  cpu_info = require("wtop.collectors.cpu_info"),
   memory = require("wtop.collectors.memory"),
   pressure = require("wtop.collectors.pressure"),
   disk = require("wtop.collectors.disk"),
@@ -11,6 +12,7 @@ local constructors = {
   gpu = require("wtop.collectors.gpu"),
   cpufreq = require("wtop.collectors.cpufreq"),
   hwmon = require("wtop.collectors.hwmon"),
+  powercap = require("wtop.collectors.powercap"),
   mounts = require("wtop.collectors.mounts"),
   cgroup = require("wtop.collectors.cgroup"),
 }
