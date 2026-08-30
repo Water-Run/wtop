@@ -1,0 +1,7 @@
+drm-driver: i915
+drm-client-id: 10
+drm-client-name: node-fallback
+drm-cycles-copy: 25000000
+drm-maxfreq-copy: 1000 MHz
+drm-total-system0: 16 MiB
+drm-resident-system0: 8 MiB

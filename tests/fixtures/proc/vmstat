@@ -1,0 +1,6 @@
+pgpgin 1000
+pgpgout 2000
+pswpin 4
+pswpout 8
+pgfault 30000
+pgmajfault 50

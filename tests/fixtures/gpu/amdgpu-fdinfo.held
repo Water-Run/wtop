@@ -1,0 +1,10 @@
+drm-driver: amdgpu
+drm-client-id: 7
+drm-client-name: render-worker
+drm-pdev: 0000:03:00.0
+drm-engine-gfx: 150000000 ns
+drm-engine-compute: 30000000 ns
+drm-engine-capacity-compute: 2
+drm-total-vram: 320 MiB
+drm-resident-vram: 192 MiB
+

@@ -1,0 +1,13 @@
+/.tools/
+/build/
+/dist/
+/*.rock
+*.so
+*.o
+*.a
+*.core
+*.log
+.luacov
+luacov.*.out
+__pycache__/
+*.pyc

@@ -1,0 +1,3 @@
+201 1 8:1 / /one rw - ext4 /dev/vda1 rw
+202 1 8:2 / /two rw - ext4 /dev/vda2 rw
+203 1 8:3 / /three rw - ext4 /dev/vda3 rw

@@ -1,0 +1,24 @@
+{
+  "json_format_version": [1, 0],
+  "smartctl": {"version": [7, 4], "exit_status": 8},
+  "device": {"name": "/dev/nvme0", "type": "nvme", "protocol": "NVMe"},
+  "model_name": "WaterRun NVMe 2TB",
+  "serial_number": "WRNVME1234567890",
+  "firmware_version": "1.2.3",
+  "user_capacity": {"bytes": 2000398934016},
+  "rotation_rate": 0,
+  "smart_status": {"passed": true},
+  "temperature": {"current": 42},
+  "power_on_time": {"hours": 1234},
+  "power_cycle_count": 77,
+  "nvme_smart_health_information_log": {
+    "critical_warning": 0,
+    "available_spare": 100,
+    "available_spare_threshold": 10,
+    "percentage_used": 3,
+    "data_units_read": 123456,
+    "data_units_written": 654321,
+    "media_errors": 0,
+    "unsafe_shutdowns": 2
+  }
+}

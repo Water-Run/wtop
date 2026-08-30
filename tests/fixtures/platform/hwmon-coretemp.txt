@@ -1,0 +1,11 @@
+@device=../../../devices/platform/coretemp.0
+name=coretemp
+temp1_label=Package id 0
+temp1_input=-5000
+temp1_max=85000
+temp1_crit=100000
+temp1_alarm=1
+temp1_fault=0
+temp2_label=Core 0
+temp2_input=not-a-number
+temp2_max=90000

@@ -1,0 +1,22 @@
+# Copy to $XDG_CONFIG_HOME/wtop/config.yml or ~/.config/wtop/config.yml.
+# This is config schema v1.  The separate layout.yml uses layout schema v2.
+schema_version: 1
+
+# Built-in examples: en-US, zh-CN, zh-TW, ja-JP, ko-KR, es-ES,
+# fr-FR, de-DE, pt-BR, ru-RU.
+locale: "en-US"
+
+# water-dark, water-light, high-contrast, colorblind
+theme: "water-dark"
+
+# Milliseconds; accepted range is 100..10000. Interactive TUI uses the nearest named rate.
+interval_ms: 1000
+
+# Disable optional smartctl/systemctl/perf/sleep and all other external helper execution.
+safe_mode: false
+
+color: true
+mouse: true
+
+# overview, processes, compute, storage, network, gpu, workloads, insights
+active_tab: "overview"

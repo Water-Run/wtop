@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dev:waterrun:wtop:agent:v1",
+  "title": "wtop Agent context v1",
+  "description": "Bounded, privacy-aware Linux telemetry context emitted by wtop --agent.",
+  "type": "object",
+  "required": [
+    "schema",
+    "producer",
+    "host",
+    "sequence",
+    "captured_unix_ns",
+    "captured_monotonic_ns",
+    "overall",
+    "metrics",
+    "signals",
+    "top",
+    "data_quality",
+    "unavailable_sources",
+    "privacy"
+  ],
+  "properties": {
+    "schema": { "const": "dev.waterrun.wtop.agent/v1" },
+    "producer": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "wtop" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "additionalProperties": true
+    },
+    "host": { "type": "object", "additionalProperties": true },
+    "sequence": { "type": "integer", "minimum": 0 },
+    "captured_unix_ns": { "type": "integer", "minimum": 0 },
+    "captured_monotonic_ns": { "type": "integer", "minimum": 0 },
+    "overall": {
+      "type": "object",
+      "required": ["state", "signal_count"],
+      "properties": {
+        "state": { "enum": ["ok", "warning", "critical", "unknown"] },
+        "signal_count": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["cpu", "memory", "pressure", "storage", "network", "gpu", "processes"],
+      "properties": {
+        "cpu": { "$ref": "#/$defs/metricObject" },
+        "memory": { "$ref": "#/$defs/metricObject" },
+        "pressure": { "$ref": "#/$defs/metricObject" },
+        "storage": { "$ref": "#/$defs/metricObject" },
+        "network": { "$ref": "#/$defs/metricObject" },
+        "gpu": { "$ref": "#/$defs/metricObject" },
+        "processes": { "$ref": "#/$defs/metricObject" }
+      },
+      "additionalProperties": true
+    },
+    "signals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["resource", "code", "severity", "message"],
+        "properties": {
+          "resource": { "$ref": "#/$defs/boundedString" },
+          "code": { "$ref": "#/$defs/boundedString" },
+          "severity": { "enum": ["warning", "critical"] },
+          "value": { "type": "number" },
+          "unit": { "$ref": "#/$defs/boundedString" },
+          "message": { "type": "string", "maxLength": 1024 }
+        },
+        "additionalProperties": true
+      }
+    },
+    "top": {
+      "type": "object",
+      "required": ["processes", "disks", "interfaces", "workloads", "gpus"],
+      "properties": {
+        "processes": { "type": "array", "maxItems": 10, "items": { "type": "object" } },
+        "disks": { "type": "array", "maxItems": 5, "items": { "type": "object" } },
+        "interfaces": { "type": "array", "maxItems": 5, "items": { "type": "object" } },
+        "workloads": { "type": "array", "maxItems": 5, "items": { "type": "object" } },
+        "gpus": { "type": "array", "maxItems": 5, "items": { "type": "object" } }
+      },
+      "additionalProperties": true
+    },
+    "data_quality": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["resource"],
+        "properties": {
+          "resource": { "$ref": "#/$defs/boundedString" },
+          "status": { "$ref": "#/$defs/boundedString" },
+          "quality": { "$ref": "#/$defs/boundedString" },
+          "reason": { "type": "string", "maxLength": 4096 }
+        },
+        "additionalProperties": true
+      }
+    },
+    "unavailable_sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "$ref": "#/$defs/boundedString" },
+          "state": { "$ref": "#/$defs/boundedString" },
+          "reason": { "type": "string", "maxLength": 4096 }
+        },
+        "additionalProperties": true
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "required": ["remote_addresses", "process_commands"],
+      "properties": {
+        "remote_addresses": { "const": "omitted" },
+        "process_commands": { "const": "omitted" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "boundedString": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "metricObject": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true
+}

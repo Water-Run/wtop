@@ -1,0 +1,133 @@
+schema_version: 1
+
+statuses:
+  planned: "Design target; catalog is not yet implemented"
+  preview: "Catalog exists but has not passed every stability gate"
+  stable: "Complete reference catalog that passes schema, coverage, and layout tests"
+
+locales:
+  - id: "en-US"
+    name: "English (United States)"
+    direction: "ltr"
+    wave: "0.1"
+    status: "stable"
+
+  - id: "zh-CN"
+    name: "简体中文"
+    direction: "ltr"
+    wave: "0.1"
+    status: "stable"
+
+  - id: "zh-TW"
+    name: "繁體中文"
+    direction: "ltr"
+    wave: "0.1"
+    status: "preview"
+
+  - id: "ja-JP"
+    name: "日本語"
+    direction: "ltr"
+    wave: "0.1"
+    status: "preview"
+
+  - id: "ko-KR"
+    name: "한국어"
+    direction: "ltr"
+    wave: "0.1"
+    status: "preview"
+
+  - id: "es-ES"
+    name: "Español"
+    direction: "ltr"
+    wave: "0.1"
+    status: "preview"
+
+  - id: "fr-FR"
+    name: "Français"
+    direction: "ltr"
+    wave: "0.1"
+    status: "preview"
+
+  - id: "de-DE"
+    name: "Deutsch"
+    direction: "ltr"
+    wave: "0.1"
+    status: "preview"
+
+  - id: "pt-BR"
+    name: "Português (Brasil)"
+    direction: "ltr"
+    wave: "0.1"
+    status: "preview"
+
+  - id: "ru-RU"
+    name: "Русский"
+    direction: "ltr"
+    wave: "0.1"
+    status: "preview"
+
+  - id: "it-IT"
+    name: "Italiano"
+    direction: "ltr"
+    wave: "0.2"
+    status: "planned"
+
+  - id: "pl-PL"
+    name: "Polski"
+    direction: "ltr"
+    wave: "0.2"
+    status: "planned"
+
+  - id: "tr-TR"
+    name: "Türkçe"
+    direction: "ltr"
+    wave: "0.2"
+    status: "planned"
+
+  - id: "uk-UA"
+    name: "Українська"
+    direction: "ltr"
+    wave: "0.2"
+    status: "planned"
+
+  - id: "id-ID"
+    name: "Bahasa Indonesia"
+    direction: "ltr"
+    wave: "0.2"
+    status: "planned"
+
+  - id: "vi-VN"
+    name: "Tiếng Việt"
+    direction: "ltr"
+    wave: "0.2"
+    status: "planned"
+
+  - id: "th-TH"
+    name: "ไทย"
+    direction: "ltr"
+    wave: "0.2"
+    status: "planned"
+
+  - id: "hi-IN"
+    name: "हिन्दी"
+    direction: "ltr"
+    wave: "0.2"
+    status: "planned"
+
+  - id: "ar"
+    name: "العربية"
+    direction: "rtl"
+    wave: "1.0"
+    status: "planned"
+
+  - id: "he-IL"
+    name: "עברית"
+    direction: "rtl"
+    wave: "1.0"
+    status: "planned"
+
+  - id: "fa-IR"
+    name: "فارسی"
+    direction: "rtl"
+    wave: "1.0"
+    status: "planned"

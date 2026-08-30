@@ -1,0 +1,7 @@
+101 1 8:1 / / rw,relatime shared:7 - ext4 /dev/vda1 rw,errors=remount-ro
+107 101 8:2 / /mnt/escaped\040space\011tab\012line\134slash rw,nodev - ext4 /dev/disk/by-label/data\040disk rw
+103 101 0:25 / /run rw,nosuid,nodev - tmpfs tmpfs rw,size=1048576k
+105 101 7:0 / /mnt/readonly ro,nosuid,nodev - squashfs /dev/loop0 ro
+102 101 8:1 /srv/project /mnt/project\040copy rw,relatime master:7 propagate_from:9 - ext4 /dev/vda1 rw,errors=remount-ro
+106 101 0:49 / /mnt/ssh rw,nosuid,nodev - fuse.sshfs user@host:/srv/data rw,user_id=1000
+104 101 0:44 / /containers rw,relatime - overlay overlay rw,lowerdir=/lower,upperdir=/upper,workdir=/work

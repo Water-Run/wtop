@@ -1,0 +1,14 @@
+{
+  "smartctl": {"version": [7, 4]},
+  "device": {"name": "/dev/sda", "type": "sat", "protocol": "ATA"},
+  "model_name": "Example Solid State Hybrid SSHD",
+  "serial_number": "HYBRID0001234",
+  "rotation_rate": 7200,
+  "smart_status": {"passed": true},
+  "temperature": {"current": 35},
+  "ata_smart_attributes": {
+    "table": [
+      {"id": 5, "name": "Reallocated_Sector_Ct", "value": 100, "worst": 100, "thresh": 10, "raw": {"value": 0, "string": "0"}}
+    ]
+  }
+}
