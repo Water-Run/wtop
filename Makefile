@@ -12,6 +12,11 @@ LUAC := $(LUA_PREFIX)/bin/luac
 LUAI := $(CURDIR)/.tools/rocks-5.5/bin/luai
 LUA_STAMP := $(LUA_PREFIX)/.wtop-ready
 LUAI_STAMP := $(CURDIR)/.tools/rocks-5.5/.wtop-ready
+# The distribution LuaRocks is too old to target Lua 5.5, so the packaging
+# path uses a pinned build rather than whatever the host happens to have.
+LUAROCKS_PREFIX := $(CURDIR)/.tools/luarocks
+LUAROCKS := $(LUAROCKS_PREFIX)/bin/luarocks
+LUAROCKS_STAMP := $(LUAROCKS_PREFIX)/.wtop-ready
 CC ?= cc
 
 ROCKSPEC := wtop-scm-1.rockspec
@@ -27,17 +32,19 @@ TEST_FILES := $(sort $(wildcard tests/unit/test_*.lua tests/integration/test_*.l
 LOCALE_SOURCES := $(sort $(wildcard src/wtop/generated/locales/*.lua))
 LOCALE_INCLUDES := $(foreach file,$(LOCALE_SOURCES),--include $(file))
 
+FUZZ_SEEDS ?= 20
+
 CFLAGS_NATIVE ?= -O2 -g0
 CFLAGS_NATIVE += -std=c17 -fPIC -Wall -Wextra -Werror
 
 .NOTPARALLEL: all native locales check test test-all test-fast test-54 test-55 test-pty test-pty-quick test-luarocks \
-	toolchain luainstaller luarocks-install bundle-dir bundle-file \
+	toolchain luainstaller luarocks-bootstrap luarocks-install bundle-dir bundle-file \
 	test-bundle-dir test-bundle-file
 
 .PHONY: all resource-check resource-check-full toolchain luainstaller native locales check test test-all test-fast \
-	test-54 test-55 test-pty test-pty-quick run \
+	test-54 test-55 test-pty test-pty-quick test-fuzz run \
 	diagnose snapshot bundle-dir bundle-file test-bundle-dir test-bundle-file checksums \
-	rock-build rock-install rockspec-check luarocks-install test-luarocks
+	rock-build rock-install rockspec-check luarocks-bootstrap luarocks-install test-luarocks
 
 all: native locales
 
@@ -49,12 +56,18 @@ resource-check-full:
 
 toolchain: $(LUA_STAMP)
 
+luarocks-bootstrap: $(LUAROCKS_STAMP)
+
 luainstaller: $(LUAI_STAMP)
 
 native: resource-check $(NATIVE_MODULE)
 
 $(LUA_STAMP): tools/bootstrap_lua.sh
 	@./tools/bootstrap_lua.sh >/dev/null
+	@touch $@
+
+$(LUAROCKS_STAMP): tools/bootstrap_luarocks.sh $(LUA_STAMP)
+	@./tools/bootstrap_luarocks.sh >/dev/null
 	@touch $@
 
 $(LUAI_STAMP): tools/bootstrap_luainstaller.sh $(LUA_STAMP)
@@ -99,6 +112,11 @@ test-pty: resource-check-full native locales
 test-pty-quick: resource-check native locales
 	@WTOP_PTY_PROFILE=quick WTOP_LUA='$(LUA)' WTOP_ROOT='$(CURDIR)' python3 tests/pty_smoke.py
 
+# Random input against the real terminal loop.  Kept out of `test` because it
+# is slow and non-deterministic by design; CI runs it on every push.
+test-fuzz: resource-check native locales
+	@WTOP_LUA='$(LUA)' WTOP_ROOT='$(CURDIR)' python3 tests/fuzz_tui.py --seeds $(FUZZ_SEEDS)
+
 run: native locales
 	@LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUA) src/wtop.lua
 
@@ -127,13 +145,11 @@ rock-install:
 	@chmod 755 "$(BINDIR)/wtop" "$(LIBDIR)/wtop_native.so"
 	@cp LICENSE README.md README-zh.md config.example.yml "$(PREFIX)/doc/"
 
-rockspec-check:
-	@luarocks lint "$(ROCKSPEC)"
+rockspec-check: $(LUAROCKS_STAMP)
+	@"$(LUAROCKS)" lint "$(ROCKSPEC)"
 
-luarocks-install: resource-check-full $(LUA_STAMP)
-	@command -v luarocks >/dev/null 2>&1 || \
-		{ echo "wtop: LuaRocks >= 3.13 is required" >&2; exit 1; }
-	luarocks --lua-version=5.5 --lua-dir="$(LUA_PREFIX)" --tree="$(WTOP_ROCK_TREE)" \
+luarocks-install: resource-check-full $(LUA_STAMP) $(LUAROCKS_STAMP)
+	"$(LUAROCKS)" --lua-version=5.5 --lua-dir="$(LUA_PREFIX)" --tree="$(WTOP_ROCK_TREE)" \
 		make "$(ROCKSPEC)" --deps-mode=none --force
 
 test-luarocks: luarocks-install

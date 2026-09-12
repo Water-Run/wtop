@@ -29,7 +29,7 @@ Development, testing, and source execution require:
 - `tar`, `sha256sum`, and `curl` or `wget` for the initial download;
 - Python 3 for PTY smoke tests.
 
-LuaRocks source installation and packaging additionally require system LuaRocks 3.13 or later. `tools/bootstrap_luainstaller.sh` installs luainstaller `1.3.0-1` from LuaRocks into the project-local `.tools/rocks-5.5` by default and validates the fixed payload against `tools/luainstaller-1.3.0.sha256`. An existing installation is reused only when its version, payload hash, and `luai -h` all validate. An adjacent `../luainstaller` worktree is no longer selected automatically.
+LuaRocks source installation and packaging require LuaRocks 3.13 or later, because Lua 5.5 is not a target LuaRocks understood before 3.12 and Ubuntu 24.04 still ships 3.8. `tools/bootstrap_luarocks.sh` therefore builds the pinned 3.13.0 release against the project's own Lua 5.5.1 into `.tools/luarocks`, verifying the downloaded archive against a recorded SHA-256, and every packaging target uses that binary rather than whatever `luarocks` is on `PATH`. `tools/bootstrap_luainstaller.sh` installs luainstaller `1.3.0-1` from LuaRocks into the project-local `.tools/rocks-5.5` by default and validates the fixed payload against `tools/luainstaller-1.3.0.sha256`. An existing installation is reused only when its version, payload hash, and `luai -h` all validate. An adjacent `../luainstaller` worktree is no longer selected automatically.
 
 Local integration requires an explicit absolute path:
 
@@ -135,12 +135,14 @@ At startup, the TUI also scans `$XDG_CONFIG_HOME/wtop/locales/*.yml` (or `~/.con
 | `make diagnose` | Emit capability diagnostics |
 | `make snapshot` | Emit one JSON snapshot |
 | `make check` | Validate Lua, POSIX shell, Python, and the Agent JSON schema |
-| `make test-fast` | Run the 41 Lua files and a representative three-case PTY profile |
-| `make test-55` | 41 Lua 5.5 unit and fixture test files |
-| `make test-54` | Run the same 41 files with system Lua 5.4 to validate the pure-Lua-compatible subset |
+| `make test-fast` | Run the 47 Lua files and a representative three-case PTY profile |
+| `make test-55` | 47 Lua 5.5 unit and fixture test files |
+| `make test-54` | Run the same 47 files with system Lua 5.4 to validate the pure-Lua-compatible subset |
+| `make test-fuzz` | Randomized keys, mouse reports, malformed escapes, invalid UTF-8, and resizes against the real terminal loop |
 | `make test-pty` | Real-PTY smoke tests for responsive sizes, page switching, and four color/character-capability profiles |
 | `make test` | `test-55` plus `test-pty` |
 | `make test-all` | Serial release-style validation across both Lua ABIs, LuaRocks, onedir, onefile, and their PTY/JSON contracts |
+| `make luarocks-bootstrap` | Build the pinned LuaRocks 3.13.0 into `.tools/luarocks` |
 | `make rockspec-check` | Validate `wtop-scm-1.rockspec` through LuaRocks |
 | `make luarocks-install` | Install into the isolated project `.tools/wtop-rocks-5.5` tree |
 | `make test-luarocks` | Reinstall the isolated rock and run installed-CLI smoke tests |
@@ -206,7 +208,7 @@ make test-54
 
 The PTY matrix currently covers `40×10`, `60×20`, `80×24/25`, `80×50`, `160×24`, `200×22`, `180×45`, and `200×45` page switching. It checks Chinese frames, interaction paths, alternate-screen entry/restoration, complete frames, and clean exit. Additional profiles assert truecolor, 256-color, 16-color, and colorless ASCII output and cover Water Light, High Contrast, and Colorblind. Pages 2–8 are each validated as the final complete frame with page-specific semantic markers.
 
-Lua tests also cover JSON's 4 MiB/depth/100000-node budgets, linear numeric parsing smoke, U+FFFD replacement for invalid UTF-8 values and keys, default redaction of connection-export IDs, bounded regular-file reads, heterogeneous CPU identity/topology/cache fixtures, powercap energy delta/wrap/reset/constraints, GPU PCI IDs/PCIe/fdinfo utilization, hwmon sentinel filtering, cgroup-aware resource preflight, and sudo privilege metadata. Passing 41 fixture files is not formal proof across kernels, hardware, or malicious-input classes.
+Lua tests also cover JSON's 4 MiB/depth/100000-node budgets, linear numeric parsing smoke, U+FFFD replacement for invalid UTF-8 values and keys, default redaction of connection-export IDs, bounded regular-file reads, heterogeneous CPU identity/topology/cache fixtures, powercap energy delta/wrap/reset/constraints, GPU PCI IDs/PCIe/fdinfo utilization, hwmon sentinel filtering, cgroup-aware resource preflight, and sudo privilege metadata. Passing 47 fixture files is not formal proof across kernels, hardware, or malicious-input classes.
 
 ### 8.2 Post-Packaging PTY
 

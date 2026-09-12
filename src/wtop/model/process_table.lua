@@ -1,7 +1,10 @@
 local Controller = {}
 Controller.__index = Controller
 
-local SORT_ORDER = { "cpu", "memory", "pid", "name", "io_read", "io_write" }
+local SORT_ORDER = {
+  "cpu", "memory", "pid", "name", "time", "threads", "virtual",
+  "state", "user", "io_read", "io_write",
+}
 local SORT_KEYS = {}
 for index, key in ipairs(SORT_ORDER) do
   SORT_KEYS[key] = index
@@ -12,6 +15,11 @@ local DEFAULT_DESCENDING = {
   memory = true,
   pid = false,
   name = false,
+  time = true,
+  threads = true,
+  virtual = true,
+  state = false,
+  user = false,
   io_read = true,
   io_write = true,
 }
@@ -106,6 +114,17 @@ local function sort_value(record, key)
   elseif key == "name" then
     local value = process.name or process.command
     return type(value) == "string" and value:lower() or nil
+  elseif key == "time" then
+    return finite_number(process.cpu_ticks)
+  elseif key == "threads" then
+    return finite_number(process.threads)
+  elseif key == "virtual" then
+    return finite_number(process.virtual_bytes)
+  elseif key == "state" then
+    return type(process.state) == "string" and process.state or nil
+  elseif key == "user" then
+    local value = process.user or (process.uid and tostring(process.uid))
+    return type(value) == "string" and value:lower() or nil
   elseif key == "io_read" then
     return io_value(process, "read")
   elseif key == "io_write" then
@@ -171,23 +190,104 @@ local function shallow_row(record, depth, direct_match, included_children)
   return row
 end
 
-local function process_matches(process, normalized_query)
-  if normalized_query == "" then
-    return true
+-- Query grammar.  Whitespace separates terms and every term must match, so
+-- adding a word narrows the result the way a search box is expected to.
+--
+--   root                bare substring, matched against every field
+--   user:root           restrict a term to one field
+--   !kernel             negate a term
+--   /^systemd%-/        a Lua pattern (Lua patterns, not PCRE — `%` escapes)
+--
+-- A bare substring is still the common case, so a query with no colons,
+-- exclamation marks or slashes behaves exactly as it did before.
+local QUERY_FIELDS = {
+  pid = "pid",
+  ppid = "parent_pid",
+  user = "user",
+  state = "state",
+  name = "name",
+  cmd = "command",
+  command = "command",
+}
+
+local MAX_QUERY_TERMS = 16
+
+local function field_text(process, field)
+  local value = process[field]
+  if value == nil then return nil end
+  return tostring(value):lower()
+end
+
+local function compile_query(normalized_query)
+  if normalized_query == "" then return nil end
+  local terms = {}
+  for raw in normalized_query:gmatch("%S+") do
+    if #terms >= MAX_QUERY_TERMS then break end
+    -- Lua 5.5 makes the generic-for variable const, so the term is edited
+    -- through a local copy.
+    local word = raw
+    local term = { negate = false }
+    if word:sub(1, 1) == "!" then
+      term.negate = true
+      word = word:sub(2)
+    end
+    if word ~= "" then
+      local field, rest = word:match("^([a-z]+):(.*)$")
+      if field and QUERY_FIELDS[field] then
+        term.field = QUERY_FIELDS[field]
+        word = rest
+      end
+      local pattern = word:match("^/(.*)/$") or (#word > 1 and word:sub(1, 1) == "/"
+        and word:sub(2) or nil)
+      if pattern and pattern ~= "" then
+        -- A malformed pattern must narrow nothing rather than raise inside the
+        -- render loop, so it is validated once here and demoted to a literal.
+        local ok = pcall(string.find, "", pattern)
+        if ok then
+          term.pattern = pattern
+        else
+          term.text = word:lower()
+        end
+      elseif word ~= "" then
+        term.text = word
+      end
+      if term.text or term.pattern then terms[#terms + 1] = term end
+    end
   end
-  local fields = {
-    process.pid,
-    process.name,
-    process.command,
-    process.user,
-    process.state,
-  }
-  for _, field in ipairs(fields) do
-    if field ~= nil and tostring(field):lower():find(normalized_query, 1, true) then
-      return true
+  if #terms == 0 then return nil end
+  return terms
+end
+
+local function term_matches(process, term)
+  local fields
+  if term.field then
+    fields = { field_text(process, term.field) }
+  else
+    fields = {
+      field_text(process, "pid"), field_text(process, "name"),
+      field_text(process, "command"), field_text(process, "user"),
+      field_text(process, "state"),
+    }
+  end
+  for _, value in ipairs(fields) do
+    if value then
+      if term.pattern then
+        local ok, found = pcall(string.find, value, term.pattern)
+        if ok and found then return true end
+      elseif value:find(term.text, 1, true) then
+        return true
+      end
     end
   end
   return false
+end
+
+local function process_matches(process, compiled)
+  if compiled == nil then return true end
+  for _, term in ipairs(compiled) do
+    if term_matches(process, term) == term.negate then return false end
+  end
+  return true
 end
 
 local function build_records(process_list)
@@ -354,6 +454,7 @@ function Controller.new(options)
     _descending = descending,
     _query = query,
     _normalized_query = normalized_query,
+    _compiled_query = compile_query(normalized_query),
     _query_truncated = query_truncated,
     _tree = options.tree == true,
     _max_query_bytes = maximum_query_bytes,
@@ -388,7 +489,7 @@ function Controller:_rebuild(preferred_id, preferred_index)
   if self._tree then
     local direct = {}
     for _, record in ipairs(records) do
-      if process_matches(record.process, self._normalized_query) then
+      if process_matches(record.process, self._compiled_query) then
         direct[record] = true
         matched = matched + 1
       end
@@ -459,7 +560,7 @@ function Controller:_rebuild(preferred_id, preferred_index)
   else
     local visible
     visible, matched = bounded_best(records, self._max_rows, compare, function(record)
-      return process_matches(record.process, self._normalized_query)
+      return process_matches(record.process, self._compiled_query)
     end)
     included = matched
 
@@ -467,7 +568,7 @@ function Controller:_rebuild(preferred_id, preferred_index)
     -- it falls just outside the bounded top set. Search can still reach every
     -- collected process because matching happens before the heap limit.
     local preferred = preferred_id and by_id[preferred_id] or nil
-    if preferred and process_matches(preferred.process, self._normalized_query) then
+    if preferred and process_matches(preferred.process, self._compiled_query) then
       local found = false
       for _, record in ipairs(visible) do
         if record == preferred then found = true; break end
@@ -564,6 +665,22 @@ function Controller:move(delta)
   return self._rows[index]
 end
 
+--- Select by row position, clamped to the visible set.
+-- Mouse clicks and Home/End address rows by index rather than by identity.
+function Controller:select_index(index)
+  if #self._rows == 0 then
+    return false
+  end
+  index = tonumber(index)
+  if not index or index ~= index or index == math.huge or index == -math.huge then
+    return false
+  end
+  index = math.max(1, math.min(#self._rows, math.floor(index)))
+  self._selected_index = index
+  self._selected_id = self._rows[index].id
+  return true, self._rows[index]
+end
+
 function Controller:select_id(id)
   if id == nil then
     return false
@@ -583,6 +700,7 @@ function Controller:set_query(query)
   local preferred_id = self._selected_id
   local preferred_index = self._selected_index
   self._query, self._normalized_query, self._query_truncated = normalize_query(query, self._max_query_bytes)
+  self._compiled_query = compile_query(self._normalized_query)
   self:_rebuild(preferred_id, preferred_index)
   return self._query, self._query_truncated
 end
@@ -607,6 +725,24 @@ function Controller:cycle_sort()
   local key = SORT_ORDER[(index % #SORT_ORDER) + 1]
   self:set_sort(key, DEFAULT_DESCENDING[key])
   return key, self._descending
+end
+
+--- Flip the current sort direction without changing the column.
+-- The UI previously exposed only a forward cycle through the sort keys, so a
+-- user who wanted "smallest first" had no way to ask for it even though the
+-- model always supported both directions.
+function Controller:toggle_direction()
+  self:set_sort(self._sort_key, not self._descending)
+  return self._descending
+end
+
+--- Show full executable paths in place of bare command names.
+function Controller:toggle_paths()
+  self._show_paths = not self._show_paths
+  -- The rendered name changes, so consumers keyed on the revision must
+  -- rebuild even though the underlying set did not change.
+  self._revision = self._revision + 1
+  return self._show_paths
 end
 
 function Controller:toggle_tree()
@@ -635,10 +771,20 @@ function Controller:status()
     sort_key = self._sort_key,
     descending = self._descending,
     query = self._query,
+    query_highlights = (function()
+      local result = {}
+      for _, term in ipairs(self._compiled_query or {}) do
+        if term.text and not term.negate and #term.text > 0 then
+          result[#result + 1] = term.text
+        end
+      end
+      return result
+    end)(),
     query_bytes = #self._query,
     query_truncated = self._query_truncated,
     max_query_bytes = self._max_query_bytes,
     tree = self._tree,
+    show_paths = self._show_paths == true,
     max_tree_depth = self._max_tree_depth,
     max_rows = self._max_rows,
     revision = self._revision,

@@ -13,7 +13,7 @@ local function resolve_options(options)
     local privilege = type(options.privilege) == "table" and options.privilege
         or Privilege.identity()
     local file_config, status
-    if privilege.via_sudo then
+    if Privilege.restricts_user_files(privilege) then
         file_config = Config.defaults()
         status = { state = "default", reason = "sudo session ignores file configuration" }
     else

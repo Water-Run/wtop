@@ -326,6 +326,19 @@ function Theme:with_capabilities(capabilities)
   })
 end
 
+--- The theme after `name` in declaration order, wrapping at the end.
+-- Five themes shipped from the start but the only way to pick one was a
+-- command-line flag, so four of them were effectively unreachable.
+function Theme.next(name, delta)
+  local names = Theme.available()
+  local index = 1
+  for position, candidate in ipairs(names) do
+    if candidate == name then index = position break end
+  end
+  delta = tonumber(delta) or 1
+  return names[((index - 1 + delta) % #names) + 1]
+end
+
 function Theme.available()
   local result = {}
   for name in pairs(palettes) do

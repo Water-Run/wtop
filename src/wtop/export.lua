@@ -180,8 +180,23 @@ local function export_memory(memory)
         "reclaimable_slab_bytes", "unreclaimable_slab_bytes", "dirty_bytes",
         "writeback_bytes", "swap_total_bytes", "swap_free_bytes", "swap_used_bytes",
         "zswap_bytes", "zswapped_bytes", "available_estimated",
+        -- Fields the collector gained alongside the Memory page.  Leaving them
+        -- out made the TUI show figures that --snapshot could not reproduce.
+        "shared_bytes", "mapped_bytes", "page_tables_bytes", "kernel_stack_bytes",
+        "committed_bytes", "commit_limit_bytes", "hugepages_total_bytes",
+        "active_bytes", "inactive_bytes",
     })
     if memory and memory.vmstat then result.vmstat = copy_object(memory.vmstat) end
+    -- The stacked composition is a non-overlapping partition of MemTotal, which
+    -- the overlapping meminfo figures cannot be reassembled into downstream.
+    if memory and type(memory.segments) == "table" then
+        local segments = json.array({})
+        for index, segment in ipairs(memory.segments) do
+            if index > 16 then break end
+            segments[index] = copy_fields(segment, { "id", "bytes" })
+        end
+        result.segments = segments
+    end
     return result
 end
 
@@ -216,7 +231,19 @@ local function export_disks(disks)
             "average_write_latency_ms", "average_queue_size", "discard_bytes_per_second",
             "discard_iops", "average_discard_latency_ms", "flush_iops",
             "average_flush_latency_ms", "quality", "reset_reason",
+            -- `partial` and `topology_truncated` say whether the row is a
+            -- complete picture; a consumer cannot infer either from the rates.
+            "partial", "topology_truncated",
         })
+        -- Static identity the storage page gained: model, capacity, medium and
+        -- scheduler.  Without it a snapshot could not reproduce what the TUI
+        -- showed, and "sdb" alone tells a reader nothing.
+        if type(device.identity) == "table" then
+            result.devices[index].identity = copy_fields(device.identity, {
+                "model", "vendor", "firmware", "size_bytes", "rotational",
+                "removable", "scheduler", "queue_depth", "read_ahead_kib", "virtual",
+            })
+        end
     end
     return result
 end
@@ -230,8 +257,20 @@ local function export_network(network)
             "default_route", "aggregate", "quality", "reset_counter",
         })
         exported.rates = copy_object(interface.rates)
+        exported.counters = copy_object(interface.counters)
+        -- Interface addresses are local configuration, not remote endpoints,
+        -- so they are not subject to the remote-address masking applied to the
+        -- connection table.
+        local addresses = json.array({})
+        for position, address in ipairs(interface.addresses or {}) do
+            if position > 16 then break end
+            addresses[position] = copy_fields(address,
+                { "family", "address", "netmask", "broadcast", "peer" })
+        end
+        exported.addresses = addresses
         result.interfaces[index] = exported
     end
+    result.addresses_status = network and network.addresses_status or nil
     return result
 end
 
@@ -641,6 +680,86 @@ function M.privilege(privilege)
     })
 end
 
+
+-- Host identity, firmware and kernel-wide counters.  Deliberately excludes the
+-- host-identifying DMI members the collector already refuses to read (serial
+-- numbers, asset tags, UUIDs), so a snapshot pasted into a bug report does not
+-- leak more than the operator expects.
+local function export_system(system)
+    if type(system) ~= "table" or next(system) == nil then return json.object({}) end
+    return json.object({
+        host = copy_fields(system.host, { "hostname", "architecture", "domain" }),
+        kernel = copy_fields(system.kernel, { "type", "release", "version", "command_line" }),
+        distribution = copy_fields(system.distribution, {
+            "name", "pretty_name", "version", "version_id", "id", "id_like",
+            "build_id", "variant",
+        }),
+        firmware = copy_fields(system.firmware, {
+            "system_vendor", "product_name", "product_version", "product_family",
+            "board_vendor", "board_name", "board_version", "bios_vendor",
+            "bios_version", "bios_date", "bios_release", "chassis_vendor",
+            "chassis_type", "chassis_type_code",
+        }),
+        virtualization = copy_fields(system.virtualization, {
+            "virtual", "technology", "container", "container_technology",
+        }),
+        security = copy_fields(system.security, { "selinux", "apparmor", "lockdown" }),
+        limits = json.object({
+            pid_max = system.limits and system.limits.pid_max or nil,
+            threads_max = system.limits and system.limits.threads_max or nil,
+            max_map_count = system.limits and system.limits.max_map_count or nil,
+            entropy_available = system.limits and system.limits.entropy_available or nil,
+            file_descriptors = copy_fields(system.limits and system.limits.file_descriptors,
+                { "open", "allocated", "maximum" }),
+        }),
+        counters = copy_fields(system.counters,
+            { "ctxt", "intr", "forks", "procs_running", "procs_blocked" }),
+        swap = json.object({
+            total_bytes = system.swap and system.swap.total_bytes or nil,
+            used_bytes = system.swap and system.swap.used_bytes or nil,
+            devices = (function()
+                local devices = json.array({})
+                for index, device in ipairs(system.swap and system.swap.devices or {}) do
+                    if index > 32 then break end
+                    devices[index] = copy_fields(device,
+                        { "name", "type", "size_bytes", "used_bytes", "priority" })
+                end
+                return devices
+            end)(),
+        }),
+        vmstat = copy_object(system.vmstat),
+        uptime_seconds = system.uptime_seconds,
+        idle_seconds = system.idle_seconds,
+        boot_time_unix = system.boot_time_unix,
+        timezone = system.timezone,
+    })
+end
+
+local function export_power_supplies(supplies)
+    if type(supplies) ~= "table" or next(supplies) == nil then return json.object({}) end
+    local function device_list(source, fields)
+        local result = json.array({})
+        for index, device in ipairs(source or {}) do
+            if index > 16 then break end
+            result[index] = copy_fields(device, fields)
+        end
+        return result
+    end
+    return json.object({
+        batteries = device_list(supplies.batteries, {
+            "id", "name", "type", "present", "status", "technology", "manufacturer",
+            "model", "cycle_count", "capacity_percent", "health_percent",
+            "energy_watt_hours", "energy_full_watt_hours", "energy_design_watt_hours",
+            "power_watts", "voltage_volts", "temperature_celsius",
+            "time_remaining_seconds", "time_to_full_seconds", "capacity_level",
+        }),
+        supplies = device_list(supplies.supplies, { "id", "name", "type", "online", "present" }),
+        summary = copy_fields(supplies.summary, { "count", "capacity_percent", "power_watts", "state" }),
+        on_ac_power = supplies.on_ac_power,
+        truncated = supplies.truncated,
+    })
+end
+
 function M.snapshot(snapshot, options)
     if type(snapshot) ~= "table" then snapshot = {} end
     if type(options) ~= "table" then options = {} end
@@ -671,6 +790,8 @@ function M.snapshot(snapshot, options)
         power = export_power(snapshot.power),
         mounts = export_mounts(snapshot.mounts),
         workloads = export_workloads(snapshot.workloads, options.workload_limit),
+        system = export_system(snapshot.system),
+        power_supplies = export_power_supplies(snapshot.power_supplies),
     })
 end
 

@@ -54,14 +54,24 @@ equal(Layout.mode(200, 22), "wide-short",
 local workspace = Workspace.new()
 assert(workspace:select("network"))
 local balanced_network = workspace:layout(180, 45)
-equal(#balanced_network.placements, 3)
-local minimum_width, maximum_width = math.huge, 0
+equal(#balanced_network.placements, 4)
+-- Panels on one row must stay visually balanced.  Widths are only comparable
+-- within a row, so group placements by their y origin before measuring.
+local rows_by_y = {}
 for _, placement in ipairs(balanced_network.placements) do
-  minimum_width = math.min(minimum_width, placement.width)
-  maximum_width = math.max(maximum_width, placement.width)
+  rows_by_y[placement.y] = rows_by_y[placement.y] or {}
+  local bucket = rows_by_y[placement.y]
+  bucket[#bucket + 1] = placement
 end
-assert(maximum_width - minimum_width <= 1,
-  "three-track responsive layout must remain visually balanced")
+for _, bucket in pairs(rows_by_y) do
+  local minimum_width, maximum_width = math.huge, 0
+  for _, placement in ipairs(bucket) do
+    minimum_width = math.min(minimum_width, placement.width)
+    maximum_width = math.max(maximum_width, placement.width)
+  end
+  assert(maximum_width - minimum_width <= 1,
+    "responsive tracks on one row must remain visually balanced")
+end
 
 -- Adjacent heights keep the same two-column flow until one column can retain
 -- equally rich forms, avoiding the former one-row breakpoint jump.

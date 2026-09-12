@@ -29,9 +29,10 @@ if [ ! -x "$lua_prefix/bin/lua" ]; then
     "$project_dir/tools/bootstrap_lua.sh"
 fi
 
-if ! command -v luarocks >/dev/null 2>&1; then
-    echo "wtop: LuaRocks >= 3.13 is required to install luainstaller" >&2
-    exit 1
+# The distribution LuaRocks cannot target Lua 5.5, so use the pinned build.
+luarocks="$project_dir/.tools/luarocks/bin/luarocks"
+if [ ! -x "$luarocks" ]; then
+    "$project_dir/tools/bootstrap_luarocks.sh"
 fi
 
 if [ -n "$local_rockspec" ]; then
@@ -54,11 +55,11 @@ if [ -n "$local_rockspec" ]; then
     rock_file=$(basename -- "$local_rockspec")
     (
         cd "$rock_dir"
-        luarocks --lua-version=5.5 --lua-dir="$lua_prefix" --tree="$rock_tree" \
+        "$luarocks" --lua-version=5.5 --lua-dir="$lua_prefix" --tree="$rock_tree" \
             make "$rock_file" --deps-mode=none
     )
 else
-    luarocks --lua-version=5.5 --lua-dir="$lua_prefix" --tree="$rock_tree" \
+    "$luarocks" --lua-version=5.5 --lua-dir="$lua_prefix" --tree="$rock_tree" \
         install luainstaller "$luainstaller_version" --deps-mode=none --force
     if ! (cd "$rock_tree" && sha256sum -c "$lock_file" >/dev/null); then
         echo "wtop: installed luainstaller does not match the pinned 1.3.0 payload" >&2

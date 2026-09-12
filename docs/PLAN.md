@@ -18,15 +18,15 @@ The current version is the `0.1.0-dev` development preview, not a completed 0.1 
 
 | Original requirement | Current status | Next-stage gap |
 | --- | --- | --- |
-| Attractive modern TUI | Custom cell grid/diff, five themes, color fallback, and responsive pages are implemented | Visual refinement, complete overlays, broader terminal matrix |
+| Attractive modern TUI | Custom cell grid/diff, five runtime-switchable themes, colour fallback, responsive pages, multi-row charts, per-core bar arrays, stacked composition bars, severity colouring, per-cell table styling with in-cell bars, and dimmed scrolling overlays are implemented | Braille charts, zoomable time axis, broader terminal matrix |
 | Different window aspect ratios | tiny, narrow-tall, wide-short, wide-tall, and multiple PTY dimensions are covered | Continuous resize, tmux/SSH, more extreme dimensions |
 | Customizable layout | Fixed widgets can move in four directions, adjust split ratios, undo/redo, and persist through schema v2 | Add/remove/replace widgets, drag-and-drop, import/export, recovery/backup |
-| Multiple tabs | Eight fixed tabs—Overview, Processes, Compute, Storage & I/O, Network, GPU, Workloads, Insights—work | Add/remove/rename/reorder tabs and multiple workspaces |
-| i18n | Safe YAML, built-in plural rules, formatter, generated registry, main-TUI messages, per-key fallback, and bounded XDG user-catalog loading are implemented | Technical-reason localization, pseudolocale, RTL |
-| Stronger performance monitoring | CPU usage and identity/topology/cache, memory, PSI, disk, mounts, network/sockets, processes, CPUFreq, hwmon, powercap, cgroup v2, and DRM/sysfs GPU are implemented | NUMA, routes, systemd/container semantics, threads/PSS, cross-resource links |
+| Multiple tabs | Ten fixed tabs—Overview, Processes, Compute, Memory, Storage & I/O, Network, GPU, Workloads, System, Insights—work | Add/remove/rename/reorder tabs and multiple workspaces |
+| i18n | Safe YAML, built-in plural rules, formatter, generated registry, per-key fallback, bounded XDG user-catalog loading, and display-width alignment throughout are implemented. All ten shipped catalogs translate every message and a test enforces it; the language can be switched at runtime with `L`; help layout is structured data rather than pre-padded translation strings | Technical-reason localization, pseudolocale, RTL |
+| Stronger performance monitoring | CPU usage and identity/topology/cache, memory with full composition and paging counters, PSI, block devices with model/size/medium/scheduler, mounts with inode usage, network interfaces with IPv4/IPv6 addresses, sockets, processes with user names and TIME+/VIRT/NI/threads, CPUFreq, hwmon, powercap, cgroup v2, DRM/sysfs GPU, host/kernel/firmware identity, and power supplies are implemented | NUMA, full route tables, systemd/container semantics, threads/PSS, cross-resource links |
 | Deep inspection | Selectable SMART/NVMe, experimental `perf stat` RAM PMU sampling, and sshd Inspectors work | Unified resource navigation, complete session/event providers, PMU platform mapping and validation |
 | GPU | DRM devices, PCI IDs/link metadata, AMD sysfs/DPM, Intel i915/xe frequencies, DRM fdinfo utilization/process tables, and hwmon temperature/power joins are implemented | Client/region drill-down, NVML, AMD SMI, Level Zero, MIG/tile |
-| Performance release/actions | Diagnostics first; the TUI exposes only `SIGTERM` with PID identity revalidation | Define product scope before adding STOP/CONT, renice, or tuning protocols |
+| Performance release/actions | A confirmed signal menu exposes `SIGTERM`, `SIGKILL`, `SIGSTOP` and `SIGCONT`, each with pidfd + start-time revalidation | renice, cgroup limits, and tuning protocols still need a product scope |
 | Linux Only | The rockspec, Make/bootstrap, C compile gate, and unified CLI entry reject non-Linux platforms; the data layer is Linux-specific | Minimum kernel/distribution baseline |
 | Lua | Business logic, collection, UI, configuration, and i18n use PUC Lua | Retain the Lua 5.4 syntax subset and Lua 5.5 release ABI |
 | LuaRocks installation | Linux-only `scm-1` rockspec, isolated installation, and installed-CLI smoke paths exist | Versioned release rock |
@@ -51,13 +51,13 @@ The current version is the `0.1.0-dev` development preview, not a completed 0.1 
 
 ### 4.2 UI
 
-- Tabs: Overview, Processes, Compute, Storage & I/O, Network, GPU, Workloads, Insights.
-- Widgets: metric, sparkline, table, text, panel, tab/status bar.
+- Tabs: Overview, Processes, Compute, Memory, Storage & I/O, Network, GPU, Workloads, System, Insights.
+- Widgets: metric (with multi-row chart), sparkline, chart, table (per-cell colour and in-cell bars), key/value, bars, segments, text, panel, tab/status bar.
 - A virtual cell grid draws by display-column width; the diff renderer emits only changed runs.
 - Keyboard, basic mouse, bracketed-paste decoding, resize, and terminal-capability fallback are supported.
 - Current layout editing moves fixed widgets in four directions, adjusts split ratios, and stores up to 50 undo/redo steps per page. Widgets cannot be added, removed, or replaced.
 - Responsive default geometry selects the richest available form for the actual rectangle. Compact windows first switch axes/reflow, then retain the focused or higher-priority branch only when space is still insufficient. Standard uses up to two columns, wide-short up to four, and wide-tall up to three. Actual placement drives both ViewModel and collector visibility: hidden tables are not modeled, and collectors unneeded by any visible widget fall back to background intervals.
-- The process page provides text search, a fixed sort cycle, PPID tree, selected-item details, and confirmed `SIGTERM`. It is not yet a complete htop-style process browser.
+- The process page provides a search language (field terms, negation, Lua patterns, combined with AND) with full line editing and match highlighting, eleven sort columns in both directions, a PPID tree, a full-path toggle, keyboard paging, click-to-select and click-to-sort, selected-item details, and a confirmed signal menu. It is still not a complete htop-style process browser: thread rows and a user-configurable column set are absent.
 - An elevated invocation is identified in status/diagnostic output. Direct `sudo wtop` and explicit `--sudo`/`--elevate` re-execution are supported without a resident root daemon.
 
 ### 4.3 Data
@@ -94,7 +94,7 @@ Every collector returns status, quality, timestamp, duration, source, and reason
 - `config.yml` uses configuration schema v1. `layout.yml` writes binary split-tree layout schema v2 and can read the linear-order v1. Both use restricted YAML profiles; layout writes are native and atomic.
 - CLI/config themes are limited strictly to five exact built-in names. Locale tags are syntactically validated and normalized; a valid unknown tag can be provided by a TUI XDG user catalog instead of having to exist in the built-in list.
 - Built-in locales are deterministically generated from YAML into Lua modules, and the registry uses literal `require`.
-- `en-US` and `zh-CN` are stable. The initial eight additional languages are preview and fall back key by key.
+- `en-US` and `zh-CN` are stable; the other eight are preview. All ten are complete: the fallback chain still exists for user-supplied catalogs, but no shipped catalog relies on it.
 - The CLI provides TUI, `--snapshot` JSON, `--agent` JSON, and `--diagnose`.
 - The TUI loads bounded XDG custom-locale files at startup. `--snapshot`/`--diagnose` do not create a translator or scan that directory.
 - JSON snapshots mask remote socket IPs by default and rebuild exported connection IDs from masked endpoints, preventing full remote addresses from leaking through internal IDs. Remote ports, local addresses, Unix socket paths, and interface MAC addresses remain unmasked. The Network-page TUI displays full endpoints and has no masking switch.
@@ -115,7 +115,7 @@ make test-bundle-dir
 make checksums
 ```
 
-`make test` currently contains 41 Lua 5.5 unit/fixture test files plus the responsive/color-depth real-PTY matrix; `make test-54` checks the pure-Lua 5.4-compatible subset. Hardware fixtures cover heterogeneous ARM, hybrid x86, RISC-V, large shared CPU-cache lists, powercap deltas/wrap/reset/constraints and overlapping `psys`, GPU PCI/fdinfo behavior, and invalid hwmon sentinels without requiring the development host to expose each device. Privilege and preflight tests cover CLI parsing, identity metadata, sanitized re-execution construction, cgroup v2 limits, and output integration without triggering an interactive password prompt.
+`make test` currently contains 47 Lua 5.5 unit/fixture test files plus the responsive/color-depth real-PTY matrix; `make test-54` checks the pure-Lua 5.4-compatible subset. Hardware fixtures cover heterogeneous ARM, hybrid x86, RISC-V, large shared CPU-cache lists, powercap deltas/wrap/reset/constraints and overlapping `psys`, GPU PCI/fdinfo behavior, and invalid hwmon sentinels without requiring the development host to expose each device. Privilege and preflight tests cover CLI parsing, identity metadata, sanitized re-execution construction, cgroup v2 limits, and output integration without triggering an interactive password prompt. A fixture filesystem additionally drives the hwmon, powercap, cpufreq, DRM, and power-supply collectors against recorded driver trees, replays real `smartctl --json` and `perf stat -x ;` output for the on-demand inspectors, and exercises the process-collection cap and the sudo file-access policy, none of which a development host reaches on its own. `make test-fuzz` throws randomized keys, mouse reports, malformed escape sequences, invalid UTF-8, and resizes at the real terminal loop; it is excluded from `make test` because it is slow and non-deterministic by design, and runs on every push in CI instead.
 
 Selected build and test Make targets run a lightweight resource precheck first and are kept nonparallel at the orchestration layer. The `build`, `test`, and `full` profiles inspect the tighter host/cgroup memory and Swap headroom, host/cgroup memory PSI, and load per CPU. An explicit environment override exists for deliberate operator use, but the normal path refuses to start resource-intensive work on an unhealthy host.
 
@@ -127,7 +127,7 @@ The following marks describe completion relative to a releasable 0.1:
 
 - [x] Linux-only Lua 5.5.1 toolchain and native terminal restoration.
 - [x] CPU usage/identity, memory, PSI, disk, mounts, network/sockets, basic processes, CPUFreq, hwmon, powercap, cgroup v2, and generic DRM collectors.
-- [x] Responsive eight-tab frame, cell diff, themes, and basic mouse.
+- [x] Responsive ten-tab frame, cell diff, runtime theme switching, and mouse selection/sorting.
 - [x] Configuration, layout schema v2 tree persistence (v1-compatible), JSON snapshot, and diagnose.
 - [x] YAML i18n compilation, stable/preview catalogs, and per-key fallback.
 - [x] onedir/onefile build targets.

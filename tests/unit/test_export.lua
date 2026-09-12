@@ -384,4 +384,112 @@ assert(#schema_bounded.top.processes == 10)
 assert(#schema_bounded.top.disks == 5 and #schema_bounded.top.interfaces == 5)
 assert(#schema_bounded.top.gpus == 5 and #schema_bounded.top.workloads == 5)
 
+-- A field the collector gathers but the export drops is invisible: the TUI
+-- shows a number that `--snapshot` cannot reproduce.  That happened three
+-- times while the Memory, Storage and System pages were being built, because
+-- every exporter carries an explicit allow-list.  Pin the fields those pages
+-- depend on so the next addition cannot quietly fail to ship.
+local enriched = Export.snapshot({
+    sequence = 1,
+    timestamp_ns = 1,
+    memory = {
+        total_bytes = 1000, available_bytes = 400, used_bytes = 600, free_bytes = 300,
+        buffers_bytes = 50, cache_bytes = 100, shared_bytes = 25, mapped_bytes = 75,
+        page_tables_bytes = 10, kernel_stack_bytes = 5, committed_bytes = 900,
+        commit_limit_bytes = 1500, active_bytes = 200, inactive_bytes = 150,
+        swap_total_bytes = 0, swap_free_bytes = 0, swap_used_bytes = 0,
+        segments = {
+            { id = "used", bytes = 525 }, { id = "shared", bytes = 25 },
+            { id = "buffers", bytes = 50 }, { id = "cache", bytes = 100 },
+            { id = "free", bytes = 300 },
+        },
+    },
+    disks = { devices = { {
+        id = "8:0", name = "sda", partial = false, topology_truncated = false,
+        identity = {
+            model = "Example SSD", vendor = "Example", size_bytes = 512 * 1024 * 1024,
+            rotational = 0, removable = false, scheduler = "none", virtual = false,
+        },
+    } } },
+    network = { interfaces = { {
+        name = "eth0", counters = { rx_bytes = 10, tx_bytes = 20 },
+        addresses = { { family = "ipv4", address = "192.0.2.5", netmask = "255.255.255.0" } },
+    } }, addresses_status = "ok" },
+    system = {
+        host = { hostname = "example", architecture = "x86_64" },
+        kernel = { release = "6.8.0" },
+        distribution = { pretty_name = "Example Linux" },
+        limits = { pid_max = 4096, file_descriptors = { open = 12, maximum = 1024 } },
+        counters = { ctxt = 99, intr = 88, forks = 7 },
+        uptime_seconds = 1234, boot_time_unix = 1700000000,
+        virtualization = { virtual = true, technology = "kvm" },
+    },
+    power_supplies = {
+        batteries = { { id = "BAT0", name = "BAT0", capacity_percent = 62,
+            health_percent = 83, energy_watt_hours = 31, power_watts = 10 } },
+        supplies = { { id = "AC", name = "AC", type = "Mains", online = false } },
+        summary = { count = 1, capacity_percent = 62, state = "discharging" },
+        on_ac_power = false,
+    },
+}, {})
+
+local memory_out = enriched.memory
+for _, field in ipairs({ "shared_bytes", "mapped_bytes", "page_tables_bytes",
+    "kernel_stack_bytes", "committed_bytes", "commit_limit_bytes",
+    "active_bytes", "inactive_bytes" }) do
+    assert(memory_out[field] ~= nil, "memory." .. field .. " must reach the snapshot")
+end
+assert(#memory_out.segments == 5, "the stacked composition must be exported")
+local segment_total = 0
+for _, segment in ipairs(memory_out.segments) do
+    segment_total = segment_total + segment.bytes
+end
+assert(segment_total == memory_out.total_bytes,
+    "the exported partition must still sum to the total")
+
+local disk_out = enriched.disks.devices[1]
+assert(disk_out.identity ~= nil, "block-device identity must reach the snapshot")
+assert(disk_out.identity.model == "Example SSD", "model survives")
+assert(disk_out.identity.size_bytes == 512 * 1024 * 1024, "capacity survives")
+assert(disk_out.identity.scheduler == "none", "scheduler survives")
+assert(disk_out.identity.virtual == false, "the virtual-device flag survives")
+assert(disk_out.partial == false, "completeness flags survive")
+
+local interface_out = enriched.network.interfaces[1]
+assert(#interface_out.addresses == 1, "interface addresses must reach the snapshot")
+assert(interface_out.addresses[1].address == "192.0.2.5", "the address survives")
+assert(interface_out.counters.rx_bytes == 10, "raw counters survive")
+assert(enriched.network.addresses_status == "ok", "the address-scan status survives")
+
+local system_out = enriched.system
+assert(system_out.host.hostname == "example", "hostname survives")
+assert(system_out.kernel.release == "6.8.0", "kernel release survives")
+assert(system_out.distribution.pretty_name == "Example Linux", "distribution survives")
+assert(system_out.limits.file_descriptors.open == 12, "descriptor usage survives")
+assert(system_out.counters.ctxt == 99, "kernel counters survive")
+assert(system_out.virtualization.technology == "kvm", "virtualization survives")
+assert(system_out.boot_time_unix == 1700000000, "boot time survives")
+
+local power_out = enriched.power_supplies
+assert(#power_out.batteries == 1 and power_out.batteries[1].health_percent == 83,
+    "battery health survives")
+assert(power_out.on_ac_power == false, "mains state survives")
+
+-- Host-identifying firmware members are never collected, so they must never
+-- appear in a snapshot that gets pasted into a bug report.
+local leaky = Export.snapshot({
+    sequence = 1, timestamp_ns = 1,
+    system = { host = { hostname = "example" }, firmware = {
+        product_name = "Example", product_serial = "SECRET-SERIAL",
+        board_serial = "SECRET-BOARD", product_uuid = "SECRET-UUID",
+        chassis_asset_tag = "SECRET-ASSET",
+    } },
+}, {})
+for _, field in ipairs({ "product_serial", "board_serial", "product_uuid",
+    "chassis_asset_tag" }) do
+    assert(leaky.system.firmware[field] == nil,
+        "host-identifying DMI member must never be exported: " .. field)
+end
+assert(leaky.system.firmware.product_name == "Example", "non-identifying members survive")
+
 return true

@@ -401,6 +401,26 @@ M.normalize_locale = Locale.normalize
 M.locale_from_environment = Locale.from_environment
 M.Catalog = Catalog
 M.Format = Format
+--- Locale identifiers this build actually ships, in stable sorted order.
+-- The runtime language switch needs a list it can cycle; reaching into the
+-- generated registry from the UI would tie the TUI to a generated file.
+function M.available(registry)
+  if registry == nil then
+    local ok, loaded = pcall(default_registry)
+    if not ok then return nil, "cannot load locale registry: " .. tostring(loaded) end
+    registry = loaded
+  end
+  if type(registry) ~= "table" or type(registry.catalogs) ~= "table" then
+    return nil, "locale registry must contain a catalogs table"
+  end
+  local locales = {}
+  for locale in pairs(registry.catalogs) do
+    if type(locale) == "string" then locales[#locales + 1] = locale end
+  end
+  table.sort(locales)
+  return locales
+end
+
 M.Locale = Locale
 M.Plural = Plural
 M.Yaml = Yaml

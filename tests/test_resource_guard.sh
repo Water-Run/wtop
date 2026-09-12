@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+# The fixture exercises the guard's own decision logic, so an operator-set
+# WTOP_SKIP_RESOURCE_CHECK in the surrounding environment would make every case
+# short-circuit and the suite would pass without testing anything.
+unset WTOP_SKIP_RESOURCE_CHECK
+
 guard=./tools/check_resources.sh
 fixture_root=$PWD/tests/fixtures/resources
 proc_root=$fixture_root/proc

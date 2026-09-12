@@ -109,6 +109,31 @@ local function min_size(node, mode)
   return math.max(first_w, second_w), first_h + second_h + node.gap
 end
 
+
+-- The size at which a subtree renders its richest form.  `min_size` reports
+-- the smallest form that merely fits, so a split could satisfy both children
+-- while leaving each of them too narrow to show the columns it exists for.
+local function preferred_size(node, mode)
+  if node.type == "widget" then
+    local full = node.forms.full or node.forms.value
+    return full.min_width, full.min_height
+  elseif node.type == "flow" then
+    return 1, 1
+  end
+  local first_w, first_h = preferred_size(node.first, mode)
+  local second_w, second_h = preferred_size(node.second, mode)
+  local axis = node.axis
+  if node.axes and node.axes[mode] then
+    axis = node.axes[mode]
+  elseif node.adaptive then
+    axis = mode == "narrow-tall" and "column" or "row"
+  end
+  if axis == "row" then
+    return first_w + second_w + node.gap, math.max(first_h, second_h)
+  end
+  return math.max(first_w, second_w), first_h + second_h + node.gap
+end
+
 local function node_axis(node, mode)
   local axis = node.axis
   if node.axes and node.axes[mode] then
@@ -232,6 +257,15 @@ local function solve_flow(node, area, mode, result, options)
         if widths[column] >= form.min_width and heights[row] >= form.min_height then
           score = score + (richness[choose_variant(item.node,
             {width = widths[column], height = heights[row]}, mode)] or 0)
+          -- Variant names alone cannot tell a table showing three columns from
+          -- the same table showing seven: both are the same form.  Reward the
+          -- cell for approaching the widget's full width so a tie between two
+          -- and four columns resolves toward the layout that actually keeps
+          -- the data, instead of toward the mode's nominal column count.
+          local full_form = item.node.forms.full
+          if full_form and full_form.min_width and full_form.min_width > 0 then
+            score = score + 0.5 * math.min(1, widths[column] / full_form.min_width)
+          end
         end
       else
         local minimum_width, minimum_height = min_size(item.node, mode)
@@ -303,6 +337,39 @@ solve_node = function(node, area, mode, result, options)
   local total = axis == "row" and area.width or area.height
   local ratio = responsive_ratio(node, mode, axis)
   local first_length, second_length = split_lengths(total, node.gap, ratio, first_min, second_min)
+
+  -- Both axes may satisfy the minimum sizes while only one lets the children
+  -- reach their full form.  Splitting a 120-column terminal into four 30-cell
+  -- panels "fits" every table and still drops half their columns; stacking the
+  -- same panels keeps the data and spends height that was empty anyway.
+  if first_length and node.reflow == true then
+    local alternate = axis == "row" and "column" or "row"
+    local first_pw, first_ph = preferred_size(node.first, mode)
+    local second_pw, second_ph = preferred_size(node.second, mode)
+    local current_first = axis == "row" and first_pw or first_ph
+    local current_second = axis == "row" and second_pw or second_ph
+    local satisfied = (first_length >= current_first and 1 or 0)
+      + (second_length >= current_second and 1 or 0)
+    if satisfied < 2 then
+      local alternate_first_min = alternate == "row" and first_w or first_h
+      local alternate_second_min = alternate == "row" and second_w or second_h
+      local alternate_total = alternate == "row" and area.width or area.height
+      local alternate_ratio = responsive_ratio(node, mode, alternate)
+      local alternate_first, alternate_second = split_lengths(
+        alternate_total, node.gap, alternate_ratio, alternate_first_min, alternate_second_min)
+      if alternate_first then
+        local alternate_first_pref = alternate == "row" and first_pw or first_ph
+        local alternate_second_pref = alternate == "row" and second_pw or second_ph
+        local alternate_satisfied = (alternate_first >= alternate_first_pref and 1 or 0)
+          + (alternate_second >= alternate_second_pref and 1 or 0)
+        if alternate_satisfied > satisfied then
+          result.reflowed[#result.reflowed + 1] =
+            { id = node.id, from = axis, to = alternate, reason = "preferred-form" }
+          axis, first_length, second_length = alternate, alternate_first, alternate_second
+        end
+      end
+    end
+  end
 
   if not first_length and node.reflow == true then
     local alternate = axis == "row" and "column" or "row"

@@ -26,7 +26,10 @@ local SENSOR_SPECS = {
     readings = { input = true, average = true },
   },
   ["in"] = {
-    kind = "voltage", order = 4, unit = "volts", scale = 1000,
+    -- The hwmon ABI numbers voltage channels `in[0-*]`, unlike every other
+    -- kind, which starts at 1.  `in0` is normally Vcore, so rejecting index 0
+    -- dropped the single most interesting voltage on most boards.
+    kind = "voltage", order = 4, unit = "volts", scale = 1000, minimum_index = 0,
     thresholds = { min = true, max = true, crit = true, lcrit = true },
     readings = { input = true },
   },
@@ -246,9 +249,18 @@ local function discover_channels(entries, options)
     local prefix, number_text, attribute = filename:match("^([a-z]+)(%d+)_([%w_]+)$")
     local spec = prefix and SENSOR_SPECS[prefix]
     local number = tonumber(number_text)
+    -- Drivers rarely publish the bare `alarm` file.  The kernel's hwmon ABI
+    -- also defines a flag per limit, and that is what the common drivers
+    -- actually implement: Intel's coretemp raises `tempN_crit_alarm` and never
+    -- `tempN_alarm`, so recognising only the bare name meant a thermal alarm
+    -- was invisible on most Intel machines.
+    local limit_alarm = attribute and attribute:match("^(%a[%w_]-)_alarm$")
     local recognized = spec and (attribute == "label" or attribute == "alarm" or attribute == "fault"
+      or (limit_alarm and spec.thresholds[limit_alarm])
       or spec.thresholds[attribute] or spec.readings[attribute])
-    if recognized and number and number >= 1 and number <= options.max_channel_index then
+    local minimum_index = spec and spec.minimum_index or 1
+    if recognized and number and number >= minimum_index
+        and number <= options.max_channel_index then
       local key = prefix .. ":" .. tostring(number)
       local group = groups[key]
       if not group then
@@ -293,6 +305,9 @@ local function read_channel(fs, base, group, options)
     readings = {},
     thresholds = {},
     alarm = nil,
+    -- Which specific limit is in alarm, when the driver says so.  The
+    -- channel-level `alarm` stays the single flag the UI reads.
+    alarms = {},
     fault = nil,
     errors = {},
     source = base,
@@ -308,6 +323,18 @@ local function read_channel(fs, base, group, options)
         channel.errors[attribute] = error_record(err, path)
       else
         channel[attribute] = value
+      end
+    elseif attribute:match("^(%a[%w_]-)_alarm$")
+        and spec.thresholds[attribute:match("^(%a[%w_]-)_alarm$")] then
+      local limit = attribute:match("^(%a[%w_]-)_alarm$")
+      local value, err = boolean_number(fs, path)
+      if value == nil then
+        channel.errors[attribute] = error_record(err, path)
+      else
+        channel.alarms[limit] = value
+        -- Any limit in alarm puts the whole channel in alarm; a driver that
+        -- also publishes the bare flag must not be able to clear it.
+        if value then channel.alarm = true end
       end
     else
       local value, err = normalized_number(fs, path, spec.scale, options.max_abs_raw_value)
@@ -327,6 +354,8 @@ local function read_channel(fs, base, group, options)
       end
     end
   end
+
+  if not has_entries(channel.alarms) then channel.alarms = nil end
 
   if has_entries(channel.errors) then
     channel.quality = "partial"

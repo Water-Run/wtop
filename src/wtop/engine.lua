@@ -1,4 +1,5 @@
 local Collectors = require("wtop.collectors")
+local Users = require("wtop.linux.users")
 local Ring = require("wtop.model.ring")
 local Scheduler = require("wtop.core.scheduler")
 local Snapshot = require("wtop.model.snapshot")
@@ -14,6 +15,10 @@ local HISTORY_KEYS = {
     "cpu_power",
     "memory",
     "pressure",
+    "memory_pressure",
+    "io_pressure",
+    "swap",
+    "battery",
     "disk_read",
     "disk_write",
     "network_receive",
@@ -42,6 +47,8 @@ local INTERVAL_FLOORS_MS = {
     powercap = 1000,
     mounts = 5000,
     cgroup = 2000,
+    system_info = 2000,
+    power_supply = 2000,
 }
 
 -- Expensive and high-cardinality sources continue sampling while their page
@@ -62,22 +69,27 @@ local BACKGROUND_INTERVALS_MS = {
     powercap = 5000,
     mounts = 30000,
     cgroup = 10000,
+    system_info = 30000,
+    power_supply = 15000,
 }
 
 local TAB_COLLECTORS = {
     overview = {
         cpu = true, memory = true, pressure = true, disk = true,
         network = true, gpu = true, cpufreq = true, hwmon = true, powercap = true,
+        system_info = true,
     },
     processes = { cpu = true, memory = true, process = true },
     compute = {
         cpu = true, cpu_info = true, memory = true, pressure = true,
         cpufreq = true, hwmon = true, powercap = true,
     },
-    storage = { disk = true, mounts = true },
+    memory = { memory = true, pressure = true, system_info = true },
+    storage = { disk = true, mounts = true, pressure = true },
     network = { network = true, connections = true },
     gpu = { gpu = true, hwmon = true },
     workloads = { cpu = true, memory = true, pressure = true, cgroup = true },
+    system = { system_info = true, cpu_info = true, memory = true, power_supply = true },
     -- Insights is a static capability summary.  Its counts may use the bounded
     -- background samples; keeping the full process collector at 1 Hz here
     -- would burn a core merely to refresh a decorative count.
@@ -90,6 +102,7 @@ local TAB_COLLECTORS = {
 local TAB_WIDGET_COLLECTORS = {
     overview = {
         cpu_overview = { "cpu" }, memory_overview = { "memory" },
+        host_overview = { "system_info", "cpu" }, core_overview = { "cpu" },
         pressure_overview = { "pressure" }, disk_overview = { "disk" },
         network_overview = { "network" }, gpu_overview = { "gpu" },
         frequency_overview = { "cpufreq" }, temperature_overview = { "hwmon" },
@@ -98,17 +111,22 @@ local TAB_WIDGET_COLLECTORS = {
     processes = { process_table = { "cpu", "memory", "process" } },
     compute = {
         cpu_total = { "cpu" }, cpu_identity = { "cpu_info" },
-        load_summary = { "cpu" }, memory_detail = { "memory" },
+        core_bars = { "cpu" }, load_summary = { "cpu" },
         core_table = { "cpu" }, cpufreq_table = { "cpufreq" }, sensor_table = { "hwmon" },
         power_table = { "powercap" },
     },
+    memory = {
+        memory_total = { "memory" }, memory_segments = { "memory" },
+        memory_detail = { "memory" }, swap_detail = { "memory", "system_info" },
+        memory_pressure = { "pressure" }, memory_counters = { "memory" },
+    },
     storage = {
         storage_summary = { "disk" }, disk_table = { "disk" }, smart_hint = {},
-        mount_table = { "mounts" },
+        mount_table = { "mounts" }, io_pressure = { "pressure" },
     },
     network = {
         network_summary = { "network" }, network_table = { "network" },
-        connection_table = { "connections" },
+        connection_table = { "connections" }, address_table = { "network" },
     },
     gpu = {
         gpu_summary = { "gpu" }, gpu_table = { "gpu", "hwmon" },
@@ -118,7 +136,12 @@ local TAB_WIDGET_COLLECTORS = {
         workload_summary = { "cgroup" }, workload_table = { "cgroup" },
         workload_detail = { "cgroup" },
     },
-    insights = { insight_summary = {} },
+    system = {
+        system_identity = { "system_info" }, system_kernel = { "system_info" },
+        system_firmware = { "system_info", "cpu_info" },
+        system_limits = { "system_info" }, battery_bars = { "power_supply" },
+    },
+    insights = { collector_table = {}, inspector_table = {}, advice_list = {} },
 }
 
 local function finite_number(value)
@@ -189,6 +212,12 @@ local function sum_interfaces(interfaces, key)
         end
     end
     return found and total or nil
+end
+
+local function resource_pressure(pressure, resource)
+    local entry = pressure and pressure[resource]
+    local some = entry and entry.some
+    return some and (some.avg10 or some.avg60 or some.avg300) or nil
 end
 
 local function pressure_value(pressure)
@@ -293,10 +322,29 @@ function Engine.new(options)
         context = context,
         max_backoff_ms = options.max_backoff_ms or 30000,
     })
-    local collectors = options.collectors or Collectors.new_all(options.collector_options)
+    -- The process table shows a command name for every row, so cmdline is read
+    -- during enumeration rather than only for the selected process; reading it
+    -- lazily is what produced a table mixing 15-character comm values with
+    -- full paths.
+    local collector_options = {}
+    for key, value in pairs(options.collector_options or {}) do collector_options[key] = value end
+    if collector_options.process == nil then
+        collector_options.process = { read_cmdline = true }
+    end
+    if collector_options.network == nil then
+        collector_options.network = { native = native.available and native or nil }
+    end
+    if collector_options.system_info == nil then
+        collector_options.system_info = { native = native.available and native or nil }
+    end
+    local collectors = options.collectors or Collectors.new_all(collector_options)
+    context.resolve_username = context.resolve_username or function(uid)
+        return Users.default:user(uid, clock.now_ns())
+    end
     local ordered = {
         "cpu", "cpu_info", "memory", "pressure", "disk", "network", "connections",
         "process", "gpu", "cpufreq", "hwmon", "powercap", "mounts", "cgroup",
+        "system_info", "power_supply",
     }
     local foreground_floors = {}
     local background_targets = {}
@@ -435,6 +483,17 @@ function Engine:_record_history(snapshot, completed)
     record("cpu_power", "powercap", snapshot.power and snapshot.power.total_power_watts)
     record("memory", "memory", memory)
     record("pressure", "pressure", pressure_value(snapshot.pressure))
+    record("memory_pressure", "pressure", resource_pressure(snapshot.pressure, "memory"))
+    record("io_pressure", "pressure", resource_pressure(snapshot.pressure, "io"))
+    local swap_percent
+    if snapshot.memory and finite_number(snapshot.memory.swap_total_bytes)
+        and snapshot.memory.swap_total_bytes > 0
+        and finite_number(snapshot.memory.swap_used_bytes) then
+        swap_percent = snapshot.memory.swap_used_bytes * 100 / snapshot.memory.swap_total_bytes
+    end
+    record("swap", "memory", swap_percent)
+    record("battery", "power_supply", snapshot.power_supplies
+        and snapshot.power_supplies.summary and snapshot.power_supplies.summary.capacity_percent)
     record("disk_read", "disk", sum_devices(disks, "read_bytes_per_second"))
     record("disk_write", "disk", sum_devices(disks, "write_bytes_per_second"))
     record("network_receive", "network", sum_interfaces(interfaces, "rx_bytes_per_second"))

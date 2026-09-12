@@ -15,6 +15,8 @@ local constructors = {
   powercap = require("wtop.collectors.powercap"),
   mounts = require("wtop.collectors.mounts"),
   cgroup = require("wtop.collectors.cgroup"),
+  system_info = require("wtop.collectors.system_info"),
+  power_supply = require("wtop.collectors.power_supply"),
 }
 
 function M.new_all(options)

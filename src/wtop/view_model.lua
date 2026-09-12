@@ -47,7 +47,17 @@ end
 
 local function translated(i18n, id, fallback, variables)
     local value = i18n and i18n:t(id, variables)
-    return value and value ~= id and value or fallback
+    if value and value ~= id then return value end
+    -- A missing key falls back to the English literal, which may itself carry
+    -- {placeholders}.  Leaving them unsubstituted printed "{sort} {direction}"
+    -- straight into panel titles, so the fallback gets the same interpolation
+    -- the catalogue entry would have received.
+    if variables and i18n and i18n.format and type(fallback) == "string"
+        and fallback:find("{", 1, true) then
+        local ok, interpolated = pcall(i18n.format.interpolate, i18n.format, fallback, variables)
+        if ok and type(interpolated) == "string" then return interpolated end
+    end
+    return fallback
 end
 
 local function formatted(call, fallback)
@@ -88,6 +98,60 @@ end
 local function temperature(format, value)
     if type(value) ~= "number" then return "—" end
     return formatted(function() return assert(format:temperature(value, { precision = 1 })) end)
+end
+
+local function duration(format, seconds)
+    if type(seconds) ~= "number" then return "—" end
+    return formatted(function() return assert(format:duration(seconds)) end)
+end
+
+local function number(format, value, precision)
+    if type(value) ~= "number" then return "—" end
+    return formatted(function()
+        return assert(format:number(value, { precision = precision or 0 }))
+    end)
+end
+
+-- Severity accessors shared by the table and bar widgets.  Returning a token
+-- name rather than a colour keeps the palette decision inside the theme.
+local function severity_token(value, warn, critical)
+    if type(value) ~= "number" or value ~= value then return nil end
+    if value >= critical then return "metric.critical" end
+    if value >= warn then return "metric.warn" end
+    return nil
+end
+
+-- Severity for quantities where a *low* reading is the bad one (available
+-- entropy, battery charge, free capacity).  Expressing it by negating the
+-- value and reusing severity_token was both unreadable and wrong at the
+-- boundary: a saturated 256-byte entropy pool came out as a warning.
+local function severity_below(value, warn, critical)
+    if type(value) ~= "number" or value ~= value then return nil end
+    if value <= critical then return "metric.critical" end
+    if value <= warn then return "metric.warn" end
+    return nil
+end
+
+local function fraction_of(value, maximum)
+    if type(value) ~= "number" or type(maximum) ~= "number" or maximum <= 0 then
+        return nil
+    end
+    return math.max(0, math.min(1, value / maximum))
+end
+
+local function entry(label_id, fallback, value, options)
+    options = options or {}
+    return {
+        label_id = label_id,
+        label = fallback,
+        value = value,
+        token = options.token,
+        emphasis = options.emphasis,
+    }
+end
+
+local function section(section_id, fallback)
+    return { section = fallback, section_id = section_id }
 end
 
 local function quality(snapshot, resource)
@@ -144,20 +208,49 @@ local function top_processes(snapshot, format, controller, i18n)
         return cached.rows, status, cached.status_text
     end
     local rows = {}
+    local clock_ticks = snapshot.processes and snapshot.processes.clock_ticks_per_second or 100
+    local total_memory = snapshot.memory and snapshot.memory.total_bytes
     for _, process in ipairs(controller:rows()) do
-        local name = process.command or process.name or "?"
+        -- The kernel truncates /proc/<pid>/stat's comm at 15 characters, so a
+        -- table built from it shows "systemd-timesyn".  cmdline is the honest
+        -- name; `show_paths` decides whether its directory is kept.
+        local name = process.command
+        if name and not status.show_paths then
+            local executable = name:match("^(%S+)") or name
+            local base = executable:match("([^/]+)$")
+            if base and base ~= "" then
+                local arguments = name:sub(#executable + 1)
+                name = base .. arguments
+            end
+        end
+        name = name or process.name or "?"
         if status.tree then
             local prefix = string.rep("  ", math.min(process.tree_depth or 0, status.max_tree_depth or 64))
             name = prefix .. (process.tree_has_children and "▾ " or "· ") .. name
         end
+        local cpu_seconds = type(process.cpu_ticks) == "number"
+            and clock_ticks > 0 and process.cpu_ticks / clock_ticks or nil
         rows[#rows + 1] = {
             id = process.id,
             pid = tostring(process.pid),
             name = name,
             cpu = process.cpu_percent and percent(format, process.cpu_percent) or "—",
+            cpu_value = process.cpu_percent,
             memory = bytes(format, process.resident_bytes),
+            memory_value = process.resident_bytes,
+            memory_fraction = fraction_of(process.resident_bytes, total_memory),
+            virtual_memory = bytes(format, process.virtual_bytes),
+            threads = process.threads and tostring(process.threads) or "—",
+            nice = process.nice and tostring(process.nice) or "—",
+            priority = process.priority and tostring(process.priority) or "—",
+            time = cpu_seconds and duration(format, cpu_seconds) or "—",
             state = process.state or "?",
-            user = process.user or (process.uid and tostring(process.uid)) or "—",
+            user = process.user or "—",
+            -- /proc/<pid>/io counters are cumulative since exec.  Presenting
+            -- them as a per-second rate would be a fabrication: the collector
+            -- samples them on demand for the selected process only.
+            read = bytes(format, process.io and process.io.read_bytes),
+            write = bytes(format, process.io and process.io.write_bytes),
             process = process,
         }
     end
@@ -181,39 +274,74 @@ local function core_rows(snapshot, format)
         rows[#rows + 1] = {
             core = core.name,
             total = percent(format, core.utilization),
+            total_value = core.utilization,
             user = percent(format, core.user),
             system = percent(format, core.system),
             iowait = percent(format, core.iowait),
+            irq = percent(format, core.irq),
+            steal = percent(format, core.steal),
         }
     end
     return rows
 end
 
-local function disk_rows(snapshot, format)
+-- A default kernel registers sixteen ramdisks and a handful of loop devices.
+-- They are always idle, always zero-length, and they used to push the real
+-- disks off the visible rows, so they are hidden unless asked for.
+local function disk_rows(snapshot, format, options)
+    options = options or {}
     local rows = {}
+    local hidden = 0
     for _, device in ipairs(snapshot.disks and snapshot.disks.devices or {}) do
-        rows[#rows + 1] = {
-            device = device.name,
-            read = rate(format, device.read_bytes_per_second),
-            write = rate(format, device.write_bytes_per_second),
-            busy = percent(format, device.busy_percent),
-            latency = device.average_read_latency_ms
-                and formatted(function() return assert(format:number(device.average_read_latency_ms, { precision = 1 })) end) .. " ms"
-                or "—",
-        }
+        local identity = device.identity or {}
+        local uninteresting = identity.virtual == true
+            and (identity.size_bytes == nil or identity.size_bytes == 0
+                or (device.read_bytes_per_second or 0) == 0
+                and (device.write_bytes_per_second or 0) == 0)
+        if uninteresting and not options.show_virtual then
+            hidden = hidden + 1
+        elseif #rows < TABLE_ROW_LIMIT then
+            rows[#rows + 1] = {
+                device = device.name,
+                model = identity.model or identity.vendor or "—",
+                size = bytes(format, identity.size_bytes),
+                medium = identity.rotational == 1 and "HDD"
+                    or (identity.rotational == 0 and "SSD" or "—"),
+                scheduler = identity.scheduler or "—",
+                read = rate(format, device.read_bytes_per_second),
+                write = rate(format, device.write_bytes_per_second),
+                busy = percent(format, device.busy_percent),
+                busy_value = device.busy_percent,
+                queue = device.average_queue_size
+                    and number(format, device.average_queue_size, 1) or "—",
+                latency = device.average_read_latency_ms
+                    and formatted(function() return assert(format:number(device.average_read_latency_ms, { precision = 1 })) end) .. " ms"
+                    or "—",
+            }
+        end
     end
-    return rows
+    return rows, hidden
 end
 
 local function network_rows(snapshot, format)
     local rows = {}
     for _, interface in ipairs(snapshot.network and snapshot.network.interfaces or {}) do
+        local rates = interface.rates or {}
+        local counters = interface.counters or {}
+        local errors = (counters.rx_errors or 0) + (counters.tx_errors or 0)
+        local drops = (counters.rx_drops or 0) + (counters.tx_drops or 0)
         rows[#rows + 1] = {
             interface = interface.name,
             state = interface.operstate or "?",
-            receive = rate(format, interface.rates and interface.rates.rx_bytes_per_second),
-            transmit = rate(format, interface.rates and interface.rates.tx_bytes_per_second),
+            receive = rate(format, rates.rx_bytes_per_second),
+            transmit = rate(format, rates.tx_bytes_per_second),
             speed = interface.speed_mbps and (tostring(interface.speed_mbps) .. " Mbit/s") or "—",
+            mac = interface.address or "—",
+            mtu = interface.mtu and tostring(interface.mtu) or "—",
+            duplex = interface.duplex or "—",
+            errors = tostring(errors),
+            drops = tostring(drops),
+            error_value = errors + drops,
         }
     end
     return rows
@@ -508,9 +636,33 @@ local function sensor_rows(snapshot, format)
     return rows
 end
 
-local function mount_rows(snapshot, format)
+-- proc, sysfs, cgroup2, devpts, tracefs and friends are kernel plumbing.  A
+-- storage page that lists twenty of them buries the one filesystem the
+-- operator came to look at, so pseudo mounts are hidden by default and the
+-- count of what was hidden is reported instead.
+local function mount_rows(snapshot, format, options)
+    options = options or {}
     local rank = { ["local"] = 1, network = 2, pseudo = 3 }
-    local selected = bounded_best_values(snapshot.mounts and snapshot.mounts.mounts or {}, TABLE_ROW_LIMIT,
+    local source = {}
+    local hidden = 0
+    local seen = {}
+    for _, mount in ipairs(snapshot.mounts and snapshot.mounts.mounts or {}) do
+        local capacity = mount.capacity or {}
+        local is_pseudo = mount.kind == "pseudo"
+            or (capacity.total_bytes ~= nil and capacity.total_bytes == 0)
+        -- The same path can be mounted repeatedly; the last entry in
+        -- mountinfo order is the one currently visible at that path.
+        local key = tostring(mount.mount_point or mount.id or #source)
+        if is_pseudo and not options.show_pseudo then
+            hidden = hidden + 1
+        elseif seen[key] then
+            source[seen[key]] = mount
+        else
+            source[#source + 1] = mount
+            seen[key] = #source
+        end
+    end
+    local selected = bounded_best_values(source, TABLE_ROW_LIMIT,
         function(left, right)
             local left_rank, right_rank = rank[left.kind] or 4, rank[right.kind] or 4
             if left_rank ~= right_rank then return left_rank < right_rank end
@@ -521,18 +673,21 @@ local function mount_rows(snapshot, format)
     local rows = {}
     for _, mount in ipairs(selected) do
         local capacity = mount.capacity or {}
+        local inode_used = mount.inodes and mount.inodes.used_percent
         rows[#rows + 1] = {
             mount = mount.mount_point,
             type = mount.fs_type,
             used = percent(format, capacity.used_percent),
+            used_value = capacity.used_percent,
             available = bytes(format, capacity.available_bytes),
             size = bytes(format, capacity.total_bytes),
+            inodes = inode_used and percent(format, inode_used) or "—",
             source = mount.source or "—",
             kind = mount.kind or "?",
             readonly = mount.readonly and "ro" or "rw",
         }
     end
-    return rows
+    return rows, hidden
 end
 
 local function workload_rows(snapshot, format)
@@ -556,73 +711,6 @@ local function workload_rows(snapshot, format)
         }
     end
     return rows
-end
-
-local function cpu_identity_text(snapshot, format, i18n)
-    local cpu_info = snapshot.cpu_info or {}
-    local identity = cpu_info.identity or {}
-    local topology = cpu_info.topology or {}
-    if not identity.model_name and not identity.vendor and not topology.threads then
-        return translated(i18n, "ui.no_data", "No data")
-    end
-    local cache_labels = {}
-    for _, cache in ipairs(cpu_info.cache_summary or {}) do
-        cache_labels[#cache_labels + 1] = tostring(cache.id or "?") .. " "
-            .. bytes(format, cache.total_size_bytes)
-    end
-    local features = {}
-    for index = 1, math.min(12, #(identity.flags or {})) do
-        features[#features + 1] = identity.flags[index]
-    end
-    local family = table.concat({
-        tostring(identity.vendor or "—"),
-        "family " .. tostring(identity.family or "—"),
-        "model " .. tostring(identity.model or "—"),
-        "stepping " .. tostring(identity.stepping or "—"),
-    }, " · ")
-    local model_line = tostring(identity.model_name or "—")
-    if identity.heterogeneous and #(cpu_info.core_types or {}) > 1 then
-        local type_labels = {}
-        for index = 1, math.min(8, #cpu_info.core_types) do
-            local core_type = cpu_info.core_types[index]
-            local label = core_type.model_name or core_type.vendor or "CPU"
-            if core_type.part and not label:find(core_type.part, 1, true) then
-                label = label .. " part " .. tostring(core_type.part)
-            end
-            if core_type.cpu_capacity then
-                label = label .. " cap " .. tostring(core_type.cpu_capacity)
-            end
-            if core_type.maximum_frequency_hz then
-                label = label .. " max " .. frequency(format, core_type.maximum_frequency_hz)
-            end
-            if core_type.threads_per_core then
-                label = label .. " " .. tostring(core_type.threads_per_core) .. "T/core"
-            end
-            local count_label = core_type.physical_core_count
-                and (tostring(core_type.physical_core_count) .. "C/") or ""
-            count_label = count_label .. tostring(core_type.logical_cpu_count or 0) .. "T"
-            type_labels[#type_labels + 1] = label .. " ×" .. count_label
-        end
-        if #cpu_info.core_types > #type_labels then type_labels[#type_labels + 1] = "…" end
-        model_line = table.concat(type_labels, " · ")
-    end
-    return table.concat({
-        model_line,
-        translated(i18n, "compute.cpu_family",
-            "Identity: {value}", { value = family }),
-        translated(i18n, "compute.cpu_topology",
-            "Topology: {sockets} socket · {cores} cores · {threads} threads", {
-                sockets = topology.sockets or 0,
-                cores = topology.physical_cores or 0,
-                threads = topology.threads or 0,
-            }),
-        translated(i18n, "compute.cpu_cache",
-            "Cache: {value}", { value = #cache_labels > 0 and table.concat(cache_labels, " · ") or "—" }),
-        translated(i18n, "compute.cpu_microcode",
-            "Microcode: {value}", { value = identity.microcode or "—" }),
-        translated(i18n, "compute.cpu_features",
-            "Features: {value}", { value = #features > 0 and table.concat(features, " ") or "—" }),
-    }, "\n")
 end
 
 local function power_rows(snapshot, format)
@@ -661,17 +749,627 @@ local function power_rows(snapshot, format)
     return rows
 end
 
-function M.build(engine, snapshot, i18n, capabilities, active_tab, process_controller, visible_widgets)
+-- ---------------------------------------------------------------------------
+-- Key/value builders
+--
+-- These replace hand-padded text blocks.  The previous approach concatenated a
+-- translated label with a literal run of spaces, which only lined up in
+-- English and collapsed entirely under CJK, where one character occupies two
+-- display columns but three bytes.
+-- ---------------------------------------------------------------------------
+
+local function plural_unit(i18n, id, fallback_one, fallback_other, count)
+    local value = i18n and i18n.t and i18n:t(id, { count = count })
+    if value and value ~= id then return value end
+    return tostring(count) .. " " .. (count == 1 and fallback_one or fallback_other)
+end
+
+local function cpu_identity_entries(snapshot, format, i18n)
+    local cpu_info = snapshot.cpu_info or {}
+    local identity = cpu_info.identity or {}
+    local topology = cpu_info.topology or {}
+    if not identity.model_name and not identity.vendor and not topology.threads then
+        return {}
+    end
+    local entries = {
+        entry("metrics.model", "Model", identity.model_name or "—", { emphasis = true }),
+        entry("metrics.vendor", "Vendor", identity.vendor),
+        entry("compute.family", "Family",
+            string.format("%s / %s / %s", tostring(identity.family or "—"),
+                tostring(identity.model or "—"), tostring(identity.stepping or "—"))),
+    }
+    if topology.threads then
+        entries[#entries + 1] = entry("compute.sockets", "Sockets",
+            plural_unit(i18n, "compute.socket_count", "socket", "sockets", topology.sockets or 0))
+        entries[#entries + 1] = entry("compute.cores", "Physical cores",
+            plural_unit(i18n, "compute.core_count", "core", "cores", topology.physical_cores or 0))
+        entries[#entries + 1] = entry("compute.threads", "Logical CPUs",
+            plural_unit(i18n, "compute.thread_count", "thread", "threads", topology.threads or 0))
+    end
+    if identity.microcode then
+        entries[#entries + 1] = entry("compute.microcode", "Microcode", identity.microcode)
+    end
+    local caches = cpu_info.cache_summary or {}
+    if #caches > 0 then
+        entries[#entries + 1] = section("compute.cache_section", "Cache")
+        for index = 1, math.min(8, #caches) do
+            local cache = caches[index]
+            entries[#entries + 1] = {
+                label = tostring(cache.id or "?"),
+                value = bytes(format, cache.total_size_bytes),
+            }
+        end
+    end
+    if identity.heterogeneous and #(cpu_info.core_types or {}) > 1 then
+        entries[#entries + 1] = section("compute.core_types_section", "Core types")
+        for index = 1, math.min(6, #cpu_info.core_types) do
+            local core_type = cpu_info.core_types[index]
+            local detail = tostring(core_type.logical_cpu_count or 0) .. "T"
+            if core_type.maximum_frequency_hz then
+                detail = detail .. " · " .. frequency(format, core_type.maximum_frequency_hz)
+            end
+            entries[#entries + 1] = {
+                label = tostring(core_type.model_name or core_type.part or "CPU"),
+                value = detail,
+            }
+        end
+    end
+    return entries
+end
+
+local function load_entries(snapshot, format, i18n)
+    local load = snapshot.cpu and snapshot.cpu.load
+    local system = snapshot.system or {}
+    if not load then return {} end
+    local threads = snapshot.cpu_info and snapshot.cpu_info.topology
+        and snapshot.cpu_info.topology.threads
+    local function load_token(value)
+        if type(value) ~= "number" or not threads or threads <= 0 then return nil end
+        return severity_token(value / threads * 100, 70, 100)
+    end
+    local entries = {
+        { label = "1m", value = number(format, load.one, 2), token = load_token(load.one) },
+        { label = "5m", value = number(format, load.five, 2), token = load_token(load.five) },
+        { label = "15m", value = number(format, load.fifteen, 2), token = load_token(load.fifteen) },
+        entry("metrics.running", "Running", snapshot.cpu and snapshot.cpu.processes_running),
+        entry("metrics.blocked", "Blocked", snapshot.cpu and snapshot.cpu.processes_blocked),
+    }
+    if system.counters then
+        entries[#entries + 1] = entry("system.context_switches", "Context switches",
+            number(format, system.counters.ctxt))
+        entries[#entries + 1] = entry("system.forks", "Forks since boot",
+            number(format, system.counters.forks))
+    end
+    return entries
+end
+
+local function memory_detail_entries(snapshot, format)
+    local memory = snapshot.memory
+    if not memory or not memory.total_bytes then return {} end
+    local function share(value)
+        if type(value) ~= "number" or not memory.total_bytes or memory.total_bytes <= 0 then
+            return bytes(format, value)
+        end
+        return string.format("%s  %.0f%%", bytes(format, value), value * 100 / memory.total_bytes)
+    end
+    return {
+        entry("metrics.total", "Total", bytes(format, memory.total_bytes), { emphasis = true }),
+        entry("metrics.used", "Used", share(memory.used_bytes),
+            { token = severity_token(memory.used_bytes * 100 / memory.total_bytes, 80, 92) }),
+        entry("metrics.available", "Available", share(memory.available_bytes)),
+        entry("metrics.free", "Free", share(memory.free_bytes)),
+        entry("metrics.cache", "Cache", share(memory.cache_bytes)),
+        entry("metrics.buffers", "Buffers", share(memory.buffers_bytes)),
+        entry("metrics.shared", "Shared", share(memory.shared_bytes)),
+        entry("metrics.anonymous", "Anonymous", bytes(format, memory.anonymous_bytes)),
+        entry("metrics.mapped", "Mapped", bytes(format, memory.mapped_bytes)),
+        entry("metrics.slab", "Slab", bytes(format, memory.slab_bytes)),
+        entry("metrics.page_tables", "Page tables", bytes(format, memory.page_tables_bytes)),
+        entry("metrics.committed", "Committed", memory.committed_bytes
+            and (bytes(format, memory.committed_bytes) .. " / "
+                .. bytes(format, memory.commit_limit_bytes)) or "—"),
+        entry("metrics.dirty", "Dirty", bytes(format, memory.dirty_bytes)),
+        entry("metrics.writeback", "Writeback", bytes(format, memory.writeback_bytes)),
+    }
+end
+
+local function swap_entries(snapshot, format)
+    local memory = snapshot.memory or {}
+    local system = snapshot.system or {}
+    local total = memory.swap_total_bytes
+    if type(total) ~= "number" or total <= 0 then
+        return { entry("memory.no_swap", "Swap", "not configured") }
+    end
+    local used_percent = memory.swap_used_bytes * 100 / total
+    local entries = {
+        entry("metrics.total", "Total", bytes(format, total)),
+        entry("metrics.used", "Used", string.format("%s  %.0f%%",
+            bytes(format, memory.swap_used_bytes), used_percent),
+            { token = severity_token(used_percent, 40, 75) }),
+        entry("metrics.free", "Free", bytes(format, memory.swap_free_bytes)),
+    }
+    if memory.zswapped_bytes then
+        entries[#entries + 1] = entry("metrics.zswap", "Zswap",
+            bytes(format, memory.zswap_bytes) .. " / " .. bytes(format, memory.zswapped_bytes))
+    end
+    for index, device in ipairs(system.swap and system.swap.devices or {}) do
+        if index == 1 then entries[#entries + 1] = section("memory.swap_devices", "Devices") end
+        if index > 8 then break end
+        entries[#entries + 1] = {
+            label = tostring(device.name),
+            value = string.format("%s / %s  %s", bytes(format, device.used_bytes),
+                bytes(format, device.size_bytes), tostring(device.type or "")),
+        }
+    end
+    return entries
+end
+
+local function paging_entries(snapshot, format)
+    local vmstat = (snapshot.memory and snapshot.memory.vmstat)
+        or (snapshot.system and snapshot.system.vmstat)
+    if type(vmstat) ~= "table" then return {} end
+    local function value(key) return number(format, vmstat[key]) end
+    return {
+        entry("memory.page_faults", "Page faults", value("pgfault")),
+        entry("memory.major_faults", "Major faults", value("pgmajfault")),
+        entry("memory.swap_in", "Swapped in", value("pswpin")),
+        entry("memory.swap_out", "Swapped out", value("pswpout")),
+        entry("memory.direct_reclaim", "Direct reclaim", value("pgscan_direct")),
+        entry("memory.oom_kills", "OOM kills", value("oom_kill"),
+            { token = (vmstat.oom_kill or 0) > 0 and "metric.critical" or nil }),
+    }
+end
+
+local function host_entries(snapshot, format, i18n)
+    local system = snapshot.system or {}
+    if not system.host then return {} end
+    local distribution = system.distribution or {}
+    local entries = {
+        entry("system.hostname", "Host", system.host.hostname, { emphasis = true }),
+        entry("system.os", "OS", distribution.pretty_name or distribution.name),
+        entry("system.kernel", "Kernel", system.kernel and system.kernel.release),
+        entry("system.uptime", "Uptime", duration(format, system.uptime_seconds)),
+    }
+    local load = snapshot.cpu and snapshot.cpu.load
+    if load then
+        entries[#entries + 1] = entry("metrics.load", "Load",
+            string.format("%s  %s  %s", number(format, load.one, 2),
+                number(format, load.five, 2), number(format, load.fifteen, 2)))
+    end
+    if system.virtualization and system.virtualization.virtual then
+        entries[#entries + 1] = entry("system.virtualization", "Virtualization",
+            system.virtualization.technology or "yes")
+    end
+    return entries
+end
+
+local function system_identity_entries(snapshot, format, i18n)
+    local system = snapshot.system or {}
+    local distribution = system.distribution or {}
+    local virtualization = system.virtualization or {}
+    local entries = {
+        section("system.host_section", "Host"),
+        entry("system.hostname", "Hostname", system.host and system.host.hostname,
+            { emphasis = true }),
+        entry("system.domain", "Domain", system.host and system.host.domain),
+        entry("system.architecture", "Architecture", system.host and system.host.architecture),
+        entry("system.timezone", "Time zone", system.timezone),
+        section("system.os_section", "Operating system"),
+        entry("system.distribution", "Distribution",
+            distribution.pretty_name or distribution.name),
+        entry("system.version", "Version", distribution.version_id or distribution.version),
+        entry("system.os_id", "Identifier", distribution.id),
+        entry("system.build", "Build", distribution.build_id),
+    }
+    entries[#entries + 1] = section("system.environment_section", "Environment")
+    entries[#entries + 1] = entry("system.virtualization", "Virtualization",
+        virtualization.virtual and (virtualization.technology or "yes") or "bare metal")
+    if virtualization.container then
+        entries[#entries + 1] = entry("system.container", "Container",
+            virtualization.container_technology or "yes")
+    end
+    for _, item in ipairs({
+        { key = "selinux", id = "system.selinux", label = "SELinux" },
+        { key = "apparmor", id = "system.apparmor", label = "AppArmor" },
+        { key = "lockdown", id = "system.lockdown", label = "Lockdown" },
+    }) do
+        local value = system.security and system.security[item.key]
+        if value then entries[#entries + 1] = entry(item.id, item.label, value) end
+    end
+    return entries
+end
+
+local function system_kernel_entries(snapshot, format, i18n)
+    local system = snapshot.system or {}
+    local kernel = system.kernel or {}
+    local entries = {
+        entry("system.kernel_type", "Kernel", kernel.type),
+        entry("system.kernel_release", "Release", kernel.release, { emphasis = true }),
+        entry("system.kernel_version", "Build", kernel.version),
+        entry("system.uptime", "Uptime", duration(format, system.uptime_seconds)),
+    }
+    if system.boot_time_unix then
+        entries[#entries + 1] = entry("system.boot_time", "Booted",
+            formatted(function()
+                return os.date("!%Y-%m-%d %H:%M:%S UTC", math.floor(system.boot_time_unix))
+            end))
+    end
+    if system.idle_seconds and system.uptime_seconds and system.uptime_seconds > 0 then
+        local threads = snapshot.cpu_info and snapshot.cpu_info.topology
+            and snapshot.cpu_info.topology.threads or 1
+        local busy = 100 - math.min(100,
+            system.idle_seconds / (system.uptime_seconds * math.max(1, threads)) * 100)
+        entries[#entries + 1] = entry("system.lifetime_busy", "Busy since boot",
+            percent(format, busy))
+    end
+    if kernel.command_line then
+        entries[#entries + 1] = section("system.cmdline_section", "Command line")
+        entries[#entries + 1] = { label = "", value = kernel.command_line }
+    end
+    return entries
+end
+
+local function system_firmware_entries(snapshot, format, i18n)
+    local system = snapshot.system or {}
+    local firmware = system.firmware
+    if not firmware then
+        return { entry("system.firmware_unavailable", "Firmware",
+            translated(i18n, "system.dmi_unavailable", "DMI not exposed by this platform")) }
+    end
+    local entries = {
+        section("system.machine_section", "Machine"),
+        entry("system.vendor", "Vendor", firmware.system_vendor),
+        entry("system.product", "Product", firmware.product_name, { emphasis = true }),
+        entry("system.product_version", "Version", firmware.product_version),
+        entry("system.chassis", "Chassis", firmware.chassis_type),
+        section("system.board_section", "Board"),
+        entry("system.board_vendor", "Vendor", firmware.board_vendor),
+        entry("system.board_name", "Model", firmware.board_name),
+        entry("system.board_version", "Version", firmware.board_version),
+        section("system.bios_section", "Firmware"),
+        entry("system.bios_vendor", "Vendor", firmware.bios_vendor),
+        entry("system.bios_version", "Version", firmware.bios_version),
+        entry("system.bios_date", "Date", firmware.bios_date),
+    }
+    return entries
+end
+
+local function system_limits_entries(snapshot, format, i18n)
+    local system = snapshot.system or {}
+    local limits = system.limits or {}
+    local descriptors = limits.file_descriptors
+    local entries = {}
+    if descriptors then
+        local used_percent = descriptors.maximum > 0
+            and descriptors.open * 100 / descriptors.maximum or nil
+        entries[#entries + 1] = entry("system.open_files", "Open descriptors",
+            number(format, descriptors.open),
+            { token = severity_token(used_percent, 70, 90) })
+    end
+    entries[#entries + 1] = entry("system.pid_max", "Maximum PID", number(format, limits.pid_max))
+    entries[#entries + 1] = entry("system.threads_max", "Maximum threads",
+        number(format, limits.threads_max))
+    -- Modern kernels saturate at 256; anything well below that means the pool
+    -- is being drained faster than it refills.
+    entries[#entries + 1] = entry("system.entropy", "Entropy available",
+        number(format, limits.entropy_available),
+        { token = severity_below(limits.entropy_available, 128, 64) })
+    local counters = system.counters or {}
+    entries[#entries + 1] = section("system.counters_section", "Since boot")
+    entries[#entries + 1] = entry("system.context_switches", "Context switches",
+        number(format, counters.ctxt))
+    entries[#entries + 1] = entry("system.interrupts", "Interrupts", number(format, counters.intr))
+    entries[#entries + 1] = entry("system.forks", "Forks", number(format, counters.forks))
+    entries[#entries + 1] = entry("system.procs_running", "Running now",
+        number(format, counters.procs_running))
+    entries[#entries + 1] = entry("system.procs_blocked", "Blocked now",
+        number(format, counters.procs_blocked),
+        { token = (counters.procs_blocked or 0) > 0 and "metric.warn" or nil })
+    return entries
+end
+
+local function battery_items(snapshot, format, i18n)
+    local supplies = snapshot.power_supplies or {}
+    local items = {}
+    for _, battery in ipairs(supplies.batteries or {}) do
+        local detail = battery.capacity_percent
+            and string.format("%.0f%%", battery.capacity_percent) or "—"
+        items[#items + 1] = {
+            label = battery.name,
+            value = battery.capacity_percent,
+            display_value = detail,
+        }
+    end
+    for _, supply in ipairs(supplies.supplies or {}) do
+        items[#items + 1] = {
+            label = supply.name,
+            value = supply.online and 100 or 0,
+            display_value = supply.online
+                and translated(i18n, "system.online", "online")
+                or translated(i18n, "system.offline", "offline"),
+            token = supply.online and "metric.good" or "text.muted",
+        }
+    end
+    return items
+end
+
+local function core_bar_items(snapshot, format)
+    local items = {}
+    for _, core in ipairs(snapshot.cpu and snapshot.cpu.cores or {}) do
+        if #items >= 256 then break end
+        items[#items + 1] = {
+            label = (core.name or "cpu"):gsub("^cpu", ""),
+            value = core.utilization,
+            display_value = type(core.utilization) == "number"
+                and string.format("%.0f%%", core.utilization) or "—",
+        }
+    end
+    return items
+end
+
+local function memory_segment_model(snapshot, format, i18n)
+    local memory = snapshot.memory
+    if not memory or not memory.segments then return { segments = {} } end
+    local labels = {
+        used = { "metrics.used", "Used", "accent.primary" },
+        shared = { "metrics.shared", "Shared", "chart.secondary" },
+        buffers = { "metrics.buffers", "Buffers", "metric.warn" },
+        cache = { "metrics.cache", "Cache", "metric.good" },
+        free = { "metrics.free", "Free", "border.subtle" },
+    }
+    local segments = {}
+    for _, segment in ipairs(memory.segments) do
+        local label = labels[segment.id] or { nil, segment.id, "accent.primary" }
+        segments[#segments + 1] = {
+            id = segment.id,
+            label_id = label[1],
+            label = label[2],
+            token = label[3],
+            bytes = segment.bytes,
+            display_value = bytes(format, segment.bytes),
+            empty = segment.id == "free",
+        }
+    end
+    return { segments = segments }
+end
+
+local function address_rows(snapshot)
+    local rows = {}
+    for _, interface in ipairs(snapshot.network and snapshot.network.interfaces or {}) do
+        for _, address in ipairs(interface.addresses or {}) do
+            if #rows >= TABLE_ROW_LIMIT then break end
+            local route = interface.default_route
+            rows[#rows + 1] = {
+                interface = interface.name,
+                family = address.family == "ipv6" and "IPv6" or "IPv4",
+                address = address.address,
+                netmask = address.netmask or "—",
+                scope = address.peer and ("peer " .. address.peer)
+                    or (address.broadcast and ("bcast " .. address.broadcast) or "—"),
+                default_route = route and route.families
+                    and (route.families[address.family] and "yes" or "—") or "—",
+            }
+        end
+    end
+    return rows
+end
+
+local COLLECTOR_RESOURCE = {
+    cpu = "cpu", cpu_info = "cpu_info", memory = "memory", pressure = "pressure",
+    disk = "disks", network = "network", connections = "connections",
+    process = "processes", gpu = "gpus", cpufreq = "cpu_frequency", hwmon = "sensors",
+    powercap = "power", mounts = "mounts", cgroup = "workloads",
+    system_info = "system", power_supply = "power_supplies",
+}
+
+local function collector_rows(snapshot, capabilities, i18n)
+    local rows = {}
+    local ids = {}
+    for id in pairs(capabilities or {}) do
+        if type(id) == "string" and id ~= "inspectors" then ids[#ids + 1] = id end
+    end
+    table.sort(ids)
+    for _, id in ipairs(ids) do
+        local capability = capabilities[id]
+        if type(capability) == "table" then
+            local resource = COLLECTOR_RESOURCE[id]
+            local state = resource and snapshot.quality and snapshot.quality[resource]
+            local source = capability.source or (capability.details and capability.details.source)
+            if type(source) == "table" then source = source[1] end
+            rows[#rows + 1] = {
+                collector = id,
+                available = capability.available == true,
+                status = capability.available and (state and state.status or "ready")
+                    or (capability.state or "unavailable"),
+                quality = state and state.quality or "—",
+                reason = capability.reason or (state and state.reason) or "—",
+                source = source and tostring(source) or "—",
+            }
+        end
+    end
+    return rows
+end
+
+local function inspector_rows(capabilities, i18n)
+    local rows = {}
+    local inspectors = capabilities and capabilities.inspectors or {}
+    local ids = {}
+    for id in pairs(inspectors) do ids[#ids + 1] = tostring(id) end
+    table.sort(ids)
+    local keys = {
+        ["storage.smart"] = { "s", "inspector.smart", "SMART / NVMe health" },
+        ["memory.bandwidth"] = { "b", "inspector.ram_bandwidth", "RAM bandwidth (PMU)" },
+        ["service.sshd"] = { "d", "inspector.sshd", "sshd service and listeners" },
+    }
+    for _, id in ipairs(ids) do
+        local capability = inspectors[id]
+        local meta = keys[id] or { "", nil, id }
+        rows[#rows + 1] = {
+            inspector = meta[2] and translated(i18n, meta[2], meta[3]) or id,
+            key = meta[1],
+            status = type(capability) == "table"
+                and (capability.available and "ready" or (capability.state or "unavailable"))
+                or tostring(capability),
+            available = type(capability) == "table" and capability.available == true,
+            reason = type(capability) == "table"
+                and (capability.reason or "—") or "—",
+        }
+    end
+    return rows
+end
+
+-- Turn capability gaps into something the operator can act on.  "GPU:
+-- unavailable" is a fact; "install smartctl to read disk health" is a next
+-- step, and that is what this page previously failed to provide.
+local ADVICE_RULES = {
+    { collector = "gpus", id = "advice.gpu",
+      text = "No DRM GPU exposed. Inside a VM or on a headless host this is expected." },
+    { collector = "cpu_frequency", id = "advice.cpufreq",
+      text = "cpufreq is absent: the platform does not export scaling policies." },
+    { collector = "sensors", id = "advice.hwmon",
+      text = "No hwmon sensors. Temperature and fan data need platform driver support." },
+    { collector = "power", id = "advice.powercap",
+      text = "RAPL/powercap is unavailable, so CPU package power cannot be read." },
+}
+
+local function advice_entries(snapshot, capabilities, i18n, privilege)
+    local entries = {}
+    local denied = {}
+    for resource, state in pairs(snapshot.quality or {}) do
+        if state.status == "denied" then denied[#denied + 1] = resource end
+    end
+    table.sort(denied)
+    if #denied > 0 then
+        entries[#entries + 1] = section("advice.permissions", "Permissions")
+        entries[#entries + 1] = {
+            label = table.concat(denied, ", "),
+            value = translated(i18n, "advice.denied",
+                "denied; run with sudo for full visibility"),
+            token = "metric.warn",
+        }
+    end
+    local gaps = {}
+    for _, rule in ipairs(ADVICE_RULES) do
+        local state = snapshot.quality and snapshot.quality[rule.collector]
+        if not state or state.status == "unavailable" then
+            gaps[#gaps + 1] = { rule = rule }
+        end
+    end
+    if #gaps > 0 then
+        entries[#entries + 1] = section("advice.gaps", "Unavailable sources")
+        for _, gap in ipairs(gaps) do
+            entries[#entries + 1] = {
+                label = gap.rule.collector,
+                value = translated(i18n, gap.rule.id, gap.rule.text),
+                token = "text.muted",
+            }
+        end
+    end
+    local inspectors = capabilities and capabilities.inspectors or {}
+    local missing = {}
+    for id, capability in pairs(inspectors) do
+        if type(capability) == "table" and capability.available ~= true then
+            missing[#missing + 1] = tostring(id)
+        end
+    end
+    table.sort(missing)
+    if #missing > 0 then
+        entries[#entries + 1] = section("advice.inspectors", "Deep inspectors")
+        for _, id in ipairs(missing) do
+            entries[#entries + 1] = {
+                label = id,
+                value = translated(i18n, "advice.inspector_missing",
+                    "helper not found or not permitted"),
+                token = "text.muted",
+            }
+        end
+    end
+    if #entries == 0 then
+        entries[#entries + 1] = {
+            label = translated(i18n, "advice.all_good", "All configured sources are reporting"),
+            value = "",
+            token = "metric.good",
+        }
+    end
+    if privilege and privilege.root ~= true then
+        entries[#entries + 1] = section("advice.hint_section", "Hints")
+        entries[#entries + 1] = {
+            label = translated(i18n, "advice.elevate", "Elevated collection"),
+            value = translated(i18n, "advice.elevate_hint",
+                "wtop --sudo re-runs with root for SMART and per-process I/O"),
+        }
+    end
+    return entries
+end
+
+local function workload_detail_entries(snapshot, format, i18n)
+    local summary = snapshot.workloads and snapshot.workloads.summary
+    if not summary then return {} end
+    local root = summary.root or {}
+    local entries = {
+        entry("workloads.nodes", "Visible cgroups", summary.node_count or 0),
+        entry("workloads.processes", "Visible processes", summary.visible_process_count or 0),
+        entry("workloads.partial", "Partial cgroups", summary.partial_node_count or 0,
+            { token = (summary.partial_node_count or 0) > 0 and "metric.warn" or nil }),
+        section("workloads.root_section", "Root cgroup"),
+        entry("metrics.cpu", "CPU", percent(format, root.cpu_utilization_percent)),
+        entry("metrics.memory", "Memory", bytes(format, root.memory_current_bytes)),
+    }
+    if (summary.partial_node_count or 0) > 0 then
+        entries[#entries + 1] = section("workloads.why_section", "Why partial")
+        entries[#entries + 1] = {
+            label = "",
+            value = translated(i18n, "workloads.partial_reason",
+                "Controllers not delegated to this cgroup, or files unreadable as this user."),
+            token = "text.muted",
+        }
+    end
+    return entries
+end
+
+local function smart_hint_entries(snapshot, capabilities, i18n)
+    local inspectors = capabilities and capabilities.inspectors or {}
+    local smart = inspectors["storage.smart"]
+    local available = type(smart) == "table" and smart.available == true
+    return {
+        entry("storage.smart_key", "Inspect", translated(i18n, "storage.smart_hint_short",
+            "press s to choose a device")),
+        entry("inspector.status", "Status", available
+            and translated(i18n, "inspector.ready", "ready")
+            or translated(i18n, "inspector.helper_missing", "smartctl not available"),
+            { token = available and "metric.good" or "metric.warn" }),
+        { label = "", value = translated(i18n, "storage.smart_standby",
+            "Read-only probes are lazy; standby disks are not awakened."),
+          token = "text.muted" },
+    }
+end
+
+function M.build(engine, snapshot, i18n, capabilities, active_tab, process_controller,
+        visible_widgets, options)
+    options = options or {}
     local format = i18n.format
     local function visible(widget_id)
         return type(visible_widgets) ~= "table" or visible_widgets[widget_id] == true
     end
+    local function on(tab, widget_id)
+        return (not active_tab or active_tab == tab) and visible(widget_id)
+    end
+
     local cpu_value = snapshot.cpu and snapshot.cpu.total and snapshot.cpu.total.utilization
     local memory_value
     if snapshot.memory and snapshot.memory.total_bytes and snapshot.memory.total_bytes > 0 then
         memory_value = snapshot.memory.used_bytes * 100 / snapshot.memory.total_bytes
     end
+    local swap_value
+    if snapshot.memory and snapshot.memory.swap_total_bytes
+        and snapshot.memory.swap_total_bytes > 0 then
+        swap_value = snapshot.memory.swap_used_bytes * 100 / snapshot.memory.swap_total_bytes
+    end
     local pressure = Engine.pressure_value(snapshot.pressure)
+    local memory_pressure = snapshot.pressure and snapshot.pressure.memory
+        and snapshot.pressure.memory.some and snapshot.pressure.memory.some.avg10
+    local io_pressure = snapshot.pressure and snapshot.pressure.io
+        and snapshot.pressure.io.some and snapshot.pressure.io.some.avg10
     local disk_read = Engine.sum_devices(snapshot.disks and snapshot.disks.devices, "read_bytes_per_second")
     local disk_write = Engine.sum_devices(snapshot.disks and snapshot.disks.devices, "write_bytes_per_second")
     local network_receive = Engine.sum_interfaces(snapshot.network and snapshot.network.interfaces, "rx_bytes_per_second")
@@ -680,8 +1378,9 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
     local first_gpu = gpu_devices[1] and gpu_devices[1].metrics or {}
     local process_count = snapshot.processes and snapshot.processes.process_candidates
         or #(snapshot.processes and snapshot.processes.list or {})
+
     local process_rows, process_status, process_status_display
-    if (not active_tab or active_tab == "processes") and visible("process_table") then
+    if on("processes", "process_table") then
         process_controller = process_controller or ProcessTable.new()
         process_rows, process_status, process_status_display = top_processes(
             snapshot, format, process_controller, i18n)
@@ -690,251 +1389,398 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         process_status = process_controller and process_controller:status() or ProcessTable.new():status()
         process_status_display = process_status_text(i18n, process_status)
     end
-    local cores = (not active_tab or active_tab == "compute") and visible("core_table")
-        and core_rows(snapshot, format) or {}
-    local disks = (not active_tab or active_tab == "storage") and visible("disk_table")
-        and disk_rows(snapshot, format) or {}
-    local interfaces = (not active_tab or active_tab == "network") and visible("network_table")
-        and network_rows(snapshot, format) or {}
-    local connections = (not active_tab or active_tab == "network") and visible("connection_table")
-        and connection_rows(snapshot) or {}
-    local gpu_table_rows = (not active_tab or active_tab == "gpu") and visible("gpu_table")
-        and gpu_rows(snapshot, format) or {}
+
+    local cores = on("compute", "core_table") and core_rows(snapshot, format) or {}
+    local core_items = {}
+    if on("compute", "core_bars") or on("overview", "core_overview") then
+        core_items = core_bar_items(snapshot, format)
+    end
+    local disks, disks_hidden = {}, 0
+    if on("storage", "disk_table") then
+        disks, disks_hidden = disk_rows(snapshot, format, { show_virtual = options.show_virtual_devices })
+    end
+    local interfaces = on("network", "network_table") and network_rows(snapshot, format) or {}
+    local connections = on("network", "connection_table") and connection_rows(snapshot) or {}
+    local addresses = on("network", "address_table") and address_rows(snapshot) or {}
+    local gpu_table_rows = on("gpu", "gpu_table") and gpu_rows(snapshot, format) or {}
     local gpu_process_table_rows, gpu_process_total = {}, 0
-    if (not active_tab or active_tab == "gpu") and visible("gpu_process_table") then
+    if on("gpu", "gpu_process_table") then
         gpu_process_table_rows, gpu_process_total = gpu_process_rows(snapshot, format)
     end
-    local cpufreq_table_rows = (not active_tab or active_tab == "compute") and visible("cpufreq_table")
-        and cpufreq_rows(snapshot, format) or {}
-    local sensor_table_rows = (not active_tab or active_tab == "compute") and visible("sensor_table")
-        and sensor_rows(snapshot, format) or {}
-    local power_table_rows = (not active_tab or active_tab == "compute") and visible("power_table")
-        and power_rows(snapshot, format) or {}
-    local mount_table_rows = (not active_tab or active_tab == "storage") and visible("mount_table")
-        and mount_rows(snapshot, format) or {}
-    local workload_table_rows = (not active_tab or active_tab == "workloads") and visible("workload_table")
-        and workload_rows(snapshot, format) or {}
+    local cpufreq_table_rows = on("compute", "cpufreq_table") and cpufreq_rows(snapshot, format) or {}
+    local sensor_table_rows = on("compute", "sensor_table") and sensor_rows(snapshot, format) or {}
+    local power_table_rows = on("compute", "power_table") and power_rows(snapshot, format) or {}
+    local mount_table_rows, mounts_hidden = {}, 0
+    if on("storage", "mount_table") then
+        mount_table_rows, mounts_hidden = mount_rows(snapshot, format,
+            { show_pseudo = options.show_pseudo_filesystems })
+    end
+    local workload_table_rows = on("workloads", "workload_table") and workload_rows(snapshot, format) or {}
+
     local average_frequency = Engine.average_cpu_frequency(snapshot.cpu_frequency)
     local maximum_temperature = Engine.maximum_temperature(snapshot.sensors)
     local cpu_power = snapshot.power and snapshot.power.total_power_watts
     local workload_root = snapshot.workloads and snapshot.workloads.summary
         and snapshot.workloads.summary.root
+    local battery_summary = snapshot.power_supplies and snapshot.power_supplies.summary
+
+    local percent_axis = function(value) return string.format("%d%%", math.floor(value + 0.5)) end
+    local rate_axis = function(value) return rate(format, value) end
+
+    local function history(key) return engine:history_values(key) end
 
     local models = {
+        -- Overview -------------------------------------------------------
         cpu_overview = {
             label = translated(i18n, "metrics.cpu", "CPU"),
             value = cpu_value,
             display_value = percent(format, cpu_value),
-            history = engine:history_values("cpu"),
+            history = history("cpu"),
             quality = quality(snapshot, "cpu"), min = 0, max = 100,
+            thresholds = { warn = 70, critical = 90 },
+            axis_format = percent_axis,
         },
         memory_overview = {
             label = translated(i18n, "metrics.memory", "Memory"),
             value = memory_value,
             display_value = percent(format, memory_value),
-            history = engine:history_values("memory"),
+            secondary_value = snapshot.memory and bytes(format, snapshot.memory.used_bytes)
+                .. " / " .. bytes(format, snapshot.memory.total_bytes) or nil,
+            history = history("memory"),
             quality = quality(snapshot, "memory"), min = 0, max = 100,
+            thresholds = { warn = 80, critical = 92 },
+            axis_format = percent_axis,
+        },
+        host_overview = { entries = host_entries(snapshot, format, i18n) },
+        core_overview = {
+            items = core_items, min = 0, max = 100,
+            thresholds = { warn = 70, critical = 90 },
         },
         pressure_overview = {
             label = translated(i18n, "metrics.pressure", "Pressure"),
             value = pressure,
             display_value = percent(format, pressure),
-            history = engine:history_values("pressure"),
+            history = history("pressure"),
             quality = quality(snapshot, "pressure"), min = 0, max = 100,
+            thresholds = { warn = 10, critical = 40 },
+            axis_format = percent_axis,
         },
         disk_overview = {
             label = translated(i18n, "metrics.disk_io", "Disk I/O"),
             display_value = "↓ " .. rate(format, disk_read) .. "  ↑ " .. rate(format, disk_write),
-            history = engine:history_values("disk_read"), quality = quality(snapshot, "disks"),
+            history = history("disk_read"), quality = quality(snapshot, "disks"),
+            axis_format = rate_axis,
         },
         network_overview = {
             label = translated(i18n, "metrics.network_io", "Network I/O"),
             display_value = "↓ " .. rate(format, network_receive) .. "  ↑ " .. rate(format, network_transmit),
-            history = engine:history_values("network_receive"), quality = quality(snapshot, "network"),
+            history = history("network_receive"), quality = quality(snapshot, "network"),
+            axis_format = rate_axis,
         },
         gpu_overview = {
             label = translated(i18n, "metrics.gpu", "GPU"),
             value = first_gpu.utilization_percent,
             display_value = #gpu_devices == 0 and translated(i18n, "ui.no_data", "No data")
                 or percent(format, first_gpu.utilization_percent),
-            history = engine:history_values("gpu"), quality = quality(snapshot, "gpus"), min = 0, max = 100,
+            history = history("gpu"), quality = quality(snapshot, "gpus"), min = 0, max = 100,
+            thresholds = { warn = 70, critical = 90 },
+            axis_format = percent_axis,
         },
         frequency_overview = {
             label = translated(i18n, "metrics.frequency", "Frequency"),
             display_value = frequency(format, average_frequency),
-            history = engine:history_values("cpu_frequency"), quality = quality(snapshot, "cpu_frequency"),
+            history = history("cpu_frequency"), quality = quality(snapshot, "cpu_frequency"),
+            axis_format = function(value) return frequency(format, value) end,
         },
         temperature_overview = {
             label = translated(i18n, "metrics.temperature", "Temperature"),
+            value = maximum_temperature,
             display_value = temperature(format, maximum_temperature),
-            history = engine:history_values("temperature"), quality = quality(snapshot, "sensors"),
+            history = history("temperature"), quality = quality(snapshot, "sensors"),
+            thresholds = { warn = 75, critical = 90 },
+            axis_format = function(value) return temperature(format, value) end,
         },
         power_overview = {
             label = translated(i18n, "metrics.power", "Power"),
+            value = cpu_power,
             display_value = type(cpu_power) == "number" and string.format("%.1f W", cpu_power) or "—",
-            history = engine:history_values("cpu_power"), quality = quality(snapshot, "power"),
+            history = history("cpu_power"), quality = quality(snapshot, "power"),
+            axis_format = function(value) return string.format("%.0fW", value) end,
         },
+
+        -- Processes ------------------------------------------------------
         process_table = {
+            panel_title = translated(i18n, "widgets.processes_sorted",
+                "Processes · {sort} {direction}", {
+                    sort = process_sort_label(i18n, process_status.sort_key),
+                    direction = translated(i18n, process_status.descending
+                        and "process.direction.descending" or "process.direction.ascending",
+                        process_status.descending and "descending" or "ascending"),
+                }),
             columns = {
-                { key = "pid", label = "PID" .. (process_status.sort_key == "pid"
-                    and (process_status.descending and " ↓" or " ↑") or ""), width = 8, min_width = 5 },
-                { key = "name", label = translated(i18n, "metrics.processes", "Process")
-                    .. (process_status.sort_key == "name" and (process_status.descending and " ↓" or " ↑") or ""),
-                    width = 36, min_width = 12 },
-                { key = "cpu", label = "CPU" .. (process_status.sort_key == "cpu"
-                    and (process_status.descending and " ↓" or " ↑") or ""),
-                    width = 10, min_width = 8, align = "right" },
-                { key = "memory", label = translated(i18n, "metrics.memory", "Memory")
-                    .. (process_status.sort_key == "memory" and (process_status.descending and " ↓" or " ↑") or ""),
-                    width = 12, min_width = 9, align = "right" },
-                { key = "state", label = "S", width = 3, min_width = 3, full_only = true },
-                { key = "user", label = translated(i18n, "metrics.user", "User"), width = 12, min_width = 8, full_only = true },
+                { key = "pid", label = "PID", sort_key = "pid",
+                    width = 8, min_width = 5, priority = 90, align = "right",
+                    highlight = true },
+                { key = "user", label = translated(i18n, "metrics.user", "User"),
+                    sort_key = "user", width = 12, min_width = 8, priority = 55,
+                    highlight = true },
+                { key = "priority", label = "PRI", width = 4, min_width = 3,
+                    align = "right", priority = 20, full_only = true },
+                { key = "nice", label = "NI", width = 4, min_width = 3,
+                    align = "right", priority = 22, full_only = true },
+                { key = "virtual_memory", label = translated(i18n, "metrics.virtual", "Virt"),
+                    sort_key = "virtual", width = 10, min_width = 8,
+                    align = "right", priority = 35, full_only = true },
+                { key = "memory", label = translated(i18n, "metrics.memory", "Res"),
+                    sort_key = "memory", width = 10, min_width = 8, align = "right", priority = 80,
+                    token = function(_, row)
+                        return severity_token(row.memory_fraction and row.memory_fraction * 100, 10, 25)
+                    end,
+                    bar = function(_, row) return row.memory_fraction end },
+                { key = "state", label = "S", width = 3, min_width = 3, priority = 45,
+                    sort_key = "state",
+                    token = function(value)
+                        if value == "R" then return "metric.good" end
+                        if value == "D" then return "metric.critical" end
+                        if value == "Z" then return "metric.warn" end
+                        return nil
+                    end },
+                { key = "cpu", label = "CPU", sort_key = "cpu",
+                    width = 9, min_width = 7, align = "right", priority = 95,
+                    token = function(_, row) return severity_token(row.cpu_value, 40, 80) end,
+                    bar = function(_, row)
+                        return row.cpu_value and math.min(1, row.cpu_value / 100) or nil
+                    end },
+                { key = "time", label = "TIME+", sort_key = "time",
+                    width = 10, min_width = 8, align = "right", priority = 40 },
+                { key = "threads", label = translated(i18n, "metrics.threads", "Thr"),
+                    sort_key = "threads", width = 5, min_width = 4,
+                    align = "right", priority = 25, full_only = true },
+                { key = "name", label = translated(i18n, "metrics.command", "Command"),
+                    sort_key = "name", width = 40, min_width = 12, priority = 85,
+                    highlight = true },
             },
             rows = process_rows,
+            highlights = process_status.query_highlights,
             selected = process_status.selected_index,
+            sort_key = process_status.sort_key,
+            sort_descending = process_status.descending,
             status = process_status,
             status_text = process_status_display,
         },
+
+        -- Compute --------------------------------------------------------
         cpu_total = {
             label = translated(i18n, "metrics.utilization", "Utilization"),
             value = cpu_value,
             display_value = percent(format, cpu_value),
-            history = engine:history_values("cpu"), quality = quality(snapshot, "cpu"), min = 0, max = 100,
+            history = history("cpu"), quality = quality(snapshot, "cpu"), min = 0, max = 100,
+            thresholds = { warn = 70, critical = 90 },
+            axis_format = percent_axis,
         },
-        cpu_identity = {
-            text = cpu_identity_text(snapshot, format, i18n),
+        core_bars = {
+            items = core_items, min = 0, max = 100,
+            thresholds = { warn = 70, critical = 90 },
         },
-        load_summary = {
-            text = snapshot.cpu and snapshot.cpu.load and string.format(
-                "1m  %.2f\n5m  %.2f\n15m %.2f\n%s %s",
-                snapshot.cpu.load.one or 0, snapshot.cpu.load.five or 0, snapshot.cpu.load.fifteen or 0,
-                translated(i18n, "metrics.running", "Running"),
-                tostring(snapshot.cpu.processes_running or "—")
-            ) or translated(i18n, "ui.no_data", "No data"),
-        },
+        cpu_identity = { entries = cpu_identity_entries(snapshot, format, i18n) },
+        load_summary = { entries = load_entries(snapshot, format, i18n) },
         core_table = {
             columns = {
-                { key = "core", label = "CPU", width = 8, min_width = 5 },
-                { key = "total", label = translated(i18n, "metrics.total", "Total"), width = 10, min_width = 8, align = "right" },
-                { key = "user", label = translated(i18n, "metrics.user", "User"), width = 10, min_width = 8, align = "right" },
-                { key = "system", label = translated(i18n, "metrics.system", "System"), width = 10, min_width = 8, align = "right" },
-                { key = "iowait", label = translated(i18n, "metrics.iowait", "I/O wait"), width = 10, min_width = 8, align = "right" },
+                { key = "core", label = "CPU", width = 8, min_width = 5, priority = 90 },
+                { key = "total", label = translated(i18n, "metrics.total", "Total"),
+                    width = 9, min_width = 7, align = "right", priority = 95,
+                    token = function(_, row) return severity_token(row.total_value, 70, 90) end,
+                    bar = function(_, row)
+                        return row.total_value and math.min(1, row.total_value / 100) or nil
+                    end },
+                { key = "user", label = translated(i18n, "metrics.user", "User"),
+                    width = 9, min_width = 7, align = "right", priority = 70 },
+                { key = "system", label = translated(i18n, "metrics.system", "System"),
+                    width = 9, min_width = 7, align = "right", priority = 65 },
+                { key = "iowait", label = translated(i18n, "metrics.iowait", "I/O wait"),
+                    width = 10, min_width = 7, align = "right", priority = 60 },
+                { key = "irq", label = "IRQ", width = 8, min_width = 6,
+                    align = "right", priority = 30, full_only = true },
+                { key = "steal", label = translated(i18n, "metrics.steal", "Steal"),
+                    width = 8, min_width = 6, align = "right", priority = 25, full_only = true },
             },
             rows = cores,
         },
         cpufreq_table = {
             columns = {
-                { key = "policy", label = translated(i18n, "metrics.policy", "Policy"), width = 10, min_width = 8 },
-                { key = "cpus", label = "CPU", width = 12, min_width = 6 },
-                { key = "current", label = translated(i18n, "metrics.current", "Current"), width = 13, min_width = 9, align = "right" },
-                { key = "minimum", label = translated(i18n, "metrics.minimum", "Minimum"), width = 12, min_width = 9, align = "right" },
-                { key = "maximum", label = translated(i18n, "metrics.maximum", "Maximum"), width = 12, min_width = 9, align = "right" },
-                { key = "governor", label = translated(i18n, "metrics.governor", "Governor"), width = 14, min_width = 9 },
-                { key = "driver", label = translated(i18n, "metrics.driver", "Driver"), width = 16, min_width = 9, full_only = true },
+                { key = "policy", label = translated(i18n, "metrics.policy", "Policy"), width = 10, min_width = 8, priority = 90 },
+                { key = "cpus", label = "CPU", width = 12, min_width = 6, priority = 70 },
+                { key = "current", label = translated(i18n, "metrics.current", "Current"), width = 13, min_width = 9, align = "right", priority = 95 },
+                { key = "minimum", label = translated(i18n, "metrics.minimum", "Minimum"), width = 12, min_width = 9, align = "right", priority = 50 },
+                { key = "maximum", label = translated(i18n, "metrics.maximum", "Maximum"), width = 12, min_width = 9, align = "right", priority = 60 },
+                { key = "governor", label = translated(i18n, "metrics.governor", "Governor"), width = 14, min_width = 9, priority = 65 },
+                { key = "driver", label = translated(i18n, "metrics.driver", "Driver"), width = 16, min_width = 9, priority = 20, full_only = true },
             },
             rows = cpufreq_table_rows,
         },
         sensor_table = {
             columns = {
-                { key = "device", label = translated(i18n, "metrics.device", "Device"), width = 16, min_width = 9 },
-                { key = "sensor", label = translated(i18n, "metrics.sensor", "Sensor"), width = 22, min_width = 12 },
-                { key = "value", label = translated(i18n, "metrics.value", "Value"), width = 14, min_width = 9, align = "right" },
-                { key = "status", label = translated(i18n, "metrics.state", "State"), width = 12, min_width = 8 },
+                { key = "device", label = translated(i18n, "metrics.device", "Device"), width = 16, min_width = 9, priority = 80 },
+                { key = "sensor", label = translated(i18n, "metrics.sensor", "Sensor"), width = 22, min_width = 12, priority = 90 },
+                { key = "value", label = translated(i18n, "metrics.value", "Value"), width = 14, min_width = 9, align = "right", priority = 95 },
+                { key = "status", label = translated(i18n, "metrics.state", "State"), width = 12, min_width = 8, priority = 60,
+                    token = function(value) return value == "ALARM" or value == "FAULT"
+                        and "metric.critical" or nil end },
             },
             rows = sensor_table_rows,
         },
         power_table = {
             columns = {
-                { key = "zone", label = translated(i18n, "metrics.device", "Zone"),
-                    width = 18, min_width = 10 },
-                { key = "domain", label = translated(i18n, "metrics.type", "Domain"),
-                    width = 15, min_width = 9 },
-                { key = "power", label = translated(i18n, "metrics.power", "Power"),
-                    width = 12, min_width = 9, align = "right" },
-                { key = "energy", label = translated(i18n, "metrics.energy", "Energy"),
-                    width = 14, min_width = 9, align = "right" },
-                { key = "limit", label = translated(i18n, "metrics.maximum", "Limit"),
-                    width = 12, min_width = 9, align = "right" },
-                { key = "source", label = translated(i18n, "metrics.source", "Source"),
-                    width = 14, min_width = 9, full_only = true },
-                { key = "state", label = translated(i18n, "metrics.state", "State"),
-                    width = 11, min_width = 8, full_only = true },
+                { key = "zone", label = translated(i18n, "metrics.device", "Zone"), width = 18, min_width = 10, priority = 90 },
+                { key = "domain", label = translated(i18n, "metrics.type", "Domain"), width = 15, min_width = 9, priority = 70 },
+                { key = "power", label = translated(i18n, "metrics.power", "Power"), width = 12, min_width = 9, align = "right", priority = 95 },
+                { key = "energy", label = translated(i18n, "metrics.energy", "Energy"), width = 14, min_width = 9, align = "right", priority = 50 },
+                { key = "limit", label = translated(i18n, "metrics.maximum", "Limit"), width = 12, min_width = 9, align = "right", priority = 60 },
+                { key = "source", label = translated(i18n, "metrics.source", "Source"), width = 14, min_width = 9, priority = 20, full_only = true },
+                { key = "state", label = translated(i18n, "metrics.state", "State"), width = 11, min_width = 8, priority = 25, full_only = true },
             },
             rows = power_table_rows,
         },
-        memory_detail = {
-            text = table.concat({
-                translated(i18n, "metrics.used", "Used") .. "       "
-                    .. bytes(format, snapshot.memory and snapshot.memory.used_bytes),
-                translated(i18n, "metrics.available", "Available") .. "  "
-                    .. bytes(format, snapshot.memory and snapshot.memory.available_bytes),
-                translated(i18n, "metrics.cache", "Cache") .. "      "
-                    .. bytes(format, snapshot.memory and snapshot.memory.cache_bytes),
-                translated(i18n, "metrics.swap", "Swap") .. "       "
-                    .. bytes(format, snapshot.memory and snapshot.memory.swap_used_bytes)
-                    .. " / " .. bytes(format, snapshot.memory and snapshot.memory.swap_total_bytes),
-            }, "\n"),
+
+        -- Memory ---------------------------------------------------------
+        memory_total = {
+            label = translated(i18n, "metrics.memory", "Memory"),
+            value = memory_value,
+            display_value = percent(format, memory_value),
+            secondary_value = snapshot.memory and bytes(format, snapshot.memory.used_bytes)
+                .. " / " .. bytes(format, snapshot.memory.total_bytes) or nil,
+            history = history("memory"),
+            quality = quality(snapshot, "memory"), min = 0, max = 100,
+            thresholds = { warn = 80, critical = 92 },
+            axis_format = percent_axis,
         },
+        memory_segments = memory_segment_model(snapshot, format, i18n),
+        memory_detail = { entries = memory_detail_entries(snapshot, format) },
+        swap_detail = { entries = swap_entries(snapshot, format) },
+        memory_pressure = {
+            label = translated(i18n, "metrics.memory_pressure", "Memory pressure"),
+            value = memory_pressure,
+            display_value = percent(format, memory_pressure),
+            secondary_value = swap_value and ("swap " .. percent(format, swap_value)) or nil,
+            history = history("memory_pressure"),
+            quality = quality(snapshot, "pressure"), min = 0, max = 100,
+            thresholds = { warn = 5, critical = 20 },
+            axis_format = percent_axis,
+        },
+        memory_counters = { entries = paging_entries(snapshot, format) },
+
+        -- Storage --------------------------------------------------------
         storage_summary = {
             label = translated(i18n, "metrics.storage", "Storage"),
             display_value = "↓ " .. rate(format, disk_read) .. "  ↑ " .. rate(format, disk_write),
-            history = engine:history_values("disk_read"), quality = quality(snapshot, "disks"),
+            history = history("disk_read"), quality = quality(snapshot, "disks"),
+            axis_format = rate_axis,
+        },
+        io_pressure = {
+            label = translated(i18n, "metrics.io_pressure", "I/O pressure"),
+            value = io_pressure,
+            display_value = percent(format, io_pressure),
+            history = history("io_pressure"),
+            quality = quality(snapshot, "pressure"), min = 0, max = 100,
+            thresholds = { warn = 10, critical = 40 },
+            axis_format = percent_axis,
         },
         disk_table = {
             columns = {
-                { key = "device", label = translated(i18n, "metrics.device", "Device"), width = 14, min_width = 8 },
-                { key = "read", label = translated(i18n, "metrics.read", "Read"), width = 14, min_width = 10, align = "right" },
-                { key = "write", label = translated(i18n, "metrics.write", "Write"), width = 14, min_width = 10, align = "right" },
-                { key = "busy", label = translated(i18n, "metrics.busy", "Busy"), width = 10, min_width = 8, align = "right" },
-                { key = "latency", label = translated(i18n, "metrics.read_latency", "Read latency"), width = 14,
-                    min_width = 10, align = "right", full_only = true },
+                { key = "device", label = translated(i18n, "metrics.device", "Device"), width = 12, min_width = 8, priority = 95 },
+                { key = "model", label = translated(i18n, "metrics.model", "Model"), width = 20, min_width = 10, priority = 40, full_only = true },
+                { key = "size", label = translated(i18n, "metrics.capacity", "Size"), width = 10, min_width = 8, align = "right", priority = 55 },
+                { key = "medium", label = translated(i18n, "metrics.medium", "Type"), width = 5, min_width = 4, priority = 30, full_only = true },
+                { key = "read", label = translated(i18n, "metrics.read", "Read"), width = 12, min_width = 10, align = "right", priority = 90 },
+                { key = "write", label = translated(i18n, "metrics.write", "Write"), width = 12, min_width = 10, align = "right", priority = 88 },
+                { key = "busy", label = translated(i18n, "metrics.busy", "Busy"), width = 9, min_width = 7, align = "right", priority = 70,
+                    token = function(_, row) return severity_token(row.busy_value, 60, 85) end,
+                    bar = function(_, row)
+                        return row.busy_value and math.min(1, row.busy_value / 100) or nil
+                    end },
+                { key = "queue", label = translated(i18n, "metrics.queue", "Queue"), width = 7, min_width = 6, align = "right", priority = 25, full_only = true },
+                { key = "latency", label = translated(i18n, "metrics.read_latency", "Read latency"), width = 13, min_width = 10, align = "right", priority = 35, full_only = true },
             },
             rows = disks,
+            status_text = disks_hidden > 0 and translated(i18n, "storage.hidden_devices",
+                "{count} virtual devices hidden", { count = disks_hidden }) or nil,
         },
         mount_table = {
             columns = {
-                { key = "mount", label = translated(i18n, "metrics.mount", "Mount"), width = 28, min_width = 12 },
-                { key = "type", label = translated(i18n, "metrics.filesystem", "Filesystem"), width = 12, min_width = 8 },
-                { key = "used", label = translated(i18n, "metrics.used", "Used"), width = 10, min_width = 8, align = "right" },
-                { key = "available", label = translated(i18n, "metrics.available", "Available"), width = 14, min_width = 10, align = "right" },
-                { key = "size", label = translated(i18n, "metrics.total", "Total"), width = 14, min_width = 10, align = "right" },
-                { key = "source", label = translated(i18n, "metrics.source", "Source"), width = 24, min_width = 10, full_only = true },
+                { key = "mount", label = translated(i18n, "metrics.mount", "Mount"), width = 26, min_width = 12, priority = 95 },
+                { key = "type", label = translated(i18n, "metrics.filesystem", "Type"), width = 10, min_width = 7, priority = 50 },
+                { key = "used", label = translated(i18n, "metrics.used", "Used"), width = 9, min_width = 7, align = "right", priority = 90,
+                    token = function(_, row) return severity_token(row.used_value, 80, 92) end,
+                    bar = function(_, row)
+                        return row.used_value and math.min(1, row.used_value / 100) or nil
+                    end },
+                { key = "available", label = translated(i18n, "metrics.available", "Available"), width = 12, min_width = 9, align = "right", priority = 85 },
+                { key = "size", label = translated(i18n, "metrics.total", "Total"), width = 12, min_width = 9, align = "right", priority = 80 },
+                { key = "inodes", label = translated(i18n, "metrics.inodes", "Inodes"), width = 9, min_width = 7, align = "right", priority = 30, full_only = true },
+                { key = "readonly", label = "RW", width = 3, min_width = 2, priority = 20, full_only = true },
+                { key = "source", label = translated(i18n, "metrics.source", "Source"), width = 22, min_width = 10, priority = 25, full_only = true },
             },
             rows = mount_table_rows,
+            status_text = mounts_hidden > 0 and translated(i18n, "storage.hidden_mounts",
+                "{count} pseudo filesystems hidden", { count = mounts_hidden }) or nil,
         },
-        smart_hint = {
-            text = translated(i18n, "storage.smart_hint",
-                    "SMART/NVMe inspector: press s to choose a device.") .. "\n"
-                .. translated(i18n, "storage.smart_standby",
-                    "Read-only probes are lazy; standby disks are not awakened."),
-            muted = true,
-        },
+        smart_hint = { entries = smart_hint_entries(snapshot, capabilities, i18n) },
+
+        -- Network --------------------------------------------------------
         network_summary = {
             label = translated(i18n, "metrics.network", "Network"),
             display_value = "↓ " .. rate(format, network_receive) .. "  ↑ " .. rate(format, network_transmit),
-            history = engine:history_values("network_receive"), quality = quality(snapshot, "network"),
+            history = history("network_receive"), quality = quality(snapshot, "network"),
+            axis_format = rate_axis,
         },
         network_table = {
             columns = {
-                { key = "interface", label = translated(i18n, "metrics.interface", "Interface"), width = 14, min_width = 8 },
-                { key = "state", label = translated(i18n, "metrics.state", "State"), width = 10, min_width = 7 },
-                { key = "receive", label = translated(i18n, "metrics.receive", "Receive"), width = 14, min_width = 10, align = "right" },
-                { key = "transmit", label = translated(i18n, "metrics.transmit", "Transmit"), width = 14, min_width = 10, align = "right" },
-                { key = "speed", label = translated(i18n, "metrics.link", "Link"), width = 14, min_width = 10,
-                    align = "right", full_only = true },
+                { key = "interface", label = translated(i18n, "metrics.interface", "Interface"), width = 12, min_width = 8, priority = 95 },
+                { key = "state", label = translated(i18n, "metrics.state", "State"), width = 9, min_width = 7, priority = 70,
+                    token = function(value)
+                        if value == "up" then return "metric.good" end
+                        if value == "down" then return "metric.critical" end
+                        return nil
+                    end },
+                { key = "receive", label = translated(i18n, "metrics.receive", "Receive"), width = 12, min_width = 10, align = "right", priority = 92 },
+                { key = "transmit", label = translated(i18n, "metrics.transmit", "Transmit"), width = 12, min_width = 10, align = "right", priority = 90 },
+                { key = "speed", label = translated(i18n, "metrics.link", "Link"), width = 12, min_width = 9, align = "right", priority = 40 },
+                { key = "mtu", label = "MTU", width = 6, min_width = 5, align = "right", priority = 35 },
+                { key = "mac", label = "MAC", width = 18, min_width = 17, priority = 25, full_only = true },
+                { key = "errors", label = translated(i18n, "metrics.errors", "Err"), width = 6, min_width = 5, align = "right", priority = 30,
+                    token = function(_, row)
+                        return (row.error_value or 0) > 0 and "metric.warn" or nil
+                    end },
             },
             rows = interfaces,
         },
+        address_table = {
+            columns = {
+                { key = "interface", label = translated(i18n, "metrics.interface", "Interface"), width = 12, min_width = 8, priority = 90 },
+                { key = "family", label = translated(i18n, "metrics.family", "Family"), width = 6, min_width = 5, priority = 70 },
+                { key = "address", label = translated(i18n, "metrics.address", "Address"), width = 30, min_width = 14, priority = 95 },
+                { key = "netmask", label = translated(i18n, "metrics.netmask", "Netmask"), width = 20, min_width = 12, priority = 40, full_only = true },
+                { key = "default_route", label = translated(i18n, "metrics.default_route", "Default"), width = 8, min_width = 7, priority = 50 },
+            },
+            rows = addresses,
+            status_text = snapshot.network and snapshot.network.addresses_status
+                and snapshot.network.addresses_status ~= "ok"
+                and tostring(snapshot.network.addresses_status) or nil,
+        },
         connection_table = {
             columns = {
-                { key = "protocol", label = translated(i18n, "metrics.protocol", "Proto"), width = 7, min_width = 5 },
-                { key = "local_endpoint", label = translated(i18n, "metrics.local_endpoint", "Local"), width = 28, min_width = 14 },
-                { key = "remote_endpoint", label = translated(i18n, "metrics.remote_endpoint", "Remote"), width = 30, min_width = 14 },
-                { key = "state", label = translated(i18n, "metrics.state", "State"), width = 14, min_width = 8 },
-                { key = "process", label = translated(i18n, "metrics.process", "Process"), width = 24, min_width = 10 },
-                { key = "queue", label = translated(i18n, "metrics.queue", "Queue"), width = 10, min_width = 7,
-                    align = "right", full_only = true },
-                { key = "uid", label = "UID", width = 8, min_width = 6, align = "right", full_only = true },
+                { key = "protocol", label = translated(i18n, "metrics.protocol", "Proto"), width = 7, min_width = 5, priority = 80 },
+                { key = "local_endpoint", label = translated(i18n, "metrics.local_endpoint", "Local"), width = 26, min_width = 14, priority = 90 },
+                { key = "remote_endpoint", label = translated(i18n, "metrics.remote_endpoint", "Remote"), width = 28, min_width = 14, priority = 85 },
+                { key = "state", label = translated(i18n, "metrics.state", "State"), width = 13, min_width = 8, priority = 70,
+                    token = function(value)
+                        if value == "ESTABLISHED" then return "metric.good" end
+                        if value == "LISTEN" then return "accent.primary" end
+                        return nil
+                    end },
+                { key = "process", label = translated(i18n, "metrics.process", "Process"), width = 22, min_width = 10, priority = 95 },
+                { key = "queue", label = translated(i18n, "metrics.queue", "Queue"), width = 10, min_width = 7, align = "right", priority = 25, full_only = true },
+                { key = "uid", label = "UID", width = 8, min_width = 6, align = "right", priority = 20, full_only = true },
             },
             rows = connections,
             status_text = translated(i18n, "network.connection_status",
@@ -944,45 +1790,40 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                         and snapshot.connections.owner_scan.status or "unavailable",
                 }),
         },
+
+        -- GPU ------------------------------------------------------------
         gpu_summary = {
             label = translated(i18n, "metrics.gpu", "GPU"),
             value = first_gpu.utilization_percent,
             display_value = #gpu_devices == 0 and translated(i18n, "ui.no_data", "No data")
                 or percent(format, first_gpu.utilization_percent),
-            history = engine:history_values("gpu"), quality = quality(snapshot, "gpus"), min = 0, max = 100,
+            history = history("gpu"), quality = quality(snapshot, "gpus"), min = 0, max = 100,
+            thresholds = { warn = 70, critical = 90 },
+            axis_format = percent_axis,
         },
         gpu_table = {
             columns = {
-                { key = "gpu", label = "GPU", width = 30, min_width = 12 },
-                { key = "vendor", label = translated(i18n, "metrics.vendor", "Vendor"), width = 18, min_width = 8 },
-                { key = "driver", label = translated(i18n, "metrics.driver", "Driver"), width = 12, min_width = 8 },
-                { key = "utilization", label = translated(i18n, "metrics.utilization", "Util"), width = 10, min_width = 8,
-                    align = "right" },
-                { key = "memory", label = translated(i18n, "metrics.memory", "Memory"),
-                    width = 20, min_width = 12, align = "right" },
-                { key = "frequency", label = translated(i18n, "metrics.frequency", "Frequency"),
-                    width = 13, min_width = 9, align = "right", full_only = true },
-                { key = "pcie", label = "PCIe", width = 18, min_width = 9, full_only = true },
-                { key = "temperature", label = translated(i18n, "metrics.temperature", "Temp"), width = 10,
-                    min_width = 8, align = "right" },
-                { key = "power", label = translated(i18n, "metrics.power", "Power"), width = 10, min_width = 8,
-                    align = "right", full_only = true },
+                { key = "gpu", label = "GPU", width = 26, min_width = 12, priority = 95 },
+                { key = "vendor", label = translated(i18n, "metrics.vendor", "Vendor"), width = 16, min_width = 8, priority = 50 },
+                { key = "driver", label = translated(i18n, "metrics.driver", "Driver"), width = 12, min_width = 8, priority = 45 },
+                { key = "utilization", label = translated(i18n, "metrics.utilization", "Util"), width = 9, min_width = 7, align = "right", priority = 90 },
+                { key = "memory", label = translated(i18n, "metrics.memory", "Memory"), width = 20, min_width = 12, align = "right", priority = 85 },
+                { key = "frequency", label = translated(i18n, "metrics.frequency", "Frequency"), width = 13, min_width = 9, align = "right", priority = 35, full_only = true },
+                { key = "pcie", label = "PCIe", width = 18, min_width = 9, priority = 25, full_only = true },
+                { key = "temperature", label = translated(i18n, "metrics.temperature", "Temp"), width = 9, min_width = 7, align = "right", priority = 70 },
+                { key = "power", label = translated(i18n, "metrics.power", "Power"), width = 10, min_width = 8, align = "right", priority = 40, full_only = true },
             },
             rows = gpu_table_rows,
         },
         gpu_process_table = {
             columns = {
-                { key = "gpu", label = "GPU", width = 10, min_width = 6 },
-                { key = "pid", label = "PID", width = 8, min_width = 6, align = "right" },
-                { key = "process", label = translated(i18n, "metrics.process", "Process"), width = 22, min_width = 10 },
-                { key = "utilization", label = translated(i18n, "metrics.utilization", "Utilization"),
-                    width = 12, min_width = 8, align = "right" },
-                { key = "memory", label = translated(i18n, "metrics.memory", "Memory"),
-                    width = 14, min_width = 10, align = "right" },
-                { key = "engines", label = translated(i18n, "metrics.engines", "Engines"),
-                    width = 34, min_width = 12, full_only = true },
-                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"),
-                    width = 11, min_width = 8, full_only = true },
+                { key = "gpu", label = "GPU", width = 10, min_width = 6, priority = 70 },
+                { key = "pid", label = "PID", width = 8, min_width = 6, align = "right", priority = 80 },
+                { key = "process", label = translated(i18n, "metrics.process", "Process"), width = 22, min_width = 10, priority = 95 },
+                { key = "utilization", label = translated(i18n, "metrics.utilization", "Utilization"), width = 12, min_width = 8, align = "right", priority = 90 },
+                { key = "memory", label = translated(i18n, "metrics.memory", "Memory"), width = 14, min_width = 10, align = "right", priority = 85 },
+                { key = "engines", label = translated(i18n, "metrics.engines", "Engines"), width = 30, min_width = 12, priority = 25, full_only = true },
+                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 11, min_width = 8, priority = 20, full_only = true },
             },
             rows = gpu_process_table_rows,
             status_text = translated(i18n, "gpu.process_status",
@@ -994,64 +1835,82 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                         or "unavailable",
                 }),
         },
+
+        -- Workloads ------------------------------------------------------
         workload_summary = {
             label = translated(i18n, "metrics.workloads", "Workloads"),
             value = workload_root and workload_root.cpu_utilization_percent,
             display_value = workload_root and percent(format, workload_root.cpu_utilization_percent)
                 or translated(i18n, "ui.no_data", "No data"),
-            history = engine:history_values("workload_cpu"), quality = quality(snapshot, "workloads"),
-            min = 0, max = 100,
+            history = history("workload_cpu"), quality = quality(snapshot, "workloads"),
+            min = 0, max = 100, thresholds = { warn = 70, critical = 90 },
+            axis_format = percent_axis,
         },
         workload_table = {
             columns = {
-                { key = "workload", label = translated(i18n, "metrics.workload", "Workload"), width = 38, min_width = 14 },
-                { key = "cpu", label = "CPU", width = 10, min_width = 8, align = "right" },
-                { key = "memory", label = translated(i18n, "metrics.memory", "Memory"), width = 13, min_width = 9, align = "right" },
-                { key = "read", label = translated(i18n, "metrics.read", "Read"), width = 13, min_width = 9, align = "right" },
-                { key = "write", label = translated(i18n, "metrics.write", "Write"), width = 13, min_width = 9, align = "right" },
-                { key = "processes", label = translated(i18n, "metrics.processes", "Processes"), width = 9, min_width = 7, align = "right" },
-                { key = "pressure", label = translated(i18n, "metrics.pressure", "Pressure"), width = 10, min_width = 8, align = "right", full_only = true },
+                { key = "workload", label = translated(i18n, "metrics.workload", "Workload"), width = 34, min_width = 14, priority = 95 },
+                { key = "cpu", label = "CPU", width = 9, min_width = 7, align = "right", priority = 90,
+                    token = function(_, row) return severity_token(row.raw_cpu, 70, 90) end,
+                    bar = function(_, row)
+                        return row.raw_cpu and row.raw_cpu >= 0
+                            and math.min(1, row.raw_cpu / 100) or nil
+                    end },
+                { key = "memory", label = translated(i18n, "metrics.memory", "Memory"), width = 12, min_width = 9, align = "right", priority = 85 },
+                { key = "read", label = translated(i18n, "metrics.read", "Read"), width = 12, min_width = 9, align = "right", priority = 50 },
+                { key = "write", label = translated(i18n, "metrics.write", "Write"), width = 12, min_width = 9, align = "right", priority = 48 },
+                { key = "processes", label = translated(i18n, "metrics.processes", "Procs"), width = 7, min_width = 6, align = "right", priority = 60 },
+                { key = "pressure", label = translated(i18n, "metrics.pressure", "Pressure"), width = 9, min_width = 7, align = "right", priority = 30, full_only = true },
+                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 10, min_width = 8, priority = 22, full_only = true },
             },
             rows = workload_table_rows,
         },
-        workload_detail = {
-            text = table.concat({
-                translated(i18n, "workloads.nodes", "Visible cgroups: {count}", {
-                    count = snapshot.workloads and snapshot.workloads.summary
-                        and snapshot.workloads.summary.node_count or 0,
-                }),
-                translated(i18n, "workloads.processes", "Visible processes: {count}", {
-                    count = snapshot.workloads and snapshot.workloads.summary
-                        and snapshot.workloads.summary.visible_process_count or 0,
-                }),
-                translated(i18n, "workloads.memory", "Root memory: {value}", {
-                    value = bytes(format, workload_root and workload_root.memory_current_bytes),
-                }),
-                translated(i18n, "workloads.partial", "Partial cgroups: {count}", {
-                    count = snapshot.workloads and snapshot.workloads.summary
-                        and snapshot.workloads.summary.partial_node_count or 0,
-                }),
-            }, "\n"),
+        workload_detail = { entries = workload_detail_entries(snapshot, format, i18n) },
+
+        -- System ---------------------------------------------------------
+        system_identity = { entries = system_identity_entries(snapshot, format, i18n) },
+        system_kernel = { entries = system_kernel_entries(snapshot, format, i18n) },
+        system_firmware = { entries = system_firmware_entries(snapshot, format, i18n) },
+        system_limits = { entries = system_limits_entries(snapshot, format, i18n) },
+        battery_bars = {
+            items = battery_items(snapshot, format, i18n),
+            min = 0, max = 100,
+            thresholds = { warn = 30, critical = 15 },
+            severity_invert = true,
+            empty_text = translated(i18n, "system.no_power_supply", "No battery or adapter"),
         },
-        insight_summary = {
-            text = table.concat({
-                translated(i18n, "insights.collectors", "Collectors: {count} available", {
-                    count = (function()
-                        local count = 0
-                        for _, capability in pairs(capabilities or {}) do
-                            if capability.available then count = count + 1 end
-                        end
-                        return count
-                    end)(),
-                }),
-                translated(i18n, "insights.processes", "Processes: {count}", { count = process_count }),
-                translated(i18n, "insights.gpu_devices", "GPU devices: {count}", { count = #gpu_devices }),
-                "",
-                translated(i18n, "insights.deep_inspectors", "Deep inspectors"),
-                "  " .. translated(i18n, "insights.smart", "SMART / NVMe health"),
-                "  " .. translated(i18n, "insights.ram_bandwidth", "RAM bandwidth (PMU)"),
-                "  " .. translated(i18n, "insights.sshd", "sshd service and listeners"),
-            }, "\n"),
+
+        -- Insights -------------------------------------------------------
+        collector_table = {
+            columns = {
+                { key = "collector", label = translated(i18n, "insights.collector", "Collector"), width = 14, min_width = 10, priority = 95 },
+                { key = "status", label = translated(i18n, "metrics.state", "State"), width = 13, min_width = 9, priority = 90,
+                    token = function(_, row)
+                        if not row.available then return "text.muted" end
+                        if row.status == "denied" or row.status == "error" then return "metric.critical" end
+                        return "metric.good"
+                    end },
+                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 11, min_width = 8, priority = 70 },
+                { key = "source", label = translated(i18n, "metrics.source", "Source"), width = 34, min_width = 12, priority = 50 },
+                { key = "reason", label = translated(i18n, "inspector.reason", "Reason"), width = 28, min_width = 10, priority = 30, full_only = true },
+            },
+            rows = collector_rows(snapshot, capabilities, i18n),
+            status_text = translated(i18n, "insights.processes", "Processes: {count}",
+                { count = process_count }) .. " · "
+                .. translated(i18n, "insights.gpu_devices", "GPU devices: {count}",
+                    { count = #gpu_devices }),
+        },
+        inspector_table = {
+            columns = {
+                { key = "key", label = translated(i18n, "insights.key", "Key"), width = 4, min_width = 3, priority = 80 },
+                { key = "inspector", label = translated(i18n, "insights.inspector", "Inspector"), width = 30, min_width = 14, priority = 95 },
+                { key = "status", label = translated(i18n, "metrics.state", "State"), width = 12, min_width = 9, priority = 90,
+                    token = function(_, row) return row.available and "metric.good" or "text.muted" end },
+                { key = "reason", label = translated(i18n, "inspector.reason", "Reason"), width = 26, min_width = 10, priority = 40, full_only = true },
+            },
+            rows = inspector_rows(capabilities, i18n),
+        },
+        advice_list = {
+            entries = advice_entries(snapshot, capabilities, i18n, options.privilege),
         },
     }
     return models

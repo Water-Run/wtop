@@ -101,6 +101,18 @@ function M.identity(options)
     }
 end
 
+--- Whether this session must ignore files owned by the invoking user.
+--
+-- Under `sudo` the process is root but the configuration file, the user locale
+-- catalogs and the persisted layout all still belong to the unprivileged user
+-- who invoked it.  Reading them would let an unprivileged file steer a root
+-- process, and writing the layout back would leave root-owned files in that
+-- user's config directory.  Every such site consults this one predicate so the
+-- policy cannot drift between them.
+function M.restricts_user_files(privilege)
+    return type(privilege) == "table" and privilege.via_sudo == true
+end
+
 function M.parse_proc_cmdline(raw)
     if type(raw) ~= "string" or raw == "" or #raw > MAX_COMMAND_BYTES
         or raw:sub(-1) ~= "\0"

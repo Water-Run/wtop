@@ -19,10 +19,12 @@ local VALID_TABS = {
     overview = true,
     processes = true,
     compute = true,
+    memory = true,
     storage = true,
     network = true,
     gpu = true,
     workloads = true,
+    system = true,
     insights = true,
 }
 

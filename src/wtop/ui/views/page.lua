@@ -98,6 +98,10 @@ function Page:render(columns, rows, state)
       status, context)
   end
   local live_models = state.widgets or (state.telemetry and state.telemetry.widgets) or {}
+  -- Widgets report the geometry they actually used.  The event loop needs it
+  -- for hit-testing and for sizing its scroll window; estimating either from
+  -- the terminal size is what let a selected row sit outside the viewport.
+  local widget_metadata = {}
   for _, placement in ipairs(layout.placements) do
     local node = placement.node
     local model = merge(node.model, self.widgets[placement.id], live_models[placement.id], {
@@ -110,16 +114,22 @@ function Page:render(columns, rows, state)
     }
     if node.panel == false then
       grid:fill(area, " ", theme:style("text.primary", "surface.raised"))
-      self.registry:render(placement.kind, grid, area, model, context, placement.variant)
+      widget_metadata[placement.id] =
+        self.registry:render(placement.kind, grid, area, model, context, placement.variant)
     else
       local panel_model = {
-        title = node.panel_title or model.panel_title,
+        title = model.panel_title or node.panel_title,
         border = node.border == true or model.border == true,
         focused = placement.focused,
       }
       Panel.render(grid, area, panel_model, context, function(target, inner, _, panel_context)
-        self.registry:render(placement.kind, target, inner, model, panel_context, placement.variant)
+        widget_metadata[placement.id] =
+          self.registry:render(placement.kind, target, inner, model, panel_context, placement.variant)
       end)
+    end
+    if type(widget_metadata[placement.id]) == "table" then
+      widget_metadata[placement.id].area = area
+      widget_metadata[placement.id].variant = placement.variant
     end
   end
 
@@ -128,6 +138,7 @@ function Page:render(columns, rows, state)
     mode = layout.mode,
     tabs = tab_metadata,
     status = status_metadata,
+    widgets = widget_metadata,
     theme = theme,
   }
 end

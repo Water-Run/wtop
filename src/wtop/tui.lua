@@ -5,6 +5,7 @@ local UserCatalogs = require("wtop.i18n.user_catalogs")
 local Inspectors = require("wtop.inspectors")
 local PerfBandwidth = require("wtop.inspectors.perf_bandwidth")
 local LayoutStore = require("wtop.layout_store")
+local Privilege = require("wtop.privilege")
 local ProcessTable = require("wtop.model.process_table")
 local Terminal = require("wtop.terminal")
 local UI = require("wtop.ui")
@@ -25,7 +26,17 @@ end
 
 local function translated(i18n, id, fallback, variables)
     local value = i18n and i18n:t(id, variables)
-    return value and value ~= id and value or fallback
+    if value and value ~= id then return value end
+    -- A missing key falls back to the English literal, which may itself carry
+    -- {placeholders}.  Leaving them unsubstituted printed "{sort} {direction}"
+    -- straight into panel titles, so the fallback gets the same interpolation
+    -- the catalogue entry would have received.
+    if variables and i18n and i18n.format and type(fallback) == "string"
+        and fallback:find("{", 1, true) then
+        local ok, interpolated = pcall(i18n.format.interpolate, i18n.format, fallback, variables)
+        if ok and type(interpolated) == "string" then return interpolated end
+    end
+    return fallback
 end
 
 local function width_function(codepoint)
@@ -34,6 +45,40 @@ local function width_function(codepoint)
         return value
     end
     return nil
+end
+
+-- Pad by measured display columns, never by bytes.  `string.format("%-18s")`
+-- counts bytes, so a four-character Chinese label (twelve bytes, eight
+-- columns) produced a different indent than an eight-column ASCII one and the
+-- whole overlay lost its column.
+local function pad_to(text, columns)
+    text = tostring(text or "")
+    local used = UI.Renderer.Width.display_width(text)
+    if used >= columns then
+        return UI.Renderer.Width.truncate(text, columns)
+    end
+    return text .. string.rep(" ", columns - used)
+end
+
+local function aligned_pairs(pairs_list, gap)
+    local width = 0
+    for _, item in ipairs(pairs_list) do
+        if not item.section and not item.blank then
+            width = math.max(width, UI.Renderer.Width.display_width(tostring(item[1] or "")))
+        end
+    end
+    local lines = {}
+    for _, item in ipairs(pairs_list) do
+        if item.blank then
+            lines[#lines + 1] = ""
+        elseif item.section then
+            lines[#lines + 1] = tostring(item.section)
+        else
+            lines[#lines + 1] = "  " .. pad_to(item[1], width) .. string.rep(" ", gap or 2)
+                .. tostring(item[2] == nil and "—" or item[2])
+        end
+    end
+    return lines
 end
 
 local function format_value(value, i18n)
@@ -74,11 +119,13 @@ local function inspector_lines(title, result, i18n)
         local keys = {}
         for key in pairs(section.fields or {}) do keys[#keys + 1] = key end
         table.sort(keys)
+        local rows = {}
         for _, key in ipairs(keys) do
             local field = section.fields[key]
-            lines[#lines + 1] = string.format("  %-22s %s  [%s]", key,
-                format_value(field and field.value, i18n), tostring(field and field.quality or "unknown"))
+            rows[#rows + 1] = { key, format_value(field and field.value, i18n)
+                .. "  [" .. tostring(field and field.quality or "unknown") .. "]" }
         end
+        for _, line in ipairs(aligned_pairs(rows)) do lines[#lines + 1] = line end
     end
     lines[#lines + 1] = ""
     lines[#lines + 1] = translated(i18n, "inspector.close_hint", "Esc/Enter closes")
@@ -99,50 +146,69 @@ local function process_detail_lines(process, i18n)
     end
     local format = i18n and i18n.format
     local function bytes(value)
-        if type(value) ~= "number" or not format then return "—" end
+        if type(value) ~= "number" then return "—" end
         return detail_formatted(function() return assert(format:bytes(value)) end)
     end
     local function percent(value)
-        if type(value) ~= "number" or not format then return "—" end
+        if type(value) ~= "number" then return "—" end
         return detail_formatted(function() return assert(format:percent(value, { precision = 1 })) end)
     end
-    local function field(label, value)
-        return string.format("  %-18s %s", label, format_value(value, i18n))
+    local function seconds(value)
+        if type(value) ~= "number" then return "—" end
+        return detail_formatted(function() return assert(format:duration(value)) end)
     end
     local io = type(process.io) == "table" and process.io or {}
     local switches = type(process.context_switches) == "table" and process.context_switches or {}
-    local lines = {
-        translated(i18n, "process.details_title", "Process details") .. " · PID " .. tostring(process.pid or "—"),
-        "",
-        translated(i18n, "process.details_identity", "Identity"),
-        field("ID", process.id),
-        field("PID", process.pid),
-        field("PPID", process.parent_pid),
-        field(translated(i18n, "process.details_name", "Name"), process.name),
-        field(translated(i18n, "process.details_command", "Command"), process.command),
-        field(translated(i18n, "metrics.user", "User"), process.user or process.uid),
-        field(translated(i18n, "metrics.state", "State"), process.state),
-        "",
-        translated(i18n, "process.details_resources", "Resources"),
-        field("CPU", percent(process.cpu_percent)),
-        field(translated(i18n, "metrics.memory", "Memory"), bytes(process.resident_bytes)),
-        field(translated(i18n, "process.details_virtual_memory", "Virtual memory"), bytes(process.virtual_bytes)),
-        field(translated(i18n, "process.details_threads", "Threads"), process.threads),
-        "",
-        translated(i18n, "process.details_scheduling", "Scheduling"),
-        field(translated(i18n, "process.details_priority", "Priority"), process.priority),
-        field("Nice", process.nice),
-        field("CPU", process.processor),
-        field(translated(i18n, "process.details_process_group", "Process group"), process.process_group),
-        field(translated(i18n, "process.details_session", "Session"), process.session),
-        "",
-        translated(i18n, "process.details_io", "I/O counters"),
-        field(translated(i18n, "metrics.read", "Read"), bytes(io.read_bytes)),
-        field(translated(i18n, "metrics.write", "Write"), bytes(io.write_bytes)),
-        field(translated(i18n, "process.details_cancelled_write", "Cancelled write"), bytes(io.cancelled_write_bytes)),
-        field(translated(i18n, "process.details_voluntary_switches", "Voluntary switches"), switches.voluntary),
-        field(translated(i18n, "process.details_involuntary_switches", "Involuntary switches"), switches.involuntary),
+    local ticks = type(process.cpu_ticks) == "number" and process.cpu_ticks / 100 or nil
+
+    local rows = {
+        { section = translated(i18n, "process.details_identity", "Identity") },
+        { "ID", process.id },
+        { "PID", process.pid },
+        { "PPID", process.parent_pid },
+        { translated(i18n, "process.details_name", "Name"), process.name },
+        { translated(i18n, "metrics.user", "User"), process.user or process.uid },
+        { translated(i18n, "metrics.state", "State"), process.state },
+        { translated(i18n, "process.details_started", "CPU time"), seconds(ticks) },
+        { blank = true },
+        { section = translated(i18n, "process.details_command", "Command") },
+        { translated(i18n, "process.details_command", "Command"), process.command },
+        { blank = true },
+        { section = translated(i18n, "process.details_resources", "Resources") },
+        { "CPU", percent(process.cpu_percent) },
+        { translated(i18n, "metrics.memory", "Memory"), bytes(process.resident_bytes) },
+        { translated(i18n, "process.details_virtual_memory", "Virtual memory"),
+          bytes(process.virtual_bytes) },
+        { translated(i18n, "process.details_threads", "Threads"), process.threads },
+        { blank = true },
+        { section = translated(i18n, "process.details_scheduling", "Scheduling") },
+        { translated(i18n, "process.details_priority", "Priority"), process.priority },
+        { "Nice", process.nice },
+        { translated(i18n, "metrics.cpu", "Last CPU"), process.processor },
+        { translated(i18n, "process.details_process_group", "Process group"), process.process_group },
+        { translated(i18n, "process.details_session", "Session"), process.session },
+        { blank = true },
+        { section = translated(i18n, "process.details_io", "I/O counters") },
+        { translated(i18n, "metrics.read", "Read"), bytes(io.read_bytes) },
+        { translated(i18n, "metrics.write", "Write"), bytes(io.write_bytes) },
+        { translated(i18n, "process.details_cancelled_write", "Cancelled write"),
+          bytes(io.cancelled_write_bytes) },
+        { translated(i18n, "process.details_voluntary_switches", "Voluntary switches"),
+          switches.voluntary },
+        { translated(i18n, "process.details_involuntary_switches", "Involuntary switches"),
+          switches.involuntary },
     }
+    for index, row in ipairs(rows) do
+        if row[2] ~= nil and type(row[2]) ~= "string" then rows[index][2] = format_value(row[2], i18n) end
+    end
+
+    local lines = {
+        translated(i18n, "process.details_title", "Process details") .. " · PID "
+            .. tostring(process.pid or "—"),
+        "",
+    }
+    for _, line in ipairs(aligned_pairs(rows)) do lines[#lines + 1] = line end
+
     if type(process.cgroups) == "table" and #process.cgroups > 0 then
         lines[#lines + 1] = ""
         lines[#lines + 1] = translated(i18n, "process.details_cgroups", "Control groups")
@@ -155,41 +221,155 @@ local function process_detail_lines(process, i18n)
         end
     end
     lines[#lines + 1] = ""
-    lines[#lines + 1] = translated(i18n, "process.details_scroll_hint",
-        "Up/Down/PgUp/PgDn scroll · Esc/Enter closes")
+    lines[#lines + 1] = translated(i18n, "process.details_actions",
+        "k signal · Up/Down/PgUp/PgDn scroll · Esc/Enter closes")
     return lines
 end
 
-local function help_lines(i18n)
+-- Help is structured data, laid out here.  It used to live as pre-padded
+-- strings inside every locale file, which meant the two columns only lined up
+-- in English, a new shortcut required editing ten translations, and the text
+-- could not be reflowed for a narrow terminal.
+local HELP_SECTIONS = {
+    {
+        id = "help.section_navigation", title = "Navigation",
+        bindings = {
+            { "1–9 0", "help.switch_tabs", "select a tab directly" },
+            { "← →", "help.cycle_tabs", "previous / next tab" },
+            { "Tab ⇧Tab", "help.focus_widget", "move focus between visible widgets" },
+            { "?  F1", "help.toggle", "show or hide this help" },
+            { "q", "help.quit", "close overlay, or quit from the main view" },
+            { "Ctrl-C", "help.force_quit", "always quit" },
+        },
+    },
+    {
+        id = "help.section_sampling", title = "Sampling",
+        bindings = {
+            { "Space", "help.pause_resume", "pause or resume sampling" },
+            { "f", "help.update_frequency", "cycle the update rate" },
+            { "r  Ctrl-L", "help.refresh", "sample now and repaint" },
+        },
+    },
+    {
+        id = "help.section_processes", title = "Processes",
+        bindings = {
+            { "↑ ↓", "help.process_selection", "move the selection" },
+            { "PgUp PgDn", "help.process_page", "move a page at a time" },
+            { "Home End", "help.process_ends", "jump to first or last row" },
+            { "/", "help.process_search", "search PID, name, command, user, state" },
+            { "o", "help.process_sort", "cycle the sort column" },
+            { "O", "help.process_direction", "reverse the sort direction" },
+            { "t", "help.process_tree", "toggle the parent/child tree" },
+            { "p", "help.process_paths", "toggle full executable paths" },
+            { "Enter", "help.process_details", "open details for the selection" },
+            { "k", "help.terminate_process", "send a signal to the selection" },
+        },
+    },
+    {
+        id = "help.section_search", title = "Search syntax",
+        bindings = {
+            { "root", "help.query_plain", "match any field" },
+            { "user:root", "help.query_field", "restrict to pid, ppid, user, state, name or cmd" },
+            { "!kernel", "help.query_negate", "exclude matches" },
+            { "/^systemd/", "help.query_pattern", "a Lua pattern (not PCRE)" },
+            { "a b", "help.query_and", "several terms must all match" },
+            { "← → Home End", "help.query_cursor", "move the cursor within the query" },
+            { "Ctrl-W Ctrl-U", "help.query_kill", "delete the previous word, or back to the start" },
+        },
+    },
+    {
+        id = "help.section_appearance", title = "Appearance",
+        bindings = {
+            { "e", "help.edit_layout", "enter layout edit mode" },
+            { "T", "help.cycle_theme", "cycle the colour theme" },
+            { "L", "help.cycle_language", "cycle the interface language" },
+            { "v", "help.toggle_virtual", "show or hide virtual devices and pseudo mounts" },
+        },
+    },
+    {
+        id = "help.section_inspect", title = "Deep inspection",
+        bindings = {
+            { "s", "help.inspect_smart", "choose a SMART/NVMe device" },
+            { "b", "help.inspect_bandwidth", "measure RAM bandwidth with perf" },
+            { "d", "help.inspect_sshd", "inspect the sshd service and listeners" },
+        },
+    },
+    {
+        id = "help.section_mouse", title = "Mouse",
+        bindings = {
+            { "click", "help.mouse_click", "tabs, footer actions, table rows, column headers" },
+            { "wheel", "help.mouse_wheel", "scroll tables and overlays" },
+        },
+    },
+}
+
+local function help_lines(i18n, width)
     local title = i18n:t("app.title")
-    return {
+    local lines = {
         title ~= "app.title" and title or "wtop — Linux performance workbench",
-        "",
-        translated(i18n, "help.switch_tabs", "1-8 / left/right switch tabs"),
-        translated(i18n, "help.focus_widget", "Tab            focus next widget"),
-        translated(i18n, "help.pause_resume", "Space          pause/resume sampling"),
-        translated(i18n, "help.update_frequency", "f / click rate cycle update frequency"),
-        translated(i18n, "help.refresh", "r / Ctrl-L     refresh and repaint"),
-        translated(i18n, "help.edit_layout", "e              layout edit mode"),
-        translated(i18n, "help.process_selection", "Up/Down        process selection"),
-        translated(i18n, "help.process_search", "/              search processes"),
-        translated(i18n, "help.process_sort", "o              cycle process sort"),
-        translated(i18n, "help.process_tree", "t              toggle process tree"),
-        translated(i18n, "help.process_details", "Enter          process details"),
-        translated(i18n, "help.terminate_process", "k              confirm SIGTERM for selected process"),
-        translated(i18n, "help.inspect_smart", "s              choose a SMART/NVMe device"),
-        translated(i18n, "help.inspect_bandwidth", "b              inspect RAM bandwidth capability"),
-        translated(i18n, "help.inspect_sshd", "d              inspect sshd service/listeners"),
-        translated(i18n, "help.toggle", "? / F1         toggle this help"),
-        translated(i18n, "help.quit", "q / Ctrl-C     quit"),
-        "",
-        translated(i18n, "help.layout_adapts", "Layouts adapt in both dimensions; edit mode lets Tab select"),
-        translated(i18n, "help.layout_reorder", "a widget and left/right reorder it without restarting wtop."),
-        translated(i18n, "help.inspectors_safe", "External inspectors use absolute argv, fixed locale, timeout"),
-        translated(i18n, "help.smart_standby", "and output limits. SMART probes do not wake standby drives."),
-        "",
-        translated(i18n, "help.close", "Esc/Enter closes"),
     }
+    -- Two columns when the overlay is wide enough for them, one when it is not.
+    local key_width = 0
+    for _, group in ipairs(HELP_SECTIONS) do
+        for _, binding in ipairs(group.bindings) do
+            key_width = math.max(key_width, UI.Renderer.Width.display_width(binding[1]))
+        end
+    end
+    for _, group in ipairs(HELP_SECTIONS) do
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = translated(i18n, group.id, group.title)
+        for _, binding in ipairs(group.bindings) do
+            local description = translated(i18n, binding[2], binding[3])
+            if width and width < key_width + 24 then
+                lines[#lines + 1] = "  " .. binding[1]
+                lines[#lines + 1] = "      " .. description
+            else
+                lines[#lines + 1] = "  " .. pad_to(binding[1], key_width) .. "  " .. description
+            end
+        end
+    end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = translated(i18n, "help.inspectors_safe",
+        "External inspectors use absolute argv, a fixed locale, timeouts and output limits.")
+    lines[#lines + 1] = translated(i18n, "help.smart_standby",
+        "SMART probes do not wake standby drives.")
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = translated(i18n, "help.close", "Esc/Enter closes")
+    return lines
+end
+
+-- Signals the action layer accepts.  The UI used to hard-wire SIGTERM even
+-- though SIGKILL, SIGSTOP and SIGCONT were already implemented with the same
+-- PID-reuse protection, so three safe actions were unreachable.
+local SIGNAL_CHOICES = {
+    { number = 15, name = "SIGTERM", id = "signal.term", fallback = "ask the process to exit" },
+    { number = 9, name = "SIGKILL", id = "signal.kill", fallback = "force the kernel to kill it" },
+    { number = 19, name = "SIGSTOP", id = "signal.stop", fallback = "suspend the process" },
+    { number = 18, name = "SIGCONT", id = "signal.cont", fallback = "resume a stopped process" },
+}
+
+local function signal_menu_lines(process, selected, i18n, unicode)
+    if unicode == nil then unicode = true end
+    local lines = {
+        translated(i18n, "signal.title", "Send a signal") .. " · PID "
+            .. tostring(process and process.pid or "—")
+            .. "  " .. tostring(process and (process.name or "") or ""),
+        "",
+        translated(i18n, "signal.hint", "Up/Down selects · Enter sends · Esc cancels"),
+        "",
+    }
+    local rows = {}
+    for index, choice in ipairs(SIGNAL_CHOICES) do
+        rows[#rows + 1] = {
+            (index == selected and (unicode and "▸ " or "> ") or "  ") .. choice.name,
+            translated(i18n, choice.id, choice.fallback),
+        }
+    end
+    for _, line in ipairs(aligned_pairs(rows, 3)) do lines[#lines + 1] = line end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = translated(i18n, "signal.warning",
+        "The target is re-verified by start time, so a recycled PID is never signalled.")
+    return lines
 end
 
 local function smart_selection_lines(devices, selected, i18n, truncated, unicode)
@@ -219,14 +399,79 @@ local function smart_selection_lines(devices, selected, i18n, truncated, unicode
     return lines
 end
 
-local function draw_overlay(grid, theme, lines, offset, capabilities)
-    offset = math.max(0, math.floor(tonumber(offset) or 0))
+-- Wrap one logical line to `width` columns, preserving its leading indent so
+-- continuation rows stay visually attached to what they continue.
+local MAX_WRAPPED_LINES = 256
+
+local function wrap_line(line, limit)
+    local width_of = UI.Renderer.Width.display_width
+    if limit < 4 or width_of(line) <= limit then return { line } end
+    -- Continuation rows keep the original indent plus two columns, so a wrapped
+    -- value stays visually attached to the label that introduced it.
+    local indent = line:match("^(%s*)") or ""
+    local prefix = indent .. "  "
+    if width_of(prefix) > limit - 4 then prefix = "" end
+
+    local result = {}
+    local remainder = line
+    local current_prefix = ""
+    while #result < MAX_WRAPPED_LINES do
+        -- The prefix is part of the emitted row, so the text that fits is the
+        -- limit minus the prefix.  `limit` itself never changes: shrinking it
+        -- each pass made every continuation row narrower than the last.
+        local usable = limit - width_of(current_prefix)
+        if usable < 2 then break end
+        if width_of(remainder) <= usable then
+            result[#result + 1] = current_prefix .. remainder
+            return result
+        end
+        local head = UI.Renderer.Width.truncate(remainder, usable, nil, "")
+        -- Prefer breaking at the last space so words survive the wrap.
+        local break_at = head:match("^.*()%s")
+        if break_at and break_at > 4 then
+            head = head:sub(1, break_at - 1)
+        end
+        if head == "" then break end
+        result[#result + 1] = current_prefix .. head
+        remainder = remainder:sub(#head + 1):gsub("^%s+", "")
+        if remainder == "" then return result end
+        current_prefix = prefix
+    end
+    if remainder ~= "" and #result < MAX_WRAPPED_LINES then
+        result[#result + 1] = UI.Renderer.Width.truncate(current_prefix .. remainder, limit)
+    end
+    return result
+end
+
+local function overlay_geometry(grid, lines)
     local maximum_line = 0
     for _, line in ipairs(lines) do
-        maximum_line = math.max(maximum_line, UI.Renderer.Width.display_width(line, grid.width_options))
+        maximum_line = math.max(maximum_line,
+            UI.Renderer.Width.display_width(line, grid.width_options))
     end
-    local width = math.min(grid.width - 2, math.max(28, maximum_line + 4))
+    local width = math.min(grid.width - 4, math.max(28, maximum_line + 4))
     local height = math.min(grid.height - 2, math.max(5, #lines + 2))
+    return width, height, maximum_line
+end
+
+--- Reflow overlay content to the width the overlay will actually get.
+local function overlay_content(grid, lines)
+    local width = select(1, overlay_geometry(grid, lines))
+    local inner = width - 4
+    local wrapped = {}
+    for _, line in ipairs(lines) do
+        for _, part in ipairs(wrap_line(line, inner)) do
+            wrapped[#wrapped + 1] = part
+            if #wrapped > 4096 then return wrapped end
+        end
+    end
+    return wrapped
+end
+
+local function draw_overlay(grid, theme, lines, offset, capabilities)
+    offset = math.max(0, math.floor(tonumber(offset) or 0))
+    lines = overlay_content(grid, lines)
+    local width, height = overlay_geometry(grid, lines)
     if width < 4 or height < 3 then
         return
     end
@@ -235,7 +480,26 @@ local function draw_overlay(grid, theme, lines, offset, capabilities)
     local area = { x = x, y = y, width = width, height = height }
     local background = theme:style("text.primary", "surface.raised")
     local border = theme:style("accent.primary", "surface.raised", { bold = true })
+    local muted = theme:style("text.muted", "surface.raised")
     local unicode = not (capabilities and capabilities.unicode == false)
+
+    -- Dim the page behind the overlay.  Without this the underlying panel
+    -- borders run straight into the overlay frame and the two read as one
+    -- broken box.
+    local scrim = theme:style("text.muted", "surface.base", { dim = true })
+    for row = 1, grid.height do
+        for column = 1, grid.width do
+            local inside = row >= y - 1 and row <= y + height
+                and column >= x - 1 and column <= x + width
+            if not inside then
+                local cell = grid:get(column, row)
+                if cell and not cell.continuation then
+                    grid:set(column, row, cell.char, scrim, cell.width or 1)
+                end
+            end
+        end
+    end
+
     local glyph = unicode
         and { "╭", "╮", "╰", "╯", "─", "│" }
         or { "+", "+", "+", "+", "-", "|" }
@@ -261,18 +525,69 @@ local function draw_overlay(grid, theme, lines, offset, capabilities)
         if line == nil then break end
         grid:write(x + 2, y + 1 + index, line, background, width - 4)
     end
+
+    -- A scroll indicator: without one, a truncated overlay looks complete and
+    -- the reader never discovers the rest of the content.
+    local scrollable = #lines - 1
+    if scrollable > body_rows and body_rows > 0 then
+        local track_top = y + 2
+        local track_height = math.max(1, height - 4)
+        local maximum_offset = math.max(1, scrollable - body_rows)
+        local thumb_height = math.max(1,
+            math.floor(track_height * body_rows / scrollable + 0.5))
+        thumb_height = math.min(thumb_height, track_height)
+        local position = math.floor((track_height - thumb_height)
+            * math.min(1, offset / maximum_offset) + 0.5)
+        for index = 0, track_height - 1 do
+            local inside = index >= position and index < position + thumb_height
+            grid:set(x + width - 1, track_top + index,
+                unicode and (inside and "█" or "│") or (inside and "#" or "|"),
+                inside and border or muted, 1)
+        end
+        local label = string.format("%d/%d", math.min(scrollable, offset + body_rows), scrollable)
+        local label_width = UI.Renderer.Width.display_width(label, grid.width_options)
+        if width > label_width + 6 then
+            grid:write(x + width - label_width - 2, y + height - 1, label, muted, label_width)
+        end
+    end
 end
 
-local function overlay_max_offset(terminal_rows, lines)
-    local height = math.min(terminal_rows - 2, math.max(5, #lines + 2))
+-- Wrapping changes the line count, so the scroll bound has to be computed from
+-- the reflowed content rather than from the source lines.
+local function overlay_max_offset(terminal_rows, terminal_columns, lines)
+    local pseudo_grid = { width = terminal_columns, height = terminal_rows }
+    local wrapped = overlay_content(pseudo_grid, lines)
+    local height = math.min(terminal_rows - 2, math.max(5, #wrapped + 2))
     local body_rows = math.max(1, height - 3)
-    return math.max(0, (#lines - 1) - body_rows)
+    return math.max(0, (#wrapped - 1) - body_rows)
 end
 
 local function utf8_backspace(value)
     if type(value) ~= "string" or value == "" then return "" end
     local index = utf8.offset(value, -1)
     return index and value:sub(1, index - 1) or ""
+end
+
+-- Byte offset of the codepoint boundary before/after `position`.  Positions are
+-- 1-based byte offsets of the character the cursor sits *on*, so a cursor at
+-- #value + 1 means "at the end".
+local function utf8_previous_offset(value, position)
+    if position <= 1 then return 1 end
+    local index = position - 1
+    while index > 1 and value:byte(index) >= 0x80 and value:byte(index) < 0xC0 do
+        index = index - 1
+    end
+    return index
+end
+
+local function utf8_next_offset(value, position)
+    local limit = #value + 1
+    if position >= limit then return limit end
+    local index = position + 1
+    while index < limit and value:byte(index) >= 0x80 and value:byte(index) < 0xC0 do
+        index = index + 1
+    end
+    return index
 end
 
 local function make_inspectors(engine)
@@ -306,7 +621,7 @@ local function run_loop(options, backend, renderer, engine, translator)
     local terminal_capabilities = backend.capabilities()
     local default_orders = Workspace.default_orders()
     local layout_orders, layout_status, layout_trees
-    if options.privilege and options.privilege.via_sudo then
+    if Privilege.restricts_user_files(options.privilege) then
         layout_orders = default_orders
         layout_status = { state = "default", reason = "sudo session ignores persisted layout" }
     else
@@ -320,7 +635,42 @@ local function run_loop(options, backend, renderer, engine, translator)
     })
     local columns, rows = assert(backend.size())
     local visible_widgets = {}
+    -- Overview cards for a resource this host does not expose at all.  These
+    -- are the optional ones: the required CPU/memory/pressure cards always
+    -- stay, because "0%" and "absent" are different facts worth showing.
+    local OPTIONAL_WIDGETS = {
+        gpu_overview = "gpus",
+        frequency_overview = "cpu_frequency",
+        temperature_overview = "sensors",
+        power_overview = "power",
+        battery_bars = "power_supplies",
+        core_overview = "cpu",
+    }
+
+    local function suppressed_widgets()
+        local suppressed = {}
+        for widget_id, resource in pairs(OPTIONAL_WIDGETS) do
+            local state = engine.snapshot.quality and engine.snapshot.quality[resource]
+            if state and state.status == "unavailable" then
+                suppressed[widget_id] = true
+            end
+        end
+        return suppressed
+    end
+
+    -- Declared before the first closure that assigns them; a `local` written
+    -- after its use site would silently become a global.
+    local dirty = true
+    local force = true
+
     local function sync_engine_visibility()
+        -- A widget entering or leaving the tree rebuilds the page geometry, so
+        -- the next frame must be a full repaint rather than a diff.
+        if workspace:set_suppressed(suppressed_widgets()) then
+            renderer:invalidate()
+            force = true
+            dirty = true
+        end
         visible_widgets = workspace:visible_widgets(columns, rows)
         assert(engine:set_active_tab(workspace.active, visible_widgets))
         return visible_widgets
@@ -338,8 +688,6 @@ local function run_loop(options, backend, renderer, engine, translator)
     local frequency_index = UpdateFrequency.nearest_index(engine.interval_ms or options.interval_ms or 1000)
         or UpdateFrequency.DEFAULT_INDEX
     local paused = false
-    local dirty = true
-    local force = true
     local running = true
     local overlay
     local overlay_offset = 0
@@ -363,6 +711,124 @@ local function run_loop(options, backend, renderer, engine, translator)
     end
     local last_metadata
     local last_rendered_page
+    -- Resolve the default here rather than leaving it nil: the page falls back
+    -- to Theme.DEFAULT when rendering, so a nil name made the first `T` press
+    -- jump from the theme actually on screen to the second in the list.
+    local theme_name = options.theme or UI.Theme.DEFAULT
+    local show_virtual = false
+    local available_locales = I18n.available() or { translator:locale() }
+
+    --- Rebuild the translator and every string the workspace baked in.
+    -- Page and widget titles are resolved when the workspace is constructed, so
+    -- a language change has to rebuild it.  The persisted layout trees, the
+    -- active tab, focus, edit mode and the undo history all carry over, so the
+    -- switch is invisible apart from the language.
+    local function cycle_locale(delta)
+        local current = translator:locale()
+        local index = 1
+        for position, locale in ipairs(available_locales) do
+            if locale == current then index = position break end
+        end
+        local target = available_locales[((index - 1 + (delta or 1)) % #available_locales) + 1]
+        local replacement, replacement_error = I18n.new({ locale = target })
+        if not replacement then
+            status_message = translated(translator, "status.locale_failed",
+                "Cannot switch language: {reason}", { reason = tostring(replacement_error) })
+            return false
+        end
+        if not Privilege.restricts_user_files(options.privilege) then
+            UserCatalogs.load(replacement)
+        end
+        translator = replacement
+        local rebuilt = Workspace.new({
+            active_tab = workspace.active,
+            layout_trees = workspace:trees(),
+            i18n = translator,
+        })
+        rebuilt.focus = workspace.focus
+        rebuilt.edit_mode = workspace.edit_mode
+        rebuilt.dirty = workspace.dirty
+        rebuilt.undo_stack = workspace.undo_stack
+        rebuilt.redo_stack = workspace.redo_stack
+        workspace = rebuilt
+        workspace:set_suppressed(suppressed_widgets())
+        status_message = translated(translator, "status.locale", "Language: {name}",
+            { name = translator:locale() })
+        renderer:invalidate()
+        force = true
+        dirty = true
+        return true
+    end
+    -- Per-widget scroll offsets.  Any panel whose content exceeds its
+    -- rectangle becomes scrollable while focused, so overflowing rows are
+    -- reachable instead of silently clipped.
+    local widget_offsets = {}
+
+    local function focused_widget_id()
+        return workspace.focus and workspace.focus[workspace.active] or nil
+    end
+
+    local function scroll_focused_widget(delta, page)
+        local id = focused_widget_id()
+        if not id then return false end
+        local widget = last_metadata and last_metadata.widgets and last_metadata.widgets[id]
+        if not widget or widget.scrollable ~= true then return false end
+        local step = page and math.max(1, (widget.visible or 1) - 1) or 1
+        local maximum = math.max(0, (widget.total or 0) - (widget.visible or 1))
+        widget_offsets[id] = math.max(0,
+            math.min(maximum, (widget_offsets[id] or 0) + delta * step))
+        dirty = true
+        return true
+    end
+
+    --- Rows the process table actually drew last frame.
+    local function process_visible_rows()
+        local widget = last_metadata and last_metadata.widgets
+            and last_metadata.widgets.process_table
+        if widget and type(widget.visible_rows) == "number" and widget.visible_rows > 0 then
+            return widget.visible_rows
+        end
+        -- Before the first frame there is no measurement; the conservative
+        -- estimate only has to be small enough not to skip rows.
+        return math.max(1, rows - 6)
+    end
+
+    local function clock_label()
+        local wall_ns = engine.clock and engine.clock.wall_ns and engine.clock.wall_ns()
+        if type(wall_ns) ~= "number" then return nil end
+        local ok, text = pcall(os.date, "%H:%M:%S", math.floor(wall_ns / 1000000000))
+        return ok and text or nil
+    end
+
+    local function brand_label()
+        local host = engine.snapshot.system and engine.snapshot.system.host
+            and engine.snapshot.system.host.hostname
+        if type(host) == "string" and host ~= "" then
+            return "wtop " .. host
+        end
+        return "wtop"
+    end
+
+    -- Anything the operator should look at right now: a denied or failing
+    -- collector, or a resource past its critical threshold.
+    local function alert_count(snapshot)
+        local count = 0
+        for _, state in pairs(snapshot.quality or {}) do
+            if state.status == "denied" or state.status == "error" then count = count + 1 end
+        end
+        local memory = snapshot.memory
+        if memory and memory.total_bytes and memory.total_bytes > 0
+            and memory.used_bytes * 100 / memory.total_bytes >= 92 then
+            count = count + 1
+        end
+        for _, mount in ipairs(snapshot.mounts and snapshot.mounts.mounts or {}) do
+            local used = mount.capacity and mount.capacity.used_percent
+            if mount.kind == "local" and type(used) == "number" and used >= 92 then
+                count = count + 1
+            end
+        end
+        return count
+    end
 
     local function current_frequency_label()
         local level = assert(UpdateFrequency.level(frequency_index))
@@ -390,6 +856,16 @@ local function run_loop(options, backend, renderer, engine, translator)
     local function show_overlay(lines)
         overlay = lines
         overlay_offset = 0
+    end
+
+    -- Footer actions and key bindings must stay in step, so both funnel into
+    -- the same synthetic key event rather than duplicating the handlers.
+    local run_command
+
+    local function refresh_signal_menu()
+        if not confirmation then return end
+        overlay = signal_menu_lines(confirmation.process, confirmation.index, translator,
+            terminal_capabilities.unicode ~= false)
     end
 
     local function refresh_smart_selection()
@@ -458,10 +934,18 @@ local function run_loop(options, backend, renderer, engine, translator)
         end
         sync_engine_visibility()
         local models = ViewModel.build(engine, engine.snapshot, translator, combined_capabilities,
-            workspace.active, process_controller, visible_widgets)
+            workspace.active, process_controller, visible_widgets, {
+                privilege = options.privilege,
+                show_virtual_devices = show_virtual,
+                show_pseudo_filesystems = show_virtual,
+            })
         local process_count = #models.process_table.rows
         local process_selected = models.process_table.status.selected_index or 0
-        local visible_rows = math.max(1, rows - 5)
+        -- The table reports the row count it actually drew on the previous
+        -- frame.  Deriving it from the terminal height instead was off by the
+        -- header, the border and the status row, so the selected row could sit
+        -- one line below the viewport and stay invisible while scrolling.
+        local visible_rows = process_visible_rows()
         if process_count == 0 then
             process_offset = 0
         elseif process_selected <= process_offset then
@@ -469,9 +953,12 @@ local function run_loop(options, backend, renderer, engine, translator)
         elseif process_selected > process_offset + visible_rows then
             process_offset = process_selected - visible_rows
         end
-        process_offset = math.max(0, process_offset)
+        process_offset = math.max(0, math.min(math.max(0, process_count - 1), process_offset))
         models.process_table.selected = process_selected
         models.process_table.offset = process_offset
+        for id, offset in pairs(widget_offsets) do
+            if type(models[id]) == "table" then models[id].offset = offset end
+        end
         sync_selected_process()
 
         local config_status = options.config_status
@@ -481,49 +968,87 @@ local function run_loop(options, backend, renderer, engine, translator)
             message = status_message,
             error = persisted_error,
             privilege = options.privilege,
-            filter = workspace.active == "processes" and models.process_table.status_text or nil,
+            -- The process table prints its own sort/filter status inside the
+            -- panel; repeating it in the footer wasted the one place a
+            -- transient message can appear.
+            filter = workspace.active == "processes"
+                and models.process_table.status.query ~= ""
+                and translated(translator, "process.filter_status", " · Filter: {query}",
+                    { query = models.process_table.status.query })
+                or nil,
+            data_age = clock_label(),
             hints = {
-                { key = "1–8", id = "actions.tabs", fallback = "Tabs" },
-                { key = "Space", id = paused and "actions.resume" or "actions.pause", fallback = paused and "Resume" or "Pause" },
-                { key = "f", id = "actions.update_frequency", fallback = "Rate" },
-                { key = "e", id = "actions.edit_layout", fallback = "Layout" },
-                { key = "?", id = "actions.help", fallback = "Help" },
-                { key = "q", id = "actions.quit", fallback = "Quit" },
+                { key = "1–0", id = "actions.tabs", fallback = "Tabs", command = "tabs" },
+                { key = "Space", id = paused and "actions.resume" or "actions.pause",
+                  fallback = paused and "Resume" or "Pause", command = "pause" },
+                { key = "f", id = "actions.update_frequency", fallback = "Rate", command = "rate" },
+                { key = "e", id = "actions.edit_layout", fallback = "Layout", command = "layout" },
+                { key = "T", id = "actions.theme", fallback = "Theme", command = "theme" },
+                { key = "L", id = "actions.language", fallback = "Lang", command = "language" },
+                { key = "?", id = "actions.help", fallback = "Help", command = "help" },
+                { key = "q", id = "actions.quit", fallback = "Quit", command = "quit" },
             },
         }
         if workspace.active == "processes" then
             status.hints = {
-                { key = "↑/↓", id = "actions.select", fallback = "Select" },
-                { key = "/", id = "actions.search", fallback = "Search" },
-                { key = "o", id = "actions.sort", fallback = "Sort" },
-                { key = "t", id = "actions.tree", fallback = "Tree" },
-                { key = "Enter", id = "actions.details", fallback = "Details" },
-                { key = "k", id = "actions.terminate", fallback = "Terminate" },
+                { key = "/", id = "actions.search", fallback = "Search", command = "search" },
+                { key = "o", id = "actions.sort", fallback = "Sort", command = "sort" },
+                { key = "O", id = "actions.reverse", fallback = "Reverse", command = "reverse" },
+                { key = "t", id = "actions.tree", fallback = "Tree", command = "tree" },
+                { key = "p", id = "actions.paths", fallback = "Paths", command = "paths" },
+                { key = "Enter", id = "actions.details", fallback = "Details", command = "details" },
+                { key = "k", id = "actions.signal", fallback = "Signal", command = "signal" },
+                { key = "?", id = "actions.help", fallback = "Help", command = "help" },
+            }
+        elseif workspace.active == "storage" or workspace.active == "network" then
+            status.hints = {
+                { key = "1–0", id = "actions.tabs", fallback = "Tabs", command = "tabs" },
+                { key = "v", id = "actions.toggle_virtual", fallback = "Virtual", command = "virtual" },
+                { key = "s", id = "actions.inspect_smart", fallback = "SMART", command = "smart" },
+                { key = "?", id = "actions.help", fallback = "Help", command = "help" },
+                { key = "q", id = "actions.quit", fallback = "Quit", command = "quit" },
+            }
+        elseif workspace.active == "insights" then
+            status.hints = {
+                { key = "1–0", id = "actions.tabs", fallback = "Tabs", command = "tabs" },
+                { key = "s", id = "actions.inspect_smart", fallback = "SMART", command = "smart" },
+                { key = "b", id = "actions.inspect_bandwidth", fallback = "Bandwidth", command = "bandwidth" },
+                { key = "d", id = "actions.inspect_sshd", fallback = "sshd", command = "sshd" },
+                { key = "?", id = "actions.help", fallback = "Help", command = "help" },
             }
         end
         if search_edit then
             status.filter = nil
+            -- Show the caret at the cursor so left/right movement is visible.
+            local draft = search_edit.draft
+            local cursor = math.max(1, math.min(#draft + 1, search_edit.cursor or (#draft + 1)))
+            local shown = draft:sub(1, cursor - 1) .. "▏" .. draft:sub(cursor)
+            if terminal_capabilities.unicode == false then
+                shown = draft:sub(1, cursor - 1) .. "|" .. draft:sub(cursor)
+            end
             status.message = translated(translator, "process.search_prompt",
-                "Search: /{query}_ · Enter confirms · Esc cancels", { query = search_edit.draft })
+                "Search: /{query} · Enter confirms · Esc cancels", { query = shown })
             status.warning = true
         end
         if confirmation then
-            status.message = translated(translator, "process.confirm_terminate",
-                "Confirm SIGTERM for PID {pid}? y/N", { pid = confirmation.pid })
+            status.message = translated(translator, "process.signal_prompt",
+                "Choose a signal for PID {pid}", { pid = confirmation.process.pid })
             status.warning = true
         end
         local grid, metadata = workspace:render(columns, rows, {
             capabilities = terminal_capabilities,
             i18n = translator,
-            theme_name = options.theme,
+            theme_name = theme_name,
             widgets = models,
             paused = paused,
             frequency_label = current_frequency_label(),
+            brand = brand_label(),
+            alert_count = alert_count(engine.snapshot),
             status = status,
             width_fn = native.available and width_function or nil,
         })
         if overlay then
-            overlay_offset = math.min(overlay_offset, overlay_max_offset(rows, overlay))
+            overlay_offset = math.min(overlay_offset, overlay_max_offset(rows, columns, overlay))
             draw_overlay(grid, metadata.theme, overlay, overlay_offset, terminal_capabilities)
         end
         local presented, present_error = renderer:present(grid, force)
@@ -539,16 +1064,31 @@ local function run_loop(options, backend, renderer, engine, translator)
 
     local models = render_frame()
 
-    local function update_search(value)
+    --- Replace the draft and move the cursor.
+    -- The draft deliberately keeps exactly what was typed.  Feeding the
+    -- controller's normalised result back in trimmed trailing whitespace, which
+    -- made a multi-term query (`user:root state:D`) impossible to type: the
+    -- space vanished the moment it was entered.
+    local function update_search(value, cursor)
         local maximum = process_controller:status().max_query_bytes or 256
         value = tostring(value or "")
-        if #value > maximum * 4 then
-            value = value:sub(1, maximum * 4)
+        if #value > maximum then
+            value = value:sub(1, maximum)
+            local _, invalid_at = utf8.len(value)
+            if invalid_at then value = value:sub(1, invalid_at - 1) end
         end
-        local normalized = process_controller:set_query(value)
-        search_edit.draft = normalized
+        search_edit.draft = value
+        search_edit.cursor = math.max(1, math.min(#value + 1, cursor or (#value + 1)))
+        process_controller:set_query(value)
         sync_selected_process()
         dirty = true
+    end
+
+    local function search_insert(text)
+        if type(text) ~= "string" or text == "" then return end
+        local draft, cursor = search_edit.draft, search_edit.cursor
+        update_search(draft:sub(1, cursor - 1) .. text .. draft:sub(cursor),
+            cursor + #text)
     end
 
     local function process_event(event)
@@ -559,29 +1099,48 @@ local function run_loop(options, backend, renderer, engine, translator)
             return
         end
         if confirmation then
-            if event.type == "key" and event.key:lower() == "y" then
-                local sent, send_error = Actions.signal_process(confirmation, 15)
-                status_message = sent and translated(translator, "process.term_sent",
-                    "SIGTERM sent to PID {pid}", { pid = confirmation.pid })
+            local function close()
+                confirmation = nil
+                overlay = nil
+                overlay_offset = 0
+                dirty = true
+            end
+            if event.type == "key" and (event.key == "up" or event.key == "down") then
+                local count = #SIGNAL_CHOICES
+                confirmation.index = ((confirmation.index - 1
+                    + (event.key == "down" and 1 or -1)) % count) + 1
+                refresh_signal_menu()
+                dirty = true
+            elseif event.type == "key" and event.key == "enter" then
+                local choice = SIGNAL_CHOICES[confirmation.index]
+                local sent, send_error = Actions.signal_process(confirmation.process, choice.number)
+                status_message = sent and translated(translator, "process.signal_sent",
+                    "{signal} sent to PID {pid}",
+                    { signal = choice.name, pid = confirmation.process.pid })
                     or translated(translator, "process.action_refused", "Action refused: {reason}", {
                         reason = tostring(send_error),
                     })
-                confirmation = nil
+                close()
                 engine:tick_visible()
-                dirty = true
             elseif event.type == "key" then
-                confirmation = nil
+                close()
                 status_message = translated(translator, "process.action_cancelled", "Action cancelled")
-                dirty = true
             end
             return
         end
 
         if search_edit then
-            if event.type == "key" and event.key == "enter" then
+            local draft, cursor = search_edit.draft, search_edit.cursor
+            if event.type == "paste" and type(event.text) == "string" then
+                search_insert((event.text:gsub("[%z\1-\31\127]", " ")))
+                return
+            end
+            if event.type ~= "key" then return end
+            local key = event.key
+            if key == "enter" then
                 search_edit = nil
                 dirty = true
-            elseif event.type == "key" and event.key == "escape" then
+            elseif key == "escape" then
                 process_controller:set_query(search_edit.original)
                 if search_edit.original_selected_id then
                     process_controller:select_id(search_edit.original_selected_id)
@@ -589,12 +1148,39 @@ local function run_loop(options, backend, renderer, engine, translator)
                 search_edit = nil
                 sync_selected_process()
                 dirty = true
-            elseif event.type == "key" and event.key == "backspace" then
-                update_search(utf8_backspace(search_edit.draft))
-            elseif event.type == "key" and event.text and not event.ctrl and not event.alt then
-                update_search(search_edit.draft .. event.text)
-            elseif event.type == "paste" and type(event.text) == "string" then
-                update_search(search_edit.draft .. event.text)
+            elseif key == "backspace" then
+                if cursor > 1 then
+                    local previous = utf8_previous_offset(draft, cursor)
+                    update_search(draft:sub(1, previous - 1) .. draft:sub(cursor), previous)
+                end
+            elseif key == "delete" then
+                if cursor <= #draft then
+                    local following = utf8_next_offset(draft, cursor)
+                    update_search(draft:sub(1, cursor - 1) .. draft:sub(following), cursor)
+                end
+            elseif key == "left" then
+                search_edit.cursor = utf8_previous_offset(draft, cursor)
+                dirty = true
+            elseif key == "right" then
+                search_edit.cursor = utf8_next_offset(draft, cursor)
+                dirty = true
+            elseif key == "home" or (event.ctrl and key == "a") then
+                search_edit.cursor = 1
+                dirty = true
+            elseif key == "end" or (event.ctrl and key == "e") then
+                search_edit.cursor = #draft + 1
+                dirty = true
+            elseif event.ctrl and key == "u" then
+                -- Readline: kill from the cursor back to the start of the line.
+                update_search(draft:sub(cursor), 1)
+            elseif event.ctrl and key == "k" then
+                update_search(draft:sub(1, cursor - 1), cursor)
+            elseif event.ctrl and key == "w" then
+                local head = draft:sub(1, cursor - 1)
+                local trimmed = head:gsub("%s+$", ""):gsub("%S+$", "")
+                update_search(trimmed .. draft:sub(cursor), #trimmed + 1)
+            elseif event.text and not event.ctrl and not event.alt then
+                search_insert(event.text)
             end
             return
         end
@@ -632,7 +1218,7 @@ local function run_loop(options, backend, renderer, engine, translator)
                 end
                 return
             end
-            local maximum = overlay_max_offset(rows, overlay)
+            local maximum = overlay_max_offset(rows, columns, overlay)
             if event.type == "mouse" and event.action == "scroll" then
                 overlay_offset = math.max(0, math.min(maximum,
                     overlay_offset + (event.direction == "down" and 1 or -1)))
@@ -680,10 +1266,72 @@ local function run_loop(options, backend, renderer, engine, translator)
                         return
                     end
                 end
-            elseif event.action == "scroll" and workspace.active == "processes" then
-                process_controller:move(event.direction == "down" and 1 or -1)
-                sync_selected_process()
-                dirty = true
+                return
+            end
+            -- The footer already computed a hit box for every shortcut it drew;
+            -- nothing consumed them, so the hints looked like buttons and
+            -- behaved like decoration.
+            if event.action == "press" and event.y == rows and last_metadata
+                and last_metadata.status then
+                for _, hint in ipairs(last_metadata.status.hints or {}) do
+                    if event.x >= hint.x and event.x < hint.x + hint.width then
+                        run_command(hint.command)
+                        return
+                    end
+                end
+                return
+            end
+            if event.action == "scroll" and workspace.active ~= "processes" then
+                if scroll_focused_widget(event.direction == "down" and 1 or -1, false) then
+                    return
+                end
+            end
+            local table_widget = last_metadata and last_metadata.widgets
+                and last_metadata.widgets.process_table
+            if workspace.active == "processes" and table_widget then
+                if event.action == "press" and table_widget.headers
+                    and event.y == table_widget.header_y then
+                    for _, header in ipairs(table_widget.headers) do
+                        if event.x >= header.x and event.x < header.x + header.width then
+                            local status = process_controller:status()
+                            if status.sort_key == header.sort_key then
+                                process_controller:toggle_direction()
+                            else
+                                process_controller:set_sort(header.sort_key)
+                            end
+                            sync_selected_process()
+                            dirty = true
+                            return
+                        end
+                    end
+                elseif event.action == "press" and event.y >= table_widget.rows_y
+                    and event.y < table_widget.rows_y + (table_widget.visible_rows or 0)
+                    and event.x >= table_widget.rows_x
+                    and event.x < table_widget.rows_x + (table_widget.rows_width or 0) then
+                    local index = (table_widget.offset or 0) + (event.y - table_widget.rows_y) + 1
+                    if process_controller:select_index(index) then
+                        sync_selected_process()
+                        dirty = true
+                    end
+                    return
+                elseif event.action == "scroll" then
+                    -- Scrolling moves the viewport, not the selection, and by a
+                    -- conventional three rows per notch.
+                    local step = 3 * (event.direction == "down" and 1 or -1)
+                    process_offset = math.max(0, process_offset + step)
+                    local count = models and #models.process_table.rows or 0
+                    process_offset = math.min(process_offset, math.max(0, count - 1))
+                    local visible = process_visible_rows()
+                    local selected = process_controller:status().selected_index or 1
+                    if selected <= process_offset then
+                        process_controller:select_index(process_offset + 1)
+                    elseif selected > process_offset + visible then
+                        process_controller:select_index(process_offset + visible)
+                    end
+                    sync_selected_process()
+                    dirty = true
+                    return
+                end
             end
             return
         elseif event.type ~= "key" then
@@ -693,8 +1341,10 @@ local function run_loop(options, backend, renderer, engine, translator)
         local key = event.key
         if (event.ctrl and key == "c") or key == "q" then
             running = false
-        elseif key:match("^[1-8]$") then
-            if workspace:select(tonumber(key)) then
+        elseif key:match("^[0-9]$") then
+            -- Ten tabs: 1..9 then 0 for the tenth, the familiar browser order.
+            local index = key == "0" and 10 or tonumber(key)
+            if workspace:select(index) then
                 sync_engine_visibility()
             end
             dirty = true
@@ -715,7 +1365,9 @@ local function run_loop(options, backend, renderer, engine, translator)
             end
             dirty = true
         elseif key == "tab" then
-            workspace:focus_cycle(event.shift and -1 or 1)
+            -- Focus only visits widgets the responsive solver actually placed;
+            -- cycling through hidden ones looked like the key did nothing.
+            workspace:focus_cycle(event.shift and -1 or 1, visible_widgets)
             dirty = true
         elseif key == "up" and workspace.edit_mode then
             workspace:move_focused_direction("above")
@@ -723,18 +1375,36 @@ local function run_loop(options, backend, renderer, engine, translator)
         elseif key == "down" and workspace.edit_mode then
             workspace:move_focused_direction("below")
             dirty = true
+        elseif key == "escape" and workspace.edit_mode then
+            workspace:toggle_edit()
+            dirty = true
         elseif (key == "[" or key == "]") and workspace.edit_mode then
             workspace:adjust_focused_ratio(key == "[" and -0.05 or 0.05)
             dirty = true
         elseif (key == "u" or key == "U") and workspace.edit_mode then
             if key == "U" or event.shift then workspace:redo() else workspace:undo() end
             dirty = true
-        elseif key == "up" and workspace.active == "processes" then
-            process_controller:move(-1)
-            sync_selected_process()
-            dirty = true
-        elseif key == "down" and workspace.active == "processes" then
-            process_controller:move(1)
+        elseif (key == "up" or key == "down" or key == "pageup" or key == "pagedown")
+            and workspace.active ~= "processes"
+            and scroll_focused_widget(
+                (key == "up" or key == "pageup") and -1 or 1,
+                key == "pageup" or key == "pagedown") then
+            -- handled by the focused panel
+        elseif (key == "up" or key == "down" or key == "pageup" or key == "pagedown"
+            or key == "home" or key == "end") and workspace.active == "processes" then
+            -- The decoder always produced these keys and the overlays already
+            -- used them; only the main table ignored everything but up/down,
+            -- so reaching row 2000 meant two thousand key presses.
+            local visible = process_visible_rows()
+            if key == "home" then
+                process_controller:select_index(1)
+            elseif key == "end" then
+                process_controller:select_index(#(models and models.process_table.rows or {}))
+            else
+                local step = (key == "pageup" or key == "pagedown") and math.max(1, visible - 1) or 1
+                if key == "up" or key == "pageup" then step = -step end
+                process_controller:move(step)
+            end
             sync_selected_process()
             dirty = true
         elseif key == "/" and workspace.active == "processes" then
@@ -743,6 +1413,7 @@ local function run_loop(options, backend, renderer, engine, translator)
                 original = query,
                 original_selected_id = process_controller:selected_id(),
                 draft = query,
+                cursor = #query + 1,
             }
             dirty = true
         elseif key == "escape" and workspace.active == "processes"
@@ -755,9 +1426,35 @@ local function run_loop(options, backend, renderer, engine, translator)
             process_controller:cycle_sort()
             sync_selected_process()
             dirty = true
+        elseif key == "O" and workspace.active == "processes" then
+            process_controller:toggle_direction()
+            sync_selected_process()
+            dirty = true
         elseif key == "t" and workspace.active == "processes" then
             process_controller:toggle_tree()
             sync_selected_process()
+            dirty = true
+        elseif key == "p" and workspace.active == "processes" then
+            process_controller:toggle_paths()
+            dirty = true
+        elseif key == "v" then
+            show_virtual = not show_virtual
+            status_message = show_virtual
+                and translated(translator, "status.virtual_shown",
+                    "Showing virtual devices and pseudo filesystems")
+                or translated(translator, "status.virtual_hidden",
+                    "Hiding virtual devices and pseudo filesystems")
+            dirty = true
+        elseif key == "L" then
+            -- `L` is itself a shifted key, so the shift flag is always set and
+            -- cannot select a direction here; the cycle simply wraps.
+            cycle_locale(1)
+        elseif key == "T" then
+            theme_name = UI.Theme.next(theme_name)
+            status_message = translated(translator, "status.theme", "Theme: {name}",
+                { name = theme_name })
+            renderer:invalidate()
+            force = true
             dirty = true
         elseif key == "space" then
             paused = not paused
@@ -769,7 +1466,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             workspace:toggle_edit()
             dirty = true
         elseif key == "?" or key == "f1" then
-            show_overlay(help_lines(translator))
+            show_overlay(help_lines(translator, columns))
             dirty = true
         elseif key == "r" or (event.ctrl and key == "l") then
             sync_engine_visibility()
@@ -778,9 +1475,14 @@ local function run_loop(options, backend, renderer, engine, translator)
             force = true
             dirty = true
         elseif key == "k" and workspace.active == "processes" then
-            confirmation = selected_process()
-            status_message = confirmation and nil
-                or translated(translator, "process.no_selection", "No process selected")
+            local process = selected_process()
+            if process then
+                confirmation = { process = process, index = 1 }
+                refresh_signal_menu()
+                overlay_offset = 0
+            else
+                status_message = translated(translator, "process.no_selection", "No process selected")
+            end
             dirty = true
         elseif key == "enter" and workspace.active == "processes" then
             local process = selected_process()
@@ -796,10 +1498,24 @@ local function run_loop(options, backend, renderer, engine, translator)
         elseif key == "b" then
             inspect_bandwidth()
             dirty = true
-        elseif key == "d" or (key == "enter" and workspace.active == "insights") then
+        elseif key == "d" then
             inspect_sshd()
             dirty = true
         end
+    end
+
+    run_command = function(command)
+        local keys = {
+            tabs = "1", pause = "space", rate = "f", layout = "e", theme = "T",
+            help = "?", quit = "q", search = "/", sort = "o", reverse = "O",
+            language = "L",
+            tree = "t", paths = "p", details = "enter", signal = "k",
+            virtual = "v", smart = "s", bandwidth = "b", sshd = "d",
+        }
+        local key = keys[command]
+        if not key then return false end
+        process_event({ type = "key", key = key, ctrl = false, alt = false, shift = false })
+        return true
     end
 
     while running do
@@ -836,7 +1552,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             models = render_frame()
         end
     end
-    if workspace.dirty and not (options.privilege and options.privilege.via_sudo) then
+    if workspace.dirty and not Privilege.restricts_user_files(options.privilege) then
         local saved, save_error = LayoutStore.save(
             workspace:orders(), layout_status and layout_status.path, workspace:trees())
         if not saved then
@@ -867,7 +1583,7 @@ function M.run(options)
         io.stderr:write("wtop: i18n initialization failed: ", tostring(translation_error), "\n")
         return 1
     end
-    if options.privilege and options.privilege.via_sudo then
+    if Privilege.restricts_user_files(options.privilege) then
         options.locale_report = { state = "skipped", loaded = {}, errors = {} }
     else
         options.locale_report = UserCatalogs.load(translator)

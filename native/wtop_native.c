@@ -13,11 +13,16 @@
 #include <lua.h>
 #include <lauxlib.h>
 
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
 #include <locale.h>
 #include <limits.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <netpacket/packet.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdint.h>
@@ -89,6 +94,29 @@ static void signal_handler(int signal_number) {
     }
 }
 
+/* Async-signal-safe best-effort write.  A plain `(void)write(...)` does not
+   silence GCC's warn_unused_result on the _FORTIFY_SOURCE-enabled toolchains
+   that most distributions ship, and the project builds with -Werror; retrying
+   short writes and EINTR is also simply more correct for terminal restore,
+   which runs from a signal handler and from atexit(). */
+static void write_all_best_effort(int fd, const char *data, size_t length) {
+    size_t offset = 0;
+
+    if (fd < 0) {
+        return;
+    }
+    while (offset < length) {
+        ssize_t written = write(fd, data + offset, length - offset);
+        if (written > 0) {
+            offset += (size_t)written;
+        } else if (written < 0 && errno == EINTR) {
+            continue;
+        } else {
+            return;
+        }
+    }
+}
+
 static void emergency_terminal_restore(void) {
     static const char sequence[] =
         "\033[?1000l\033[?1006l\033[?2004l\033[?7h\033[0m\033[?25h\033[?1049l";
@@ -101,7 +129,7 @@ static void emergency_terminal_restore(void) {
     if (g_terminal.input_flags >= 0) {
         (void)fcntl(g_terminal.input_fd, F_SETFL, g_terminal.input_flags);
     }
-    (void)write(g_terminal.output_fd, sequence, sizeof(sequence) - 1);
+    write_all_best_effort(g_terminal.output_fd, sequence, sizeof(sequence) - 1);
     g_terminal.active = 0;
 }
 
@@ -1416,6 +1444,111 @@ static int l_statvfs(lua_State *L) {
     return 1;
 }
 
+/* getifaddrs(3) is the only portable way to read interface addresses; procfs
+   exposes IPv6 through /proc/net/if_inet6 but has no IPv4 equivalent.  This
+   uses netlink under the hood and never consults NSS, so it cannot block on a
+   name service the way a resolver call could. */
+#define WTOP_MAX_INTERFACE_ADDRESSES 512
+
+static void push_interface_flags(lua_State *L, unsigned int flags) {
+    lua_pushboolean(L, (flags & IFF_UP) != 0);
+    lua_setfield(L, -2, "up");
+    lua_pushboolean(L, (flags & IFF_RUNNING) != 0);
+    lua_setfield(L, -2, "running");
+    lua_pushboolean(L, (flags & IFF_LOOPBACK) != 0);
+    lua_setfield(L, -2, "loopback");
+    lua_pushboolean(L, (flags & IFF_POINTOPOINT) != 0);
+    lua_setfield(L, -2, "point_to_point");
+    lua_pushboolean(L, (flags & IFF_BROADCAST) != 0);
+    lua_setfield(L, -2, "broadcast");
+}
+
+static int push_socket_address(lua_State *L, const struct sockaddr *address,
+                               const char *key) {
+    char text[INET6_ADDRSTRLEN];
+
+    if (address == NULL) return 0;
+    if (address->sa_family == AF_INET) {
+        const struct sockaddr_in *in4 = (const struct sockaddr_in *)(const void *)address;
+        if (inet_ntop(AF_INET, &in4->sin_addr, text, sizeof(text)) == NULL) return 0;
+    } else if (address->sa_family == AF_INET6) {
+        const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *)(const void *)address;
+        if (inet_ntop(AF_INET6, &in6->sin6_addr, text, sizeof(text)) == NULL) return 0;
+    } else {
+        return 0;
+    }
+    lua_pushstring(L, text);
+    lua_setfield(L, -2, key);
+    return 1;
+}
+
+static int l_interface_addresses(lua_State *L) {
+    struct ifaddrs *list = NULL;
+    struct ifaddrs *entry = NULL;
+    int count = 0;
+    int truncated = 0;
+
+    if (getifaddrs(&list) != 0) return push_errno(L, "getifaddrs");
+
+    lua_newtable(L);
+    for (entry = list; entry != NULL; entry = entry->ifa_next) {
+        const struct sockaddr *address = entry->ifa_addr;
+        int family;
+
+        if (entry->ifa_name == NULL || address == NULL) continue;
+        family = address->sa_family;
+        if (family != AF_INET && family != AF_INET6 && family != AF_PACKET) continue;
+        if (count >= WTOP_MAX_INTERFACE_ADDRESSES) {
+            truncated = 1;
+            break;
+        }
+
+        lua_createtable(L, 0, 8);
+        lua_pushstring(L, entry->ifa_name);
+        lua_setfield(L, -2, "interface");
+        push_interface_flags(L, entry->ifa_flags);
+
+        if (family == AF_PACKET) {
+            const struct sockaddr_ll *link = (const struct sockaddr_ll *)(const void *)address;
+            char mac[18];
+            lua_pushstring(L, "link");
+            lua_setfield(L, -2, "family");
+            if (link->sll_halen == 6) {
+                int written = snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x",
+                    link->sll_addr[0], link->sll_addr[1], link->sll_addr[2],
+                    link->sll_addr[3], link->sll_addr[4], link->sll_addr[5]);
+                if (written > 0 && (size_t)written < sizeof(mac)) {
+                    lua_pushstring(L, mac);
+                    lua_setfield(L, -2, "address");
+                }
+            }
+            lua_pushinteger(L, (lua_Integer)link->sll_ifindex);
+            lua_setfield(L, -2, "index");
+        } else {
+            lua_pushstring(L, family == AF_INET ? "ipv4" : "ipv6");
+            lua_setfield(L, -2, "family");
+            if (!push_socket_address(L, address, "address")) {
+                lua_pop(L, 1);
+                continue;
+            }
+            push_socket_address(L, entry->ifa_netmask, "netmask");
+            if ((entry->ifa_flags & IFF_POINTOPOINT) != 0) {
+                push_socket_address(L, entry->ifa_dstaddr, "peer");
+            } else {
+                push_socket_address(L, entry->ifa_broadaddr, "broadcast");
+            }
+        }
+
+        count += 1;
+        lua_rawseti(L, -2, count);
+    }
+    freeifaddrs(list);
+
+    lua_pushboolean(L, truncated);
+    lua_setfield(L, -2, "truncated");
+    return 1;
+}
+
 static int l_system_constants(lua_State *L) {
     long clock_ticks = sysconf(_SC_CLK_TCK);
     long page_size = sysconf(_SC_PAGESIZE);
@@ -1649,6 +1782,7 @@ static const luaL_Reg functions[] = {
     {"path_type", l_path_type},
     {"statvfs", l_statvfs},
     {"system_constants", l_system_constants},
+    {"interface_addresses", l_interface_addresses},
     {"signal_process", l_signal_process},
     {"setpriority", l_setpriority},
     {"uid", l_uid},

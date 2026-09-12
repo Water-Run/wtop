@@ -100,6 +100,7 @@ function Process.new(options)
     fs = options.fs or FS.default,
     proc_path = Common.absolute_path("proc_path", options.proc_path, "/proc"),
     clock_ticks_per_second = clock_ticks_per_second,
+    uptime_path = Common.absolute_path("uptime_path", options.uptime_path, "/proc/uptime"),
     page_size_bytes = page_size_bytes,
     read_status = options.read_status ~= false,
     read_cmdline = options.read_cmdline == true,
@@ -147,6 +148,20 @@ function Process:sample(context, previous)
   local previous_data = Common.previous_data(previous)
   local elapsed_ns = previous_data and Common.elapsed_ns(now, previous.timestamp_ns) or nil
   local previous_by_id = previous_data and previous_data.by_id or {}
+  -- Only needed on the first sample, to turn cumulative ticks into a lifetime
+  -- average; a missing or unreadable /proc/uptime simply leaves the first
+  -- frame without CPU values, exactly as before.
+  local uptime_seconds
+  if not previous_data then
+    local uptime_content = fs:read(self.uptime_path, 4096)
+    if type(uptime_content) == "string" then
+      local seconds = tonumber(uptime_content:match("^%s*([%d%.]+)"))
+      if type(seconds) == "number" and seconds == seconds
+          and seconds ~= math.huge and seconds > 0 then
+        uptime_seconds = seconds
+      end
+    end
+  end
   local clock_ticks_per_second = (context and context.clock_ticks_per_second) or self.clock_ticks_per_second
   local page_size_bytes = (context and context.page_size_bytes) or self.page_size_bytes
   if type(clock_ticks_per_second) ~= "number" or clock_ticks_per_second ~= clock_ticks_per_second
@@ -229,6 +244,21 @@ function Process:sample(context, previous)
               if cpu_percent == cpu_percent and cpu_percent < math.huge then
                 process.cpu_percent = math.max(0, cpu_percent)
                 process.quality = "fresh"
+              end
+            end
+          elseif uptime_seconds and type(process.cpu_ticks) == "number" then
+            -- The very first sample has nothing to difference against, so every
+            -- row used to show "—" and a CPU-descending table was really sorted
+            -- by PID.  Lifetime average CPU over the process's age is a usable
+            -- first frame; it is explicitly marked estimated so it is never
+            -- mistaken for an interval measurement.
+            local age = uptime_seconds - (process.starttime_ticks or 0) / clock_ticks_per_second
+            if age > 0.5 then
+              local cpu_percent = (process.cpu_ticks + 0.0) / clock_ticks_per_second
+                / age * 100
+              if cpu_percent == cpu_percent and cpu_percent < math.huge then
+                process.cpu_percent = math.max(0, cpu_percent)
+                process.quality = "estimated"
               end
             end
           end

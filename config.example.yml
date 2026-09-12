@@ -18,5 +18,6 @@ safe_mode: false
 color: true
 mouse: true
 
-# overview, processes, compute, storage, network, gpu, workloads, insights
+# overview, processes, compute, memory, storage, network, gpu, workloads,
+# system, insights
 active_tab: "overview"

@@ -1,0 +1,174 @@
+# wtop CI.
+#
+# Two classes of defect motivated this file, and both of them reached a release
+# branch because nothing here existed:
+#
+#   * `(void)write(...)` does not silence GCC's warn_unused_result, and the
+#     project builds with -Werror, so `make native` failed outright on a stock
+#     Ubuntu toolchain while passing on the author's machine.  The `distro-gcc`
+#     job builds the native module with the distribution compiler, exactly as a
+#     packager would.
+#   * a unit test asserted the winner of a 30 ms race, so it failed roughly one
+#     run in five.  The `flaky` job repeats the timing-sensitive file enough
+#     times that a one-in-five failure cannot pass unnoticed.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # GitHub runners are healthy by construction and the guard's `full` profile
+  # wants more headroom than a standard runner advertises.  The guard's own
+  # fixture test still exercises its decision logic.
+  WTOP_SKIP_RESOURCE_CHECK: "1"
+
+jobs:
+  # The compile gate a packager hits first.  No project toolchain, no vendored
+  # Lua: just the distribution's compiler against the project's own flags.
+  distro-gcc:
+    name: native module / ${{ matrix.cc }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.cc }}
+      - name: Build the toolchain and native module
+        env:
+          CC: ${{ matrix.cc }}
+        run: make native
+      - name: Reject new warnings under a stricter dialect
+        env:
+          CC: ${{ matrix.cc }}
+        run: |
+          "$CC" -std=c17 -fPIC -Wall -Wextra -Werror \
+            -Wshadow -Wconversion -Wsign-conversion -Wpointer-arith \
+            -O2 -shared -I.tools/lua-5.5.1/include \
+            -o /dev/null native/wtop_native.c
+
+  # Syntax, schema and the full unit suite on the release ABI.
+  test:
+    name: unit + PTY / ubuntu-24.04
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: make check
+      - run: make test-55
+      - run: make test-pty
+
+  # The pure-Lua subset must keep working on the system interpreter, which is
+  # what a distribution package would link against.
+  lua54:
+    name: pure-Lua subset / Lua 5.4
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua 5.4
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lua5.4
+          sudo ln -sf /usr/bin/lua5.4 /usr/local/bin/lua
+      - run: make test-54
+
+  # Timing-sensitive files, repeated.  A test that asserts the winner of a race
+  # passes most of the time; the only way to catch it is to run it often.
+  flaky:
+    name: repeat timing-sensitive tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: make native locales
+      - name: Run the native and live-consistency suites 25 times
+        run: |
+          for attempt in $(seq 1 25); do
+            LUA_PATH='${{ github.workspace }}/src/?.lua;${{ github.workspace }}/src/?/init.lua;;' \
+            LUA_CPATH='${{ github.workspace }}/build/native/?.so;;' \
+              .tools/lua-5.5.1/bin/lua tests/run.lua \
+                tests/unit/test_native.lua \
+                tests/unit/test_live_consistency.lua \
+                tests/unit/test_core_primitives.lua \
+              || { echo "::error::failed on attempt $attempt"; exit 1; }
+          done
+      # The terminal shutdown sequence is written microseconds before exit, so
+      # a harness that stops reading when the child is reaped loses it roughly
+      # one run in twenty.  Repetition is the only way that shows up.
+      - name: Run the PTY matrix 3 times
+        run: |
+          for attempt in 1 2 3; do
+            make test-pty || { echo "::error::PTY failed on attempt $attempt"; exit 1; }
+          done
+
+  # Memory safety for the C layer, over the real collection paths.
+  sanitizers:
+    name: ASan + UBSan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: make toolchain locales
+      - name: Build the native module with sanitizers
+        run: |
+          mkdir -p build/native
+          cc -std=c17 -fPIC -Wall -Wextra -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -shared -I.tools/lua-5.5.1/include \
+            -o build/native/wtop_native.so native/wtop_native.c
+      - name: Exercise collection and the unit suite
+        env:
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          LUA_PATH: ${{ github.workspace }}/src/?.lua;${{ github.workspace }}/src/?/init.lua;;
+          LUA_CPATH: ${{ github.workspace }}/build/native/?.so;;
+        run: |
+          .tools/lua-5.5.1/bin/lua src/wtop.lua --snapshot > /dev/null
+          .tools/lua-5.5.1/bin/lua src/wtop.lua --agent > /dev/null
+          .tools/lua-5.5.1/bin/lua src/wtop.lua --diagnose > /dev/null
+          .tools/lua-5.5.1/bin/lua tests/run.lua tests/unit/test_*.lua
+
+  # Random input against the real terminal loop.  Catches crashes that a
+  # scripted PTY case would never reach.
+  fuzz:
+    name: interactive fuzz
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: make native locales
+      - run: python3 tests/fuzz_tui.py --seeds 40
+
+  # The packaging path end to end, including both luainstaller artifacts and an
+  # isolated LuaRocks installation.
+  package:
+    name: LuaRocks + luainstaller artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # No apt LuaRocks: 24.04 ships 3.8, which cannot target Lua 5.5.  The
+      # Makefile bootstraps the pinned 3.13 against the project's own Lua.
+      - run: make rockspec-check
+      - run: make test-luarocks
+      - run: make test-bundle-dir
+      - run: make test-bundle-file
+      - name: Record artifact checksums
+        run: make checksums && cat dist/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wtop-bundles
+          path: |
+            dist/wtop-onefile
+            dist/SHA256SUMS
+          retention-days: 7

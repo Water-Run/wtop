@@ -189,16 +189,39 @@ local function validate_v2(raw, defaults)
             if not tree then return nil, parse_error end
             local valid, info_or_error = Layout.validate(tree, { allowed_widgets = expected })
             if not valid then return nil, "invalid layout page " .. page .. ": " .. info_or_error end
+            -- Widgets added by a newer wtop have to join a layout that was
+            -- saved without them.  Inserting each one below the previous
+            -- built a right-leaning chain: every insert halved the remaining
+            -- space, so after nine additions the last widget held 1/512 of the
+            -- page and the responsive solver collapsed all of them away.
+            --
+            -- Instead the new widgets become one balanced subtree placed beside
+            -- the saved layout, with a ratio proportional to how many leaves
+            -- each side holds.  The user's arrangement and ratios survive, and
+            -- the additions get a fair share.
             local seen = {}
             for _, id in ipairs(info_or_error.order) do seen[id] = true end
-            local last = info_or_error.order[#info_or_error.order]
+            local additions = {}
             for _, id in ipairs(expected) do
-                if not seen[id] then
-                    tree, parse_error = Layout.insert(tree, last, id, {
-                        position = "below", allowed_widgets = expected,
-                    })
-                    if not tree then return nil, "cannot add widget " .. id .. ": " .. parse_error end
-                    last, seen[id] = id, true
+                if not seen[id] then additions[#additions + 1] = id end
+            end
+            if #additions > 0 then
+                local existing = #info_or_error.order
+                local addition, addition_error = Layout.from_order(additions, {
+                    allowed_widgets = expected,
+                    axis = "horizontal",
+                    alternate_axes = true,
+                })
+                if not addition then
+                    return nil, "cannot add widgets to " .. page .. ": " .. tostring(addition_error)
+                end
+                local ratio = existing / (existing + #additions)
+                -- Layout.split rejects the degenerate ends of the range.
+                ratio = math.max(0.05, math.min(0.95, ratio))
+                tree, parse_error = Layout.split("vertical", ratio, { tree, addition },
+                    { gap = 1, allowed_widgets = expected })
+                if not tree then
+                    return nil, "cannot add widgets to " .. page .. ": " .. tostring(parse_error)
                 end
             end
         end

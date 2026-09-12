@@ -159,6 +159,40 @@ function M.render(values, width, options)
   return text
 end
 
+--- Resolve a series into exactly `width` right-aligned column values.
+-- Columns with no sample are `nil` so a caller can draw a gap rather than a
+-- zero.  When the series carries timestamp metadata the same one-column-per
+-- -interval bucketing the sparkline uses is applied, which keeps a chart and a
+-- sparkline built from one history aligned column for column.
+function M.buckets(values, width, options)
+  if values ~= nil and type(values) ~= "table" then
+    error("sparkline values must be a table", 2)
+  end
+  values, options = values or {}, options or {}
+  if type(width) ~= "number" or not finite(width) or width < 0
+      or width % 1 ~= 0 or width > MAX_WIDTH then
+    error("sparkline width must be an integer in 0..10000", 2)
+  end
+  local result = {}
+  if width == 0 then return result end
+  local length = sequence_length(values)
+  local bucketed = time_buckets(values, length, width)
+  if bucketed then
+    for index = 1, width do
+      local value = bucketed[index]
+      result[index] = finite(value) and value or nil
+    end
+    return result
+  end
+  local first = math.max(1, length - width + 1)
+  local offset = width - (length - first + 1)
+  for index = first, length do
+    local value = values[index]
+    result[offset + index - first + 1] = finite(value) and value or nil
+  end
+  return result
+end
+
 M.glyphs = glyphs
 M.MAX_WIDTH = MAX_WIDTH
 M.MAX_POINTS = MAX_POINTS

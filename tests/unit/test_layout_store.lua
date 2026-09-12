@@ -67,4 +67,57 @@ local _, unsafe_status = LayoutStore.load(defaults, "/tmp/../layout.yml")
 assert(unsafe_status.state == "error" and unsafe_status.reason == "invalid layout path")
 assert(LayoutStore.parse("schema_version: 1\npages: {}\n", nil) == nil)
 
+-- Upgrading wtop must not bury the widgets a release adds.  Appending each one
+-- below the previous built a right-leaning chain where every insert halved the
+-- remaining space, so a layout saved with two widgets kept only those two on
+-- screen and the responsive solver collapsed the other nine away.
+local Responsive = require("wtop.ui.layout.responsive")
+local UI = require("wtop.ui")
+local many = {}
+for index = 1, 11 do many[index] = "widget" .. index end
+local grown_orders, grown_trees = assert(LayoutStore.parse([[
+schema_version: 2
+pages:
+  overview:
+    type: split
+    axis: horizontal
+    ratio_micros: 500000
+    gap: 1
+    children:
+      - type: leaf
+        widget_id: "widget1"
+      - type: leaf
+        widget_id: "widget2"
+]], { overview = many }))
+assert(#grown_orders.overview == 11, "every default widget must reach the order")
+assert(grown_orders.overview[1] == "widget1" and grown_orders.overview[2] == "widget2",
+    "the saved arrangement must keep its position")
+
+-- Build a UI tree from the migrated model and solve it: the point is that the
+-- additions are reachable, not merely present in the tree.
+local function ui_from(model_tree, path)
+  if model_tree.type == "leaf" then
+    return UI.Layout.widget({
+      id = model_tree.widget_id, kind = "metric", priority = 50,
+      min_width = 20, min_height = 4,
+      value_min_width = 14, value_min_height = 2,
+    })
+  end
+  return UI.Layout.split(model_tree.axis == "horizontal" and "row" or "column",
+    model_tree.ratio,
+    ui_from(model_tree.children[1], path .. "1"),
+    ui_from(model_tree.children[2], path .. "2"),
+    { id = "t:" .. path, gap = model_tree.gap, reflow = true })
+end
+local solved = Responsive.solve(ui_from(grown_trees.overview, "r"), 160, 44,
+    { header_height = 1, footer_height = 1 })
+assert(#solved.placements == 11,
+    "all widgets must be placed, got " .. #solved.placements
+      .. " with " .. #solved.hidden .. " hidden")
+local smallest = math.huge
+for _, placement in ipairs(solved.placements) do
+  smallest = math.min(smallest, placement.width * placement.height)
+end
+assert(smallest >= 60, "no widget may be starved into an unusable sliver")
+
 return true

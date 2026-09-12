@@ -42,7 +42,16 @@ local models = ViewModel.build(engine, snapshot({ root, child, other }), transla
     "processes", controller)
 assert(models.process_table.rows[1].id == "2:20")
 assert(models.process_table.rows[1].process.starttime_ticks == 20)
-assert(models.process_table.columns[3].label:find("↓", 1, true))
+-- The sort arrow is drawn by the table widget from the model's sort state
+-- instead of being concatenated into a column label, so the header can stay
+-- in step when the sort changes.
+assert(models.process_table.sort_key == "cpu")
+assert(models.process_table.sort_descending == true)
+local sortable = 0
+for _, column in ipairs(models.process_table.columns) do
+  if column.sort_key then sortable = sortable + 1 end
+end
+assert(sortable >= 6, "process columns must be clickable for sorting")
 assert(models.process_table.status_text:find("排序", 1, true))
 assert(controller:select_id("3:30"))
 
@@ -87,5 +96,46 @@ assert(smart_joined:find("/dev/nvme0n1", 1, true))
 assert(smart_joined:find("▸ /dev/sda", 1, true))
 assert(smart_joined:find("HDD", 1, true))
 assert(smart_joined:find("截断", 1, true))
+
+-- Overlay reflow: a long line must wrap to the overlay width with every
+-- continuation row the same width and indent.  Before this, overlays hard-clipped
+-- and a long command line simply disappeared past the frame.
+local Grid = require("wtop.ui.renderer.grid")
+local Theme = require("wtop.ui.renderer.width") and require("wtop.ui.theme")
+local Width = require("wtop.ui.renderer.width")
+local overlay_grid = Grid.new(60, 20)
+local long_line = "  命令        "
+    .. string.rep("/usr/lib/systemd/systemd --system --deserialize=88 ", 6)
+TUI.draw_overlay(overlay_grid, Theme.new("lua-blue", { truecolor = true }),
+    { "标题", long_line, "尾行" }, 0, { unicode = true })
+local wrapped_rows, saw_continuation = 0, false
+for row = 1, 20 do
+    local text = overlay_grid:row_text(row)
+    assert(Width.display_width(text) <= 60,
+        "overlay row " .. row .. " must not exceed the terminal width")
+    if text:find("deserialize", 1, true) then
+        wrapped_rows = wrapped_rows + 1
+        if text:find("^%s+│%s+%-%-") then saw_continuation = true end
+    end
+end
+assert(wrapped_rows > 1, "a long line must wrap across several overlay rows")
+
+-- A short overlay must not gain a scrollbar, and a long one must.
+local short_grid = Grid.new(40, 20)
+TUI.draw_overlay(short_grid, Theme.new("lua-blue", { truecolor = true }),
+    { "标题", "一行" }, 0, { unicode = true })
+local short_text = table.concat({ short_grid:row_text(9), short_grid:row_text(10) }, "")
+assert(not short_text:find("█", 1, true), "content that fits gets no scrollbar")
+
+local many = { "标题" }
+for index = 1, 60 do many[#many + 1] = "row " .. index end
+local scroll_grid = Grid.new(40, 12)
+TUI.draw_overlay(scroll_grid, Theme.new("lua-blue", { truecolor = true }), many, 0,
+    { unicode = true })
+local scroll_text = {}
+for row = 1, 12 do scroll_text[#scroll_text + 1] = scroll_grid:row_text(row) end
+scroll_text = table.concat(scroll_text, "\n")
+assert(scroll_text:find("█", 1, true), "content that overflows shows a scrollbar")
+assert(scroll_text:find("/60", 1, true), "the overflow counter names the total")
 
 return true

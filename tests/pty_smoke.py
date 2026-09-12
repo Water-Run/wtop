@@ -34,16 +34,22 @@ SIZES = (
 EDIT_MARKERS = (b"LAYOUT", "布局".encode())
 SEARCH_MARKERS = (b"Search", "搜索".encode())
 PROCESS_DETAIL_MARKERS = (b"Process details", "进程详情".encode())
+SIGNAL_MARKERS = (b"SIGTERM", "发送信号".encode())
+HELP_MARKERS = (b"Navigation", "导航".encode())
 LUA_BLUE_BACKGROUND = b"48;2;0;0;128"
+# Key "0" selects the tenth tab, matching the in-app binding.
+PAGE_KEYS = {1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9", 10: "0"}
 PAGE_MARKERS = {
-    1: ("CPU", "内存", "温度"),
-    2: ("进程 - CPU 降序",),
-    3: ("逻辑 CPU", "频率策略"),
-    4: ("块设备", "文件系统与挂载点"),
-    5: ("网络接口", "套接字与连接"),
-    6: ("图形设备", "GPU 进程"),
-    7: ("cgroup v2 工作负载",),
-    8: ("能力与检查器",),
+    1: ("CPU", "内存", "主机"),
+    2: ("进程", "命令"),
+    3: ("逻辑 CPU", "各核心 CPU"),
+    4: ("内存构成", "分页与缺页"),
+    5: ("块设备", "文件系统与挂载点"),
+    6: ("网络接口", "套接字与连接"),
+    7: ("图形设备", "GPU 进程"),
+    8: ("cgroup v2 工作负载",),
+    9: ("主机与操作系统", "内核与启动"),
+    10: ("采集器", "深度检查器"),
 }
 
 
@@ -246,30 +252,66 @@ def _run_session(
         time.sleep(0.75)
     os.set_blocking(master, False)
     output = bytearray()
+    # The interactive exercise now drives thirty-odd bindings at 0.2 s apart,
+    # so the budget scales with the script instead of being a fixed eight
+    # seconds that silently became too small as coverage grew.
     deadline = time.monotonic() + 8.0
     # None is a live TIOCSWINSZ/SIGWINCH transition from narrow-tall to
     # wide-short; byte entries are terminal input.
     if exercise:
+        # Each entry is (input, required_markers).  Gating by what must already
+        # be on screen keeps the script reorderable; the previous version
+        # gated on a hard-coded action index, so inserting a binding silently
+        # made the harness wait for an overlay that had not been opened.
         actions = [
-            b"e", b"\x1b[C", b"]", b"u", b"U", b"e", None,
-            b"2", b"/", "测试".encode(), b"\x7f", b"\r", b"\x1b",
-            b"o", b"t", b"\x1b[B", b"\r", b"\x1b[6~", b"\x1b", b"q",
+            (b"e", None), (b"\x1b[C", EDIT_MARKERS), (b"]", None), (b"u", None),
+            (b"U", None), (b"e", None), (None, None),
+            (b"2", None), (b"/", None), ("测试".encode(), None), (b"\x7f", None),
+            (b"\r", SEARCH_MARKERS), (b"\x1b", None),
+            # sort forward, reverse, tree, full paths, then keyboard paging
+            (b"o", None), (b"O", None), (b"t", None), (b"p", None),
+            (b"\x1b[6~", None), (b"\x1b[H", None), (b"\x1b[F", None),
+            (b"\x1b[B", None),
+            # process details open, scroll and close
+            (b"\r", None), (b"\x1b[6~", PROCESS_DETAIL_MARKERS),
+            (b"\x1b", PROCESS_DETAIL_MARKERS),
+            # the signal menu opens and cancels without sending anything
+            (b"k", None), (b"\x1b[B", SIGNAL_MARKERS), (b"\x1b", SIGNAL_MARKERS),
+            # search line editing: type, move the cursor, kill a word, cancel
+            (b"/", None), ("user:root sy".encode(), None),
+            (b"\x1b[D", None), (b"\x1b[D", None), (b"\x1b[H", None), (b"\x1b[F", None),
+            (b"\x17", None), (b"\x1b", None),
+            # theme cycle, language cycle, virtual-device toggle, help overlay
+            (b"T", None), (b"L", None), (b"L", None), (b"v", None), (b"?", None),
+            (b"\x1b[6~", None), (b"\x1b", None),
+            (b"q", None),
         ]
     elif page_switch:
-        actions = [b"2", b"3", b"6", b"1", b"q"]
+        actions = [(key, None) for key in (b"2", b"3", b"6", b"1", b"q")]
     elif final_page is not None:
         assert final_page in PAGE_MARKERS
-        actions = [str(final_page).encode("ascii"), b"q"]
+        actions = [(PAGE_KEYS[final_page].encode("ascii"), None), (b"q", None)]
     elif frequency_click:
         click_x = max(1, columns - 2)
         actions = [
-            f"\x1b[<0;{click_x};1M".encode("ascii"),
-            f"\x1b[<0;{click_x};1m".encode("ascii"),
-            b"q",
+            (f"\x1b[<0;{click_x};1M".encode("ascii"), None),
+            (f"\x1b[<0;{click_x};1m".encode("ascii"), None),
+            (b"q", None),
         ]
     else:
-        actions = [b"q"]
+        actions = [(b"q", None)]
     action_delay = 0.2 if exercise or page_switch or final_page is not None or frequency_click else 0.0
+    # A bare Escape is a prefix, not a key: if the next byte reaches the child
+    # in the same read, the decoder correctly reports Alt+<key> instead of
+    # Escape followed by that key, exactly as xterm does.  Under load the child
+    # can be descheduled for longer than the normal gap, batching the two.  So
+    # an Escape gets its own, much wider gap rather than relying on the
+    # scheduler to keep the writes apart.
+    escape_delay = max(action_delay * 4, 0.6)
+    budget = sum(
+        escape_delay if action == b"\x1b" else action_delay for action, _ in actions
+    )
+    deadline = max(deadline, time.monotonic() + 8.0 + budget * 2.0)
     action_index = 0
     next_action_at = None
     status = None
@@ -297,19 +339,13 @@ def _run_session(
                 and action_index < len(actions)
                 and now >= next_action_at
                 and (
-                    not exercise
-                    or action_index != 1
-                    or any(marker in output for marker in EDIT_MARKERS)
-                )
-                and (
-                    not exercise
-                    or action_index != 17
-                    # Do not close a newly opened overlay before a slower
-                    # collection/render turn has made it observable.
-                    or any(marker in output for marker in PROCESS_DETAIL_MARKERS)
+                    # Never act on an overlay before a slower collection or
+                    # render turn has actually put it on screen.
+                    actions[action_index][1] is None
+                    or any(marker in output for marker in actions[action_index][1])
                 )
             ):
-                action = actions[action_index]
+                action = actions[action_index][0]
                 if action is None:
                     fcntl.ioctl(
                         master,
@@ -321,7 +357,9 @@ def _run_session(
                     os.write(master, action)
                 action_index += 1
                 # Separate edit, move, finish and quit across poll/render turns.
-                next_action_at = now + action_delay
+                next_action_at = now + (
+                    escape_delay if action == b"\x1b" else action_delay
+                )
             waited, wait_status = os.waitpid(pid, os.WNOHANG)
             if waited == pid:
                 status = wait_status
@@ -334,6 +372,22 @@ def _run_session(
                 f"wtop PTY session {columns}x{rows} timed out at action "
                 f"{action_index}/{len(actions)}\n{tail}"
             )
+        # The child has exited, but the last thing it wrote - the cursor and
+        # alternate-screen restore - may still be sitting in the pty buffer.
+        # Reaping the child says nothing about the reader having seen it, so
+        # drain to EOF rather than racing the kernel for the final bytes.
+        drain_deadline = time.monotonic() + 2.0
+        while time.monotonic() < drain_deadline:
+            ready, _, _ = select.select([master], [], [], 0.05)
+            if not ready:
+                break
+            try:
+                chunk = os.read(master, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            output.extend(chunk)
     finally:
         os.close(master)
 
@@ -354,8 +408,8 @@ def _run_session(
             f"{max(addressed_rows or {0})} under PTY backpressure"
         )
     if not exercise:
-        forbidden = ("进程 - CPU 降序", "逻辑 CPU", "GPU 进程", "图形设备") \
-            if page_switch else ()
+        # Page-unique widget text: none of it may survive a switch away.
+        forbidden = ("排序：", "逻辑 CPU", "套接字与连接") if page_switch else ()
         _assert_complete_screen(bytes(output), columns, rows, forbidden)
         if page_switch:
             final_text = VirtualScreen(columns, rows)
@@ -364,7 +418,11 @@ def _run_session(
             # Brackets are the active-tab cue in monochrome only. Assert
             # overview-specific cards so this check works in every colour
             # depth and cannot pass merely because the tab label is visible.
-            assert all(marker in final_screen for marker in ("CPU", "内存", "温度")), (
+            # Cards that are always present on overview.  The temperature and
+            # GPU cards are deliberately not listed: a host without hwmon or a
+            # DRM device now hides them rather than showing an empty frame, so
+            # asserting them would make the test host-dependent.
+            assert all(marker in final_screen for marker in ("CPU", "内存", "主机")), (
                 "page-switch sequence did not end on overview"
             )
         if final_page is not None:
@@ -442,7 +500,11 @@ def run_ascii_profile() -> bytes:
     assert all(value < 128 for value in output), (
         "ASCII terminal profile received non-ASCII bytes"
     )
-    assert b";2;" not in output and not re.search(rb"(?:38|48);5;\d+", output), (
+    # As above, the truecolour form must be matched precisely so the SGR dim
+    # attribute is not mistaken for a colour.
+    assert not re.search(rb"(?:38|48);2;\d+;\d+;\d+", output) and not re.search(
+        rb"(?:38|48);5;\d+", output
+    ), (
         "no-colour profile emitted coloured SGR"
     )
     return output
@@ -481,7 +543,7 @@ def main() -> None:
         print(f"PTY {columns}x{rows}: ok")
     captures.append(run_session(200, 45, exercise=False, page_switch=True))
     print("PTY 200x45 page-switch final screen: ok")
-    for page in range(2, 9):
+    for page in range(2, 11):
         captures.append(run_session(180, 45, exercise=False, final_page=page))
         print(f"PTY 180x45 page {page} final screen: ok")
 
@@ -507,7 +569,12 @@ def main() -> None:
         cli_options=("--theme", "water-light", "--lang", "en-US"),
     )
     assert re.search(rb"(?:38|48);5;\d+", colour256), "256-colour profile emitted no indexed colours"
-    assert b";2;" not in colour256, "256-colour profile leaked truecolour SGR"
+    # Match the truecolour form specifically.  A bare ";2;" also matches the
+    # SGR *dim* attribute, so the loose pattern failed the moment any widget
+    # rendered dimmed text.
+    assert not re.search(rb"(?:38|48);2;\d+;\d+;\d+", colour256), (
+        "256-colour profile leaked truecolour SGR"
+    )
     print("PTY 100x30 256-colour/light theme: ok")
 
     colour16 = run_session(
@@ -517,9 +584,9 @@ def main() -> None:
         terminal_environment={"TERM": "xterm", "COLORTERM": None},
         cli_options=("--theme", "colorblind", "--lang", "en-US"),
     )
-    assert b";2;" not in colour16 and not re.search(rb"(?:38|48);5;\d+", colour16), (
-        "16-colour profile emitted a higher colour depth"
-    )
+    assert not re.search(rb"(?:38|48);2;\d+;\d+;\d+", colour16) and not re.search(
+        rb"(?:38|48);5;\d+", colour16
+    ), "16-colour profile emitted a higher colour depth"
     print("PTY 100x30 16-colour/colorblind theme: ok")
 
     high_contrast = run_session(

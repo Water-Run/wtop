@@ -30,6 +30,7 @@ function Network.new(options)
       "ipv6_route_path", options.ipv6_route_path, "/proc/net/ipv6_route"),
     sys_class_path = Common.absolute_path(
       "sys_class_path", options.sys_class_path, "/sys/class/net"),
+    native = options.native,
     _method_style = true,
   }, Network)
 end
@@ -140,6 +141,47 @@ local function default_routes(fs, ipv4_path, ipv6_path)
   return result, partial
 end
 
+
+-- getifaddrs(3) is the only reliable source for IPv4 addresses; procfs exposes
+-- IPv6 through /proc/net/if_inet6 but has no IPv4 equivalent short of an ioctl.
+-- A missing or failing native module simply leaves interfaces without
+-- addresses rather than degrading the rest of the sample.
+local MAX_ADDRESSES_PER_INTERFACE = 16
+
+local function interface_addresses(native)
+  if type(native) ~= "table" or type(native.interface_addresses) ~= "function" then
+    return nil, "native_unavailable"
+  end
+  local ok, entries = pcall(native.interface_addresses)
+  if not ok or type(entries) ~= "table" then
+    return nil, "interface_addresses_failed"
+  end
+  local by_name = {}
+  for _, entry in ipairs(entries) do
+    if type(entry) == "table" and type(entry.interface) == "string"
+        and type(entry.address) == "string" and entry.family ~= "link" then
+      local bucket = by_name[entry.interface]
+      if not bucket then
+        bucket = {}
+        by_name[entry.interface] = bucket
+      end
+      if #bucket < MAX_ADDRESSES_PER_INTERFACE then
+        bucket[#bucket + 1] = {
+          family = entry.family,
+          address = Common.safe_text(entry.address, 64),
+          netmask = type(entry.netmask) == "string"
+            and Common.safe_text(entry.netmask, 64) or nil,
+          broadcast = type(entry.broadcast) == "string"
+            and Common.safe_text(entry.broadcast, 64) or nil,
+          peer = type(entry.peer) == "string"
+            and Common.safe_text(entry.peer, 64) or nil,
+        }
+      end
+    end
+  end
+  return by_name, entries.truncated == true and "truncated" or nil
+end
+
 function Network:sample(context, previous)
   local started = Common.now_ns(context)
   local fs = Common.fs(context, self.fs)
@@ -165,6 +207,8 @@ function Network:sample(context, previous)
   local any_gap = false
   local routes, routes_partial = default_routes(fs, self.route_path, self.ipv6_route_path)
   local has_default_route = next(routes) ~= nil
+  local addresses_by_name, addresses_note = interface_addresses(
+    self.native or (context and context.native))
 
   for _, current in ipairs(raw) do
     raw_by_name[current.name] = current
@@ -200,6 +244,7 @@ function Network:sample(context, previous)
       carrier = fs:read_number(base .. "/carrier"),
       duplex = optional_text(fs, base .. "/duplex"),
       address = optional_text(fs, base .. "/address"),
+      addresses = addresses_by_name and addresses_by_name[current.name] or nil,
       default_route = routes[current.name],
       aggregate = aggregate,
       counters = current,
@@ -234,6 +279,7 @@ function Network:sample(context, previous)
   end)
   return Common.result("ok", now, {
     interfaces = interfaces,
+    addresses_status = addresses_by_name and (addresses_note or "ok") or addresses_note,
     default_routes = routes,
     raw_by_name = raw_by_name,
     raw_by_ifindex = raw_by_ifindex,

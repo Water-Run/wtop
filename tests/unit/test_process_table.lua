@@ -194,4 +194,86 @@ assert(bounded:status().matched == 20, "search must run before the row cap")
 bounded:set_query("pid-does-not-exist")
 assert(#bounded:rows() == 0 and bounded:status().matched == 0)
 
+
+-- Query grammar.  A bare word must keep behaving exactly as it did, while
+-- field, negation and pattern terms narrow the set further.  Every term has to
+-- match, so adding a word can only ever shrink the result.
+local function query_names(query, records)
+    local controller = Controller.new({})
+    controller:update(records)
+    controller:set_query(query)
+    local names = {}
+    for _, row in ipairs(controller:rows()) do names[#names + 1] = row.name end
+    table.sort(names)
+    return table.concat(names, ","), controller:status()
+end
+
+local query_set = {
+    { id = "1:1", pid = 1, name = "systemd", command = "/usr/lib/systemd/systemd",
+      user = "root", state = "S", starttime_ticks = 1 },
+    { id = "2:2", pid = 42, name = "bash", command = "-bash",
+      user = "waterrun", state = "S", starttime_ticks = 2 },
+    { id = "3:3", pid = 99, name = "kworker", command = "kworker/0:1",
+      user = "root", state = "D", starttime_ticks = 3 },
+}
+
+local function expect_query(query, expected, label)
+    local actual = query_names(query, query_set)
+    if actual ~= expected then
+        error(string.format("%s: query %q expected [%s], got [%s]",
+            label, query, expected, actual), 2)
+    end
+end
+
+expect_query("", "bash,kworker,systemd", "an empty query matches everything")
+expect_query("root", "kworker,systemd", "a bare term searches every field")
+expect_query("user:root", "kworker,systemd", "a field term restricts the search")
+expect_query("state:D", "kworker", "state is searchable")
+expect_query("pid:42", "bash", "pid is searchable")
+expect_query("!root", "bash", "a negated term excludes")
+expect_query("root !kworker", "systemd", "terms combine with AND")
+expect_query("user:root state:S", "systemd", "field terms combine")
+expect_query("/^kw/", "kworker", "a Lua pattern matches")
+expect_query("/systemd$/", "systemd", "an anchored pattern matches")
+expect_query("nothingmatches", "", "an unmatched term yields nothing")
+-- A malformed pattern must narrow rather than raise inside the render loop.
+expect_query("/[unclosed", "", "a malformed pattern is demoted to a literal")
+expect_query("cmd:/usr/lib", "systemd", "a field term may contain slashes")
+
+-- Highlights expose the plain substrings so a table can show why a row matched;
+-- negated and pattern terms are not highlightable.
+local _, highlight_status = query_names("root !kworker /^sys/", query_set)
+assert(#highlight_status.query_highlights == 1,
+    "only positive literal terms are highlightable")
+assert(highlight_status.query_highlights[1] == "root", "the literal term is reported")
+
+-- Sorting must cover every declared key in both directions without error.
+local sort_controller = Controller.new({})
+sort_controller:update(query_set)
+for _, key in ipairs(Controller.sort_order) do
+    assert(sort_controller:set_sort(key), "sort key " .. key .. " must be accepted")
+    assert(#sort_controller:rows() == 3, "sorting must not drop rows: " .. key)
+    local descending = sort_controller:status().descending
+    assert(sort_controller:toggle_direction() ~= descending,
+        "toggle_direction must flip " .. key)
+    assert(#sort_controller:rows() == 3, "reversing must not drop rows: " .. key)
+end
+
+-- select_index addresses rows by position for mouse clicks and Home/End.
+assert(sort_controller:select_index(2))
+assert(sort_controller:status().selected_index == 2)
+assert(sort_controller:select_index(999))
+assert(sort_controller:status().selected_index == 3, "an out-of-range index clamps")
+assert(not sort_controller:select_index("nope"), "a non-numeric index is rejected")
+
+-- The path toggle changes what the view renders, so consumers keyed on the
+-- revision have to be told to rebuild.
+local paths_controller = Controller.new({})
+paths_controller:update(query_set)
+local revision = paths_controller:status().revision
+assert(paths_controller:toggle_paths() == true)
+assert(paths_controller:status().show_paths == true)
+assert(paths_controller:status().revision ~= revision,
+    "toggling paths must bump the revision")
+
 return true

@@ -27,7 +27,11 @@ function M.render(grid, area, state, context)
   grid:fill(area, " ", base)
 
   local brand = tostring(state.brand or Util.t(context, "app.name", "wtop"))
-  brand = Util.truncate(grid, brand, math.min(area.width, 12))
+  -- The brand carries the host name, which is the single most useful piece of
+  -- context on a screenshot. Twelve columns truncated it on almost every host,
+  -- so it now scales with the terminal and yields first on narrow ones.
+  brand = Util.truncate(grid, brand,
+    math.max(4, math.min(area.width - 8, math.floor(area.width * 0.22))))
   grid:write(area.x, area.y, brand, Util.style(context, "accent.primary", "surface.raised", {bold = true}), area.width)
   local brand_width = Width.display_width(brand, grid.width_options)
 

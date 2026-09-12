@@ -8,6 +8,9 @@ local builtins = {
   timeseries = require("wtop.ui.widgets.metric"),
   table = require("wtop.ui.widgets.table"),
   process_table = require("wtop.ui.widgets.table"),
+  key_value = require("wtop.ui.widgets.key_value"),
+  bars = require("wtop.ui.widgets.bars"),
+  segments = require("wtop.ui.widgets.segments"),
 }
 
 function Registry.new(extra)
@@ -39,6 +42,10 @@ end
 
 Registry.builtins = builtins
 Registry.Sparkline = require("wtop.ui.widgets.sparkline")
+Registry.Chart = require("wtop.ui.widgets.chart")
+Registry.KeyValue = require("wtop.ui.widgets.key_value")
+Registry.Bars = require("wtop.ui.widgets.bars")
+Registry.Segments = require("wtop.ui.widgets.segments")
 Registry.Panel = require("wtop.ui.widgets.panel")
 
 return Registry

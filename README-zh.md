@@ -12,14 +12,21 @@
 
 ## 核心能力
 
-- 用响应式八标签 TUI 展示概览、进程、计算、存储、网络、GPU、工作负载和洞察。
-- 直接采集 Linux 的 CPU 身份/拓扑/缓存/核心类型、内存、PSI、存储、网络、
-  进程、CPU 频率、hwmon 传感器、powercap、cgroup v2 和 DRM/PCI/fdinfo GPU 数据。
-- 提供进程搜索、排序、树形视图、详情，以及带确认和 PID 重用保护的
-  `SIGTERM` 动作。
+- 用响应式十标签 TUI 展示概览、进程、计算、内存、存储、网络、GPU、
+  工作负载、系统和洞察。
+- 直接采集 Linux 的 CPU 身份/拓扑/缓存/核心类型、内存构成与分页计数、PSI、
+  带型号/容量/介质/调度器的块设备、带 inode 使用率的挂载点、带 IPv4/IPv6
+  地址的网络接口、套接字、进程、CPU 频率、hwmon 传感器、powercap、
+  cgroup v2、DRM/PCI/fdinfo GPU 数据，以及主机/内核/发行版/固件身份和电源；
+  默认路径不依赖任何外部程序。
+- 提供进程搜索、十一种可双向排序的列、树形视图、已解析的用户名、
+  TIME+/虚拟内存/NI/线程数列、详情，以及带确认和 PID 重用保护的信号菜单
+  （`SIGTERM`、`SIGKILL`、`SIGSTOP`、`SIGCONT`）。
 - 主机工具和权限可用时，提供按需 SMART/NVMe、RAM bandwidth 和 sshd 检查。
-- 默认采用 Lua 蓝配色，并支持差分渲染、鼠标、终端色彩降级、CJK 文本、
-  国际化和持久化布局。
+- 默认采用 Lua 蓝配色，并支持差分渲染、多行图表、各核心条形阵列、
+  按数值严重程度着色、单元格内嵌条、鼠标选行与点击列头排序、运行时切换主题、
+  终端色彩降级、按显示宽度对齐的 CJK 文本、十种完整翻译且可运行时切换的界面语言，
+  以及持久化布局。
 - 可输出完整 JSON 快照（`--snapshot`）、紧凑自动化上下文（`--agent`）和
   能力报告（`--diagnose`）。
 - 限制高成本采集，并明确报告 unavailable、denied、partial、truncated 和
@@ -53,7 +60,11 @@ make test           # Lua 5.5 单元/fixture 测试与 PTY matrix
 make test-all       # 两种 Lua ABI、LuaRocks 与两种 bundle 形态
 make test-54        # 使用系统 Lua 5.4 验证纯 Lua 兼容子集
 make test-luarocks  # 隔离安装与 CLI smoke test
+make test-fuzz      # 向真实终端循环投放随机输入
 ```
+
+每次推送都会在 CI 中于 Ubuntu 22.04 与 24.04 上用 gcc 和 clang 跑同样的目标，
+另外还包括 sanitizer、fuzzer 与两种 bundle 形态。
 
 交互模式要求 stdin 和 stdout 都是 TTY。脚本请使用 `wtop --snapshot` 或
 `wtop --agent`；全部选项见 `wtop --help`，TUI 内按 `?`/`F1` 查看快捷键，

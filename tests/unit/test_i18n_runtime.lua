@@ -58,12 +58,52 @@ local traditional = assert(I18n.new({ locale = "zh-TW" }))
 equal(traditional:t("tabs.overview"), "總覽", "preview translation")
 equal(traditional:t("actions.cancel"), "取消", "complete preview translation")
 equal(traditional:t("widgets.cpu_identity"), "CPU 識別資訊", "new preview translation")
-equal(traditional:t("compute.cpu_family", { value = "x" }), "标识：x",
-  "new preview message fallback")
+equal(traditional:t("system.hostname"), "主機名稱", "newly translated preview message")
 local diagnostics = traditional:diagnostics()
 equal(table.concat(diagnostics.fallback_chain, ","), "zh-TW,zh-CN,en-US", "fallback chain")
 equal(diagnostics.status, "preview", "diagnostic status")
-equal(diagnostics.missing_messages, 5, "preview catalog coverage")
+
+-- Every shipped catalog now carries every message, so no shipped locale can
+-- demonstrate the fallback chain any more.  Prove it against a deliberately
+-- partial catalog instead: that tests the mechanism rather than the current
+-- state of the translations.
+local partial_registry = {
+  default = "en-US",
+  catalogs = {
+    ["en-US"] = {
+      _meta = { locale = "en-US", name = "English", direction = "ltr",
+        plural_rule = "en", catalog_version = 1, fallback = {} },
+      messages = { ["app.name"] = "wtop", ["tabs.overview"] = "Overview",
+        ["actions.cancel"] = "Cancel" },
+    },
+    ["zh-CN"] = {
+      _meta = { locale = "zh-CN", name = "简体中文", direction = "ltr",
+        plural_rule = "zh", catalog_version = 1, fallback = { "en-US" } },
+      messages = { ["app.name"] = "wtop", ["tabs.overview"] = "概览" },
+    },
+    ["zh-TW"] = {
+      _meta = { locale = "zh-TW", name = "繁體中文", direction = "ltr",
+        plural_rule = "zh", catalog_version = 1, fallback = { "zh-CN", "en-US" } },
+      messages = { ["app.name"] = "wtop" },
+    },
+  },
+  statuses = { ["en-US"] = "stable", ["zh-CN"] = "preview", ["zh-TW"] = "preview" },
+}
+local partial = assert(I18n.new({ locale = "zh-TW", registry = partial_registry }))
+equal(partial:t("app.name"), "wtop", "own catalog wins")
+equal(partial:t("tabs.overview"), "概览", "missing message falls back one step")
+equal(partial:t("actions.cancel"), "Cancel", "missing message falls back to the root")
+local partial_diagnostics = partial:diagnostics()
+assert(partial_diagnostics.missing_messages > 0,
+  "an incomplete catalog must report its coverage gap")
+
+-- And the shipped catalogs must stay complete: a new UI string added without a
+-- translation should be caught here, not by a user seeing English mid-sentence.
+for _, locale in ipairs(assert(I18n.available())) do
+  local catalog = assert(I18n.new({ locale = locale }))
+  equal(catalog:diagnostics().missing_messages, 0,
+    "shipped catalog " .. locale .. " must translate every message")
+end
 
 local regional_fallback = assert(I18n.new({ locale = "fr-CA" }))
 equal(regional_fallback:locale(), "fr-FR", "language alias fallback")

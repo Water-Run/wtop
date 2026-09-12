@@ -35,7 +35,7 @@ src/wtop.lua             CLI entry point
 src/wtop/
   application.lua       configuration parsing and snapshot/TUI assembly
   tui.lua               event loop, keys, overlays, and runtime state
-  workspace.lua         eight fixed pages, widgets, and layout editing
+  workspace.lua         ten fixed pages, widgets, and layout editing
   view_model.lua        Snapshot-to-widget-model conversion
   engine.lua            collector scheduling, snapshot merging, and history
   core/                 clocks, scheduler, Runner, JSON, and other infrastructure
@@ -62,7 +62,7 @@ tools/                   locale, toolchain, build, and checking tools
 tests/                   unit/fixture and real-PTY smoke tests
 ```
 
-The eight fixed pages, in order, are `overview`, `processes`, `compute`, `storage`, `network`, `gpu`, `workloads`, and `insights`. Pages and widgets cannot currently be created or deleted.
+The ten fixed pages, in order, are `overview`, `processes`, `compute`, `memory`, `storage`, `network`, `gpu`, `workloads`, `system`, and `insights`. Pages and widgets cannot currently be created or deleted.
 
 ## 3. Runtime
 
@@ -195,7 +195,7 @@ The program runs unprivileged by default and never installs a resident privilege
 
 ## 10. Current Test Boundary
 
-- The current 41 Lua unit/fixture test files cover platform gates, procfs, sysfs, connections, cgroup v2, DRM fdinfo, GPU frequency/hwmon joins, heterogeneous CPU inventory, powercap, SMART, PMU, layouts, i18n, input, renderer, Runner isolation, resource preflight, privilege handling, pidfd actions, JSON boundaries, and export privacy.
+- The current 47 Lua unit/fixture test files cover platform gates, procfs, sysfs, connections, cgroup v2, DRM fdinfo, GPU frequency/hwmon joins, heterogeneous CPU inventory, powercap, SMART, PMU, layouts, i18n, input, renderer, Runner isolation, resource preflight, privilege handling, pidfd actions, JSON boundaries, export privacy, hardware-absent driver trees, offline inspector replay, process-collection scale limits, and the sudo file-access policy.
 - PTY smoke tests cover `40×10`, `60×20`, `80×24/25`, `80×50`, `160×24`, `200×22`, `180×45`, resize, CJK, key paths, alternate-screen restoration, and layout persistence.
 - onedir/onefile have post-build CLI, snapshot, and PTY targets.
 

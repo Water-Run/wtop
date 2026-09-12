@@ -15,6 +15,8 @@ local RESOURCE_KEYS = {
   power = true,
   mounts = true,
   workloads = true,
+  system = true,
+  power_supplies = true,
 }
 
 local ID_TO_RESOURCE = {
@@ -26,12 +28,15 @@ local ID_TO_RESOURCE = {
   powercap = "power",
   cgroup = "workloads",
   psi = "pressure",
+  system_info = "system",
+  power_supply = "power_supplies",
 }
 
 local VALID_STATUS = { ok = true, unavailable = true, denied = true, error = true }
 local VALID_QUALITY = {
   fresh = true, stale = true, gap = true, estimated = true, unavailable = true,
   denied = true, error = true, partial = true, reset = true, measured = true,
+  truncated = true,
 }
 
 local function nonnegative_integer(value)
@@ -76,6 +81,8 @@ function Snapshot.new(sequence, timestamp_ns)
     power = {},
     mounts = {},
     workloads = {},
+    system = {},
+    power_supplies = {},
     quality = {},
     collectors = {},
   }

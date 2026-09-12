@@ -34,7 +34,20 @@ Use the following command when raw detail is required:
 wtop --snapshot
 ```
 
-It returns `dev.waterrun.wtop.snapshot/v1`, with additional collector fields and longer lists. Call `--agent` first, then obtain a full snapshot only when an anomaly needs deeper investigation, to avoid consuming context unnecessarily.
+It returns `dev.waterrun.wtop.snapshot/v1`, with additional collector fields
+and longer lists. Beyond the resources `--agent` summarises, the snapshot also
+carries `system` (host name, kernel, distribution, firmware, virtualization,
+security modules, kernel limits and counters, Swap devices, time zone) and
+`power_supplies` (batteries with charge, health against design capacity and
+remaining runtime, plus mains adapters). Network interfaces additionally carry
+their IPv4/IPv6 `addresses` and raw `counters`.
+
+`system.firmware` deliberately omits serial numbers, asset tags and the product
+UUID: the collector never reads them, so a snapshot pasted into a bug report
+does not leak more host identity than the operator expects.
+
+Call `--agent` first, then obtain a full snapshot only when an anomaly needs
+deeper investigation, to avoid consuming context unnecessarily.
 
 ## Privacy and Invocation Contract
 

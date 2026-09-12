@@ -103,6 +103,33 @@ function Memory:sample(context)
     swap_used_bytes = swap_total - swap_free,
     zswap_bytes = info.Zswap or info.zswap,
     zswapped_bytes = info.Zswapped or info.zswapped,
+    shared_bytes = info.Shmem or 0,
+    mapped_bytes = info.Mapped,
+    page_tables_bytes = info.PageTables,
+    kernel_stack_bytes = info.KernelStack,
+    committed_bytes = info.Committed_AS,
+    commit_limit_bytes = info.CommitLimit,
+    hugepages_total_bytes = info.Hugetlb,
+    active_bytes = info.Active,
+    inactive_bytes = info.Inactive,
+    -- Ordered, non-overlapping slices that sum to MemTotal.  A stacked bar
+    -- needs a partition, not the overlapping figures meminfo reports, so the
+    -- residual "used" is computed last and never allowed to go negative.
+    segments = (function()
+      local total = info.MemTotal or 0
+      local buffers = info.Buffers or 0
+      local shared = info.Shmem or 0
+      local free = info.MemFree or 0
+      local reclaimable = math.max(0, cache)
+      local used = math.max(0, total - free - buffers - reclaimable - shared)
+      return {
+        { id = "used", bytes = used },
+        { id = "shared", bytes = shared },
+        { id = "buffers", bytes = buffers },
+        { id = "cache", bytes = reclaimable },
+        { id = "free", bytes = free },
+      }
+    end)(),
     available_estimated = estimated_available,
     vmstat = vmstat,
     vmstat_error = vmstat_parse_error or (vmstat_read_error and vmstat_read_error.message),

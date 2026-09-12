@@ -12,17 +12,25 @@ with PUC Lua 5.5.1 and a small C17 native module; it does not use LuaJIT.
 
 ## What it does
 
-- Presents overview, processes, compute, storage, network, GPU, workloads, and
-  insights in a responsive eight-tab TUI.
-- Collects CPU identity/topology/cache/core types, memory, PSI, storage,
-  network, processes, CPU frequency, hwmon sensors, powercap, cgroup v2, and
-  DRM/PCI/fdinfo GPU data directly from Linux.
-- Provides process search, sorting, trees, details, and a confirmation-gated
-  `SIGTERM` action protected against PID reuse.
+- Presents overview, processes, compute, memory, storage, network, GPU,
+  workloads, system, and insights in a responsive ten-tab TUI.
+- Collects CPU identity/topology/cache/core types, memory composition and
+  paging counters, PSI, block devices with model/size/scheduler, mounts with
+  inode usage, network interfaces with IPv4/IPv6 addresses, sockets, processes,
+  CPU frequency, hwmon sensors, powercap, cgroup v2, DRM/PCI/fdinfo GPU data,
+  host/kernel/distribution/firmware identity, and power supplies — all directly
+  from Linux, with no external helper on the default path.
+- Provides process search, eleven sort columns in both directions, trees,
+  resolved user names, TIME+/VIRT/NI/thread columns, details, and a
+  confirmation-gated signal menu (`SIGTERM`, `SIGKILL`, `SIGSTOP`, `SIGCONT`)
+  protected against PID reuse.
 - Offers on-demand SMART/NVMe, RAM-bandwidth, and sshd inspection when optional
   host tools and permissions are available.
-- Uses a Lua-blue default palette with differential rendering, mouse input,
-  terminal color fallbacks, CJK-aware text, i18n, and persistent layouts.
+- Uses a Lua-blue default palette with differential rendering, multi-row
+  charts, per-core bar arrays, severity colouring, in-cell bars, mouse
+  selection and click-to-sort, runtime theme switching, terminal colour
+  fallbacks, display-width-correct CJK text, ten fully translated interface
+  languages switchable at runtime, and persistent layouts.
 - Exports complete JSON snapshots (`--snapshot`), compact automation context
   (`--agent`), and capability reports (`--diagnose`).
 - Bounds expensive collection and reports unavailable, denied, partial,
@@ -58,7 +66,11 @@ make test           # Lua 5.5 unit/fixture tests and PTY matrix
 make test-all       # both Lua ABIs, LuaRocks, and both bundle forms
 make test-54        # pure-Lua compatibility subset on system Lua 5.4
 make test-luarocks  # isolated installation and CLI smoke test
+make test-fuzz      # randomized input against the real terminal loop
 ```
+
+Every push runs the same targets in CI across Ubuntu 22.04 and 24.04 with
+both gcc and clang, plus sanitizers, the fuzzer, and both bundle forms.
 
 Interactive mode requires stdin and stdout to be TTYs. For scripts, use
 `wtop --snapshot` or `wtop --agent`. Run `wtop --help` for all options;

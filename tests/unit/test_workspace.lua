@@ -6,7 +6,7 @@ local workspace = Workspace.new({ active_tab = "overview" })
 assert(workspace.active == "overview")
 workspace:cycle(1)
 assert(workspace.active == "processes")
-assert(workspace:select(8) and workspace.active == "insights")
+assert(workspace:select(10) and workspace.active == "insights")
 assert(not workspace:select("missing"))
 workspace:select("overview")
 
@@ -54,9 +54,13 @@ for _, tab in ipairs({ "overview", "processes", "compute", "storage", "network",
         == #compact:orders()[tab], "responsive accounting regressed on " .. tab)
 end
 
+-- The column count is content-driven rather than dictated by the mode: the
+-- solver now prefers whichever axis lets its children reach their full form,
+-- which is what stops a 120-column terminal from cutting four tables down to
+-- three visible columns each.  What a mode still fixes is the upper bound.
 local responsive_cases = {
-    { 80, 50, "narrow-tall", 1 },
-    { 120, 40, "standard", 2 },
+    { 80, 50, "narrow-tall", 2 },
+    { 120, 40, "standard", 4 },
     { 160, 24, "wide-short", 4 },
     { 180, 45, "wide-tall", 3 },
 }
@@ -68,17 +72,30 @@ for _, case in ipairs(responsive_cases) do
     for _, placement in ipairs(layout.placements) do x_positions[placement.x] = true end
     local column_count = 0
     for _ in pairs(x_positions) do column_count = column_count + 1 end
-    assert(column_count == case[4], case[3] .. " workspace column policy regressed")
+    assert(column_count >= 1 and column_count <= case[4],
+        case[3] .. " workspace column policy regressed")
+    -- Every placed widget must be wide enough to render something useful.
+    for _, placement in ipairs(layout.placements) do
+        assert(placement.width >= 18 and placement.height >= 2,
+            case[3] .. " placed a widget too small to read")
+    end
     if case[3] == "wide-tall" then
-        local widths = {}
-        for _, placement in ipairs(layout.placements) do widths[placement.x] = placement.width end
-        local minimum, maximum
-        for _, width in pairs(widths) do
-            minimum = minimum and math.min(minimum, width) or width
-            maximum = maximum and math.max(maximum, width) or width
+        -- Widths are only comparable between panels sharing a row.
+        local rows_by_y = {}
+        for _, placement in ipairs(layout.placements) do
+            rows_by_y[placement.y] = rows_by_y[placement.y] or {}
+            local bucket = rows_by_y[placement.y]
+            bucket[#bucket + 1] = placement.width
         end
-        assert(maximum - minimum <= 1,
-            "wide-tall responsive tracks must have balanced visual proportions")
+        for _, bucket in pairs(rows_by_y) do
+            local minimum, maximum
+            for _, width in ipairs(bucket) do
+                minimum = minimum and math.min(minimum, width) or width
+                maximum = maximum and math.max(maximum, width) or width
+            end
+            assert(maximum - minimum <= 1,
+                "wide-tall responsive tracks must have balanced visual proportions")
+        end
     end
 end
 
@@ -94,5 +111,49 @@ for index, placement in ipairs(low.placements) do
     assert(placement.id == high.placements[index].id)
     assert(placement.x == high.placements[index].x)
 end
+
+
+-- A resource the host does not expose is dropped from the rendered tree so it
+-- stops claiming screen space, but it must never be dropped from the layout
+-- that gets persisted: the widget has to come back the moment data appears,
+-- and a user who edits the layout meanwhile must not lose it.
+local LayoutModel = require("wtop.model.layout")
+local suppress_page = Workspace.new({ active_tab = "overview" })
+local page_order = Workspace.default_orders().overview
+local function leaves(workspace)
+    return assert(LayoutModel.to_order(workspace:trees().overview,
+        { allowed_widgets = page_order }))
+end
+local full_leaves = #leaves(suppress_page)
+local before = #suppress_page:layout(160, 44).placements
+local absent = {
+    gpu_overview = true, frequency_overview = true,
+    temperature_overview = true, power_overview = true,
+}
+assert(suppress_page:set_suppressed(absent), "the suppressed set must be applied")
+assert(not suppress_page:set_suppressed(absent), "an unchanged set must not relayout")
+local suppressed_placements = #suppress_page:layout(160, 44).placements
+assert(suppressed_placements == before - 4,
+    "every suppressed widget must leave the rendered tree")
+
+-- Editing while widgets are suppressed must not prune them from the model.
+suppress_page:toggle_edit()
+assert(suppress_page:move_focused_direction("below"))
+assert(suppress_page:adjust_focused_ratio(0.05))
+assert(#leaves(suppress_page) == full_leaves,
+    "suppressed widgets must survive a layout edit")
+local persisted = {}
+for _, id in ipairs(leaves(suppress_page)) do persisted[id] = true end
+for id in pairs(absent) do
+    assert(persisted[id], "suppressed widget lost from the persisted tree: " .. id)
+end
+
+-- Focus must never rest on a widget that is no longer rendered.
+assert(not absent[suppress_page.focus.overview],
+    "focus must move off a suppressed widget")
+
+assert(suppress_page:set_suppressed({}), "clearing the set must relayout")
+assert(#suppress_page:layout(160, 44).placements == before,
+    "widgets must return as soon as their resource reports again")
 
 return true

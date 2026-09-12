@@ -25,6 +25,46 @@ local function delta(current, previous, key)
   return Common.delta(current[key], previous[key])
 end
 
+
+-- Static block-device identity.  These files are cheap and change only on
+-- hotplug, but they are what turns an opaque "sda" row into something an
+-- operator recognises, and `size` is what lets the UI hide the 16 zero-length
+-- ramdisks a default kernel registers.
+local function read_identity(fs, device)
+  local base = "/sys/block/" .. device.name
+  local function optional(path, limit)
+    local value = fs:read(base .. "/" .. path, 4096)
+    if type(value) ~= "string" then return nil end
+    local trimmed = Common.trim(value)
+    if trimmed == "" then return nil end
+    return Common.safe_text(trimmed, limit or 64)
+  end
+  local sectors = fs:read_number(base .. "/size")
+  local rotational = fs:read_number(base .. "/queue/rotational")
+  local scheduler = optional("queue/scheduler", 128)
+  if scheduler then
+    -- The file lists every registered scheduler with the active one bracketed.
+    scheduler = scheduler:match("%[(%S+)%]") or scheduler:match("^(%S+)$") or scheduler
+  end
+  return {
+    model = optional("device/model", 64),
+    vendor = optional("device/vendor", 64),
+    firmware = optional("device/rev", 32),
+    size_bytes = type(sectors) == "number" and sectors >= 0
+      and sectors <= math.maxinteger // 512 and sectors * 512 or nil,
+    rotational = type(rotational) == "number" and rotational or nil,
+    removable = fs:read_number(base .. "/removable") == 1,
+    scheduler = scheduler,
+    queue_depth = fs:read_number(base .. "/device/queue_depth"),
+    read_ahead_kib = fs:read_number(base .. "/queue/read_ahead_kb"),
+    -- ram/loop/zram devices are kernel plumbing rather than storage the
+    -- operator provisioned; the UI hides them by default.
+    virtual = device.name:match("^ram%d") ~= nil
+      or device.name:match("^loop%d") ~= nil
+      or device.name:match("^zram%d") ~= nil,
+  }
+end
+
 local function read_sector_sizes(fs, device)
   local base = "/sys/dev/block/" .. device.id
   local logical = fs:read_number(base .. "/queue/logical_block_size")
@@ -153,6 +193,7 @@ function Disk:sample(context, previous)
         accounting_sector_size_bytes = 512,
         logical_sector_size_bytes = logical_sector_size,
         physical_sector_size_bytes = physical_sector_size,
+        identity = topology.partition == nil and read_identity(fs, current) or nil,
         in_flight = current.io_in_progress,
         counters = current,
         quality = "gap",
