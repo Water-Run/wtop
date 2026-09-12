@@ -5,7 +5,7 @@
 **WaterRun's top** is a responsive Linux terminal performance workbench built
 with PUC Lua 5.5.1 and a small C17 native module; it does not use LuaJIT.
 
-> **Status:** `0.1.0-dev` development preview, not a stable release.
+> **Status:** `0.1.0` — first tagged release. Linux-only; see `CHANGELOG.md` for what this release was verified against.
 >
 > **Linux only:** macOS, Windows, BSD, and Android/Termux are rejected by the
 > build and runtime entry points.
@@ -71,6 +71,8 @@ make test-fuzz      # randomized input against the real terminal loop
 
 Every push runs the same targets in CI across Ubuntu 22.04 and 24.04 with
 both gcc and clang, plus sanitizers, the fuzzer, and both bundle forms.
+`make test-fuzz` is deliberately excluded from `make test`: it is slow and
+non-deterministic by design.
 
 Interactive mode requires stdin and stdout to be TTYs. For scripts, use
 `wtop --snapshot` or `wtop --agent`. Run `wtop --help` for all options;

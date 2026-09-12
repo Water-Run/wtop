@@ -42,6 +42,8 @@ security modules, kernel limits and counters, Swap devices, time zone) and
 remaining runtime, plus mains adapters). Network interfaces additionally carry
 their IPv4/IPv6 `addresses` and raw `counters`.
 
+`system.kernel.command_line` redacts parameters that name a secret or identify the machine — `root`, `resume`, `cryptdevice`, `rd.luks.key`, `systemd.machine_id`, `ip`, `nfsroot` and similar — replacing only the value with `<redacted>` and leaving ordinary parameters and bare flags intact. `/proc/cmdline` is world-readable, so this is not access control; it keeps a disk-encryption key or a root filesystem UUID out of an export that gets pasted into a ticket.
+
 `system.firmware` deliberately omits serial numbers, asset tags and the product
 UUID: the collector never reads them, so a snapshot pasted into a bug report
 does not leak more host identity than the operator expects.

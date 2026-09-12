@@ -2,7 +2,7 @@
 
 ## 1. Current Status
 
-wtop is currently the `0.1.0-dev` development preview. The repository contains a working Lua 5.5.1 bootstrap, C17 native module, deterministic locale compilation, LuaRocks rockspec, luainstaller onedir/onefile targets, and PTY smoke tests, but no formal-release matrix for multiple architectures, libcs, older glibc versions, and distributions.
+wtop `0.1.0` ships a working Lua 5.5.1 bootstrap, C17 native module, deterministic locale compilation, LuaRocks rockspec, luainstaller onedir/onefile targets, and PTY smoke tests. It does not ship a formal-release matrix across multiple architectures, libcs, older glibc versions, and distributions; `CHANGELOG.md` records exactly what this release was built and tested on.
 
 The build has no runtime LuaRock dependencies. `wtop_native.so` provides interactive terminal handling, poll, signals, atomic writes, constrained subprocess execution, and a small set of Linux syscalls. The native file reader opens in nonblocking/no-follow mode, accepts regular files only, defaults to 4 MiB with an explicit 64 MiB maximum, and rejects symlinks, devices, FIFOs, and oversized content while still supporting procfs/sysfs pseudo-files presented as regular files.
 

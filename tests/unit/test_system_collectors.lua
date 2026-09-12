@@ -83,6 +83,32 @@ local with_free = SystemInfo.parse_file_nr("1000 250 4096")
 equal(with_free.open, 750, "free allocated descriptors are not counted as in use")
 
 -- ---------------------------------------------------------------------------
+-- The kernel command line reaches JSON exports, and an export is the thing
+-- people paste into tickets.  /proc/cmdline is world-readable, so this is not
+-- access control; it keeps a disk-encryption key or a root filesystem UUID out
+-- of a document that travels.
+local redacted = SystemInfo.redact_command_line(
+  "BOOT_IMAGE=/vmlinuz root=UUID=2f9c-dead ro quiet "
+    .. "rd.luks.key=/crypto_keyfile.bin splash cryptdevice=/dev/sda2:root "
+    .. "systemd.machine_id=0123456789abcdef nosplash")
+for _, secret in ipairs({ "2f9c%-dead", "crypto_keyfile", "/dev/sda2", "0123456789abcdef" }) do
+  assert(not redacted:find(secret),
+    "the command line still contains " .. secret .. ": " .. redacted)
+end
+for _, kept in ipairs({ "BOOT_IMAGE=/vmlinuz", "ro", "quiet", "splash", "nosplash" }) do
+  assert(redacted:find(kept, 1, true),
+    "redaction must keep the ordinary parameter " .. kept .. ": " .. redacted)
+end
+equal(select(2, redacted:gsub("<redacted>", "")), 4,
+  "each secret parameter is replaced exactly once")
+-- The key must survive so the line still reads as a command line.
+assert(redacted:find("root=<redacted>", 1, true), "the parameter name is kept")
+equal(SystemInfo.redact_command_line(nil), nil, "non-string input yields nothing")
+equal(SystemInfo.redact_command_line(""), "", "an empty command line stays empty")
+-- A parameter that merely starts with a redacted name is not itself a secret.
+assert(SystemInfo.redact_command_line("rootwait=10"):find("rootwait=10", 1, true),
+  "prefix matches must not be redacted")
+
 -- SystemInfo sampling
 -- ---------------------------------------------------------------------------
 

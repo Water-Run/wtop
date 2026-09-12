@@ -4,7 +4,7 @@
 
 wtop (WaterRun's top) is a modern Linux-only TUI performance workbench. Its goal is to put “what is happening now,” “why is it slow,” “which process or device is involved,” and “what can be done safely” into one responsive interface.
 
-The current version is the `0.1.0-dev` development preview, not a completed 0.1 release. The first vertical slice—CPU/memory/PSI → Snapshot → ViewModel → responsive TUI → luainstaller—is operational. Current work focuses on features, hardware backends, and release evidence instead of presenting design documents as implemented behavior. CPU/GPU identity and telemetry are becoming substantially richer, but the project does not claim parity with CPU-Z, GPU-Z, AIDA64, or HWiNFO.
+The current version is `0.1.0`, the first tagged release. The first vertical slice—CPU/memory/PSI → Snapshot → ViewModel → responsive TUI → luainstaller—is operational. Current work focuses on features, hardware backends, and release evidence instead of presenting design documents as implemented behavior. CPU/GPU identity and telemetry are becoming substantially richer, but the project does not claim parity with CPU-Z, GPU-Z, AIDA64, or HWiNFO.
 
 ## 2. Status Definitions
 

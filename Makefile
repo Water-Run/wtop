@@ -153,7 +153,7 @@ luarocks-install: resource-check-full $(LUA_STAMP) $(LUAROCKS_STAMP)
 		make "$(ROCKSPEC)" --deps-mode=none --force
 
 test-luarocks: luarocks-install
-	@"$(WTOP_ROCK_TREE)/bin/wtop" --version | grep -qx 'wtop 0.1.0-dev'
+	@"$(WTOP_ROCK_TREE)/bin/wtop" --version | grep -qx 'wtop 0.1.0'
 	@"$(WTOP_ROCK_TREE)/bin/wtop" --diagnose | grep -q 'Platform: Linux'
 	@"$(WTOP_ROCK_TREE)/bin/wtop" --snapshot | python3 tests/json_contract_smoke.py snapshot
 	@"$(WTOP_ROCK_TREE)/bin/wtop" --agent | python3 tests/json_contract_smoke.py agent

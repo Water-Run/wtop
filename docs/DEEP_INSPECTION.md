@@ -1,6 +1,6 @@
 # Deep Inspection: Current Implementation and Boundaries
 
-This document describes only the current `0.1.0-dev` implementation. wtop's long-term direction is to put commonly needed read-only diagnostic information in one TUI, but it is not currently a complete replacement for `smartctl`, `perf`, `systemctl`, `ss`, or vendor-specific GPU tools.
+This document describes only the current `0.1.0` implementation. wtop's long-term direction is to put commonly needed read-only diagnostic information in one TUI, but it is not currently a complete replacement for `smartctl`, `perf`, `systemctl`, `ss`, or vendor-specific GPU tools.
 
 ## 1. Current Entry Points
 

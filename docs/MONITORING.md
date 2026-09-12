@@ -1,6 +1,6 @@
 # Monitoring Scope and Performance Operations
 
-> This document separates the continuous collectors implemented in `0.1.0-dev` from later goals. A provider absent from “Current Implementation” must not be inferred to exist from a design goal.
+> This document separates the continuous collectors implemented in `0.1.0` from later goals. A provider absent from “Current Implementation” must not be inferred to exist from a design goal.
 
 ## 1. Data-Source Principles
 
@@ -29,7 +29,7 @@ The CLI defaults to `--interval 1000`. The active page uses the greater of the b
 | Powercap | bounded zone hierarchy, energy/direct power, constraints, wrap/reset-safe deltas, separate CPU-package and platform/`psys` aggregates | powercap sysfs | 1 s / 5 s |
 | Mounts | mount identity, filesystem/source/read-only state, plus capacity and inodes where safe | `/proc/self/mountinfo`, `statvfs` | 5 s / 30 s |
 | cgroup v2 | CPU/max/weight, memory/Swap/events/limit, I/O rates, PIDs/events, PSI, cpuset | `/sys/fs/cgroup` | 2 s / 10 s |
-| System identity | host name/domain/architecture, kernel type/release/build/command line, distribution from os-release, uptime and boot time, virtualization and container detection, SELinux/AppArmor/lockdown state, DMI machine/board/firmware (placeholder strings discarded; serial numbers, asset tags and the product UUID are never read), descriptor/PID/thread limits, entropy, kernel-wide counters, Swap devices, time zone | `/proc/sys/kernel`, `/proc/uptime`, `/proc/stat`, `/proc/swaps`, `/proc/vmstat`, `/etc/os-release`, `/sys/class/dmi/id` | 5 s / 30 s |
+| System identity | host name/domain/architecture, kernel type/release/build/command line (secret and machine-identifying parameters redacted), distribution from os-release, uptime and boot time, virtualization and container detection, SELinux/AppArmor/lockdown state, DMI machine/board/firmware (placeholder strings discarded; serial numbers, asset tags and the product UUID are never read), descriptor/PID/thread limits, entropy, kernel-wide counters, Swap devices, time zone | `/proc/sys/kernel`, `/proc/uptime`, `/proc/stat`, `/proc/swaps`, `/proc/vmstat`, `/etc/os-release`, `/sys/class/dmi/id` | 5 s / 30 s |
 | Power supplies | battery status, charge and health against design capacity, energy or charge normalised to watt-hours, power draw, voltage, cycle count, remaining or to-full runtime, and mains adapter presence | `/sys/class/power_supply` | 5 s / 15 s |
 | GPU | DRM device/node identity, PCI names/link metadata, selected AMD busy/VRAM, AMD/i915/xe frequencies, DRM fdinfo device/process data | `/sys/class/drm`, `/proc/<pid>/fdinfo`, bounded local `pci.ids` | 1 s / 5 s |
 

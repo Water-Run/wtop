@@ -1,6 +1,6 @@
 # Current Architecture
 
-This document describes the actual `0.1.0-dev` structure. It does not present planned plugins, an Insight Engine, or vendor GPU providers as implemented capabilities.
+This document describes the actual `0.1.0` structure. It does not present planned plugins, an Insight Engine, or vendor GPU providers as implemented capabilities.
 
 ## 1. Data Flow
 

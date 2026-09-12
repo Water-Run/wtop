@@ -1,6 +1,6 @@
 # UI and Interaction
 
-> This document reflects current `0.1.0-dev` behavior. Items labeled “future” or “goal” are not delivered features.
+> This document reflects current `0.1.0` behavior. Items labeled “future” or “goal” are not delivered features.
 
 ## 1. Current Visual Baseline
 
@@ -55,7 +55,7 @@ shows a scrollbar and a `shown/total` counter when its content does not fit.
 | `6` `network` | Interface rate/link/MTU/MAC/error summary, IPv4 and IPv6 addresses with netmask and default-route marking, and the TCP/TCP6/UDP/UDP6/Unix socket table | No route table detail, connection filters, or endpoint-masking switch |
 | `7` `gpu` | DRM device, PCI vendor/model/link metadata, driver/busy/VRAM, hwmon temperature/power, frequency, and fdinfo-mapped processes, engines, utilization, and memory | No client/frequency-domain/memory-region drill-down or vendor API; unmatched sensors remain `—` |
 | `8` `workloads` | cgroup v2 path-tree summaries for CPU, memory, I/O, process count, PSI, and quality, plus a detail panel that explains why nodes are partial | No expand/collapse, selected-item detail, systemd-unit, or container semantics |
-| `9` `system` | Host name/domain/architecture/time zone, distribution, kernel release and build, boot time and busy-since-boot, virtualization and container detection, SELinux/AppArmor/lockdown, DMI machine/board/firmware, descriptor and PID/thread limits, entropy, kernel-wide counters, and power supplies | DMI is frequently root-only; serial numbers, asset tags and the product UUID are deliberately never read |
+| `9` `system` | Host name/domain/architecture/time zone, distribution, kernel release and build, boot time and busy-since-boot, virtualization and container detection, SELinux/AppArmor/lockdown, DMI machine/board/firmware, descriptor and PID/thread limits, entropy, kernel-wide counters, and power supplies | DMI is frequently root-only; serial numbers, asset tags and the product UUID are deliberately never read, and secret or machine-identifying kernel parameters are redacted |
 | `0` `insights` | Per-collector availability, status, quality, source and reason; deep-inspector readiness with its key binding; and actionable findings for denied or absent sources | Does not foreground-sample process/GPU at 1 Hz for counts; no automatic inference |
 
 Tabs cannot currently be added, removed, renamed, or reordered. `1`–`9` select

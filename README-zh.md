@@ -5,7 +5,7 @@
 **WaterRun's top** 是使用 PUC Lua 5.5.1 和小型 C17 原生模块构建的 Linux
 响应式终端性能工作台，不使用 LuaJIT。
 
-> **状态：** 当前版本为 `0.1.0-dev` development preview，尚不是稳定发行版。
+> **状态：** `0.1.0` —— 首个正式发行版本。仅支持 Linux；本次发行经过验证的范围见 `CHANGELOG.md`。
 >
 > **仅支持 Linux：** 构建和运行入口会拒绝 macOS、Windows、BSD 与
 > Android/Termux。

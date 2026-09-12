@@ -80,6 +80,36 @@ local function read_text(fs, path)
   return text(content)
 end
 
+-- Parameters whose value is a secret or a stable machine identifier.  The
+-- kernel command line is world-readable, so this is not access control; it
+-- stops a snapshot that gets pasted into a ticket or handed to an agent from
+-- carrying a disk-encryption key or a filesystem UUID with it.
+local REDACTED_PARAMETERS = {
+  ["luks.key"] = true, ["rd.luks.key"] = true, ["cryptkey"] = true,
+  ["rd.luks.uuid"] = true, ["cryptdevice"] = true,
+  ["root"] = true, ["resume"] = true, ["rd.lvm.lv"] = true,
+  ["systemd.machine_id"] = true, ["ip"] = true, ["nfsroot"] = true,
+  ["iscsi_initiator"] = true, ["iscsi_target_name"] = true,
+  ["password"] = true, ["token"] = true,
+}
+
+-- Redact `key=value` parameters that name a secret or identify the machine.
+-- Bare flags carry no value and are left alone, so the result still reads as
+-- the real command line.
+local function redact_command_line(value)
+  if type(value) ~= "string" then return nil end
+  local parts = {}
+  for word in value:gmatch("%S+") do
+    local key = word:match("^([%w_.%-]+)=")
+    if key and REDACTED_PARAMETERS[key:lower()] then
+      parts[#parts + 1] = key .. "=<redacted>"
+    else
+      parts[#parts + 1] = word
+    end
+  end
+  return table.concat(parts, " ")
+end
+
 local function read_number(fs, path)
   return number(read_text(fs, path))
 end
@@ -352,7 +382,7 @@ function SystemInfo:sample(context)
       or (uname and text(uname.release)),
     version = read_text(fs, self.proc_path .. "/sys/kernel/version")
       or (uname and text(uname.version)),
-    command_line = read_text(fs, self.proc_path .. "/cmdline"),
+    command_line = redact_command_line(read_text(fs, self.proc_path .. "/cmdline")),
   }
 
   -- /etc/os-release is a symlink into /usr/lib on most modern distributions,
@@ -437,6 +467,7 @@ SystemInfo.parse_os_release = parse_os_release
 SystemInfo.parse_swaps = parse_swaps
 SystemInfo.parse_file_nr = parse_file_nr
 SystemInfo.parse_uptime = parse_uptime
+SystemInfo.redact_command_line = redact_command_line
 SystemInfo.CHASSIS_TYPES = CHASSIS_TYPES
 
 return SystemInfo
