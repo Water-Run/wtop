@@ -47,6 +47,23 @@ local function width_function(codepoint)
     return nil
 end
 
+-- Cells a classic Windows console gives each character in its code page, or
+-- nil where the backend has no such console. Answers are cached because the
+-- renderer asks for every non-ASCII character it draws.
+local function console_cells_function()
+    if type(native.console_cells) ~= "function" then return nil end
+    local cache = {}
+    return function(codepoint)
+        local cached = cache[codepoint]
+        if cached == nil then
+            local ok, cells = pcall(native.console_cells, codepoint)
+            cached = ok and type(cells) == "number" and cells or 0
+            cache[codepoint] = cached
+        end
+        return cached
+    end
+end
+
 -- Pad by measured display columns, never by bytes.  `string.format("%-18s")`
 -- counts bytes, so a four-character Chinese label (twelve bytes, eight
 -- columns) produced a different indent than an eight-column ASCII one and the
@@ -375,7 +392,8 @@ local function signal_menu_lines(process, selected, i18n, unicode, choices)
     for _, line in ipairs(aligned_pairs(rows, 3)) do lines[#lines + 1] = line end
     lines[#lines + 1] = ""
     lines[#lines + 1] = windows
-        and "The process start time is checked before termination."
+        and translated(i18n, "process.terminate_warning",
+            "The process start time is checked before termination.")
         or translated(i18n, "signal.warning",
             "The target is re-verified by start time, so a recycled PID is never signalled.")
     return lines
@@ -633,6 +651,9 @@ end
 local function run_loop(options, backend, renderer, engine, translator)
     local terminal_capabilities = backend.capabilities()
     local host = native.uname()
+    local linux_host = host ~= nil and host.sysname == "Linux"
+    local console_cells = terminal_capabilities.native_presentation
+        and console_cells_function() or nil
     local action_choices = host and host.sysname == "Windows"
         and WINDOWS_ACTION_CHOICES or (host and host.sysname == "Darwin"
             and {} or SIGNAL_CHOICES)
@@ -1041,6 +1062,17 @@ local function run_loop(options, backend, renderer, engine, translator)
                 { key = "?", id = "actions.help", fallback = "Help", command = "help" },
             }
         end
+        if not linux_host then
+            -- The SMART, bandwidth, and sshd inspectors are Linux-only.
+            local kept = {}
+            for _, hint in ipairs(status.hints or {}) do
+                if hint.command ~= "smart" and hint.command ~= "bandwidth"
+                    and hint.command ~= "sshd" then
+                    kept[#kept + 1] = hint
+                end
+            end
+            status.hints = kept
+        end
         if search_edit then
             status.filter = nil
             -- Show the caret at the cursor so left/right movement is visible.
@@ -1055,8 +1087,11 @@ local function run_loop(options, backend, renderer, engine, translator)
             status.warning = true
         end
         if confirmation then
-            status.message = translated(translator, "process.signal_prompt",
-                "Choose a signal for PID {pid}", { pid = confirmation.process.pid })
+            status.message = action_choices == WINDOWS_ACTION_CHOICES
+                and translated(translator, "process.action_prompt",
+                    "Choose an action for PID {pid}", { pid = confirmation.process.pid })
+                or translated(translator, "process.signal_prompt",
+                    "Choose a signal for PID {pid}", { pid = confirmation.process.pid })
             status.warning = true
         end
         local grid, metadata = workspace:render(columns, rows, {
@@ -1070,6 +1105,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             alert_count = alert_count(engine.snapshot),
             status = status,
             width_fn = native.available and width_function or nil,
+            console_cells = console_cells,
         })
         if overlay then
             overlay_offset = math.min(overlay_offset, overlay_max_offset(rows, columns, overlay))
@@ -1504,7 +1540,8 @@ local function run_loop(options, backend, renderer, engine, translator)
         elseif key == "k" and workspace.active == "processes" then
             local process = selected_process()
             if #action_choices == 0 then
-                status_message = "Process actions are unavailable on this platform"
+                status_message = translated(translator, "process.actions_unavailable",
+                    "Process actions are unavailable on this platform")
             elseif process then
                 confirmation = { process = process, index = 1 }
                 refresh_signal_menu()
@@ -1596,6 +1633,49 @@ local function run_loop(options, backend, renderer, engine, translator)
     return 0
 end
 
+-- Without LANG, --lang, or a configured locale, a Windows console follows the
+-- user's display language, provided the console's code page can show it.
+-- Otherwise the interface stays in English rather than printing "?" marks.
+local LOCALE_PROBES = {
+    zh = 0x4E2D, ja = 0x3042, ko = 0xD55C, ru = 0x0414,
+    de = 0x00FC, fr = 0x00E9, es = 0x00F1, pt = 0x00E3,
+}
+
+local function windows_default_locale(getenv)
+    for _, name in ipairs({ "LC_ALL", "LC_MESSAGES", "LANG" }) do
+        local value = getenv(name)
+        if value and value ~= "" then return nil end
+    end
+    if type(native.user_locale) ~= "function" or type(native.console_cells) ~= "function" then
+        return nil
+    end
+    local ok, tag = pcall(native.user_locale)
+    local normalized = ok and type(tag) == "string" and I18n.normalize_locale(tag) or nil
+    if not normalized then return nil end
+    local language, region = normalized:match("^(%a+)%-?(%a*)")
+    local available = {}
+    for _, id in ipairs(I18n.available() or {}) do available[id] = true end
+    local candidate = available[normalized] and normalized or nil
+    if not candidate and language == "zh" then
+        candidate = (region == "TW" or region == "HK" or region == "MO") and "zh-TW" or "zh-CN"
+    end
+    if not candidate then
+        local ids = {}
+        for id in pairs(available) do ids[#ids + 1] = id end
+        table.sort(ids)
+        for _, id in ipairs(ids) do
+            if id:match("^(%a+)") == language then candidate = id break end
+        end
+    end
+    local probe = LOCALE_PROBES[language]
+    if not candidate or not available[candidate] or not probe then return nil end
+    local shown, cells = pcall(native.console_cells, probe)
+    if shown and type(cells) == "number" and cells > 0 then return candidate end
+    return nil
+end
+
+M.windows_default_locale = windows_default_locale
+
 function M.run(options)
     options = options or {}
     local uname = native.uname()
@@ -1614,7 +1694,11 @@ function M.run(options)
         return 1
     end
 
-    local translator, translation_error = I18n.new({ locale = options.locale })
+    local locale = options.locale
+    if locale == nil and uname.sysname == "Windows" then
+        locale = windows_default_locale(os.getenv)
+    end
+    local translator, translation_error = I18n.new({ locale = locale })
     if not translator then
         io.stderr:write("wtop: i18n initialization failed: ", tostring(translation_error), "\n")
         return 1

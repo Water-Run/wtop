@@ -244,7 +244,7 @@ local function top_processes(snapshot, format, controller, i18n)
             nice = process.nice and tostring(process.nice) or "—",
             priority = process.priority and tostring(process.priority) or "—",
             time = cpu_seconds and duration(format, cpu_seconds) or "—",
-            state = process.state or "?",
+            state = process.state or "—",
             user = process.user or "—",
             -- /proc/<pid>/io counters are cumulative since exec.  Presenting
             -- them as a per-second rate would be a fabrication: the collector
@@ -774,10 +774,13 @@ local function cpu_identity_entries(snapshot, format, i18n)
     local entries = {
         entry("metrics.model", "Model", identity.model_name or "—", { emphasis = true }),
         entry("metrics.vendor", "Vendor", identity.vendor),
-        entry("compute.family", "Family",
-            string.format("%s / %s / %s", tostring(identity.family or "—"),
-                tostring(identity.model or "—"), tostring(identity.stepping or "—"))),
     }
+    -- Apple silicon and some ARM hosts have no x86-style family triple.
+    if identity.family or identity.model or identity.stepping then
+        entries[#entries + 1] = entry("compute.family", "Family",
+            string.format("%s / %s / %s", tostring(identity.family or "—"),
+                tostring(identity.model or "—"), tostring(identity.stepping or "—")))
+    end
     if topology.threads then
         entries[#entries + 1] = entry("compute.sockets", "Sockets",
             plural_unit(i18n, "compute.socket_count", "socket", "sockets", topology.sockets or 0))

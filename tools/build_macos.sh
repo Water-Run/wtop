@@ -45,7 +45,8 @@ mkdir -p "$output_dir"
 cc -std=c17 -O2 -Wall -Wextra -Werror \
     "-mmacosx-version-min=$deployment" -dynamiclib -undefined dynamic_lookup \
     -I"$work_dir/lua-5.5.1/src" \
-    -o "$output_dir/wtop_native.so" "$project_dir/native/wtop_macos.c"
+    -o "$output_dir/wtop_native.so" "$project_dir/native/wtop_macos.c" \
+    -framework IOKit -framework CoreFoundation
 cp "$work_dir/lua-5.5.1/src/lua" "$output_dir/lua"
 cp -R "$project_dir/src" "$output_dir/"
 cat > "$output_dir/wtop" <<'EOF'

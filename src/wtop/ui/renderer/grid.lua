@@ -6,26 +6,6 @@ Grid.__index = Grid
 local MAX_DIMENSION = 10000
 local MAX_CELLS = 1000000
 
-local ascii_glyphs = {
-  ["—"] = "-", ["–"] = "-", ["−"] = "-", ["·"] = ".", ["…"] = ".",
-  ["×"] = "x", ["↑"] = "^", ["↓"] = "v", ["←"] = "<", ["→"] = ">",
-  ["‹"] = "<", ["›"] = ">", ["▸"] = ">", ["▾"] = "v", ["●"] = "*",
-  ["°"] = "o", ["Ⅰ"] = "I", ["Ⅱ"] = "II",
-  ["▁"] = ".", ["▂"] = ":", ["▃"] = "-", ["▄"] = "=",
-  ["▅"] = "+", ["▆"] = "*", ["▇"] = "#", ["█"] = "#",
-}
-
-local function ascii_grapheme(grapheme, width)
-  if not grapheme:find("[\128-\255]") then return grapheme, width end
-  local replacement = ascii_glyphs[grapheme]
-  if replacement then return replacement, #replacement end
-  -- Preserve an ASCII base letter when the cluster only adds a combining
-  -- mark; other unsupported glyphs become a terminal-safe placeholder.
-  local first = grapheme:byte(1)
-  if first and first < 0x80 then return grapheme:sub(1, 1), 1 end
-  return "?", 1
-end
-
 local function blank(style)
   return {char = " ", width = 1, style = style}
 end
@@ -54,8 +34,10 @@ function Grid.new(width, height, options)
     error("grid options must be a table", 2)
   end
   options = options or {}
-  if options.width_fn ~= nil and type(options.width_fn) ~= "function" then
-    error("grid width_fn must be a function", 2)
+  for _, name in ipairs({"width_fn", "console_cells"}) do
+    if options[name] ~= nil and type(options[name]) ~= "function" then
+      error("grid " .. name .. " must be a function", 2)
+    end
   end
   for _, name in ipairs({"ambiguous_is_wide", "unicode"}) do
     if options[name] ~= nil and type(options[name]) ~= "boolean" then
@@ -75,6 +57,7 @@ function Grid.new(width, height, options)
     height = height,
     width_options = {
       width_fn = options.width_fn,
+      console_cells = options.console_cells,
       ambiguous_is_wide = options.ambiguous_is_wide,
       unicode = options.unicode,
     },
@@ -200,7 +183,8 @@ function Grid:write(x, y, text, style, max_width)
       grapheme, width = codepoint == 0x09 and " " or "�", 1
     end
     if self.width_options.unicode == false then
-      grapheme, width = ascii_grapheme(grapheme, width)
+      -- graphemes() already substituted; this catches the control marker.
+      grapheme, width = Width.ascii_cluster(grapheme, width, self.width_options)
     end
     if width == 0 then
       self:set(x, y, grapheme, style, 0)

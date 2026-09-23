@@ -63,17 +63,19 @@ smoke evidence below; they have not been shipped as a cross-platform release.
 
 | Runtime host | Terminal case | Acceptance focus |
 | --- | --- | --- |
-| Linux | Debian 13 x86_64 SSH PTY; development host | Snapshot, Agent, diagnose, TUI quit; 47 Lua test files and three PTY scenarios on the development host |
-| macOS | macOS 26.5 arm64 SSH PTY | Native CPU and per-core utilization, memory, process, storage, network and system data; Snapshot, Agent, diagnose, TUI quit |
+| Linux | Debian 13 x86_64 SSH PTY; development host | Snapshot, Agent, diagnose, TUI quit; 49 Lua test files and the PTY matrix on the development host |
+| macOS | macOS 26.5 arm64 SSH PTY | Native CPU and per-core utilization, performance/efficiency core types and caches, memory composition, processes with users and paths, IOKit disk I/O, 64-bit interface counters, and system data; Snapshot, Agent, diagnose, TUI |
 | Windows XP, 32-bit x86 | No test environment available | PE32 i386 build and import review; runtime remains unverified |
-| Windows Server 2008 | 6.0.6003 x86_64 host running the x86 artifact | Native resources including per-core CPU utilization, Snapshot, Agent, diagnose, configuration/layout I/O, and Cygwin/OpenSSH PTY TUI; forced legacy CPU fallback compared against GetSystemTimes |
-| Newer Windows | 10.0.26100 x86_64 host running the x86 artifact | Native resources including per-core CPU utilization, Snapshot, Agent, diagnose, and native Win32 console TUI through PowerShell/OpenSSH ConPTY |
-| Server 2008 classic CMD | Direct local console session not available | Win32 screen-buffer and key-event path requires direct visual/keyboard/resize validation on this host |
+| Windows Server 2008 | 6.0.6003 x86_64 host running the x86 artifact | Native resources including per-core CPU utilization, CPU identity and caches, memory composition, physical-disk I/O, sockets with owning processes, Snapshot, Agent, diagnose, configuration/layout I/O, and Cygwin/OpenSSH PTY TUI; forced legacy CPU fallback compared against GetSystemTimes |
+| Newer Windows | 10.0.26100 x86_64 host running the x86 artifact | The same resources as Server 2008 with 64-bit interface counters, Snapshot, Agent, diagnose, and native Win32 console TUI through PowerShell/OpenSSH ConPTY |
+| Server 2008 classic CMD | Legacy console with code page 936, driven by `tools/console_harness.c` | Screen-buffer drawing, Chinese text in double-byte cells, key events, page switching, the terminate menu, buffer resize, `q` and Ctrl+C exit with the console restored |
 | Windows with WSL | Linux runtime in WSL | Linux compatibility; this does not establish native Windows support |
 
-The Server 2008 SSH session runs through a Cygwin pipe and does not exercise
-its local classic CMD console. A headless SSH session cannot allocate a
-desktop console there. The newer Windows ConPTY run exercises the Win32 console
+The Server 2008 SSH session runs through a Cygwin pipe. To exercise the
+legacy console itself, `tools/console_harness.c` allocates a real console on
+that host, starts wtop on it, then reads the screen buffer and injects key
+and resize events. That checks what the console holds, not how a physical
+monitor and font render it; a person at the machine is still the final check. The newer Windows ConPTY run exercises the Win32 console
 backend, but does not establish old CMD display quality. XP cannot receive a
 runtime-tested claim without an XP test environment. macOS deployment targets
 are 11.0 for arm64 and 10.13 for x86_64; only arm64 macOS 26.5 has been run.
@@ -95,6 +97,19 @@ is documented from XP SP1 onward, so the module resolves it dynamically and
 has an NT processor-counter fallback for earlier XP. That fallback matched
 `GetSystemTimes` counters on Server 2008 when forced for validation. It is
 still unverified on XP itself.
+
+## Known Issues
+
+- When a Cygwin/OpenSSH session hangs up instead of quitting normally, the
+  Windows program behind `wtop.sh` can keep running without a terminal. It
+  does not notice the closed pipe and keeps polling.
+- On Windows the Workloads, GPU, sensors, power, and pressure pages have no
+  native source yet and show as unavailable. Disk busy time is derived from
+  idle time; macOS reports no busy time.
+- A classic console shows line art as ASCII. Text in the console's code page
+  (for example Chinese on code page 936) is shown as is; other characters
+  appear as `?`. Without `LANG` or `--lang`, a Windows console follows the
+  display language only when its code page can show it.
 
 ## Baselines Still to Decide
 

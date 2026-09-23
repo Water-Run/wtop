@@ -8,12 +8,18 @@
 #include <windows.h>
 #include <psapi.h>
 #include <iphlpapi.h>
+#include <tlhelp32.h>
+#include <winioctl.h>
+#include <sddl.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <lua.h>
 #include <lauxlib.h>
+
+#include "wtop_windows.h"
 
 #define UNIX_FILETIME_TICKS 116444736000000000ULL
 #define MAX_PROCESSES 8192
@@ -94,6 +100,10 @@ static void push_utf8(lua_State *L, const WCHAR *source) {
     }
     lua_pushlstring(L, buffer, (size_t)length - 1);
     free(buffer);
+}
+
+void wtop_push_utf8(lua_State *L, const wchar_t *source) {
+    push_utf8(L, source);
 }
 
 static void utf8_field(lua_State *L, const char *name, const WCHAR *value) {
@@ -920,19 +930,72 @@ failed:
     return push_windows_error(L, "atomic_write");
 }
 
+/* Windows has no locale-aware wcwidth. Answering "unknown" for everything
+ * but NUL and ASCII lets the renderer's Unicode width tables decide, instead
+ * of a coarse range that made box drawing, arrows, and blocks double-width. */
 static int l_wcwidth(lua_State *L) {
     lua_Integer codepoint = luaL_checkinteger(L, 1);
-    if (codepoint < 0 || codepoint > 0x10ffff) {
-        lua_pushinteger(L, -1);
-    } else if (codepoint == 0) {
+    if (codepoint == 0) {
         lua_pushinteger(L, 0);
-    } else if (codepoint < 32 || (codepoint >= 127 && codepoint < 160)) {
-        lua_pushinteger(L, -1);
-    } else if (codepoint >= 0x1100 && codepoint <= 0xFF60) {
-        lua_pushinteger(L, 2);
-    } else {
+    } else if (codepoint >= 32 && codepoint < 127) {
         lua_pushinteger(L, 1);
+    } else {
+        lua_pushinteger(L, -1);
     }
+    return 1;
+}
+
+/* How many cells the console's code page gives one character: 1 or 2, 0 if
+ * the code page cannot show it, nil without a classic console (a pipe, or a
+ * UTF-8 code page whose cell widths the legacy console does not track). */
+static int l_console_cells(lua_State *L) {
+    lua_Integer codepoint = luaL_checkinteger(L, 1);
+    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode;
+    UINT code_page;
+    WCHAR wide[1];
+    char bytes[8];
+    BOOL used_default = FALSE;
+    int length;
+    if (!GetConsoleMode(output, &mode)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    code_page = GetConsoleOutputCP();
+    if (code_page == 0 || code_page == CP_UTF8 || code_page == CP_UTF7) {
+        lua_pushnil(L);
+        return 1;
+    }
+    if (codepoint < 0x80) {
+        lua_pushinteger(L, codepoint >= 0x20 && codepoint < 0x7f ? 1 : 0);
+        return 1;
+    }
+    if (codepoint > 0xFFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+    wide[0] = (WCHAR)codepoint;
+    length = WideCharToMultiByte(code_page, WC_NO_BEST_FIT_CHARS, wide, 1, bytes,
+        (int)sizeof(bytes), NULL, &used_default);
+    if (length == 0 && GetLastError() == ERROR_INVALID_FLAGS) {
+        used_default = FALSE;
+        length = WideCharToMultiByte(code_page, 0, wide, 1, bytes,
+            (int)sizeof(bytes), NULL, &used_default);
+    }
+    lua_pushinteger(L, length > 0 && length <= 2 && !used_default ? length : 0);
+    return 1;
+}
+
+/* The user's display language as a BCP 47 tag such as "zh-CN". */
+static int l_user_locale(lua_State *L) {
+    LCID locale = MAKELCID(GetUserDefaultUILanguage(), SORT_DEFAULT);
+    char language[16], region[16];
+    if (!GetLocaleInfoA(locale, LOCALE_SISO639LANGNAME, language, sizeof(language))
+        || !GetLocaleInfoA(locale, LOCALE_SISO3166CTRYNAME, region, sizeof(region))) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushfstring(L, "%s-%s", language, region);
     return 1;
 }
 
@@ -1022,13 +1085,138 @@ static int l_collect_cpu(lua_State *L) {
     return 1;
 }
 
+static int registry_text(HKEY key, const WCHAR *name, WCHAR *output,
+    DWORD characters) {
+    DWORD type = 0, bytes = (characters - 1) * sizeof(WCHAR);
+    WCHAR *start;
+    if (RegQueryValueExW(key, name, NULL, &type, (BYTE *)output, &bytes)
+        != ERROR_SUCCESS || type != REG_SZ) return 0;
+    output[bytes / sizeof(WCHAR)] = 0;
+    output[characters - 1] = 0;
+    for (start = output; *start == L' '; ++start) {}
+    if (start != output) memmove(output, start, (wcslen(start) + 1) * sizeof(WCHAR));
+    for (size_t length = wcslen(output); length > 0 && output[length - 1] == L' '; )
+        output[--length] = 0;
+    return output[0] != 0;
+}
+
+typedef struct {
+    int level;
+    int type;
+    uint64_t size;
+    int instances;
+} cache_total;
+
+static const char *cache_type_name(int type) {
+    switch (type) {
+    case 0: return "Unified";
+    case 1: return "Instruction";
+    case 2: return "Data";
+    default: return "Trace";
+    }
+}
+
+static void push_processor_topology(lua_State *L, DWORD threads) {
+    HMODULE kernel = GetModuleHandleA("kernel32.dll");
+    typedef BOOL (WINAPI *logical_processor_function)(
+        PSYSTEM_LOGICAL_PROCESSOR_INFORMATION, PDWORD);
+    logical_processor_function query = kernel
+        ? (logical_processor_function)(void *)GetProcAddress(kernel,
+            "GetLogicalProcessorInformation") : NULL;
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION *entries = NULL;
+    DWORD bytes = 0, count, index;
+    int cores = 0, packages = 0, cache_count = 0;
+    cache_total caches[16];
+    lua_createtable(L, 0, 4);
+    integer_field(L, "threads", (lua_Integer)threads);
+    /* XP SP3 and Server 2003 SP1 added this export; older hosts keep only the
+     * logical CPU count rather than guessing cores and caches. */
+    if (query && !query(NULL, &bytes) && GetLastError() == ERROR_INSUFFICIENT_BUFFER
+        && bytes > 0 && bytes <= 1024 * 1024)
+        entries = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION *)malloc(bytes);
+    if (entries && query(entries, &bytes)) {
+        count = bytes / sizeof(entries[0]);
+        for (index = 0; index < count; ++index) {
+            const SYSTEM_LOGICAL_PROCESSOR_INFORMATION *entry = &entries[index];
+            if (entry->Relationship == RelationProcessorCore) {
+                ++cores;
+            } else if (entry->Relationship == RelationProcessorPackage) {
+                ++packages;
+            } else if (entry->Relationship == RelationCache) {
+                int found = -1;
+                for (int cache = 0; cache < cache_count; ++cache) {
+                    if (caches[cache].level == entry->Cache.Level
+                        && caches[cache].type == (int)entry->Cache.Type) {
+                        found = cache;
+                        break;
+                    }
+                }
+                if (found < 0 && cache_count < 16) {
+                    found = cache_count++;
+                    caches[found].level = entry->Cache.Level;
+                    caches[found].type = (int)entry->Cache.Type;
+                    caches[found].size = 0;
+                    caches[found].instances = 0;
+                }
+                if (found >= 0) {
+                    caches[found].size += entry->Cache.Size;
+                    caches[found].instances += 1;
+                }
+            }
+        }
+        if (cores > 0) integer_field(L, "physical_cores", cores);
+        if (packages > 0) integer_field(L, "sockets", packages);
+    }
+    free(entries);
+    lua_setfield(L, -2, "topology");
+    lua_createtable(L, cache_count, 0);
+    for (int cache = 0; cache < cache_count; ++cache) {
+        char id[32];
+        snprintf(id, sizeof(id), "L%d:%s", caches[cache].level,
+            cache_type_name(caches[cache].type));
+        lua_createtable(L, 0, 5);
+        string_field(L, "id", id);
+        integer_field(L, "level", caches[cache].level);
+        string_field(L, "type", cache_type_name(caches[cache].type));
+        integer_field(L, "instances", caches[cache].instances);
+        integer_field(L, "total_size_bytes", (lua_Integer)caches[cache].size);
+        lua_rawseti(L, -2, cache + 1);
+    }
+    lua_setfield(L, -2, "cache_summary");
+}
+
 static int l_collect_cpu_info(lua_State *L) {
     SYSTEM_INFO system;
+    HKEY key;
     GetSystemInfo(&system);
-    lua_createtable(L, 0, 1);
-    lua_createtable(L, 0, 1);
-    integer_field(L, "threads", (lua_Integer)system.dwNumberOfProcessors);
-    lua_setfield(L, -2, "topology");
+    lua_createtable(L, 0, 3);
+    lua_createtable(L, 0, 6);
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+        L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", 0,
+        KEY_QUERY_VALUE, &key) == ERROR_SUCCESS) {
+        WCHAR text[256];
+        DWORD mhz = 0, type = 0, bytes = sizeof(mhz);
+        if (registry_text(key, L"ProcessorNameString", text, 256))
+            utf8_field(L, "model_name", text);
+        if (registry_text(key, L"VendorIdentifier", text, 256))
+            utf8_field(L, "vendor", text);
+        if (registry_text(key, L"Identifier", text, 256)) {
+            const WCHAR *family = wcsstr(text, L"Family ");
+            int family_value, model_value, stepping_value;
+            if (family && swscanf(family, L"Family %d Model %d Stepping %d",
+                &family_value, &model_value, &stepping_value) == 3) {
+                integer_field(L, "family", family_value);
+                integer_field(L, "model", model_value);
+                integer_field(L, "stepping", stepping_value);
+            }
+        }
+        if (RegQueryValueExW(key, L"~MHz", NULL, &type, (BYTE *)&mhz, &bytes)
+            == ERROR_SUCCESS && type == REG_DWORD && mhz > 0)
+            integer_field(L, "nominal_frequency_hz", (lua_Integer)mhz * 1000000);
+        RegCloseKey(key);
+    }
+    lua_setfield(L, -2, "identity");
+    push_processor_topology(L, system.dwNumberOfProcessors);
     return 1;
 }
 
@@ -1042,11 +1230,17 @@ static void memory_segment(lua_State *L, int index, const char *id,
 
 static int l_collect_memory(lua_State *L) {
     MEMORYSTATUSEX memory;
-    uint64_t swap_total, swap_free, used;
+    PERFORMANCE_INFORMATION performance;
+    OSVERSIONINFOEXW version;
+    uint64_t swap_total, swap_free, used, cache = 0;
+    int has_performance, split_cache, segment = 1;
     memset(&memory, 0, sizeof(memory));
     memory.dwLength = sizeof(memory);
     if (!GlobalMemoryStatusEx(&memory))
         return push_windows_error(L, "GlobalMemoryStatusEx");
+    memset(&performance, 0, sizeof(performance));
+    performance.cb = sizeof(performance);
+    has_performance = GetPerformanceInfo(&performance, sizeof(performance));
     used = memory.ullTotalPhys >= memory.ullAvailPhys
         ? memory.ullTotalPhys - memory.ullAvailPhys : 0;
     swap_total = memory.ullTotalPageFile > memory.ullTotalPhys
@@ -1054,7 +1248,7 @@ static int l_collect_memory(lua_State *L) {
     swap_free = memory.ullAvailPageFile > memory.ullAvailPhys
         ? memory.ullAvailPageFile - memory.ullAvailPhys : 0;
     if (swap_free > swap_total) swap_free = swap_total;
-    lua_createtable(L, 0, 10);
+    lua_createtable(L, 0, 16);
     integer_field(L, "total_bytes", (lua_Integer)memory.ullTotalPhys);
     integer_field(L, "available_bytes", (lua_Integer)memory.ullAvailPhys);
     integer_field(L, "used_bytes", (lua_Integer)used);
@@ -1062,90 +1256,225 @@ static int l_collect_memory(lua_State *L) {
     integer_field(L, "swap_total_bytes", (lua_Integer)swap_total);
     integer_field(L, "swap_free_bytes", (lua_Integer)swap_free);
     integer_field(L, "swap_used_bytes", (lua_Integer)(swap_total - swap_free));
-    lua_createtable(L, 2, 0);
-    memory_segment(L, 1, "used", used);
-    memory_segment(L, 2, "free", memory.ullAvailPhys);
+    if (has_performance) {
+        uint64_t page = performance.PageSize;
+        cache = (uint64_t)performance.SystemCache * page;
+        integer_field(L, "cache_bytes", (lua_Integer)cache);
+        integer_field(L, "committed_bytes",
+            (lua_Integer)((uint64_t)performance.CommitTotal * page));
+        integer_field(L, "commit_limit_bytes",
+            (lua_Integer)((uint64_t)performance.CommitLimit * page));
+        integer_field(L, "kernel_paged_bytes",
+            (lua_Integer)((uint64_t)performance.KernelPaged * page));
+        integer_field(L, "kernel_nonpaged_bytes",
+            (lua_Integer)((uint64_t)performance.KernelNonpaged * page));
+        integer_field(L, "handle_count", (lua_Integer)performance.HandleCount);
+        integer_field(L, "process_count", (lua_Integer)performance.ProcessCount);
+        integer_field(L, "thread_count", (lua_Integer)performance.ThreadCount);
+    }
+    /* From Vista on, the system cache figure is standby memory that already
+     * counts as available. XP counts its cache working set as in use, so
+     * splitting it out of the available bytes there would be wrong. */
+    split_cache = cache > 0 && windows_version(&version)
+        && version.dwMajorVersion >= 6;
+    if (split_cache) {
+        if (cache > memory.ullAvailPhys) cache = memory.ullAvailPhys;
+        integer_field(L, "free_bytes", (lua_Integer)(memory.ullAvailPhys - cache));
+    }
+    lua_createtable(L, 3, 0);
+    memory_segment(L, segment++, "used", used);
+    if (split_cache) {
+        memory_segment(L, segment++, "cache", cache);
+        memory_segment(L, segment++, "free", memory.ullAvailPhys - cache);
+    } else {
+        memory_segment(L, segment++, "free", memory.ullAvailPhys);
+    }
     lua_setfield(L, -2, "segments");
     return 1;
 }
 
-static int l_collect_process(lua_State *L) {
-    DWORD pids[MAX_PROCESSES];
-    DWORD bytes = 0;
-    DWORD count, index, output_index = 1;
-    if (!EnumProcesses(pids, sizeof(pids), &bytes))
-        return push_windows_error(L, "EnumProcesses");
-    count = bytes / sizeof(DWORD);
-    lua_createtable(L, 0, 4);
-    lua_createtable(L, (int)count, 0);
-    for (index = 0; index < count; ++index) {
-        DWORD pid = pids[index];
-        HANDLE process;
-        FILETIME created, exited, kernel, user;
-        PROCESS_MEMORY_COUNTERS memory;
-        WCHAR name[MAX_PATH];
-        int has_times, has_memory;
-        char fallback_name[32];
-        char fallback_id[48];
-        if (!pid) continue;
-        process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-            FALSE, pid);
-        if (!process)
-            process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid);
-        if (!process) continue;
-        has_times = GetProcessTimes(process, &created, &exited, &kernel, &user);
-        memset(&memory, 0, sizeof(memory));
-        memory.cb = sizeof(memory);
-        has_memory = GetProcessMemoryInfo(process, &memory, sizeof(memory));
-        if (!GetModuleBaseNameW(process, NULL, name, MAX_PATH)) {
-            DWORD name_length = GetProcessImageFileNameW(process, name, MAX_PATH);
-            if (name_length > 0) {
-                const WCHAR *base = wcsrchr(name, L'\\');
-                if (base && base[1]) {
-                    size_t remaining = wcslen(base + 1);
-                    memmove(name, base + 1, (remaining + 1) * sizeof(WCHAR));
-                }
-            } else {
-                name[0] = 0;
-            }
-        }
-        (void)CloseHandle(process);
-        snprintf(fallback_name, sizeof(fallback_name), "PID %lu",
-            (unsigned long)pid);
-        snprintf(fallback_id, sizeof(fallback_id), "pid:%lu",
-            (unsigned long)pid);
-        lua_createtable(L, 0, 9);
-        integer_field(L, "pid", (lua_Integer)pid);
-        if (name[0]) utf8_field(L, "name", name);
-        else string_field(L, "name", fallback_name);
-        if (has_times) {
-            uint64_t start = filetime_value(created);
-            char identity[64];
-            snprintf(identity, sizeof(identity), "%lu:%llu",
-                (unsigned long)pid, (unsigned long long)start);
-            string_field(L, "id", identity);
-            integer_field(L, "starttime_ticks", (lua_Integer)start);
-            integer_field(L, "cpu_ticks", (lua_Integer)(
-                (filetime_value(kernel) + filetime_value(user)) / 100000ULL));
-        } else {
-            string_field(L, "id", fallback_id);
-        }
-        if (has_memory) {
-            integer_field(L, "resident_bytes", (lua_Integer)memory.WorkingSetSize);
-            integer_field(L, "virtual_bytes", (lua_Integer)memory.PagefileUsage);
-        }
-        lua_rawseti(L, -2, output_index++);
+#define USER_CACHE_SIZE 128
+
+typedef struct {
+    BYTE sid[SECURITY_MAX_SID_SIZE];
+    char name[192];
+    int used;
+} user_cache_entry;
+
+static user_cache_entry user_cache[USER_CACHE_SIZE];
+static int user_cache_next = 0;
+
+static void utf8_copy(char *output, size_t size, const WCHAR *source) {
+    int length = WideCharToMultiByte(CP_UTF8, 0, source, -1, output, (int)size,
+        NULL, NULL);
+    if (length <= 0) output[0] = 0;
+    output[size - 1] = 0;
+}
+
+/* Account lookups can leave the machine for domain SIDs, so each SID is
+ * resolved once per run and the answer, including a failure, is reused. */
+static const char *process_user(HANDLE process) {
+    HANDLE token;
+    DWORD length = 0;
+    union {
+        TOKEN_USER user;
+        BYTE bytes[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+    } buffer;
+    PSID sid;
+    user_cache_entry *entry;
+    WCHAR name[96], domain[96];
+    DWORD name_length = 96, domain_length = 96;
+    SID_NAME_USE use;
+    if (!OpenProcessToken(process, TOKEN_QUERY, &token)) return NULL;
+    if (!GetTokenInformation(token, TokenUser, &buffer, sizeof(buffer), &length)) {
+        CloseHandle(token);
+        return NULL;
     }
+    CloseHandle(token);
+    sid = buffer.user.User.Sid;
+    if (!IsValidSid(sid)) return NULL;
+    for (int index = 0; index < USER_CACHE_SIZE; ++index) {
+        if (user_cache[index].used && EqualSid((PSID)user_cache[index].sid, sid))
+            return user_cache[index].name;
+    }
+    entry = &user_cache[user_cache_next];
+    user_cache_next = (user_cache_next + 1) % USER_CACHE_SIZE;
+    if (!CopySid(sizeof(entry->sid), (PSID)entry->sid, sid)) return NULL;
+    if (LookupAccountSidW(NULL, sid, name, &name_length, domain, &domain_length,
+        &use)) {
+        utf8_copy(entry->name, sizeof(entry->name), name);
+    } else {
+        LPWSTR text = NULL;
+        if (ConvertSidToStringSidW(sid, &text)) {
+            utf8_copy(entry->name, sizeof(entry->name), text);
+            LocalFree(text);
+        } else {
+            entry->name[0] = 0;
+        }
+    }
+    entry->used = 1;
+    return entry->name[0] ? entry->name : NULL;
+}
+
+static HANDLE open_query_process(DWORD pid, int *can_read_memory) {
+    HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+        FALSE, pid);
+    *can_read_memory = process != NULL;
+    if (!process) process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid);
+    /* PROCESS_QUERY_LIMITED_INFORMATION (Vista+) still reads times, memory,
+     * and the image path of protected and service processes. XP rejects it. */
+    if (!process) process = OpenProcess(0x1000, FALSE, pid);
+    return process;
+}
+
+static int process_path(HANDLE process, int can_read_memory, WCHAR *path,
+    DWORD characters) {
+    static int resolved = 0;
+    typedef BOOL (WINAPI *image_name_function)(HANDLE, DWORD, LPWSTR, PDWORD);
+    static image_name_function image_name = NULL;
+    DWORD length = characters;
+    if (!resolved) {
+        HMODULE kernel = GetModuleHandleA("kernel32.dll");
+        image_name = kernel ? (image_name_function)(void *)GetProcAddress(kernel,
+            "QueryFullProcessImageNameW") : NULL;
+        resolved = 1;
+    }
+    if (image_name && image_name(process, 0, path, &length) && length > 0)
+        return 1;
+    if (can_read_memory && GetModuleFileNameExW(process, NULL, path, characters) > 0)
+        return 1;
+    return 0;
+}
+
+static int l_collect_process(lua_State *L) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    PROCESSENTRY32W entry;
+    DWORD count = 0, denied = 0;
+    int output_index = 1, truncated = 0;
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return push_windows_error(L, "CreateToolhelp32Snapshot");
+    entry.dwSize = sizeof(entry);
+    lua_createtable(L, 0, 6);
+    lua_createtable(L, 256, 0);
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            DWORD pid = entry.th32ProcessID;
+            HANDLE process;
+            FILETIME created, exited, kernel, user;
+            PROCESS_MEMORY_COUNTERS memory;
+            WCHAR path[MAX_PATH];
+            int has_times = 0, has_memory = 0, has_path = 0, can_read_memory = 0;
+            const char *owner = NULL;
+            char fallback_id[48];
+            /* PID 0 is the idle accounting pseudo-process, not a program. */
+            if (pid == 0) continue;
+            if (count >= MAX_PROCESSES) {
+                truncated = 1;
+                break;
+            }
+            ++count;
+            process = open_query_process(pid, &can_read_memory);
+            if (process) {
+                has_times = GetProcessTimes(process, &created, &exited, &kernel, &user);
+                memset(&memory, 0, sizeof(memory));
+                memory.cb = sizeof(memory);
+                has_memory = GetProcessMemoryInfo(process, &memory, sizeof(memory));
+                has_path = process_path(process, can_read_memory, path, MAX_PATH);
+                owner = process_user(process);
+                (void)CloseHandle(process);
+            } else {
+                ++denied;
+            }
+            lua_createtable(L, 0, 13);
+            integer_field(L, "pid", (lua_Integer)pid);
+            integer_field(L, "parent_pid", (lua_Integer)entry.th32ParentProcessID);
+            integer_field(L, "threads", (lua_Integer)entry.cntThreads);
+            integer_field(L, "priority", (lua_Integer)entry.pcPriClassBase);
+            entry.szExeFile[MAX_PATH - 1] = 0;
+            utf8_field(L, "name", entry.szExeFile);
+            if (has_path) {
+                path[MAX_PATH - 1] = 0;
+                utf8_field(L, "command", path);
+            }
+            if (owner) string_field(L, "user", owner);
+            if (has_times) {
+                uint64_t start = filetime_value(created);
+                char identity[64];
+                snprintf(identity, sizeof(identity), "%lu:%llu",
+                    (unsigned long)pid, (unsigned long long)start);
+                string_field(L, "id", identity);
+                integer_field(L, "starttime_ticks", (lua_Integer)start);
+                integer_field(L, "cpu_ticks", (lua_Integer)(
+                    (filetime_value(kernel) + filetime_value(user)) / 100000ULL));
+            } else {
+                snprintf(fallback_id, sizeof(fallback_id), "pid:%lu",
+                    (unsigned long)pid);
+                string_field(L, "id", fallback_id);
+                lua_pushboolean(L, 1);
+                lua_setfield(L, -2, "partial");
+                string_field(L, "partial_reason", process ? "times_unavailable"
+                    : "query_denied");
+            }
+            if (has_memory) {
+                integer_field(L, "resident_bytes", (lua_Integer)memory.WorkingSetSize);
+                integer_field(L, "virtual_bytes", (lua_Integer)memory.PagefileUsage);
+            }
+            lua_rawseti(L, -2, output_index++);
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
     lua_setfield(L, -2, "list");
     integer_field(L, "process_candidates", (lua_Integer)count);
     integer_field(L, "process_limit", MAX_PROCESSES);
+    integer_field(L, "denied", (lua_Integer)denied);
     integer_field(L, "clock_ticks_per_second", 100);
-    lua_pushboolean(L, count == MAX_PROCESSES);
+    string_field(L, "starttime_unit", "filetime");
+    lua_pushboolean(L, truncated);
     lua_setfield(L, -2, "truncated");
     return 1;
 }
 
-static int push_drive_records(lua_State *L, int mounts) {
+static int push_mount_records(lua_State *L) {
     WCHAR drives[512];
     DWORD length = GetLogicalDriveStringsW(
         (DWORD)(sizeof(drives) / sizeof(drives[0])), drives);
@@ -1168,54 +1497,201 @@ static int push_drive_records(lua_State *L, int mounts) {
         used = total.QuadPart >= free_total.QuadPart
             ? total.QuadPart - free_total.QuadPart : 0;
         lua_createtable(L, 0, 8);
-        if (mounts) {
-            utf8_field(L, "id", path);
-            utf8_field(L, "mount_point", path);
-            utf8_field(L, "source", path);
-            string_field(L, "kind", kind == DRIVE_REMOTE ? "network" : "local");
-            if (GetVolumeInformationW(path, NULL, 0, NULL, NULL,
-                &flags, filesystem, MAX_PATH)) {
-                utf8_field(L, "fs_type", filesystem);
-                lua_pushboolean(L, (flags & FILE_READ_ONLY_VOLUME) != 0);
-                lua_setfield(L, -2, "readonly");
-            }
-            lua_createtable(L, 0, 4);
-            integer_field(L, "total_bytes", (lua_Integer)total.QuadPart);
-            integer_field(L, "available_bytes",
-                (lua_Integer)free_to_user.QuadPart);
-            integer_field(L, "used_bytes", (lua_Integer)used);
-            number_field(L, "used_percent",
-                (lua_Number)used * 100 / (lua_Number)total.QuadPart);
-            lua_setfield(L, -2, "capacity");
-        } else {
-            utf8_field(L, "name", path);
-            lua_createtable(L, 0, 2);
-            integer_field(L, "size_bytes", (lua_Integer)total.QuadPart);
-            lua_setfield(L, -2, "identity");
+        utf8_field(L, "id", path);
+        utf8_field(L, "mount_point", path);
+        utf8_field(L, "source", path);
+        string_field(L, "kind", "local");
+        if (GetVolumeInformationW(path, NULL, 0, NULL, NULL,
+            &flags, filesystem, MAX_PATH)) {
+            utf8_field(L, "fs_type", filesystem);
+            lua_pushboolean(L, (flags & FILE_READ_ONLY_VOLUME) != 0);
+            lua_setfield(L, -2, "readonly");
         }
+        lua_createtable(L, 0, 4);
+        integer_field(L, "total_bytes", (lua_Integer)total.QuadPart);
+        integer_field(L, "available_bytes", (lua_Integer)free_to_user.QuadPart);
+        integer_field(L, "used_bytes", (lua_Integer)used);
+        number_field(L, "used_percent",
+            (lua_Number)used * 100 / (lua_Number)total.QuadPart);
+        lua_setfield(L, -2, "capacity");
         lua_rawseti(L, -2, output_index++);
     }
-    lua_setfield(L, -2, mounts ? "mounts" : "devices");
+    lua_setfield(L, -2, "mounts");
     return 1;
 }
 
+#define MAX_PHYSICAL_DRIVES 32
+#define DRIVE_IDENTITY_REFRESH 60
+
+typedef struct {
+    int valid;
+    int age;
+    char model[128];
+    char vendor[64];
+    char firmware[32];
+    int bus;
+    int removable;
+    int rotational; /* -1 unknown, 0 SSD, 1 HDD */
+} drive_identity;
+
+static drive_identity drive_identities[MAX_PHYSICAL_DRIVES];
+
+/* Windows 7 added the seek-penalty property; declare it locally so the XP
+ * headers still build. Older systems answer with an error, left unknown. */
+typedef struct {
+    DWORD Version;
+    DWORD Size;
+    BOOLEAN IncursSeekPenalty;
+} seek_penalty_descriptor;
+
+static void descriptor_text(char *output, size_t size, const BYTE *base,
+    DWORD available, DWORD offset) {
+    size_t length = 0;
+    output[0] = 0;
+    if (offset == 0 || offset >= available) return;
+    while (offset + length < available && base[offset + length] && length + 1 < size) {
+        output[length] = (char)base[offset + length];
+        ++length;
+    }
+    output[length] = 0;
+    while (length > 0 && output[length - 1] == ' ') output[--length] = 0;
+    if (output[0] == ' ') {
+        size_t skip = 0;
+        while (output[skip] == ' ') ++skip;
+        memmove(output, output + skip, length - skip + 1);
+    }
+}
+
+static void read_drive_identity(HANDLE drive, drive_identity *identity) {
+    STORAGE_PROPERTY_QUERY query;
+    union {
+        STORAGE_DEVICE_DESCRIPTOR descriptor;
+        BYTE bytes[1024];
+    } buffer;
+    seek_penalty_descriptor penalty;
+    DWORD returned = 0;
+    memset(identity, 0, sizeof(*identity));
+    identity->rotational = -1;
+    memset(&query, 0, sizeof(query));
+    query.PropertyId = StorageDeviceProperty;
+    query.QueryType = PropertyStandardQuery;
+    if (DeviceIoControl(drive, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query),
+        &buffer, sizeof(buffer), &returned, NULL) && returned >= sizeof(buffer.descriptor)) {
+        descriptor_text(identity->vendor, sizeof(identity->vendor), buffer.bytes,
+            returned, buffer.descriptor.VendorIdOffset);
+        descriptor_text(identity->model, sizeof(identity->model), buffer.bytes,
+            returned, buffer.descriptor.ProductIdOffset);
+        descriptor_text(identity->firmware, sizeof(identity->firmware), buffer.bytes,
+            returned, buffer.descriptor.ProductRevisionOffset);
+        identity->bus = (int)buffer.descriptor.BusType;
+        identity->removable = buffer.descriptor.RemovableMedia != 0;
+    }
+    query.PropertyId = (STORAGE_PROPERTY_ID)7; /* StorageDeviceSeekPenaltyProperty */
+    memset(&penalty, 0, sizeof(penalty));
+    if (DeviceIoControl(drive, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query),
+        &penalty, sizeof(penalty), &returned, NULL) && returned >= sizeof(penalty))
+        identity->rotational = penalty.IncursSeekPenalty ? 1 : 0;
+    identity->valid = 1;
+}
+
+static const char *bus_name(int bus) {
+    static const char *names[] = {
+        NULL, "SCSI", "ATAPI", "ATA", "IEEE 1394", "SSA", "Fibre Channel",
+        "USB", "RAID", "iSCSI", "SAS", "SATA", "SD", "MMC", "Virtual",
+        "File-backed virtual", "Storage Spaces", "NVMe",
+    };
+    if (bus <= 0 || bus >= (int)(sizeof(names) / sizeof(names[0]))) return NULL;
+    return names[bus];
+}
+
 static int l_collect_disk(lua_State *L) {
-    if (!push_drive_records(L, 0))
-        return push_windows_error(L, "GetLogicalDriveStringsW");
+    int output_index = 1;
+    lua_createtable(L, 0, 1);
+    lua_createtable(L, 4, 0);
+    for (int number = 0; number < MAX_PHYSICAL_DRIVES; ++number) {
+        WCHAR path[40];
+        char name[32];
+        HANDLE drive;
+        DISK_PERFORMANCE performance;
+        DISK_GEOMETRY_EX geometry;
+        uint64_t disk_size = 0;
+        DWORD returned = 0;
+        int has_performance, has_length;
+        drive_identity *identity = &drive_identities[number];
+        swprintf(path, 40, L"\\\\.\\PhysicalDrive%d", number);
+        /* No access rights are needed for the performance and property
+         * queries, so an ordinary user sees the same counters as an admin. */
+        drive = CreateFileW(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+            OPEN_EXISTING, 0, NULL);
+        if (drive == INVALID_HANDLE_VALUE) {
+            identity->valid = 0;
+            continue;
+        }
+        memset(&performance, 0, sizeof(performance));
+        has_performance = DeviceIoControl(drive, IOCTL_DISK_PERFORMANCE, NULL, 0,
+            &performance, sizeof(performance), &returned, NULL);
+        /* The geometry query needs no access rights, unlike the length
+         * query, so it reports the size to ordinary users as well. */
+        has_length = DeviceIoControl(drive, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, NULL, 0,
+            &geometry, sizeof(geometry), &returned, NULL)
+            && returned >= offsetof(DISK_GEOMETRY_EX, Data);
+        if (has_length) disk_size = (uint64_t)geometry.DiskSize.QuadPart;
+        if (!identity->valid || ++identity->age >= DRIVE_IDENTITY_REFRESH)
+            read_drive_identity(drive, identity);
+        CloseHandle(drive);
+        snprintf(name, sizeof(name), "PhysicalDrive%d", number);
+        lua_createtable(L, 0, 8);
+        string_field(L, "id", name);
+        /* Disk Management and diskpart call this drive "Disk N". */
+        snprintf(name, sizeof(name), "Disk %d", number);
+        string_field(L, "name", name);
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "aggregate");
+        lua_createtable(L, 0, 7);
+        if (identity->model[0]) string_field(L, "model", identity->model);
+        if (identity->vendor[0]) string_field(L, "vendor", identity->vendor);
+        if (identity->firmware[0]) string_field(L, "firmware", identity->firmware);
+        if (bus_name(identity->bus)) string_field(L, "bus", bus_name(identity->bus));
+        if (has_length) integer_field(L, "size_bytes", (lua_Integer)disk_size);
+        if (identity->rotational >= 0) integer_field(L, "rotational", identity->rotational);
+        lua_pushboolean(L, identity->removable);
+        lua_setfield(L, -2, "removable");
+        lua_setfield(L, -2, "identity");
+        if (has_performance) {
+            lua_createtable(L, 0, 7);
+            integer_field(L, "bytes_read", (lua_Integer)performance.BytesRead.QuadPart);
+            integer_field(L, "bytes_written",
+                (lua_Integer)performance.BytesWritten.QuadPart);
+            integer_field(L, "reads", (lua_Integer)performance.ReadCount);
+            integer_field(L, "writes", (lua_Integer)performance.WriteCount);
+            integer_field(L, "read_time_ns",
+                (lua_Integer)performance.ReadTime.QuadPart * 100);
+            integer_field(L, "write_time_ns",
+                (lua_Integer)performance.WriteTime.QuadPart * 100);
+            integer_field(L, "idle_time_ns",
+                (lua_Integer)performance.IdleTime.QuadPart * 100);
+            lua_setfield(L, -2, "counters");
+            integer_field(L, "in_flight", (lua_Integer)performance.QueueDepth);
+        }
+        lua_rawseti(L, -2, output_index++);
+    }
+    lua_setfield(L, -2, "devices");
     return 1;
 }
 
 static int l_collect_mounts(lua_State *L) {
-    if (!push_drive_records(L, 1))
+    if (!push_mount_records(L))
         return push_windows_error(L, "GetLogicalDriveStringsW");
     return 1;
 }
 
 static int l_collect_network(lua_State *L) {
     ULONG size = 0;
-    DWORD status = GetIfTable(NULL, &size, FALSE);
+    DWORD status;
     MIB_IFTABLE *interfaces;
     DWORD index, output_index = 1;
+    if (wtop_push_if_table2(L)) return 1;
+    status = GetIfTable(NULL, &size, FALSE);
     if (status != ERROR_INSUFFICIENT_BUFFER || size == 0 || size > 1024 * 1024) {
         lua_pushnil(L);
         lua_pushliteral(L, "GetIfTable failed or returned too much data");
@@ -1245,17 +1721,28 @@ static int l_collect_network(lua_State *L) {
         string_field(L, "operstate",
             entry->dwOperStatus == IF_OPER_STATUS_OPERATIONAL ? "up" : "down");
         integer_field(L, "mtu", (lua_Integer)entry->dwMtu);
-        number_field(L, "speed_mbps", (lua_Number)entry->dwSpeed / 1000000.0);
-        lua_createtable(L, 0, 4);
+        if (entry->dwSpeed > 0)
+            integer_field(L, "speed_mbps", (lua_Integer)(entry->dwSpeed / 1000000));
+        if (entry->dwPhysAddrLen > 0 && entry->dwPhysAddrLen <= MAXLEN_PHYSADDR) {
+            char mac[3 * MAXLEN_PHYSADDR];
+            for (DWORD byte = 0; byte < entry->dwPhysAddrLen; ++byte)
+                snprintf(mac + byte * 3, 4, byte + 1 < entry->dwPhysAddrLen
+                    ? "%02x:" : "%02x", entry->bPhysAddr[byte]);
+            string_field(L, "address", mac);
+        }
+        lua_createtable(L, 0, 6);
         integer_field(L, "rx_bytes", (lua_Integer)entry->dwInOctets);
         integer_field(L, "tx_bytes", (lua_Integer)entry->dwOutOctets);
         integer_field(L, "rx_errors", (lua_Integer)entry->dwInErrors);
         integer_field(L, "tx_errors", (lua_Integer)entry->dwOutErrors);
+        integer_field(L, "rx_drops", (lua_Integer)entry->dwInDiscards);
+        integer_field(L, "tx_drops", (lua_Integer)entry->dwOutDiscards);
         lua_setfield(L, -2, "counters");
         lua_rawseti(L, -2, output_index++);
     }
     free(interfaces);
     lua_setfield(L, -2, "interfaces");
+    integer_field(L, "counter_bits", 32);
     return 1;
 }
 
@@ -1338,6 +1825,8 @@ static const luaL_Reg functions[] = {
     {"mkdir", l_mkdir},
     {"atomic_write", l_atomic_write},
     {"wcwidth", l_wcwidth},
+    {"console_cells", l_console_cells},
+    {"user_locale", l_user_locale},
     {"collect_cpu", l_collect_cpu},
     {"collect_cpu_info", l_collect_cpu_info},
     {"collect_memory", l_collect_memory},
@@ -1345,6 +1834,7 @@ static const luaL_Reg functions[] = {
     {"collect_disk", l_collect_disk},
     {"collect_mounts", l_collect_mounts},
     {"collect_network", l_collect_network},
+    {"collect_connections", wtop_collect_connections},
     {"collect_system_info", l_collect_system_info},
     {NULL, NULL},
 };

@@ -5,10 +5,17 @@
 #include <lua.h>
 #include <lauxlib.h>
 
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOKitLib.h>
+#include <IOKit/IOBSD.h>
+#include <IOKit/storage/IOBlockStorageDriver.h>
+#include <IOKit/storage/IOMedia.h>
+#include <IOKit/storage/IOStorageDeviceCharacteristics.h>
+#include <IOKit/storage/IOStorageProtocolCharacteristics.h>
+
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
-#include <ifaddrs.h>
 #include <limits.h>
 #include <libproc.h>
 #include <locale.h>
@@ -19,7 +26,10 @@
 #include <mach/vm_statistics.h>
 #include <net/if.h>
 #include <net/if_dl.h>
+#include <net/if_mib.h>
+#include <net/route.h>
 #include <poll.h>
+#include <pwd.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -524,23 +534,160 @@ static int l_collect_cpu(lua_State *L) {
     return 1;
 }
 
+static int sysctl_text(const char *name, char *output, size_t size) {
+    size_t length = size - 1;
+    memset(output, 0, size);
+    if (sysctlbyname(name, output, &length, NULL, 0) != 0 || length == 0) return 0;
+    output[size - 1] = 0;
+    return output[0] != 0;
+}
+
+static int sysctl_integer(const char *name, int64_t *value) {
+    unsigned char buffer[8] = {0};
+    size_t length = sizeof(buffer);
+    *value = 0;
+    if (sysctlbyname(name, buffer, &length, NULL, 0) != 0) return 0;
+    if (length == sizeof(int32_t)) {
+        int32_t narrow;
+        memcpy(&narrow, buffer, sizeof(narrow));
+        *value = narrow;
+    } else if (length == sizeof(int64_t)) {
+        memcpy(value, buffer, sizeof(*value));
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
+typedef struct {
+    int level;
+    const char *type;
+    int64_t instances;
+    int64_t total;
+} cache_total;
+
+static void add_cache(cache_total *caches, int *count, int level, const char *type,
+    int64_t size, int64_t instances) {
+    if (size <= 0 || instances <= 0) return;
+    for (int index = 0; index < *count; ++index) {
+        if (caches[index].level == level && strcmp(caches[index].type, type) == 0) {
+            caches[index].instances += instances;
+            caches[index].total += size * instances;
+            return;
+        }
+    }
+    if (*count >= 8) return;
+    caches[*count].level = level;
+    caches[*count].type = type;
+    caches[*count].instances = instances;
+    caches[*count].total = size * instances;
+    ++*count;
+}
+
 static int l_collect_cpu_info(lua_State *L) {
-    int logical = 0, physical = 0;
-    size_t length = sizeof(int);
-    if (sysctlbyname("hw.logicalcpu", &logical, &length, NULL, 0) != 0)
+    int64_t logical = 0, physical = 0, packages = 0, levels = 0, value = 0;
+    char text[256];
+    cache_total caches[8];
+    int cache_count = 0;
+    if (!sysctl_integer("hw.logicalcpu", &logical))
         return push_errno(L, "sysctlbyname(hw.logicalcpu)");
-    length = sizeof(int);
-    (void)sysctlbyname("hw.physicalcpu", &physical, &length, NULL, 0);
-    lua_createtable(L, 0, 1);
-    lua_createtable(L, 0, 2);
+    (void)sysctl_integer("hw.physicalcpu", &physical);
+    (void)sysctl_integer("hw.packages", &packages);
+    (void)sysctl_integer("hw.nperflevels", &levels);
+    lua_createtable(L, 0, 4);
+    lua_createtable(L, 0, 6);
+    if (sysctl_text("machdep.cpu.brand_string", text, sizeof(text)))
+        string_field(L, "model_name", text);
+    if (sysctl_text("machdep.cpu.vendor", text, sizeof(text)))
+        string_field(L, "vendor", text);
+#if defined(__arm64__)
+    else
+        string_field(L, "vendor", "Apple");
+#endif
+    if (sysctl_integer("machdep.cpu.family", &value)) integer_field(L, "family", value);
+    if (sysctl_integer("machdep.cpu.model", &value)) integer_field(L, "model", value);
+    if (sysctl_integer("machdep.cpu.stepping", &value)) integer_field(L, "stepping", value);
+    lua_pushboolean(L, levels > 1);
+    lua_setfield(L, -2, "heterogeneous");
+    lua_setfield(L, -2, "identity");
+    lua_createtable(L, 0, 3);
     integer_field(L, "threads", logical);
-    if (physical > 0) integer_field(L, "cores", physical);
+    if (physical > 0) integer_field(L, "physical_cores", physical);
+    if (packages > 0) integer_field(L, "sockets", packages);
     lua_setfield(L, -2, "topology");
+    lua_createtable(L, (int)(levels > 0 ? levels : 0), 0);
+    if (levels > 0) {
+        /* Apple silicon groups cores into performance levels, each with its
+         * own core count and cache sizes. */
+        for (int64_t level = 0; level < levels && level < 8; ++level) {
+            char name[64];
+            int64_t level_logical = 0, level_physical = 0, size = 0, sharing = 0;
+            snprintf(name, sizeof(name), "hw.perflevel%lld.logicalcpu", (long long)level);
+            (void)sysctl_integer(name, &level_logical);
+            snprintf(name, sizeof(name), "hw.perflevel%lld.physicalcpu", (long long)level);
+            (void)sysctl_integer(name, &level_physical);
+            lua_createtable(L, 0, 4);
+            lua_pushfstring(L, "type-%d", (int)level + 1);
+            lua_setfield(L, -2, "id");
+            snprintf(name, sizeof(name), "hw.perflevel%lld.name", (long long)level);
+            if (sysctl_text(name, text, sizeof(text))) string_field(L, "model_name", text);
+            integer_field(L, "logical_cpu_count", level_logical);
+            integer_field(L, "physical_core_count", level_physical);
+            lua_rawseti(L, -2, (lua_Integer)level + 1);
+            snprintf(name, sizeof(name), "hw.perflevel%lld.l1dcachesize", (long long)level);
+            if (sysctl_integer(name, &size)) add_cache(caches, &cache_count, 1, "Data", size, level_physical);
+            snprintf(name, sizeof(name), "hw.perflevel%lld.l1icachesize", (long long)level);
+            if (sysctl_integer(name, &size)) add_cache(caches, &cache_count, 1, "Instruction", size, level_physical);
+            snprintf(name, sizeof(name), "hw.perflevel%lld.cpusperl2", (long long)level);
+            (void)sysctl_integer(name, &sharing);
+            snprintf(name, sizeof(name), "hw.perflevel%lld.l2cachesize", (long long)level);
+            if (sysctl_integer(name, &size) && sharing > 0)
+                add_cache(caches, &cache_count, 2, "Unified", size, level_logical / sharing);
+            snprintf(name, sizeof(name), "hw.perflevel%lld.cpusperl3", (long long)level);
+            sharing = 0;
+            (void)sysctl_integer(name, &sharing);
+            snprintf(name, sizeof(name), "hw.perflevel%lld.l3cachesize", (long long)level);
+            if (sysctl_integer(name, &size) && sharing > 0)
+                add_cache(caches, &cache_count, 3, "Unified", size, level_logical / sharing);
+        }
+    } else {
+        /* hw.cacheconfig lists how many logical CPUs share each cache level. */
+        uint64_t sharing[8] = {0};
+        size_t length = sizeof(sharing);
+        int64_t size = 0;
+        if (sysctlbyname("hw.cacheconfig", sharing, &length, NULL, 0) != 0) length = 0;
+        if (length >= 2 * sizeof(uint64_t) && sharing[1] > 0) {
+            if (sysctl_integer("hw.l1dcachesize", &size))
+                add_cache(caches, &cache_count, 1, "Data", size, logical / (int64_t)sharing[1]);
+            if (sysctl_integer("hw.l1icachesize", &size))
+                add_cache(caches, &cache_count, 1, "Instruction", size, logical / (int64_t)sharing[1]);
+        }
+        if (length >= 3 * sizeof(uint64_t) && sharing[2] > 0
+            && sysctl_integer("hw.l2cachesize", &size))
+            add_cache(caches, &cache_count, 2, "Unified", size, logical / (int64_t)sharing[2]);
+        if (length >= 4 * sizeof(uint64_t) && sharing[3] > 0
+            && sysctl_integer("hw.l3cachesize", &size))
+            add_cache(caches, &cache_count, 3, "Unified", size, logical / (int64_t)sharing[3]);
+    }
+    lua_setfield(L, -2, "core_types");
+    lua_createtable(L, cache_count, 0);
+    for (int index = 0; index < cache_count; ++index) {
+        lua_createtable(L, 0, 5);
+        lua_pushfstring(L, "L%d:%s", caches[index].level, caches[index].type);
+        lua_setfield(L, -2, "id");
+        integer_field(L, "level", caches[index].level);
+        string_field(L, "type", caches[index].type);
+        integer_field(L, "instances", caches[index].instances);
+        integer_field(L, "total_size_bytes", caches[index].total);
+        lua_rawseti(L, -2, index + 1);
+    }
+    lua_setfield(L, -2, "cache_summary");
     return 1;
 }
 
 static int l_collect_memory(lua_State *L) {
-    uint64_t total, free_bytes, used, swap_total = 0, swap_used = 0;
+    uint64_t total, used, cache, free_bytes, app, wired, compressed;
+    uint64_t swap_total = 0, swap_used = 0;
     size_t length = sizeof(total);
     vm_statistics64_data_t vm;
     mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
@@ -554,35 +701,92 @@ static int l_collect_memory(lua_State *L) {
         lua_pushliteral(L, "host_statistics64(HOST_VM_INFO64) failed");
         return 2;
     }
-    free_bytes = ((uint64_t)vm.free_count + vm.inactive_count
-        + vm.speculative_count) * page_size;
-    if (free_bytes > total) free_bytes = total;
-    used = total - free_bytes;
+    /* The same split Activity Monitor uses: app memory, wired, and the
+     * compressor are in use; file-backed and purgeable pages are cache. */
+    app = vm.internal_page_count > vm.purgeable_count
+        ? (uint64_t)(vm.internal_page_count - vm.purgeable_count) * page_size : 0;
+    wired = (uint64_t)vm.wire_count * page_size;
+    compressed = (uint64_t)vm.compressor_page_count * page_size;
+    used = app + wired + compressed;
+    if (used > total) used = total;
+    cache = ((uint64_t)vm.external_page_count + vm.purgeable_count) * page_size;
+    if (cache > total - used) cache = total - used;
+    free_bytes = total - used - cache;
     length = sizeof(swap);
     if (sysctlbyname("vm.swapusage", &swap, &length, NULL, 0) == 0) {
         swap_total = swap.xsu_total;
         swap_used = swap.xsu_used;
         if (swap_used > swap_total) swap_used = swap_total;
     }
-    lua_createtable(L, 0, 9);
+    lua_createtable(L, 0, 12);
     integer_field(L, "total_bytes", (lua_Integer)total);
-    integer_field(L, "available_bytes", (lua_Integer)free_bytes);
+    integer_field(L, "available_bytes", (lua_Integer)(cache + free_bytes));
     integer_field(L, "free_bytes", (lua_Integer)free_bytes);
     integer_field(L, "used_bytes", (lua_Integer)used);
+    integer_field(L, "cache_bytes", (lua_Integer)cache);
+    integer_field(L, "wired_bytes", (lua_Integer)wired);
+    integer_field(L, "compressed_bytes", (lua_Integer)compressed);
     integer_field(L, "swap_total_bytes", (lua_Integer)swap_total);
     integer_field(L, "swap_used_bytes", (lua_Integer)swap_used);
     integer_field(L, "swap_free_bytes", (lua_Integer)(swap_total - swap_used));
-    lua_createtable(L, 2, 0);
+    lua_createtable(L, 3, 0);
     lua_createtable(L, 0, 2);
     string_field(L, "id", "used");
     integer_field(L, "bytes", (lua_Integer)used);
     lua_rawseti(L, -2, 1);
     lua_createtable(L, 0, 2);
-    string_field(L, "id", "available");
-    integer_field(L, "bytes", (lua_Integer)free_bytes);
+    string_field(L, "id", "cache");
+    integer_field(L, "bytes", (lua_Integer)cache);
     lua_rawseti(L, -2, 2);
+    lua_createtable(L, 0, 2);
+    string_field(L, "id", "free");
+    integer_field(L, "bytes", (lua_Integer)free_bytes);
+    lua_rawseti(L, -2, 3);
     lua_setfield(L, -2, "segments");
     return 1;
+}
+
+#define USER_CACHE_SIZE 64
+
+typedef struct {
+    uid_t uid;
+    int used;
+    char name[64];
+} user_cache_entry;
+
+static user_cache_entry user_cache[USER_CACHE_SIZE];
+static int user_cache_next = 0;
+
+/* Directory lookups can reach a network directory service, so each UID is
+ * resolved once per run and the answer, including a failure, is reused. */
+static const char *user_name(uid_t uid) {
+    struct passwd entry, *result = NULL;
+    char buffer[2048];
+    user_cache_entry *cached;
+    for (int index = 0; index < USER_CACHE_SIZE; ++index) {
+        if (user_cache[index].used && user_cache[index].uid == uid)
+            return user_cache[index].name;
+    }
+    cached = &user_cache[user_cache_next];
+    user_cache_next = (user_cache_next + 1) % USER_CACHE_SIZE;
+    if (getpwuid_r(uid, &entry, buffer, sizeof(buffer), &result) == 0
+        && result && result->pw_name && result->pw_name[0])
+        snprintf(cached->name, sizeof(cached->name), "%s", result->pw_name);
+    else
+        snprintf(cached->name, sizeof(cached->name), "%u", (unsigned)uid);
+    cached->uid = uid;
+    cached->used = 1;
+    return cached->name;
+}
+
+/* The BSD status reports SRUN for runnable and sleeping processes alike, so
+ * only the states it does distinguish are passed on. */
+static const char *process_state(uint32_t status) {
+    switch (status) {
+    case SSTOP: return "T";
+    case SZOMB: return "Z";
+    default: return NULL;
+    }
 }
 
 static int l_collect_process(lua_State *L) {
@@ -597,6 +801,7 @@ static int l_collect_process(lua_State *L) {
         struct proc_bsdinfo bsd;
         struct proc_taskinfo task;
         char name[PROC_PIDPATHINFO_MAXSIZE];
+        char path[PROC_PIDPATHINFO_MAXSIZE];
         char identity[80];
         pid_t pid = pids[index];
         int bsd_bytes, task_bytes;
@@ -618,6 +823,13 @@ static int l_collect_process(lua_State *L) {
         integer_field(L, "starttime_ticks", (lua_Integer)bsd.pbi_start_tvsec
             * 1000000LL + bsd.pbi_start_tvusec);
         integer_field(L, "uid", bsd.pbi_uid);
+        string_field(L, "user", user_name(bsd.pbi_uid));
+        integer_field(L, "parent_pid", bsd.pbi_ppid);
+        integer_field(L, "nice", bsd.pbi_nice);
+        if (process_state(bsd.pbi_status))
+            string_field(L, "state", process_state(bsd.pbi_status));
+        if (proc_pidpath(pid, path, sizeof(path)) > 0)
+            string_field(L, "command", path);
         if (task_bytes == sizeof(task)) {
             integer_field(L, "cpu_ticks", (lua_Integer)(
                 ((uint64_t)task.pti_total_user + task.pti_total_system)
@@ -632,12 +844,13 @@ static int l_collect_process(lua_State *L) {
     integer_field(L, "process_candidates", count);
     integer_field(L, "process_limit", MAX_PROCESS_COUNT);
     integer_field(L, "clock_ticks_per_second", 100);
+    string_field(L, "starttime_unit", "unix_us");
     lua_pushboolean(L, count == MAX_PROCESS_COUNT);
     lua_setfield(L, -2, "truncated");
     return 1;
 }
 
-static int push_mounts(lua_State *L, int mounts) {
+static int push_mounts(lua_State *L) {
     struct statfs *values = NULL;
     int count = getmntinfo(&values, MNT_NOWAIT), output_index = 1;
     if (count <= 0 || !values) return push_errno(L, "getmntinfo");
@@ -651,61 +864,234 @@ static int push_mounts(lua_State *L, int mounts) {
         uint64_t used = total >= free_bytes ? total - free_bytes : 0;
         if (total == 0) continue;
         lua_createtable(L, 0, 8);
-        if (mounts) {
-            string_field(L, "id", entry->f_mntonname);
-            string_field(L, "mount_point", entry->f_mntonname);
-            string_field(L, "source", entry->f_mntfromname);
-            string_field(L, "fs_type", entry->f_fstypename);
-            string_field(L, "kind", entry->f_flags & MNT_LOCAL ? "local" : "network");
-            lua_pushboolean(L, (entry->f_flags & MNT_RDONLY) != 0);
-            lua_setfield(L, -2, "readonly");
-            lua_createtable(L, 0, 4);
-            integer_field(L, "total_bytes", (lua_Integer)total);
-            integer_field(L, "available_bytes", (lua_Integer)available);
-            integer_field(L, "used_bytes", (lua_Integer)used);
-            number_field(L, "used_percent", (lua_Number)used * 100 / total);
-            lua_setfield(L, -2, "capacity");
-        } else {
-            string_field(L, "name", entry->f_mntfromname);
-            lua_createtable(L, 0, 2);
-            integer_field(L, "size_bytes", (lua_Integer)total);
-            lua_setfield(L, -2, "identity");
-        }
+        string_field(L, "id", entry->f_mntonname);
+        string_field(L, "mount_point", entry->f_mntonname);
+        string_field(L, "source", entry->f_mntfromname);
+        string_field(L, "fs_type", entry->f_fstypename);
+        string_field(L, "kind", strcmp(entry->f_fstypename, "devfs") == 0
+            ? "pseudo" : entry->f_flags & MNT_LOCAL ? "local" : "network");
+        lua_pushboolean(L, (entry->f_flags & MNT_RDONLY) != 0);
+        lua_setfield(L, -2, "readonly");
+        lua_createtable(L, 0, 4);
+        integer_field(L, "total_bytes", (lua_Integer)total);
+        integer_field(L, "available_bytes", (lua_Integer)available);
+        integer_field(L, "used_bytes", (lua_Integer)used);
+        number_field(L, "used_percent", (lua_Number)used * 100 / total);
+        lua_setfield(L, -2, "capacity");
         lua_rawseti(L, -2, output_index++);
     }
-    lua_setfield(L, -2, mounts ? "mounts" : "devices");
+    lua_setfield(L, -2, "mounts");
     return 1;
 }
 
-static int l_collect_disk(lua_State *L) { return push_mounts(L, 0); }
-static int l_collect_mounts(lua_State *L) { return push_mounts(L, 1); }
+static CFTypeRef registry_property(io_registry_entry_t entry, CFStringRef key,
+    CFTypeID type) {
+    CFTypeRef value = IORegistryEntryCreateCFProperty(entry, key, kCFAllocatorDefault, 0);
+    if (value && CFGetTypeID(value) != type) {
+        CFRelease(value);
+        return NULL;
+    }
+    return value;
+}
+
+static int dictionary_integer(CFDictionaryRef dictionary, CFStringRef key,
+    int64_t *value) {
+    CFTypeRef number = CFDictionaryGetValue(dictionary, key);
+    return number && CFGetTypeID(number) == CFNumberGetTypeID()
+        && CFNumberGetValue((CFNumberRef)number, kCFNumberSInt64Type, value);
+}
+
+static void dictionary_string_field(lua_State *L, CFDictionaryRef dictionary,
+    CFStringRef key, const char *field) {
+    CFTypeRef value = dictionary ? CFDictionaryGetValue(dictionary, key) : NULL;
+    char text[256];
+    if (!value || CFGetTypeID(value) != CFStringGetTypeID()) return;
+    if (!CFStringGetCString((CFStringRef)value, text, sizeof(text),
+        kCFStringEncodingUTF8)) return;
+    for (size_t length = strlen(text); length > 0 && text[length - 1] == ' '; )
+        text[--length] = 0;
+    if (text[0]) string_field(L, field, text);
+}
+
+static void counter_field(lua_State *L, CFDictionaryRef statistics, CFStringRef key,
+    const char *field) {
+    int64_t value;
+    if (dictionary_integer(statistics, key, &value) && value >= 0)
+        integer_field(L, field, value);
+}
+
+static int l_collect_disk(lua_State *L) {
+    io_iterator_t iterator = 0;
+    io_registry_entry_t driver;
+    int output_index = 1;
+    if (IOServiceGetMatchingServices(MACH_PORT_NULL,
+        IOServiceMatching(kIOBlockStorageDriverClass), &iterator) != KERN_SUCCESS) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "IOServiceGetMatchingServices failed");
+        return 2;
+    }
+    lua_createtable(L, 0, 1);
+    lua_createtable(L, 4, 0);
+    while ((driver = IOIteratorNext(iterator)) != 0) {
+        io_registry_entry_t media = 0, device = 0;
+        CFDictionaryRef statistics = registry_property(driver,
+            CFSTR(kIOBlockStorageDriverStatisticsKey), CFDictionaryGetTypeID());
+        CFDictionaryRef characteristics = NULL, protocol = NULL;
+        CFStringRef bsd_name = NULL;
+        CFNumberRef size = NULL;
+        CFBooleanRef removable = NULL;
+        char name[64] = "";
+        if (IORegistryEntryGetChildEntry(driver, kIOServicePlane, &media) == KERN_SUCCESS) {
+            bsd_name = registry_property(media, CFSTR(kIOBSDNameKey), CFStringGetTypeID());
+            size = registry_property(media, CFSTR(kIOMediaSizeKey), CFNumberGetTypeID());
+            removable = registry_property(media, CFSTR(kIOMediaRemovableKey),
+                CFBooleanGetTypeID());
+        }
+        if (IORegistryEntryGetParentEntry(driver, kIOServicePlane, &device) == KERN_SUCCESS) {
+            characteristics = registry_property(device,
+                CFSTR(kIOPropertyDeviceCharacteristicsKey), CFDictionaryGetTypeID());
+            protocol = registry_property(device,
+                CFSTR(kIOPropertyProtocolCharacteristicsKey), CFDictionaryGetTypeID());
+        }
+        if (bsd_name)
+            (void)CFStringGetCString(bsd_name, name, sizeof(name), kCFStringEncodingUTF8);
+        if (name[0] && statistics) {
+            int64_t bytes = 0;
+            lua_createtable(L, 0, 6);
+            string_field(L, "id", name);
+            string_field(L, "name", name);
+            lua_pushboolean(L, 1);
+            lua_setfield(L, -2, "aggregate");
+            lua_createtable(L, 0, 7);
+            dictionary_string_field(L, characteristics, CFSTR(kIOPropertyProductNameKey), "model");
+            dictionary_string_field(L, characteristics, CFSTR(kIOPropertyVendorNameKey), "vendor");
+            dictionary_string_field(L, characteristics,
+                CFSTR(kIOPropertyProductRevisionLevelKey), "firmware");
+            dictionary_string_field(L, protocol, CFSTR(kIOPropertyPhysicalInterconnectTypeKey), "bus");
+            if (size && CFNumberGetValue(size, kCFNumberSInt64Type, &bytes) && bytes > 0)
+                integer_field(L, "size_bytes", bytes);
+            if (characteristics) {
+                CFTypeRef medium = CFDictionaryGetValue(characteristics,
+                    CFSTR(kIOPropertyMediumTypeKey));
+                if (medium && CFGetTypeID(medium) == CFStringGetTypeID()) {
+                    if (CFStringCompare((CFStringRef)medium,
+                        CFSTR(kIOPropertyMediumTypeSolidStateKey), 0) == kCFCompareEqualTo)
+                        integer_field(L, "rotational", 0);
+                    else if (CFStringCompare((CFStringRef)medium,
+                        CFSTR(kIOPropertyMediumTypeRotationalKey), 0) == kCFCompareEqualTo)
+                        integer_field(L, "rotational", 1);
+                }
+            }
+            lua_pushboolean(L, removable && CFBooleanGetValue(removable));
+            lua_setfield(L, -2, "removable");
+            lua_setfield(L, -2, "identity");
+            lua_createtable(L, 0, 6);
+            counter_field(L, statistics, CFSTR(kIOBlockStorageDriverStatisticsBytesReadKey), "bytes_read");
+            counter_field(L, statistics, CFSTR(kIOBlockStorageDriverStatisticsBytesWrittenKey), "bytes_written");
+            counter_field(L, statistics, CFSTR(kIOBlockStorageDriverStatisticsReadsKey), "reads");
+            counter_field(L, statistics, CFSTR(kIOBlockStorageDriverStatisticsWritesKey), "writes");
+            counter_field(L, statistics, CFSTR(kIOBlockStorageDriverStatisticsTotalReadTimeKey), "read_time_ns");
+            counter_field(L, statistics, CFSTR(kIOBlockStorageDriverStatisticsTotalWriteTimeKey), "write_time_ns");
+            lua_setfield(L, -2, "counters");
+            lua_rawseti(L, -2, output_index++);
+        }
+        if (statistics) CFRelease(statistics);
+        if (characteristics) CFRelease(characteristics);
+        if (protocol) CFRelease(protocol);
+        if (bsd_name) CFRelease(bsd_name);
+        if (size) CFRelease(size);
+        if (removable) CFRelease(removable);
+        if (media) IOObjectRelease(media);
+        if (device) IOObjectRelease(device);
+        IOObjectRelease(driver);
+    }
+    IOObjectRelease(iterator);
+    lua_setfield(L, -2, "devices");
+    return 1;
+}
+
+static int l_collect_mounts(lua_State *L) { return push_mounts(L); }
 
 static int l_collect_network(lua_State *L) {
-    struct ifaddrs *first = NULL;
-    int output_index = 1;
-    if (getifaddrs(&first) != 0) return push_errno(L, "getifaddrs");
-    lua_createtable(L, 0, 1);
+    /* NET_RT_IFLIST2 names each interface and its link address. Its byte
+     * counters, like the if_data behind getifaddrs, wrap at 4 GiB for an
+     * unprivileged caller, so the counters come from the interface MIB. */
+    int mib[6] = {CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST2, 0};
+    size_t length = 0;
+    char *buffer, *next, *end;
+    int output_index = 1, all_wide = 1;
+    if (sysctl(mib, 6, NULL, &length, NULL, 0) != 0 || length == 0)
+        return push_errno(L, "sysctl(NET_RT_IFLIST2)");
+    length += 4096;
+    buffer = (char *)malloc(length);
+    if (!buffer) return luaL_error(L, "out of memory collecting interfaces");
+    if (sysctl(mib, 6, buffer, &length, NULL, 0) != 0) {
+        int code = errno;
+        free(buffer);
+        errno = code;
+        return push_errno(L, "sysctl(NET_RT_IFLIST2)");
+    }
+    lua_createtable(L, 0, 2);
     lua_createtable(L, 16, 0);
-    for (struct ifaddrs *item = first; item; item = item->ifa_next) {
-        const struct if_data *data;
-        if (!item->ifa_addr || item->ifa_addr->sa_family != AF_LINK
-            || !item->ifa_data || !item->ifa_name) continue;
-        data = (const struct if_data *)item->ifa_data;
-        lua_createtable(L, 0, 7);
-        string_field(L, "id", item->ifa_name);
-        string_field(L, "name", item->ifa_name);
-        string_field(L, "operstate", item->ifa_flags & IFF_UP ? "up" : "down");
-        integer_field(L, "mtu", data->ifi_mtu);
-        lua_createtable(L, 0, 4);
-        integer_field(L, "rx_bytes", (lua_Integer)data->ifi_ibytes);
-        integer_field(L, "tx_bytes", (lua_Integer)data->ifi_obytes);
-        integer_field(L, "rx_errors", (lua_Integer)data->ifi_ierrors);
-        integer_field(L, "tx_errors", (lua_Integer)data->ifi_oerrors);
+    end = buffer + length;
+    for (next = buffer; next + sizeof(struct if_msghdr) <= end; ) {
+        const struct if_msghdr *header = (const struct if_msghdr *)next;
+        const struct if_msghdr2 *message;
+        const struct sockaddr_dl *link;
+        const struct if_data64 *counters;
+        struct ifmibdata interface_mib;
+        size_t mib_length = sizeof(interface_mib);
+        int mib_query[6] = {CTL_NET, PF_LINK, NETLINK_GENERIC, IFMIB_IFDATA, 0,
+            IFDATA_GENERAL};
+        char name[IFNAMSIZ + 1];
+        size_t name_length;
+        if (header->ifm_msglen == 0 || next + header->ifm_msglen > end) break;
+        next += header->ifm_msglen;
+        if (header->ifm_type != RTM_IFINFO2
+            || header->ifm_msglen < sizeof(struct if_msghdr2) + sizeof(struct sockaddr_dl))
+            continue;
+        message = (const struct if_msghdr2 *)header;
+        link = (const struct sockaddr_dl *)(message + 1);
+        name_length = link->sdl_nlen < IFNAMSIZ ? link->sdl_nlen : IFNAMSIZ;
+        memcpy(name, link->sdl_data, name_length);
+        name[name_length] = 0;
+        if (!name[0]) continue;
+        mib_query[4] = message->ifm_index;
+        if (sysctl(mib_query, 6, &interface_mib, &mib_length, NULL, 0) == 0
+            && mib_length >= sizeof(interface_mib)) {
+            counters = &interface_mib.ifmd_data;
+        } else {
+            counters = &message->ifm_data;
+            all_wide = 0;
+        }
+        lua_createtable(L, 0, 8);
+        string_field(L, "id", name);
+        string_field(L, "name", name);
+        string_field(L, "operstate", message->ifm_flags & IFF_UP
+            && message->ifm_flags & IFF_RUNNING ? "up" : "down");
+        integer_field(L, "mtu", (lua_Integer)message->ifm_data.ifi_mtu);
+        if (message->ifm_data.ifi_baudrate > 0)
+            integer_field(L, "speed_mbps",
+                (lua_Integer)(message->ifm_data.ifi_baudrate / 1000000));
+        if (link->sdl_alen == 6) {
+            const unsigned char *mac = (const unsigned char *)LLADDR(link);
+            char text[18];
+            snprintf(text, sizeof(text), "%02x:%02x:%02x:%02x:%02x:%02x",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            string_field(L, "address", text);
+        }
+        lua_createtable(L, 0, 5);
+        integer_field(L, "rx_bytes", (lua_Integer)counters->ifi_ibytes);
+        integer_field(L, "tx_bytes", (lua_Integer)counters->ifi_obytes);
+        integer_field(L, "rx_errors", (lua_Integer)counters->ifi_ierrors);
+        integer_field(L, "tx_errors", (lua_Integer)counters->ifi_oerrors);
+        integer_field(L, "rx_drops", (lua_Integer)counters->ifi_iqdrops);
         lua_setfield(L, -2, "counters");
         lua_rawseti(L, -2, output_index++);
     }
-    freeifaddrs(first);
+    free(buffer);
     lua_setfield(L, -2, "interfaces");
+    integer_field(L, "counter_bits", all_wide ? 64 : 32);
     return 1;
 }
 

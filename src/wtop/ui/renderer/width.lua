@@ -307,6 +307,42 @@ function M.codepoint_width(cp, options)
   return 1
 end
 
+-- Line art and punctuation with a plain-ASCII stand-in, used whenever the
+-- terminal cannot show Unicode glyphs.
+M.ASCII_GLYPHS = {
+  ["—"] = "-", ["–"] = "-", ["−"] = "-", ["·"] = ".", ["…"] = ".",
+  ["×"] = "x", ["↑"] = "^", ["↓"] = "v", ["←"] = "<", ["→"] = ">",
+  ["‹"] = "<", ["›"] = ">", ["▸"] = ">", ["▾"] = "v", ["●"] = "*",
+  ["°"] = "o", ["Ⅰ"] = "I", ["Ⅱ"] = "II",
+  ["▁"] = ".", ["▂"] = ":", ["▃"] = "-", ["▄"] = "=",
+  ["▅"] = "+", ["▆"] = "*", ["▇"] = "#", ["█"] = "#",
+}
+
+-- The glyph and cell count a non-Unicode terminal actually shows for one
+-- cluster. Line art falls back to ASCII. A classic Windows console reports,
+-- through `console_cells`, which characters its code page can show and how
+-- many cells each takes (two for a double-byte character), so Chinese,
+-- Japanese, Korean, Cyrillic, or accented text stays readable there.
+-- Anything else becomes a single "?".
+function M.ascii_cluster(cluster, width, options)
+  if not cluster:find("[\128-\255]") then return cluster, width end
+  local replacement = M.ASCII_GLYPHS[cluster]
+  if replacement then return replacement, #replacement end
+  local console_cells = options and options.console_cells
+  if console_cells then
+    local cp, after = decode_at(cluster, 1)
+    if cp and after == #cluster + 1 then
+      local ok, cells = pcall(console_cells, cp)
+      if ok and (cells == 1 or cells == 2) then return cluster, cells end
+    end
+  end
+  -- Preserve an ASCII base letter when the cluster only adds a combining
+  -- mark; other unsupported glyphs become a terminal-safe placeholder.
+  local first = cluster:byte(1)
+  if first and first < 0x80 then return cluster:sub(1, 1), 1 end
+  return "?", 1
+end
+
 local function is_extender(cp)
   return cp == 0x200D or in_ranges(cp, combining)
     or (cp >= 0x1F3FB and cp <= 0x1F3FF)
@@ -376,6 +412,11 @@ function M.graphemes(text, options)
       cluster_width = math.max(cluster_width, 2)
     end
     local cluster = valid == false and "�" or text:sub(start, index - 1)
+    if options.unicode == false then
+      -- Measure what will be drawn, so alignment and truncation agree with
+      -- the substituted glyphs.
+      cluster, cluster_width = M.ascii_cluster(cluster, cluster_width, options)
+    end
     return cluster, cluster_width, start, index - 1
   end
 end

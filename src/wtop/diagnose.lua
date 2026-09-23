@@ -72,7 +72,10 @@ function M.collect(options)
         safe_mode = options.safe_mode == true,
     }
 
-    if uname and uname.sysname == "Linux" then
+    -- Without the native module the host is unknown; the Linux file probes
+    -- still answer truthfully there, while macOS and Windows use native ones.
+    local linux_sources = not uname or uname.sysname == "Linux"
+    if linux_sources then
         report.sources = {
             proc_stat = probe_file("/proc/stat"),
             proc_cpuinfo = probe_file("/proc/cpuinfo"),
@@ -94,7 +97,8 @@ function M.collect(options)
     else
         for _, name in ipairs({
             "collect_cpu", "collect_cpu_info", "collect_memory", "collect_process",
-            "collect_disk", "collect_mounts", "collect_network", "collect_system_info",
+            "collect_disk", "collect_mounts", "collect_network", "collect_connections",
+            "collect_system_info",
         }) do
             report.sources[name] = probe_native(name)
         end
@@ -106,7 +110,7 @@ function M.collect(options)
         report.terminal.rows = rows
     end
 
-    for _, helper in ipairs(uname and uname.sysname == "Linux" and HELPERS or {}) do
+    for _, helper in ipairs(linux_sources and HELPERS or {}) do
         local path = system.find_executable(helper)
         report.helpers[helper] = {
             state = options.safe_mode and "disabled" or (path and "available" or "unavailable"),

@@ -26,8 +26,8 @@ fi
 make -C "$work_dir/lua-src/src" mingw "CC=$compiler"
 "$compiler" -std=c17 -O2 -Wall -Wextra -Werror -shared \
     -I"$source_dir/src" -o "$work_dir/wtop_native.dll" \
-    "$project_dir/native/wtop_windows.c" "$work_dir/lua-src/src/lua55.dll" \
-    -lpsapi -liphlpapi
+    "$project_dir/native/wtop_windows.c" "$project_dir/native/wtop_windows_net.c" \
+    "$work_dir/lua-src/src/lua55.dll" -lpsapi -liphlpapi
 
 rm -rf "$output_dir"
 mkdir -p "$output_dir"
