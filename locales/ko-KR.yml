@@ -55,7 +55,7 @@ messages:
   alerts.count:
     other: "경고 {count}개"
   app.name: "wtop"
-  app.title: "wtop — Linux 성능 워크벤치"
+  app.title: "wtop — 시스템 모니터"
   collector.denied: "{name} 접근 거부: {reason}"
   collector.stale: "{name}: {age} 동안 갱신되지 않음"
   collector.unavailable: "{name} 사용 불가: {reason}"

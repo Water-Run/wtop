@@ -6,6 +6,8 @@ FS.__index = FS
 local ERRNO_KIND = {
   [1] = "denied",       -- EPERM
   [2] = "missing",      -- ENOENT
+  [3] = "missing",      -- Win32 ERROR_PATH_NOT_FOUND
+  [5] = "denied",       -- Win32 ERROR_ACCESS_DENIED
   [13] = "denied",      -- EACCES
   [20] = "missing",     -- ENOTDIR
 }

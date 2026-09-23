@@ -57,7 +57,7 @@ messages:
     many: "{count} alertes"
     other: "{count} alertes"
   app.name: "wtop"
-  app.title: "wtop — atelier de performances Linux"
+  app.title: "wtop — moniteur système"
   collector.denied: "{name} indisponible : accès refusé : {reason}"
   collector.stale: "{name} n’est plus actualisé depuis {age}"
   collector.unavailable: "{name} indisponible : {reason}"

@@ -1,5 +1,6 @@
 local I18n = require("wtop.i18n")
 local FS = require("wtop.linux.fs")
+local ConfigPath = require("wtop.config_path")
 local Theme = require("wtop.ui.theme")
 
 local M = {}
@@ -36,23 +37,6 @@ local function copy(value)
     return result
 end
 
-local function safe_config_root(value)
-    if type(value) ~= "string" or #value < 1 or #value > 4096
-        or value:sub(1, 1) ~= "/" or value:find("\0", 1, true)
-    then
-        return false
-    end
-    for component in value:gmatch("[^/]+") do
-        if component == "." or component == ".." then return false end
-    end
-    return true
-end
-
-local function environment_value(environment, name)
-    local ok, value = pcall(environment, name)
-    return ok and type(value) == "string" and value or nil
-end
-
 function M.defaults()
     return {
         schema_version = 1,
@@ -66,14 +50,7 @@ function M.defaults()
 end
 
 function M.path(environment)
-    environment = environment or os.getenv
-    if type(environment) ~= "function" then return nil end
-    local config_home = environment_value(environment, "XDG_CONFIG_HOME")
-    if safe_config_root(config_home) then
-        return config_home .. "/wtop/config.yml"
-    end
-    local home = environment_value(environment, "HOME")
-    return safe_config_root(home) and (home .. "/.config/wtop/config.yml") or nil
+    return ConfigPath.file("config.yml", environment)
 end
 
 local function validate(raw)
@@ -146,7 +123,7 @@ function M.load(path)
     if not path then
         return M.defaults(), { state = "unavailable", reason = "HOME is not set" }
     end
-    if not safe_config_root(path) then
+    if not ConfigPath.safe_absolute(path) then
         return M.defaults(), { state = "error", path = path, reason = "invalid configuration path" }
     end
     local text, read_error = FS.default:read(path, 1024 * 1024)

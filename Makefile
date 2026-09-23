@@ -1,8 +1,22 @@
 SHELL := /bin/sh
 
 HOST_OS := $(shell uname -s 2>/dev/null || echo unknown)
+ifeq ($(HOST_OS),Darwin)
+
+.PHONY: all native run snapshot diagnose
+all: native
+native:
+	@./tools/build_macos.sh
+run: native
+	@./dist/macos/wtop
+snapshot: native
+	@./dist/macos/wtop --snapshot
+diagnose: native
+	@./dist/macos/wtop --diagnose
+
+else
 ifneq ($(HOST_OS),Linux)
-$(error wtop supports Linux only (detected $(HOST_OS)))
+$(error wtop build supports Linux and macOS (detected $(HOST_OS)))
 endif
 
 LUA_VERSION := 5.5.1
@@ -188,3 +202,5 @@ test-bundle-file: resource-check-full bundle-file
 checksums:
 	@test -x dist/wtop/wtop && test -x dist/wtop-onefile
 	@cd dist && sha256sum wtop/wtop wtop-onefile > SHA256SUMS
+
+endif

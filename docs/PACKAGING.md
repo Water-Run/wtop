@@ -257,7 +257,16 @@ For sudo smoke validation, never open an uncontrolled password prompt in automat
 
 ## 9. Current Platform Boundary
 
-Linux-only is enforced at five points: the rockspec platform allowlist, Makefile parse-time check, two bootstrap scripts, C-module compile-time check, and unified CLI runtime entry. The Makefile builds for the current Linux host. The repository's current `dist/` comes from Fedora glibc x86_64 development validation and is not a formal release. No minimum glibc version has been selected or validated, and compatibility cannot be inferred from successful execution on the development host, the ELF interpreter, or `file` output. Current validation does not promise:
+The 0.1 LuaRocks rockspec and Linux release bundles remain Linux-only. The
+source tree also provides `tools/build_macos.sh` and
+`tools/build_windows_x86.sh` for development artifacts; `make` supports
+macOS source builds. Their host-collector and TUI smoke evidence is recorded
+in [Cross-Platform Product Requirements](CROSS_PLATFORM.md). The existing
+Linux `dist/` comes from Fedora glibc x86_64 development validation and is
+not a formal release. No minimum glibc version has been selected or
+validated, and compatibility cannot be inferred from successful execution on
+the development host, the ELF interpreter, or `file` output. Current Linux
+validation does not promise:
 
 - aarch64;
 - musl;

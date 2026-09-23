@@ -2,7 +2,16 @@
 
 ## 1. Positioning
 
-wtop (WaterRun's top) is a modern Linux-only TUI performance workbench. Its goal is to put “what is happening now,” “why is it slow,” “which process or device is involved,” and “what can be done safely” into one responsive interface.
+wtop (WaterRun's top) is a modern TUI performance workbench. Its goal is to put
+“what is happening now,” “why is it slow,” “which process or device is involved,”
+and “what can be done safely” into one responsive interface. Version 0.1.0 is
+Linux-only; the next product direction targets native Linux, macOS, and Windows
+monitoring. Windows requires a 32-bit x86 build targeting XP compatibility,
+with real-host validation on Windows Server 2008 and classic consoles without
+VT/ANSI support. Source-development builds for macOS and Windows x86 now run
+the shared TUI and core collectors; the tagged release and LuaRocks package
+remain Linux-only. See [Cross-Platform Product Requirements](CROSS_PLATFORM.md)
+for the implementation evidence and remaining validation limits.
 
 The current version is `0.1.0`, the first tagged release. The first vertical slice—CPU/memory/PSI → Snapshot → ViewModel → responsive TUI → luainstaller—is operational. Current work focuses on features, hardware backends, and release evidence instead of presenting design documents as implemented behavior. CPU/GPU identity and telemetry are becoming substantially richer, but the project does not claim parity with CPU-Z, GPU-Z, AIDA64, or HWiNFO.
 
@@ -27,7 +36,7 @@ The current version is `0.1.0`, the first tagged release. The first vertical sli
 | Deep inspection | Selectable SMART/NVMe, experimental `perf stat` RAM PMU sampling, and sshd Inspectors work | Unified resource navigation, complete session/event providers, PMU platform mapping and validation |
 | GPU | DRM devices, PCI IDs/link metadata, AMD sysfs/DPM, Intel i915/xe frequencies, DRM fdinfo utilization/process tables, and hwmon temperature/power joins are implemented | Client/region drill-down, NVML, AMD SMI, Level Zero, MIG/tile |
 | Performance release/actions | A confirmed signal menu exposes `SIGTERM`, `SIGKILL`, `SIGSTOP` and `SIGCONT`, each with pidfd + start-time revalidation | renice, cgroup limits, and tuning protocols still need a product scope |
-| Linux Only | The rockspec, Make/bootstrap, C compile gate, and unified CLI entry reject non-Linux platforms; the data layer is Linux-specific | Minimum kernel/distribution baseline |
+| Cross-platform runtime | Linux release path remains; source-development macOS arm64 and Windows x86 backends provide CPU, memory, process, storage, network, system, TUI, Snapshot, Agent, and diagnose on tested hosts | XP runtime and Server 2008 classic CMD validation, older macOS, optional provider parity, performance baselines |
 | Lua | Business logic, collection, UI, configuration, and i18n use PUC Lua | Retain the Lua 5.4 syntax subset and Lua 5.5 release ABI |
 | LuaRocks installation | Linux-only `scm-1` rockspec, isolated installation, and installed-CLI smoke paths exist | Versioned release rock |
 | luainstaller | onedir/onefile, explicit locale inclusion, locked payload validation, and `make checksums` exist | Multi-architecture/libc, final-candidate rebuild, SBOM/signing |
@@ -158,7 +167,7 @@ The following marks describe completion relative to a releasable 0.1:
 
 Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, security, and test review. A low-level capability does not constitute a product promise.
 
-## 6. Non-Goals
+## 6. Version 0.1 Non-Goals
 
 - macOS, Windows, or BSD.
 - Clusters, remote agents, or a long-term metrics database.
@@ -201,6 +210,8 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
 
 ### Phase D: 0.3 and Later
 
+- Assess the scope of a HWiNFO-like TUI: hardware inventory, sensor coverage,
+  device relationships, and vendor-specific detail across supported systems.
 - Metric recording and replay.
 - Optional perf/eBPF backends, hot call stacks, and flame graphs.
 - Cross-resource timeline correlation and alert rules.
@@ -237,7 +248,7 @@ The implementation already has fixed rings, diff output, collector durations, sc
 - Real performance budgets pass on the minimum and typical supported hosts.
 - Release artifacts include checksums, an SBOM, third-party notices, and traceable build metadata.
 
-## 10. Fixed Decisions and Open Questions
+## 10. Version 0.1 Fixed Decisions and Open Questions
 
 Fixed:
 

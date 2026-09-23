@@ -79,10 +79,26 @@ function M.identity(options)
     if type(options) ~= "table" then error("privilege options must be a table", 2) end
     local backend = options.native or native_default
     local getenv = options.getenv or os.getenv
+    local platform = call(backend.uname)
+    local windows = type(platform) == "table" and platform.sysname == "Windows"
+    if windows and type(backend.is_admin) == "function" then
+        local administrator = call(backend.is_admin)
+        if type(administrator) == "boolean" then
+            return {
+                mode = "user",
+                uid = nil,
+                effective_uid = nil,
+                original_uid = nil,
+                root = false,
+                elevated = administrator,
+                via_sudo = false,
+            }
+        end
+    end
     local real_uid, effective_uid = call(backend.uid)
     if not valid_uid(real_uid) then real_uid = nil end
     if not valid_uid(effective_uid) then effective_uid = nil end
-    if real_uid == nil or effective_uid == nil then
+    if not windows and (real_uid == nil or effective_uid == nil) then
         local status_real, status_effective = status_uids(options, backend)
         real_uid = real_uid or status_real
         effective_uid = effective_uid or status_effective

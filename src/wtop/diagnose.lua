@@ -28,6 +28,13 @@ local function probe_file(path)
     return { state = "unavailable", path = path }
 end
 
+local function probe_native(name)
+    return {
+        state = type(native[name]) == "function" and "available" or "unavailable",
+        path = "native:" .. name,
+    }
+end
+
 function M.collect(options)
     options = options or {}
     if type(options) ~= "table" then error("diagnose options must be a table", 2) end
@@ -60,7 +67,13 @@ function M.collect(options)
             stdin_tty = native.isatty(0),
             stdout_tty = native.isatty(1),
         },
-        sources = {
+        sources = {},
+        helpers = {},
+        safe_mode = options.safe_mode == true,
+    }
+
+    if uname and uname.sysname == "Linux" then
+        report.sources = {
             proc_stat = probe_file("/proc/stat"),
             proc_cpuinfo = probe_file("/proc/cpuinfo"),
             proc_meminfo = probe_file("/proc/meminfo"),
@@ -77,10 +90,15 @@ function M.collect(options)
             drm = probe_file("/sys/class/drm"),
             cgroup_v2 = probe_file("/sys/fs/cgroup/cgroup.controllers"),
             perf_pmu = probe_file("/sys/bus/event_source/devices"),
-        },
-        helpers = {},
-        safe_mode = options.safe_mode == true,
-    }
+        }
+    else
+        for _, name in ipairs({
+            "collect_cpu", "collect_cpu_info", "collect_memory", "collect_process",
+            "collect_disk", "collect_mounts", "collect_network", "collect_system_info",
+        }) do
+            report.sources[name] = probe_native(name)
+        end
+    end
 
     if report.terminal.stdout_tty then
         local columns, rows = native.terminal_size()
@@ -88,7 +106,7 @@ function M.collect(options)
         report.terminal.rows = rows
     end
 
-    for _, helper in ipairs(HELPERS) do
+    for _, helper in ipairs(uname and uname.sysname == "Linux" and HELPERS or {}) do
         local path = system.find_executable(helper)
         report.helpers[helper] = {
             state = options.safe_mode and "disabled" or (path and "available" or "unavailable"),
@@ -129,7 +147,9 @@ function M.run(options)
         " ", tostring(report.platform.machine or ""), "\n")
     io.write("  Native:   ", report.native.state, " (", tostring(report.native.version), ")\n")
     io.write("  UID:      ", tostring(report.identity.effective_uid), "\n")
-    io.write("  Access:   ", tostring(report.identity.mode),
+    local access = report.platform.sysname == "Windows" and report.identity.elevated
+        and "administrator" or tostring(report.identity.mode)
+    io.write("  Access:   ", access,
         report.identity.via_sudo and " (sudo)" or "", "\n")
     io.write("  TTY:      stdin=", tostring(report.terminal.stdin_tty),
         " stdout=", tostring(report.terminal.stdout_tty), "\n")

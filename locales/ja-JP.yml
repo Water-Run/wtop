@@ -55,7 +55,7 @@ messages:
   alerts.count:
     other: "警告 {count} 件"
   app.name: "wtop"
-  app.title: "wtop — Linux パフォーマンスワークベンチ"
+  app.title: "wtop — システムモニター"
   collector.denied: "{name} はアクセス拒否のため利用できません: {reason}"
   collector.stale: "{name}: {age} 更新なし"
   collector.unavailable: "{name} は利用できません: {reason}"

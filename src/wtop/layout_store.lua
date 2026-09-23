@@ -2,6 +2,7 @@ local I18n = require("wtop.i18n")
 local Layout = require("wtop.model.layout")
 local FS = require("wtop.linux.fs")
 local native = require("wtop.native")
+local ConfigPath = require("wtop.config_path")
 
 local M = {}
 
@@ -9,20 +10,7 @@ local MAX_PATH_BYTES = 4096
 local MAX_PAGES = 64
 
 local function safe_absolute_path(value)
-    if type(value) ~= "string" or #value < 1 or #value > MAX_PATH_BYTES
-        or value:sub(1, 1) ~= "/" or value:find("\0", 1, true)
-    then
-        return false
-    end
-    for component in value:gmatch("[^/]+") do
-        if component == "." or component == ".." then return false end
-    end
-    return true
-end
-
-local function environment_value(environment, name)
-    local ok, value = pcall(environment, name)
-    return ok and type(value) == "string" and value or nil
+    return ConfigPath.safe_absolute(value)
 end
 
 local function validate_defaults(defaults)
@@ -74,14 +62,7 @@ local function copy_trees(trees, defaults)
 end
 
 function M.path(environment)
-    environment = environment or os.getenv
-    if type(environment) ~= "function" then return nil end
-    local config_home = environment_value(environment, "XDG_CONFIG_HOME")
-    if not safe_absolute_path(config_home) then
-        local home = environment_value(environment, "HOME")
-        config_home = safe_absolute_path(home) and (home .. "/.config") or nil
-    end
-    return config_home and (config_home .. "/wtop/layout.yml") or nil
+    return ConfigPath.file("layout.yml", environment)
 end
 
 local function validate_v1(raw, defaults)
@@ -344,10 +325,17 @@ function M.load(defaults, path)
 end
 
 local function ensure_directory(path)
-    local current = path:sub(1, 1) == "/" and "/" or ""
-    for part in path:gmatch("[^/]+") do
+    path = ConfigPath.normalize(path)
+    local current, remainder
+    if path:match("^[A-Za-z]:/") then
+        current, remainder = path:sub(1, 3), path:sub(4)
+    else
+        current, remainder = "/", path
+    end
+    for part in remainder:gmatch("[^/]+") do
         current = current == "/" and (current .. part)
-            or (current == "" and part or (current .. "/" .. part))
+            or (current:sub(-1) == "/" and (current .. part)
+                or (current .. "/" .. part))
         local created, create_error = native.mkdir(current, 448)
         if not created then return nil, create_error end
     end
@@ -361,6 +349,7 @@ function M.save(orders, path, trees)
     if not path then return nil, "HOME is not set" end
     if not safe_absolute_path(path) then return nil, "invalid layout path" end
     if not native.available then return nil, "native atomic writer is unavailable" end
+    path = ConfigPath.normalize(path)
     local directory = path:match("^(.*)/[^/]+$")
     if not directory then return nil, "layout path has no directory" end
     local ensured, ensure_error = ensure_directory(directory)

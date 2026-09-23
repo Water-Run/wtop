@@ -55,7 +55,7 @@ messages:
   alerts.count:
     other: "{count} 个警报"
   app.name: "wtop"
-  app.title: "wtop — Linux 性能工作台"
+  app.title: "wtop — 系统监控器"
   collector.denied: "无法访问{name}：权限被拒绝（{reason}）"
   collector.stale: "{name} 已有 {age} 未更新"
   collector.unavailable: "{name}不可用：{reason}"

@@ -1,6 +1,7 @@
 local Parsers = require("wtop.linux.parsers")
 local FS = require("wtop.linux.fs")
 local native_default = require("wtop.native")
+local Platform = require("wtop.platform")
 
 local M = {}
 
@@ -79,9 +80,13 @@ function M.signal_process(process, signal_number, options)
     if own_pid and process.pid == own_pid then
         return nil, "refusing to signal wtop itself"
     end
-    local verified, verify_error = M.verify_process(process, options.fs)
-    if not verified then
-        return nil, verify_error
+    if Platform.id(native) == "windows" then
+        if signal_number ~= 9 then
+            return nil, "this process action is unavailable on Windows"
+        end
+    else
+        local verified, verify_error = M.verify_process(process, options.fs)
+        if not verified then return nil, verify_error end
     end
     -- The native layer revalidates starttime while holding a pidfd, closing
     -- the classic verify-then-kill PID-reuse window.

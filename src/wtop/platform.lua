@@ -2,6 +2,8 @@ local native = require("wtop.native")
 
 local M = {}
 
+local supported = { Linux = "linux", Darwin = "macos", Windows = "windows" }
+
 function M.detect(adapter)
     adapter = adapter or native
     if type(adapter) ~= "table" or adapter.available == false
@@ -28,6 +30,22 @@ function M.require_linux(adapter)
         return nil, "Linux is required (detected " .. platform.sysname .. ")"
     end
     return platform
+end
+
+function M.require_supported(adapter)
+    local platform, detect_error = M.detect(adapter)
+    if not platform then return nil, detect_error end
+    local id = supported[platform.sysname]
+    if not id then
+        return nil, "unsupported operating system (detected " .. platform.sysname .. ")"
+    end
+    platform.id = id
+    return platform
+end
+
+function M.id(adapter)
+    local platform = M.require_supported(adapter)
+    return platform and platform.id or nil
 end
 
 return M

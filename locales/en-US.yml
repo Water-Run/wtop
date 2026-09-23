@@ -55,7 +55,7 @@ messages:
     one: "{count} alert"
     other: "{count} alerts"
   app.name: "wtop"
-  app.title: "wtop — Linux performance workbench"
+  app.title: "wtop — system monitor"
   collector.denied: "{name} is unavailable because access was denied: {reason}"
   collector.stale: "{name} has not updated for {age}"
   collector.unavailable: "{name} is unavailable: {reason}"

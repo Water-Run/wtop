@@ -55,7 +55,7 @@ messages:
   alerts.count:
     other: "{count} 則警示"
   app.name: "wtop"
-  app.title: "wtop — Linux 效能工作台"
+  app.title: "wtop — 系統監控器"
   collector.denied: "{name} 因權限不足而無法使用：{reason}"
   collector.stale: "{name} 已有 {age} 未更新"
   collector.unavailable: "{name} 無法使用：{reason}"

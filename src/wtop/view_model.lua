@@ -1232,7 +1232,7 @@ local ADVICE_RULES = {
       text = "RAPL/powercap is unavailable, so CPU package power cannot be read." },
 }
 
-local function advice_entries(snapshot, capabilities, i18n, privilege)
+local function advice_entries(snapshot, capabilities, i18n, privilege, linux_host)
     local entries = {}
     local denied = {}
     for resource, state in pairs(snapshot.quality or {}) do
@@ -1243,8 +1243,9 @@ local function advice_entries(snapshot, capabilities, i18n, privilege)
         entries[#entries + 1] = section("advice.permissions", "Permissions")
         entries[#entries + 1] = {
             label = table.concat(denied, ", "),
-            value = translated(i18n, "advice.denied",
-                "denied; run with sudo for full visibility"),
+            value = linux_host and translated(i18n, "advice.denied",
+                "denied; run with sudo for full visibility")
+                or translated(i18n, "status.denied", "Denied"),
             token = "metric.warn",
         }
     end
@@ -1260,7 +1261,8 @@ local function advice_entries(snapshot, capabilities, i18n, privilege)
         for _, gap in ipairs(gaps) do
             entries[#entries + 1] = {
                 label = gap.rule.collector,
-                value = translated(i18n, gap.rule.id, gap.rule.text),
+                value = linux_host and translated(i18n, gap.rule.id, gap.rule.text)
+                    or translated(i18n, "status.unavailable", "Unavailable"),
                 token = "text.muted",
             }
         end
@@ -1291,7 +1293,7 @@ local function advice_entries(snapshot, capabilities, i18n, privilege)
             token = "metric.good",
         }
     end
-    if privilege and privilege.root ~= true then
+    if linux_host and privilege and privilege.root ~= true then
         entries[#entries + 1] = section("advice.hint_section", "Hints")
         entries[#entries + 1] = {
             label = translated(i18n, "advice.elevate", "Elevated collection"),
@@ -1348,6 +1350,9 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         visible_widgets, options)
     options = options or {}
     local format = i18n.format
+    local kernel_type = snapshot.system and snapshot.system.kernel
+        and snapshot.system.kernel.type
+    local linux_host = (options.platform or kernel_type or "Linux") == "Linux"
     local function visible(widget_id)
         return type(visible_widgets) ~= "table" or visible_widgets[widget_id] == true
     end
@@ -1910,7 +1915,8 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             rows = inspector_rows(capabilities, i18n),
         },
         advice_list = {
-            entries = advice_entries(snapshot, capabilities, i18n, options.privilege),
+            entries = advice_entries(snapshot, capabilities, i18n,
+                options.privilege, linux_host),
         },
     }
     return models

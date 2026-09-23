@@ -306,7 +306,7 @@ local HELP_SECTIONS = {
 local function help_lines(i18n, width)
     local title = i18n:t("app.title")
     local lines = {
-        title ~= "app.title" and title or "wtop — Linux performance workbench",
+        title ~= "app.title" and title or "wtop — system monitor",
     }
     -- Two columns when the overlay is wide enough for them, one when it is not.
     local key_width = 0
@@ -347,11 +347,18 @@ local SIGNAL_CHOICES = {
     { number = 19, name = "SIGSTOP", id = "signal.stop", fallback = "suspend the process" },
     { number = 18, name = "SIGCONT", id = "signal.cont", fallback = "resume a stopped process" },
 }
+local WINDOWS_ACTION_CHOICES = {
+    { number = 9, name = "Terminate", id = "process.terminate",
+        fallback = "end this process" },
+}
 
-local function signal_menu_lines(process, selected, i18n, unicode)
+local function signal_menu_lines(process, selected, i18n, unicode, choices)
     if unicode == nil then unicode = true end
+    choices = choices or SIGNAL_CHOICES
+    local windows = choices == WINDOWS_ACTION_CHOICES
     local lines = {
-        translated(i18n, "signal.title", "Send a signal") .. " · PID "
+        translated(i18n, windows and "process.action_title" or "signal.title",
+            windows and "Process action" or "Send a signal") .. " · PID "
             .. tostring(process and process.pid or "—")
             .. "  " .. tostring(process and (process.name or "") or ""),
         "",
@@ -359,7 +366,7 @@ local function signal_menu_lines(process, selected, i18n, unicode)
         "",
     }
     local rows = {}
-    for index, choice in ipairs(SIGNAL_CHOICES) do
+    for index, choice in ipairs(choices) do
         rows[#rows + 1] = {
             (index == selected and (unicode and "▸ " or "> ") or "  ") .. choice.name,
             translated(i18n, choice.id, choice.fallback),
@@ -367,8 +374,10 @@ local function signal_menu_lines(process, selected, i18n, unicode)
     end
     for _, line in ipairs(aligned_pairs(rows, 3)) do lines[#lines + 1] = line end
     lines[#lines + 1] = ""
-    lines[#lines + 1] = translated(i18n, "signal.warning",
-        "The target is re-verified by start time, so a recycled PID is never signalled.")
+    lines[#lines + 1] = windows
+        and "The process start time is checked before termination."
+        or translated(i18n, "signal.warning",
+            "The target is re-verified by start time, so a recycled PID is never signalled.")
     return lines
 end
 
@@ -591,6 +600,10 @@ local function utf8_next_offset(value, position)
 end
 
 local function make_inspectors(engine)
+    local host = native.uname()
+    if not host or host.sysname ~= "Linux" then
+        return Inspectors.Registry.new()
+    end
     local smartctl = system.find_executable("smartctl") or "/usr/sbin/smartctl"
     local systemctl = system.find_executable("systemctl") or "/usr/bin/systemctl"
     local perf_reader = PerfBandwidth.new({
@@ -619,6 +632,10 @@ end
 
 local function run_loop(options, backend, renderer, engine, translator)
     local terminal_capabilities = backend.capabilities()
+    local host = native.uname()
+    local action_choices = host and host.sysname == "Windows"
+        and WINDOWS_ACTION_CHOICES or (host and host.sysname == "Darwin"
+            and {} or SIGNAL_CHOICES)
     local default_orders = Workspace.default_orders()
     local layout_orders, layout_status, layout_trees
     if Privilege.restricts_user_files(options.privilege) then
@@ -865,7 +882,7 @@ local function run_loop(options, backend, renderer, engine, translator)
     local function refresh_signal_menu()
         if not confirmation then return end
         overlay = signal_menu_lines(confirmation.process, confirmation.index, translator,
-            terminal_capabilities.unicode ~= false)
+            terminal_capabilities.unicode ~= false, action_choices)
     end
 
     local function refresh_smart_selection()
@@ -936,6 +953,7 @@ local function run_loop(options, backend, renderer, engine, translator)
         local models = ViewModel.build(engine, engine.snapshot, translator, combined_capabilities,
             workspace.active, process_controller, visible_widgets, {
                 privilege = options.privilege,
+                platform = options.platform,
                 show_virtual_devices = show_virtual,
                 show_pseudo_filesystems = show_virtual,
             })
@@ -997,9 +1015,15 @@ local function run_loop(options, backend, renderer, engine, translator)
                 { key = "t", id = "actions.tree", fallback = "Tree", command = "tree" },
                 { key = "p", id = "actions.paths", fallback = "Paths", command = "paths" },
                 { key = "Enter", id = "actions.details", fallback = "Details", command = "details" },
-                { key = "k", id = "actions.signal", fallback = "Signal", command = "signal" },
                 { key = "?", id = "actions.help", fallback = "Help", command = "help" },
             }
+            if #action_choices > 0 then
+                table.insert(status.hints, #status.hints,
+                    { key = "k", id = action_choices == WINDOWS_ACTION_CHOICES
+                        and "actions.terminate" or "actions.signal",
+                        fallback = action_choices == WINDOWS_ACTION_CHOICES
+                            and "Terminate" or "Signal", command = "signal" })
+            end
         elseif workspace.active == "storage" or workspace.active == "network" then
             status.hints = {
                 { key = "1–0", id = "actions.tabs", fallback = "Tabs", command = "tabs" },
@@ -1106,17 +1130,20 @@ local function run_loop(options, backend, renderer, engine, translator)
                 dirty = true
             end
             if event.type == "key" and (event.key == "up" or event.key == "down") then
-                local count = #SIGNAL_CHOICES
+                local count = #action_choices
                 confirmation.index = ((confirmation.index - 1
                     + (event.key == "down" and 1 or -1)) % count) + 1
                 refresh_signal_menu()
                 dirty = true
             elseif event.type == "key" and event.key == "enter" then
-                local choice = SIGNAL_CHOICES[confirmation.index]
+                local choice = action_choices[confirmation.index]
                 local sent, send_error = Actions.signal_process(confirmation.process, choice.number)
-                status_message = sent and translated(translator, "process.signal_sent",
-                    "{signal} sent to PID {pid}",
-                    { signal = choice.name, pid = confirmation.process.pid })
+                status_message = sent and (action_choices == WINDOWS_ACTION_CHOICES
+                    and translated(translator, "process.terminated",
+                        "Process {pid} terminated", { pid = confirmation.process.pid })
+                    or translated(translator, "process.signal_sent",
+                        "{signal} sent to PID {pid}",
+                        { signal = choice.name, pid = confirmation.process.pid }))
                     or translated(translator, "process.action_refused", "Action refused: {reason}", {
                         reason = tostring(send_error),
                     })
@@ -1476,7 +1503,9 @@ local function run_loop(options, backend, renderer, engine, translator)
             dirty = true
         elseif key == "k" and workspace.active == "processes" then
             local process = selected_process()
-            if process then
+            if #action_choices == 0 then
+                status_message = "Process actions are unavailable on this platform"
+            elseif process then
                 confirmation = { process = process, index = 1 }
                 refresh_signal_menu()
                 overlay_offset = 0
@@ -1524,6 +1553,11 @@ local function run_loop(options, backend, renderer, engine, translator)
         if not polled then
             error(poll_error or "terminal poll failed")
         end
+        if polled.events then
+            for _, event in ipairs(polled.events) do
+                process_event(event)
+            end
+        end
         if polled.data then
             for _, event in ipairs(decoder:feed(polled.data, false)) do
                 process_event(event)
@@ -1565,14 +1599,16 @@ end
 function M.run(options)
     options = options or {}
     local uname = native.uname()
-    if not uname or uname.sysname ~= "Linux" then
-        io.stderr:write("wtop: Linux is required\n")
+    if not uname or (uname.sysname ~= "Linux" and uname.sysname ~= "Darwin"
+        and uname.sysname ~= "Windows") then
+        io.stderr:write("wtop: unsupported operating system\n")
         return 1
     end
     if not native.available then
         io.stderr:write("wtop: native module unavailable; run 'make native'\n")
         return 1
     end
+    options.platform = uname.sysname
     if not native.isatty(0) or not native.isatty(1) then
         io.stderr:write("wtop: interactive mode requires a TTY; use --snapshot or --agent for JSON output\n")
         return 1

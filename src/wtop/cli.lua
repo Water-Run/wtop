@@ -9,7 +9,7 @@ local M = {}
 local HELP = [[
 Usage: wtop [OPTIONS]
 
-WaterRun's top: a responsive, deep Linux observability TUI.
+WaterRun's top: a responsive system monitor.
 
 Options:
   -h, --help             Show this help
@@ -17,7 +17,7 @@ Options:
       --diagnose         Print capability diagnostics and exit
       --snapshot         Print one machine-readable snapshot and exit
       --agent            Print compact LLM/agent context JSON and exit
-      --sudo             Restart through sudo for privileged collection
+      --sudo             Restart through sudo on Linux
       --elevate          Alias for --sudo
       --lang LOCALE      Select UI locale (for example zh-CN or en-US)
       --theme NAME       Select theme
@@ -173,7 +173,8 @@ function M.run(argv, dependencies)
 
     local platform = dependencies.platform or Platform
     local privilege_module = dependencies.privilege or Privilege
-    local _, platform_error = platform.require_linux()
+    local require_platform = platform.require_supported or platform.require_linux
+    local detected_platform, platform_error = require_platform()
     if platform_error then
         io.stderr:write("wtop: ", platform_error, "\n")
         return 1
@@ -186,6 +187,13 @@ function M.run(argv, dependencies)
     end
     identity.requested = options.elevate == true
     options.privilege = identity
+
+    if M.requires_elevation(options, identity)
+        and type(detected_platform) == "table"
+        and detected_platform.sysname ~= "Linux" then
+        io.stderr:write("wtop: --sudo is available only on Linux in this build\n")
+        return 1
+    end
 
     if M.requires_elevation(options, identity) then
         local elevated, elevation_error = privilege_module.elevate()

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:dev:waterrun:wtop:agent:v1",
   "title": "wtop Agent context v1",
-  "description": "Bounded, privacy-aware Linux telemetry context emitted by wtop --agent.",
+  "description": "Bounded, privacy-aware telemetry context emitted by wtop --agent.",
   "type": "object",
   "required": [
     "schema",

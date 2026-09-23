@@ -1,5 +1,6 @@
 local Catalog = require("wtop.i18n.catalog")
 local FS = require("wtop.linux.fs")
+local ConfigPath = require("wtop.config_path")
 
 local UserCatalogs = {}
 
@@ -11,40 +12,9 @@ local DIRECTORY_ENTRY_SLACK = 256
 local MAX_FILES = 4096
 local MAX_BYTES = 16 * 1024 * 1024
 
-local function getenv_value(getenv, name)
-  local ok, value = pcall(getenv, name)
-  if not ok or type(value) ~= "string" or value == "" then return nil end
-  if value:find("[%z\1-\31\127]") or #value > MAX_PATH_BYTES or value:sub(1, 1) ~= "/" then
-    return nil
-  end
-  return value
-end
-
-local function trim_trailing_slashes(path)
-  if path == "/" then return path end
-  local trimmed = path:gsub("/+$", "")
-  return trimmed == "" and "/" or trimmed
-end
-
-local function append_path(base, suffix)
-  base = trim_trailing_slashes(base)
-  if base == "/" then return "/" .. suffix end
-  return base .. "/" .. suffix
-end
-
 function UserCatalogs.path(getenv)
-  getenv = getenv or os.getenv
-  if type(getenv) ~= "function" then return nil, "getenv_function_required" end
-  local config_home = getenv_value(getenv, "XDG_CONFIG_HOME")
-  if config_home then
-    local candidate = append_path(config_home, "wtop/locales")
-    if #candidate <= MAX_PATH_BYTES then return candidate end
-  end
-  local home = getenv_value(getenv, "HOME")
-  if home then
-    local candidate = append_path(home, ".config/wtop/locales")
-    if #candidate <= MAX_PATH_BYTES then return candidate end
-  end
+  local path = ConfigPath.file("locales", getenv)
+  if path then return path end
   return nil, "config_home_unavailable"
 end
 
@@ -187,7 +157,7 @@ function UserCatalogs.load(translator, options)
   if not directory then
     return fatal_report(report, "error", "path", path_error or "config_home_unavailable")
   end
-  if type(directory) ~= "string" or directory == "" or directory:sub(1, 1) ~= "/"
+  if type(directory) ~= "string" or directory == "" or not ConfigPath.safe_absolute(directory)
       or directory:find("[%z\1-\31\127]") or #directory > MAX_PATH_BYTES
       or directory:find("/%.%.?/") or directory:match("/%.%.?$") then
     return fatal_report(report, "error", "path", "invalid_catalog_directory")

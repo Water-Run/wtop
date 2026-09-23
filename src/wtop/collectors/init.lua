@@ -1,4 +1,5 @@
 local M = {}
+local Platform = require("wtop.platform")
 
 local constructors = {
   cpu = require("wtop.collectors.cpu"),
@@ -22,6 +23,10 @@ local constructors = {
 function M.new_all(options)
   options = options or {}
   if type(options) ~= "table" then error("collector options must be a table", 2) end
+  local platform = options.platform or Platform.id()
+  if platform == "windows" or platform == "macos" then
+    return require("wtop.collectors.portable").new_all(options)
+  end
   local result = {}
   for id, module in pairs(constructors) do
     result[id] = module.new(options[id] or options.common)

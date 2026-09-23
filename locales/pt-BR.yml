@@ -57,7 +57,7 @@ messages:
     many: "{count} alertas"
     other: "{count} alertas"
   app.name: "wtop"
-  app.title: "wtop — central de desempenho Linux"
+  app.title: "wtop — monitor do sistema"
   collector.denied: "{name} indisponível: acesso negado: {reason}"
   collector.stale: "{name} não é atualizado há {age}"
   collector.unavailable: "{name} indisponível: {reason}"

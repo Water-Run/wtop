@@ -54,11 +54,27 @@ local function detect_capabilities(options)
     }
 end
 
+local function native_capabilities(native, detected)
+    if type(native.terminal_capabilities) ~= "function" then return detected end
+    local ok, overrides = pcall(native.terminal_capabilities)
+    if not ok or type(overrides) ~= "table" then return detected end
+    for key, value in pairs(overrides) do
+        detected[key] = value
+    end
+    if detected.no_color then
+        detected.colors = 0
+        detected.color = false
+        detected.truecolor = false
+    end
+    return detected
+end
+
 function M.new(native)
     native = native or native_default
     if type(native) ~= "table" then error("terminal backend must be a table", 2) end
     local active = false
     local capabilities = detect_capabilities()
+    local native_presentation = false
 
     return {
         start = function(options)
@@ -72,6 +88,10 @@ function M.new(native)
                 return false, start_error
             end
             active = true
+            capabilities = native_capabilities(native, capabilities)
+            native_presentation = type(native.terminal_present) == "function"
+                and capabilities.native_presentation ~= false
+            if native_presentation then return true end
             -- Disable terminal autowrap while the cell renderer owns the
             -- alternate screen. This keeps a write to the bottom-right cell
             -- from scrolling on terminals with eager wrap semantics.
@@ -101,6 +121,11 @@ function M.new(native)
             return event, poll_error
         end,
         present = function(runs, metadata)
+            if native_presentation then
+                local ok, presented, present_error = pcall(native.terminal_present, runs, metadata)
+                if not ok then return nil, "terminal_present_failed" end
+                return presented, present_error
+            end
             local encoded, sequence = pcall(Ansi.encode, runs)
             if not encoded then return nil, "terminal_encode_failed" end
             if metadata and metadata.full then
@@ -118,6 +143,11 @@ function M.new(native)
                 return true
             end
             active = false
+            if native_presentation then
+                local stop_ok, stopped, stop_error = pcall(native.terminal_stop)
+                if not stop_ok then return false, "terminal_stop_failed" end
+                return stopped, stop_error
+            end
             local sequence = "\27[?1000l\27[?1006l\27[?2004l\27[?7h\27[0m\27[?25h\27[?1049l"
             local write_ok, written, write_error = pcall(native.write, sequence)
             if not write_ok then written, write_error = nil, "terminal_write_failed" end

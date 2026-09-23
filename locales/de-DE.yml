@@ -56,7 +56,7 @@ messages:
     one: "{count} Warnung"
     other: "{count} Warnungen"
   app.name: "wtop"
-  app.title: "wtop — Linux-Leistungszentrale"
+  app.title: "wtop — Systemmonitor"
   collector.denied: "{name} ist nicht verfügbar, da der Zugriff verweigert wurde: {reason}"
   collector.stale: "{name} wurde seit {age} nicht aktualisiert"
   collector.unavailable: "{name} ist nicht verfügbar: {reason}"
