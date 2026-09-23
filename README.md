@@ -1,95 +1,161 @@
 # wtop
 
-[中文](README-zh.md)
+[English](README.md) · [中文](README-zh.md) · [Français](README-fr.md) · [Русский](README-ru.md)
 
-**WaterRun's top** is a responsive Linux terminal performance workbench built
-with PUC Lua 5.5.1 and a small C17 native module; it doesn't use LuaJIT.
+**WaterRun's top** is a terminal system monitor that aims to run anywhere:
+modern Linux, macOS and Windows, and also old machines and old consoles
+that newer tools have left behind.
 
-> This release supports Linux.
+It shows CPU, memory, disks, network, processes, GPU and more in one
+responsive screen, and adapts to what the terminal can actually do, from
+a truecolor terminal with a mouse down to a plain `cmd.exe` window with
+no color at all.
 
-## What it does
+```bash
+wtop                # interactive monitor
+wtop --snapshot     # one JSON snapshot, for scripts
+wtop --diagnose     # what wtop can see on this machine
+```
 
-- Shows overview, processes, compute, memory, storage, network, GPU,
-  workloads, system, and insights in a ten-tab TUI.
-- Reads CPU, memory, disks, mounts, network interfaces, sockets, processes,
-  sensors, cgroup v2, GPU, and power straight from `/proc` and `/sys` — no
-  external helper on the default path.
-- Process search, eleven sort columns in both directions, trees, resolved user
-  names, details, and a confirmation-gated signal menu (`SIGTERM`, `SIGKILL`,
-  `SIGSTOP`, `SIGCONT`) that guards against PID reuse.
-- On-demand SMART/NVMe, RAM-bandwidth, and sshd inspection when the host tools
-  and permissions are available.
-- Lua-blue palette with charts, per-core bars, severity colouring, mouse
-  selection, click-to-sort, runtime theme switching, terminal colour
-  fallbacks, display-width-correct CJK text, ten interface languages
-  switchable at runtime, and persistent layouts.
-- Exports JSON snapshots (`--snapshot`), compact automation context
-  (`--agent`), and capability reports (`--diagnose`).
-- Expensive collection is bounded; when a read fails or is incomplete, wtop
-  reports it — unavailable, denied, partial, truncated, or counter-reset —
-  instead of showing blanks.
+## Where it runs
 
-## Requirements and installation
+| System | Status |
+|---|---|
+| Linux (x86_64) | Released as 0.1.0, installable with LuaRocks |
+| Windows, 32-bit build | In development. Tested on Windows Server 2008 and current Windows; built for XP |
+| macOS (Apple silicon, Intel) | In development. Runs on macOS 26 (Apple silicon) |
 
-You need Linux with usable `/proc` and `/sys`, a POSIX shell, `make`, a C17
-compiler, and bootstrap tools (`curl` or `wget`, `tar`, and `sha256sum`).
-LuaRocks installation requires LuaRocks 3.13 or newer and PUC Lua
-`>= 5.5, < 5.6`.
+The Windows build is one 32-bit package that targets everything from XP to
+Windows 11. It monitors Windows itself, not a Linux layer on top. XP is a
+build target but hasn't been tested on a real XP machine yet.
+
+> [!NOTE]
+> Windows and macOS builds come from the source tree for now. The 0.1.0
+> release and the LuaRocks package are Linux-only.
+
+## Built for old hardware
+
+- **Plain consoles.** wtop checks what the terminal supports before using
+  colors, mouse, Unicode or the alternate screen. On a console without
+  ANSI escape support, like `cmd.exe` on older Windows, it draws through
+  the Windows console API instead, so escape codes don't end up on screen.
+- **Small screens.** The layout reflows down to very small windows, and
+  a colorless, keyboard-only ASCII mode stays usable.
+- **Low overhead.** Collection runs on a timer with sensible floors, and
+  panels you can't see aren't collected or drawn.
+- **No dependencies.** It's PUC Lua plus a small C module. No Python, no
+  runtime to install, no external helper on the default path.
+
+## What it shows
+
+- Ten tabs: Overview, Processes, Compute, Memory, Storage, Network, GPU,
+  Workloads, System and Insights.
+- A process list with search, sorting, a tree view, and a confirmed
+  signal menu.
+- Optional deep checks (SMART/NVMe, memory bandwidth, sshd) when the host
+  tools are available.
+- Readings that failed or are incomplete are labeled as such (for example
+  `denied` or `partial`) instead of showing up as blank or zero.
+- Ten interface languages, switchable at runtime with `L`, and five color
+  themes.
+
+## Install
+
+### Linux
+
+With LuaRocks 3.13+ and Lua 5.5:
 
 ```bash
 git clone https://github.com/Water-Run/wtop.git
 cd wtop
 luarocks --lua-version=5.5 make wtop-scm-1.rockspec
-wtop --diagnose
+wtop
 ```
 
-Pass `--lua-dir=/path/to/lua-prefix` if LuaRocks can't find Lua 5.5.
-`make luarocks-install` installs into an isolated tree under `.tools/`
+If LuaRocks can't find Lua 5.5, add `--lua-dir=/path/to/lua`.
+
+Or skip LuaRocks and run from the source tree. This downloads Lua 5.5.1
+into the repository, checks its SHA-256, and builds the native module:
+
+```bash
+make run
+```
+
+You need a C compiler, `make`, and `curl` or `wget`.
+
+### Windows
+
+Build the 32-bit package on Linux with a MinGW cross compiler
+(`i686-w64-mingw32-gcc`):
+
+```bash
+./tools/build_windows_x86.sh
+```
+
+Copy `dist/windows-x86` to the Windows machine and run `wtop.cmd` from
+`cmd.exe` or PowerShell. Over a Cygwin/OpenSSH session, use `wtop.sh`
 instead.
 
-## Run and test from source
+### macOS
 
-The source build downloads official Lua 5.5.1, verifies its pinned SHA-256,
-and keeps it inside the repository.
+```bash
+make run
+```
 
-| Target | What it does |
+The build lands in `dist/macos/wtop`. It targets macOS 11 on Apple silicon
+and 10.13 on Intel.
+
+## Use
+
+| Key | Action |
 |---|---|
-| `make run` | Build and start the TUI |
-| `make check` | Syntax checks |
-| `make test-fast` | Isolated Lua tests and a small PTY smoke set |
-| `make test` | Lua 5.5 unit/fixture tests and PTY matrix |
-| `make test-all` | Both Lua ABIs, LuaRocks, and both bundle forms |
-| `make test-54` | Pure-Lua compatibility subset on system Lua 5.4 |
-| `make test-luarocks` | Isolated installation and CLI smoke test |
-| `make test-fuzz` | Randomized input against the real terminal loop |
+| `1`–`8`, `Tab` | Switch tabs and focus |
+| `f` | Change the update rate |
+| `L` | Change language |
+| `?` or `F1` | All keys |
+| `q` or `Ctrl+C` | Quit |
 
-Every push runs the same targets in CI on Ubuntu 22.04 and 24.04 with both
-gcc and clang, plus sanitizers, the fuzzer, and both bundle forms.
-`make test-fuzz` isn't part of `make test`: it's slow and non-deterministic
-by design.
+<details>
+<summary><b>Command-line options</b></summary>
 
-Interactive mode needs stdin and stdout to be TTYs. For scripts, use
-`wtop --snapshot` or `wtop --agent`. Run `wtop --help` for all options;
-inside the TUI, press `?`/`F1` for keys and `q`/`Ctrl+C` to exit.
+| Option | |
+|---|---|
+| `--snapshot` | Print one JSON snapshot and exit |
+| `--agent` | Print compact JSON context for scripts and LLM agents |
+| `--diagnose` | Show which data sources work on this machine |
+| `--lang LOCALE` | Interface language, e.g. `zh-CN`, `fr-FR`, `ru-RU` |
+| `--theme NAME` | `lua-blue`, `water-dark`, `water-light`, `high-contrast`, `colorblind` |
+| `--interval MS` | Sampling interval, 100 to 10000 (default 1000) |
+| `--no-color` | No colors |
+| `--safe-mode` | Don't run any optional helper programs |
+| `--sudo` | Restart through `sudo` (Linux) |
 
-## Privileges
+</details>
 
-Core monitoring works as a regular user. `sudo wtop` starts elevated, while
-`wtop --sudo` (alias: `--elevate`) asks wtop to relaunch through the system
-`sudo` before collection; help and version output don't prompt for a
-password. Root state is shown in the TUI and structured output, and
-sudo-launched sessions ignore file configuration, user locale catalogs, and
-persisted layouts. Elevate only when needed; `--safe-mode` disables optional
-helpers.
+Settings can also go in `~/.config/wtop/config.yml`; see
+[config.example.yml](config.example.yml).
 
-## Documentation
+### Root access
 
-See [Plan](docs/PLAN.md), [Architecture](docs/ARCHITECTURE.md),
-[UI](docs/UI.md), [Monitoring](docs/MONITORING.md),
-[Deep Inspection](docs/DEEP_INSPECTION.md), [i18n](docs/I18N.md),
-[Packaging](docs/PACKAGING.md), and [Agent API](docs/AGENT.md).
+Everyday monitoring works as a normal user. Some details, like other
+users' open sockets or SMART data, need root: run `sudo wtop` or
+`wtop --sudo`. A root session doesn't read or write your personal config
+or layout.
+
+## Development
+
+| Command | |
+|---|---|
+| `make run` | Build and start |
+| `make test-fast` | Quick tests |
+| `make test` | Unit, fixture and terminal tests |
+| `make test-all` | Everything, including LuaRocks and bundles |
+
+Design notes are in [docs/](docs/): [architecture](docs/ARCHITECTURE.md),
+[cross-platform](docs/CROSS_PLATFORM.md), [UI](docs/UI.md),
+[monitoring](docs/MONITORING.md), [i18n](docs/I18N.md),
+[packaging](docs/PACKAGING.md) and the [agent JSON](docs/AGENT.md).
 
 ## License
 
-wtop uses the [EUPL-1.2](LICENSE): a strong copyleft license that isn't the
-GPL. The complete terms in `LICENSE` control.
+[EUPL-1.2](LICENSE).

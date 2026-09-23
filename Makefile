@@ -157,7 +157,7 @@ rock-install:
 	@cp "$(ROCK_NATIVE_MODULE)" "$(LIBDIR)/wtop_native.so"
 	@cp src/wtop.lua "$(BINDIR)/wtop"
 	@chmod 755 "$(BINDIR)/wtop" "$(LIBDIR)/wtop_native.so"
-	@cp LICENSE README.md README-zh.md config.example.yml "$(PREFIX)/doc/"
+	@cp LICENSE README.md README-zh.md README-fr.md README-ru.md config.example.yml "$(PREFIX)/doc/"
 
 rockspec-check: $(LUAROCKS_STAMP)
 	@"$(LUAROCKS)" lint "$(ROCKSPEC)"
