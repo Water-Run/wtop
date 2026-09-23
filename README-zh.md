@@ -67,8 +67,7 @@ LuaRocks 找不到 Lua 5.5 时传入 `--lua-dir=/path/to/lua-prefix`；改用
 
 ## 权限
 
-核心监控用普通用户就能运行。`sudo wtop` 直接以提权方式启动；`wtop
---sudo`（别名 `--elevate`）会让 wtop 在采集前通过系统 `sudo` 重启自身；
+核心监控用普通用户就能运行。`sudo wtop` 直接以提权方式启动；`wtop --sudo`（别名 `--elevate`）会让 wtop 在采集前通过系统 `sudo` 重启自身；
 查看 help 和 version 不会提示输入密码。TUI 和结构化输出都会标明 root
 状态；sudo 启动的会话会忽略文件配置、用户语言包和持久化布局。只在需要时
 提权；`--safe-mode` 会禁用可选 helper。
