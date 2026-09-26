@@ -38,6 +38,8 @@ ROCK_BUILD_DIR := $(CURDIR)/build/luarocks
 ROCK_NATIVE_MODULE := $(ROCK_BUILD_DIR)/wtop_native.so
 WTOP_ROCK_TREE ?= $(CURDIR)/.tools/wtop-rocks-5.5
 
+NATIVE_SOURCES := native/wtop_native.c native/wtop_nvml.c
+NATIVE_HEADERS := native/wtop_nvml.h
 NATIVE_DIR := $(CURDIR)/build/native
 NATIVE_MODULE := $(NATIVE_DIR)/wtop_native.so
 LUA_PATH_DEV := $(CURDIR)/src/?.lua;$(CURDIR)/src/?/init.lua;;
@@ -88,9 +90,9 @@ $(LUAI_STAMP): tools/bootstrap_luainstaller.sh $(LUA_STAMP)
 	@./tools/bootstrap_luainstaller.sh >/dev/null
 	@touch $@
 
-$(NATIVE_MODULE): native/wtop_native.c Makefile $(LUA_STAMP)
+$(NATIVE_MODULE): $(NATIVE_SOURCES) $(NATIVE_HEADERS) Makefile $(LUA_STAMP)
 	@mkdir -p $(NATIVE_DIR)
-	@$(CC) $(CFLAGS_NATIVE) -shared -I$(LUA_PREFIX)/include -o $@ $<
+	@$(CC) $(CFLAGS_NATIVE) -shared -I$(LUA_PREFIX)/include -o $@ $(NATIVE_SOURCES) -ldl
 
 locales: resource-check $(LUA_STAMP)
 	@if [ -f tools/compile_locales.lua ]; then \
@@ -146,7 +148,7 @@ rock-build: resource-check
 	@test -n "$(LUA_INCDIR)" || { echo "wtop: LUA_INCDIR is required" >&2; exit 1; }
 	@mkdir -p "$(ROCK_BUILD_DIR)"
 	$(CC) $(CFLAGS) -std=c17 -fPIC -Wall -Wextra -Werror -shared \
-		-I"$(LUA_INCDIR)" -o "$(ROCK_NATIVE_MODULE)" native/wtop_native.c
+		-I"$(LUA_INCDIR)" -o "$(ROCK_NATIVE_MODULE)" $(NATIVE_SOURCES) -ldl
 
 rock-install:
 	@test -f "$(ROCK_NATIVE_MODULE)" || { echo "wtop: run the rock build pass first" >&2; exit 1; }

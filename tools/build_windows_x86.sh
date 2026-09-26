@@ -27,7 +27,8 @@ make -C "$work_dir/lua-src/src" mingw "CC=$compiler"
 "$compiler" -std=c17 -O2 -Wall -Wextra -Werror -shared \
     -I"$source_dir/src" -o "$work_dir/wtop_native.dll" \
     "$project_dir/native/wtop_windows.c" "$project_dir/native/wtop_windows_net.c" \
-    "$work_dir/lua-src/src/lua55.dll" -lpsapi -liphlpapi
+    "$project_dir/native/wtop_windows_hw.c" \
+    "$work_dir/lua-src/src/lua55.dll" -lpsapi -liphlpapi -lsetupapi
 
 rm -rf "$output_dir"
 mkdir -p "$output_dir"
@@ -74,7 +75,13 @@ saved=$(stty -g </dev/tty) || exit 1
 size=$(stty size </dev/tty) || exit 1
 export LINES="${size%% *}" COLUMNS="${size#* }"
 restore() { stty "$saved" </dev/tty; }
-trap restore EXIT HUP INT TERM
+# A hang-up ends this shell by default; wtop watches the shell's Windows PID
+# and exits with it, because the pipe it reads from can outlive the session.
+trap restore EXIT INT TERM
+if [ -r "/proc/$$/winpid" ]; then
+    WTOP_WATCH_PID=$(cat "/proc/$$/winpid")
+    export WTOP_WATCH_PID
+fi
 stty raw -echo </dev/tty
 export LUA_PATH="$root_win\\src\\?.lua;$root_win\\src\\?\\init.lua;;"
 export LUA_CPATH="$root_win\\?.dll;;"

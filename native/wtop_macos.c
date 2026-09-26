@@ -47,6 +47,8 @@
 #include <unistd.h>
 #include <wchar.h>
 
+#include "wtop_macos.h"
+
 #define MAX_PROCESS_COUNT 8192
 
 static struct termios saved_terminal;
@@ -521,13 +523,26 @@ static int l_collect_cpu(lua_State *L) {
         lua_createtable(L, 0, 2);
         lua_pushfstring(L, "cpu%d", (int)index);
         lua_setfield(L, -2, "name");
-        lua_createtable(L, 0, 2);
+        lua_createtable(L, 0, 5);
         integer_field(L, "busy", (lua_Integer)core_busy);
         integer_field(L, "total", (lua_Integer)core_total);
+        integer_field(L, "user", processors[index].cpu_ticks[CPU_STATE_USER]);
+        integer_field(L, "nice", processors[index].cpu_ticks[CPU_STATE_NICE]);
+        integer_field(L, "system", processors[index].cpu_ticks[CPU_STATE_SYSTEM]);
         lua_setfield(L, -2, "raw");
         lua_rawseti(L, -2, (lua_Integer)index + 1);
     }
     lua_setfield(L, -2, "cores");
+    {
+        double loads[3];
+        if (getloadavg(loads, 3) == 3) {
+            lua_createtable(L, 0, 3);
+            number_field(L, "one", loads[0]);
+            number_field(L, "five", loads[1]);
+            number_field(L, "fifteen", loads[2]);
+            lua_setfield(L, -2, "load");
+        }
+    }
     if (processor_info != NULL)
         (void)vm_deallocate(mach_task_self(), (vm_address_t)processor_info,
             (vm_size_t)processor_info_count * sizeof(integer_t));
@@ -831,8 +846,8 @@ static int l_collect_process(lua_State *L) {
         if (proc_pidpath(pid, path, sizeof(path)) > 0)
             string_field(L, "command", path);
         if (task_bytes == sizeof(task)) {
-            integer_field(L, "cpu_ticks", (lua_Integer)(
-                ((uint64_t)task.pti_total_user + task.pti_total_system)
+            integer_field(L, "cpu_ticks", (lua_Integer)(wtop_mach_to_ns(
+                (uint64_t)task.pti_total_user + task.pti_total_system)
                     / 10000000ULL));
             integer_field(L, "resident_bytes", (lua_Integer)task.pti_resident_size);
             integer_field(L, "virtual_bytes", (lua_Integer)task.pti_virtual_size);
@@ -992,6 +1007,17 @@ static int l_collect_disk(lua_State *L) {
             counter_field(L, statistics, CFSTR(kIOBlockStorageDriverStatisticsWritesKey), "writes");
             counter_field(L, statistics, CFSTR(kIOBlockStorageDriverStatisticsTotalReadTimeKey), "read_time_ns");
             counter_field(L, statistics, CFSTR(kIOBlockStorageDriverStatisticsTotalWriteTimeKey), "write_time_ns");
+            {
+                /* IOKit keeps no idle clock; summed service time stands in
+                 * for busy time and overstates it with queued requests. */
+                int64_t read_ns = 0, write_ns = 0;
+                if (dictionary_integer(statistics,
+                        CFSTR(kIOBlockStorageDriverStatisticsTotalReadTimeKey), &read_ns)
+                    && dictionary_integer(statistics,
+                        CFSTR(kIOBlockStorageDriverStatisticsTotalWriteTimeKey), &write_ns)
+                    && read_ns >= 0 && write_ns >= 0)
+                    integer_field(L, "service_time_ns", (lua_Integer)(read_ns + write_ns));
+            }
             lua_setfield(L, -2, "counters");
             lua_rawseti(L, -2, output_index++);
         }
@@ -1164,6 +1190,7 @@ static const luaL_Reg functions[] = {
 
 int luaopen_wtop_native(lua_State *L) {
     luaL_newlib(L, functions);
+    wtop_register_hardware(L);
     string_field(L, "VERSION", "macos-0.1");
     return 1;
 }

@@ -60,7 +60,7 @@ jobs:
           "$CC" -std=c17 -fPIC -Wall -Wextra -Werror \
             -Wshadow -Wconversion -Wsign-conversion -Wpointer-arith \
             -O2 -shared -I.tools/lua-5.5.1/include \
-            -o /dev/null native/wtop_native.c
+            -o /dev/null native/wtop_native.c native/wtop_nvml.c -ldl
 
   # Syntax, schema and the full unit suite on the release ABI.
   test:
@@ -127,7 +127,7 @@ jobs:
           cc -std=c17 -fPIC -Wall -Wextra -Werror -O1 -g \
             -fsanitize=address,undefined -fno-omit-frame-pointer \
             -shared -I.tools/lua-5.5.1/include \
-            -o build/native/wtop_native.so native/wtop_native.c
+            -o build/native/wtop_native.so native/wtop_native.c native/wtop_nvml.c -ldl
       - name: Exercise collection and the unit suite
         env:
           ASAN_OPTIONS: detect_leaks=0:halt_on_error=1

@@ -3,6 +3,7 @@ local FS = require("wtop.linux.fs")
 local Parsers = require("wtop.linux.parsers")
 local Sysfs = require("wtop.linux.sysfs")
 local Common = require("wtop.collectors.common")
+local NVML = require("wtop.collectors.nvml")
 
 local GPU = {}
 GPU.__index = GPU
@@ -1493,9 +1494,20 @@ function GPU.new(options)
     max_pci_ids_bytes = positive_integer(
       "max_pci_ids_bytes", options.max_pci_ids_bytes, 8 * 1024 * 1024, 64 * 1024 * 1024),
     pci_ids_paths = pci_ids_paths,
+    nvml = type(options.nvml) == "function" and options.nvml or nil,
+    nvml_default = options.nvml == nil,
     _pci_name_cache = {},
     _method_style = true,
   }, GPU)
+end
+
+-- The host's vendor library describes the host; a fixture filesystem gets
+-- none unless a test injects a provider.
+function GPU:_nvml_provider(fs)
+  if self.nvml then return self.nvml end
+  if not self.nvml_default or fs ~= FS.default then return nil end
+  if self._nvml_host == nil then self._nvml_host = NVML.default_provider() or false end
+  return self._nvml_host or nil
 end
 
 function GPU:probe(context)
@@ -1509,6 +1521,11 @@ function GPU:probe(context)
     return Capability.unavailable(err and err.message or "drm_unavailable", { source = self.drm_path })
   end
   if #found.cards == 0 then
+    local nvml_data = not (context and context.safe_mode)
+      and NVML.query(self:_nvml_provider(fs), false)
+    if nvml_data and #nvml_data.devices > 0 then
+      return Capability.available({ source = "nvml", details = { devices = #nvml_data.devices } })
+    end
     return Capability.unavailable("no_drm_card_devices", { source = self.drm_path })
   end
   return Capability.available({
@@ -1532,7 +1549,15 @@ function GPU:sample(context, previous)
   if not found then
     return Common.error_result(list_error, Common.now_ns(context), self.drm_path)
   end
-  if #found.cards == 0 then
+  -- Loading NVML is an optional vendor provider, which safe mode excludes.
+  local nvml_data, nvml_reason
+  if context and context.safe_mode then
+    nvml_reason = "safe_mode"
+  else
+    nvml_data, nvml_reason = NVML.query(self:_nvml_provider(fs),
+      not context or context.scan_gpu_processes ~= false)
+  end
+  if #found.cards == 0 and not (nvml_data and #nvml_data.devices > 0) then
     local finished = Common.now_ns(context)
     return Common.result("unavailable", finished, nil, {
       quality = "unavailable",
@@ -1579,6 +1604,20 @@ function GPU:sample(context, previous)
   local truncated = found.truncated or process_scan.truncated
   for _, device in ipairs(devices) do
     finalize_processes(device, process_scan)
+  end
+  local providers = { nvml = { status = "unavailable", reason = nvml_reason } }
+  if nvml_data then
+    providers.nvml = NVML.merge(devices, lookup, nvml_data, {
+      used_ids = used_ids,
+      include_processes = process_scan.enabled == true,
+      process_name = function(pid)
+        local comm = fs:read(self.proc_path .. "/" .. tostring(pid) .. "/comm", 4096)
+        return type(comm) == "string" and Common.safe_text(Common.trim(comm), 64) or nil
+      end,
+    })
+    for _, device in ipairs(devices) do by_id[device.id] = device end
+  end
+  for _, device in ipairs(devices) do
     estimated = estimated or device.identity_quality == "estimated"
     partial = partial or device.partial
     truncated = truncated or device.frequencies.truncated or device.hwmon_truncated
@@ -1595,6 +1634,7 @@ function GPU:sample(context, previous)
     by_id = by_id,
     process_scan = process_scan,
     drm_scan = drm_scan,
+    providers = providers,
     truncated = truncated,
   }, {
     quality = partial and "partial" or (estimated and "estimated" or "fresh"),

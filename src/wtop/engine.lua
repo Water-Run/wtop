@@ -288,6 +288,8 @@ function Engine.new(options)
     local context = {}
     for key, value in pairs(options.context or {}) do context[key] = value end
     context.clock = context.clock or clock
+    -- Collectors that can load an optional vendor library check this flag.
+    if options.safe_mode then context.safe_mode = true end
     if not valid_clock(context.clock) then
         error("context clock must provide now_ns and wall_ns", 2)
     end

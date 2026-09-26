@@ -24,7 +24,7 @@ This document describes the actual `0.1.0` structure. It does not present planne
       virtual cell grid → diff renderer → terminal
 ```
 
-The default continuous collection path requires no external CLI. `smartctl`, `perf`, `sleep`, and `systemctl` are used only by on-demand Inspectors and are launched through the constrained Runner. There is currently no NVML, AMD SMI, Level Zero, or other vendor GPU library/provider.
+The default continuous collection path requires no external CLI. `smartctl`, `perf`, `sleep`, and `systemctl` are used only by on-demand Inspectors and are launched through the constrained Runner. The only vendor GPU library is NVML: `libnvidia-ml.so.1` is opened at run time when present and skipped in safe mode. There is no AMD SMI or Level Zero provider.
 
 UI state is currently coordinated directly by `tui.lua`, `workspace.lua`, and the process controller; it is not a complete Action → Reducer → single AppState architecture. The established boundaries still hold: collectors do not draw to the terminal, and widgets do not read procfs or sysfs directly.
 
@@ -154,7 +154,7 @@ The GPU collector uses only DRM, sysfs, procfs, and a bounded local `pci.ids` lo
 - It records PCI class, revision, correctly nested `pci.ids` subsystem names, boot-VGA, NUMA, PCIe link, runtime-PM, and modalias metadata when exposed.
 - It discovers associated hwmon paths and stores `hwmon_refs`, but does not duplicate temperature, power, or fan reads inside the GPU collector.
 
-The ViewModel joins the global hwmon snapshot through `hwmon_refs`, hwmon `class`, and normalized `device_target`. When several channels match, it takes the highest temperature and highest power rather than summing overlapping rails; a native GPU metric takes precedence. The GPU page also has a bounded process table. With no matching sensor, Temp/Power remains `—`, and fans are not yet shown in the GPU table. There are still no vendor UUIDs, NVML/AMD SMI/Level Zero providers, NVIDIA proprietary metrics, MIG, AMD `gpu_metrics`, or vendor actions.
+The ViewModel joins the global hwmon snapshot through `hwmon_refs`, hwmon `class`, and normalized `device_target`. When several channels match, it takes the highest temperature and highest power rather than summing overlapping rails; a native GPU metric takes precedence. The GPU page also has a bounded process table. With no matching sensor, Temp/Power remains `—`, and fans are not yet shown in the GPU table. When NVML is present it is joined by PCI address: it fills utilization, memory, clocks, temperature, power, the vendor UUID and per-process GPU memory that DRM did not supply, and lists NVIDIA GPUs that have no DRM node. There are still no AMD SMI/Level Zero providers, MIG, AMD `gpu_metrics`, or vendor actions.
 
 ## 7. Inspectors
 
@@ -195,7 +195,7 @@ The program runs unprivileged by default and never installs a resident privilege
 
 ## 10. Current Test Boundary
 
-- The current 47 Lua unit/fixture test files cover platform gates, procfs, sysfs, connections, cgroup v2, DRM fdinfo, GPU frequency/hwmon joins, heterogeneous CPU inventory, powercap, SMART, PMU, layouts, i18n, input, renderer, Runner isolation, resource preflight, privilege handling, pidfd actions, JSON boundaries, export privacy, hardware-absent driver trees, offline inspector replay, process-collection scale limits, and the sudo file-access policy.
+- The current 50 Lua unit/fixture test files cover platform gates, procfs, sysfs, connections, cgroup v2, DRM fdinfo, GPU frequency/hwmon joins, heterogeneous CPU inventory, powercap, SMART, PMU, layouts, i18n, input, renderer, Runner isolation, resource preflight, privilege handling, pidfd actions, JSON boundaries, export privacy, hardware-absent driver trees, offline inspector replay, process-collection scale limits, and the sudo file-access policy.
 - PTY smoke tests cover `40×10`, `60×20`, `80×24/25`, `80×50`, `160×24`, `200×22`, `180×45`, resize, CJK, key paths, alternate-screen restoration, and layout persistence.
 - onedir/onefile have post-build CLI, snapshot, and PTY targets.
 

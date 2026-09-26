@@ -251,7 +251,7 @@ readelf -dW build/native/wtop_native.so
 strings build/native/wtop_native.so dist/wtop/wtop dist/wtop-onefile
 ```
 
-Source/build directories must not be embedded in ELF files. Unexpected shared libraries, RPATH/RUNPATH, or the wrong architecture must fail a release. This check applies to runtime ELF files; the `.luai/generated-output.txt` onedir exception is described above, and other text payloads still require individual review. The native module currently links no NVML, AMD SMI, or Level Zero.
+Source/build directories must not be embedded in ELF files. Unexpected shared libraries, RPATH/RUNPATH, or the wrong architecture must fail a release. This check applies to runtime ELF files; the `.luai/generated-output.txt` onedir exception is described above, and other text payloads still require individual review. The native module links no vendor GPU library; NVML is opened with `dlopen` at run time when the NVIDIA driver provides it, so `-ldl` is the only addition to the link line.
 
 For sudo smoke validation, never open an uncontrolled password prompt in automation. First use `sudo -n true`; run a bounded `sudo -n <installed-wtop> --diagnose` only when noninteractive sudo is already available. Unit tests validate construction and metadata without requiring root.
 

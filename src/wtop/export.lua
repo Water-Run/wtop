@@ -455,11 +455,13 @@ local function export_gpus(gpus)
     result.drm_scan = copy_fields(gpus and gpus.drm_scan, {
         "truncated", "unattached_render_nodes", "estimated_render_links",
     })
+    result.providers = copy_object(gpus and gpus.providers)
     for index, device in ipairs(gpus and gpus.devices or {}) do
         local exported = copy_fields(device, {
             "id", "card", "pci_bdf", "vendor_id", "device_id", "vendor", "driver",
             "vendor_name", "model_name", "stable_id", "primary_node",
-            "identity_quality", "partial", "source",
+            "identity_quality", "partial", "source", "vendor_uuid", "driver_version",
+            "driver_provider", "core_count",
         })
         exported.pci = copy_object(device.pci)
         exported.capabilities = copy_object(device.capabilities)

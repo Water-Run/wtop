@@ -92,10 +92,11 @@ end
 -- ---------------------------------------------------------------------------
 
 local rapl_first = Powercap.new({ fs = Fixture.new(Hardware.powercap_intel_rapl()) })
-local first = rapl_first:sample({ now_ns = 0 })
+local first = rapl_first:sample({ now_ns = function() return 0 end })
 equal(first.status, "ok", "powercap sample status")
 local package_zone = find(first.data.zones, function(z) return z.name == "package-0" end)
 assert(package_zone, "the package zone must be discovered")
+equal(package_zone.power_watts, nil, "a first sample cannot produce power")
 close(package_zone.energy_joules, 123456.789012, 0.001, "microjoules become joules")
 equal(#package_zone.constraints, 2, "both constraints are read")
 local long_term = find(package_zone.constraints, function(c) return c.name == "long_term" end)
@@ -109,12 +110,10 @@ assert(find(first.data.zones, function(z) return z.name == "psys" end), "psys is
 local rapl_second = Powercap.new({
   fs = Fixture.new(Hardware.powercap_intel_rapl_advanced(nil, 45 * 1000000)),
 })
-local second = rapl_second:sample({ now_ns = 1000000000 }, first)
+local second = rapl_second:sample({ now_ns = function() return 1000000000 end }, first)
 local package_after = find(second.data.zones, function(z) return z.name == "package-0" end)
 assert(package_after, "the package zone survives the second sample")
-if package_after.power_watts ~= nil then
-  close(package_after.power_watts, 45, 1.0, "45 J over one second is 45 W")
-end
+close(package_after.power_watts, 45, 1.0, "45 J over one second is 45 W")
 
 -- ---------------------------------------------------------------------------
 -- cpufreq: kHz, shared policies, and the governor/driver identity.

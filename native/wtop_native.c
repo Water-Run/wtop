@@ -13,6 +13,8 @@
 #include <lua.h>
 #include <lauxlib.h>
 
+#include "wtop_nvml.h"
+
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
@@ -1789,6 +1791,7 @@ static const luaL_Reg functions[] = {
     {"pid", l_pid},
     {"uname", l_uname},
     {"wcwidth", l_wcwidth},
+    {"nvml_query", wtop_nvml_query},
     {NULL, NULL},
 };
 

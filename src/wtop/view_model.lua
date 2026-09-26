@@ -1307,10 +1307,56 @@ local function advice_entries(snapshot, capabilities, i18n, privilege, linux_hos
     return entries
 end
 
+-- Windows service hosts and macOS resource coalitions fill the Workloads
+-- page where Linux has cgroups; their labels name what is actually grouped.
+local WORKLOAD_KINDS = {
+    service = {
+        title = { "widgets.services", "Windows services" },
+        nodes = { "workloads.service_hosts", "Service host processes" },
+        processes = { "workloads.running_services", "Running services" },
+        partial = { "workloads.unreadable_hosts", "Unreadable hosts" },
+        root = { "workloads.all_services", "All services" },
+        reason = { "workloads.service_partial_reason",
+            "Some service processes belong to other accounts and are readable only as administrator." },
+    },
+    coalition = {
+        title = { "widgets.app_groups", "Applications and their helpers" },
+        nodes = { "workloads.app_groups", "Application groups" },
+        processes = { "workloads.processes", "Visible processes" },
+        partial = { "workloads.unreadable_groups", "Partly unreadable groups" },
+        root = { "workloads.all_groups", "All groups" },
+        reason = { "workloads.coalition_partial_reason",
+            "Processes of other users are readable only with sudo." },
+    },
+}
+
 local function workload_detail_entries(snapshot, format, i18n)
     local summary = snapshot.workloads and snapshot.workloads.summary
     if not summary then return {} end
     local root = summary.root or {}
+    local kind = WORKLOAD_KINDS[snapshot.workloads.kind]
+    if kind then
+        local processes = snapshot.workloads.kind == "service"
+            and (snapshot.workloads.running_services or 0) or (summary.visible_process_count or 0)
+        local entries = {
+            entry(kind.nodes[1], kind.nodes[2], math.max(0, (summary.node_count or 1) - 1)),
+            entry(kind.processes[1], kind.processes[2], processes),
+            entry(kind.partial[1], kind.partial[2], summary.partial_node_count or 0,
+                { token = (summary.partial_node_count or 0) > 0 and "metric.warn" or nil }),
+            section(kind.root[1], kind.root[2]),
+            entry("metrics.cpu", "CPU", percent(format, root.cpu_utilization_percent)),
+            entry("metrics.memory", "Memory", bytes(format, root.memory_current_bytes)),
+        }
+        if (summary.partial_node_count or 0) > 0 then
+            entries[#entries + 1] = section("workloads.why_section", "Why partial")
+            entries[#entries + 1] = {
+                label = "",
+                value = translated(i18n, kind.reason[1], kind.reason[2]),
+                token = "text.muted",
+            }
+        end
+        return entries
+    end
     local entries = {
         entry("workloads.nodes", "Visible cgroups", summary.node_count or 0),
         entry("workloads.processes", "Visible processes", summary.visible_process_count or 0),
@@ -1871,6 +1917,9 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 10, min_width = 8, priority = 22, full_only = true },
             },
             rows = workload_table_rows,
+            panel_title = snapshot.workloads and WORKLOAD_KINDS[snapshot.workloads.kind]
+                and translated(i18n, WORKLOAD_KINDS[snapshot.workloads.kind].title[1],
+                    WORKLOAD_KINDS[snapshot.workloads.kind].title[2]) or nil,
         },
         workload_detail = { entries = workload_detail_entries(snapshot, format, i18n) },
 

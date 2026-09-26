@@ -53,6 +53,19 @@ smoke evidence below; they have not been shipped as a cross-platform release.
   and `stop`. Native Win32 console sessions use screen-buffer APIs and native
   key events; ANSI streams use the shared encoder. The Cygwin/OpenSSH launcher
   sets its PTY to raw mode while the program runs.
+- Hardware sources beyond the core resources are native per platform.
+  Windows enumerates display adapters through SetupAPI and joins DXGI 1.1 for
+  the adapter LUID that keys the PDH GPU counters; processor frequency,
+  ACPI thermal zones, and GPU load come from PDH counters with English names;
+  batteries from `GetSystemPowerStatus`; workloads are running services
+  grouped by host process. macOS reads IOAccelerator statistics, HID
+  temperature services, SMC fan and power keys, IOReport energy and
+  performance-state residency, IOPowerSources, per-process socket
+  descriptors, and resource coalitions. IOReport, IOHID events, the SMC and
+  the coalition query have no SDK header, so each is resolved at run time and
+  a missing one reports its source as unavailable.
+- Linux opens NVML (`libnvidia-ml.so.1`) with `dlopen` when present and joins
+  it onto DRM devices by PCI address; safe mode does not load it.
 - The Windows x86 artifact bundles a matching 32-bit Lua runtime and native
   module. It is built with an XP target macro and PE32 i386 format. Newer API
   calls needed for version, architecture, and uptime are resolved dynamically;
@@ -63,11 +76,13 @@ smoke evidence below; they have not been shipped as a cross-platform release.
 
 | Runtime host | Terminal case | Acceptance focus |
 | --- | --- | --- |
-| Linux | Debian 13 x86_64 SSH PTY; development host | Snapshot, Agent, diagnose, TUI quit; 49 Lua test files and the PTY matrix on the development host |
-| macOS | macOS 26.5 arm64 SSH PTY | Native CPU and per-core utilization, performance/efficiency core types and caches, memory composition, processes with users and paths, IOKit disk I/O, 64-bit interface counters, and system data; Snapshot, Agent, diagnose, TUI |
-| Windows XP, 32-bit x86 | No test environment available | PE32 i386 build and import review; runtime remains unverified |
-| Windows Server 2008 | 6.0.6003 x86_64 host running the x86 artifact | Native resources including per-core CPU utilization, CPU identity and caches, memory composition, physical-disk I/O, sockets with owning processes, Snapshot, Agent, diagnose, configuration/layout I/O, and Cygwin/OpenSSH PTY TUI; forced legacy CPU fallback compared against GetSystemTimes |
-| Newer Windows | 10.0.26100 x86_64 host running the x86 artifact | The same resources as Server 2008 with 64-bit interface counters, Snapshot, Agent, diagnose, and native Win32 console TUI through PowerShell/OpenSSH ConPTY |
+| Linux x86_64 | Fedora 44 development host | 50 Lua test files, the Lua 5.4 subset, and the PTY matrix; Snapshot with DRM/fdinfo GPU data; NVML reported unavailable without the NVIDIA driver |
+| Linux aarch64 | Ubuntu 24.04, DGX Spark (Cortex-X925/A725, NVIDIA GB10, driver 580), SSH | Native build and the 50 Lua test files; NVML joined onto the DRM node: utilization, clocks, temperature, power, UUID, driver version, per-process GPU memory |
+| Linux | Debian 13 x86_64 SSH PTY | Snapshot, Agent, diagnose, TUI quit (earlier run) |
+| macOS | macOS 26.5 arm64 (M4) SSH PTY | CPU with per-core user/system/nice, P/E cluster frequency from performance-state residency, memory, processes, IOKit disk I/O with estimated busy time, 64-bit interface counters, sockets with owners, GPU utilization, clock and memory, HID temperatures, SMC fan and system power, IOReport CPU/GPU/ANE/DRAM energy, coalition workloads, load average; Snapshot and TUI |
+| Windows XP, 32-bit x86 | No test environment available | PE32 i386 build; every import of the native DLL is present on XP (reviewed with objdump); runtime remains unverified |
+| Windows Server 2008 | 6.0.6003 x86_64 host running the x86 artifact | Native resources including per-core CPU utilization and time classes, CPU identity and caches, memory composition, physical-disk I/O, sockets with owning processes, the display adapter with driver version and memory through SetupAPI, power-plan and rated CPU frequency, service-host workloads, Snapshot, Agent, diagnose, configuration/layout I/O, and Cygwin/OpenSSH PTY TUI including hang-up exit |
+| Newer Windows | 10.0.26100 x86_64 host running the x86 artifact | The same resources as Server 2008 with 64-bit interface counters, effective CPU frequency including turbo, an ACPI thermal zone, 64-bit process memory read from a 32-bit build, Snapshot, Agent, diagnose, and native Win32 console TUI through PowerShell/OpenSSH ConPTY |
 | Server 2008 classic CMD | Legacy console with code page 936, driven by `tools/console_harness.c` | Screen-buffer drawing, Chinese text in double-byte cells, key events, page switching, the terminate menu, buffer resize, `q` and Ctrl+C exit with the console restored |
 | Windows with WSL | Linux runtime in WSL | Linux compatibility; this does not establish native Windows support |
 
@@ -100,12 +115,24 @@ still unverified on XP itself.
 
 ## Known Issues
 
-- When a Cygwin/OpenSSH session hangs up instead of quitting normally, the
-  Windows program behind `wtop.sh` can keep running without a terminal. It
-  does not notice the closed pipe and keeps polling.
-- On Windows the Workloads, GPU, sensors, power, and pressure pages have no
-  native source yet and show as unavailable. Disk busy time is derived from
-  idle time; macOS reports no busy time.
+- On Windows the collectors cost more CPU than the performance goal allows.
+  With the TUI on its default page, the x86 build used about 15% of one core
+  on the 10.0.26100 host. Per call, the process list took about 15 ms there
+  and the socket table about 6 ms; on Server 2008 the display-adapter query
+  took about 18 ms, disks 11 ms and mounts 8 ms. Caching adapter identity and
+  cheaper process enumeration are the next steps.
+- Windows has no pressure or power-zone source and shows them as
+  unavailable. Its CPU frequency comes from PDH from Windows 7 / 2008 R2 on;
+  older systems report the rated frequency as an estimate. An adapter without
+  a WDDM driver, or one that DXGI does not list in a service session, has
+  identity and memory but no utilization.
+- macOS has no pressure source, no per-process GPU usage, and, without root,
+  sockets and workloads only for the caller's own processes. Disk busy time is
+  an estimate from summed request service time. Cluster-to-CPU numbering is
+  inferred from the performance-level counts.
+- The macOS sensor, energy, frequency and workload sources use private
+  interfaces. They were validated on M4 and macOS 26.5 only; other chips and
+  releases may report them as unavailable.
 - A classic console shows line art as ASCII. Text in the console's code page
   (for example Chinese on code page 936) is shown as is; other characters
   appear as `?`. Without `LANG` or `--lang`, a Windows console follows the

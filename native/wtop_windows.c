@@ -360,7 +360,8 @@ static int l_poll(lua_State *L) {
         DWORD started = GetTickCount();
         for (;;) {
             DWORD available = 0;
-            if (!PeekNamedPipe(terminal.input, NULL, 0, NULL, &available, NULL)) {
+            if (wtop_launcher_gone()
+                || !PeekNamedPipe(terminal.input, NULL, 0, NULL, &available, NULL)) {
                 lua_createtable(L, 0, 1);
                 lua_pushboolean(L, 1);
                 lua_setfield(L, -2, "hangup");
@@ -1071,13 +1072,21 @@ static int l_collect_cpu(lua_State *L) {
         uint64_t core_idle = (uint64_t)processors[index].idle_time.QuadPart;
         uint64_t core_kernel = (uint64_t)processors[index].kernel_time.QuadPart;
         uint64_t core_user = (uint64_t)processors[index].user_time.QuadPart;
+        /* Kernel time includes idle, DPC, and interrupt time. */
+        uint64_t core_irq = (uint64_t)processors[index].dpc_time.QuadPart
+            + (uint64_t)processors[index].interrupt_time.QuadPart;
         if (core_kernel < core_idle) continue;
         lua_createtable(L, 0, 2);
         lua_pushfstring(L, "cpu%d", (int)index);
         lua_setfield(L, -2, "name");
-        lua_createtable(L, 0, 2);
+        lua_createtable(L, 0, 5);
         integer_field(L, "busy", (lua_Integer)(core_kernel - core_idle + core_user));
         integer_field(L, "total", (lua_Integer)(core_kernel + core_user));
+        integer_field(L, "user", (lua_Integer)core_user);
+        if (core_kernel - core_idle >= core_irq) {
+            integer_field(L, "system", (lua_Integer)(core_kernel - core_idle - core_irq));
+            integer_field(L, "irq", (lua_Integer)core_irq);
+        }
         lua_setfield(L, -2, "raw");
         lua_rawseti(L, -2, (lua_Integer)index + 1);
     }
@@ -1401,7 +1410,7 @@ static int l_collect_process(lua_State *L) {
             DWORD pid = entry.th32ProcessID;
             HANDLE process;
             FILETIME created, exited, kernel, user;
-            PROCESS_MEMORY_COUNTERS memory;
+            wtop_memory_counters memory;
             WCHAR path[MAX_PATH];
             int has_times = 0, has_memory = 0, has_path = 0, can_read_memory = 0;
             const char *owner = NULL;
@@ -1416,9 +1425,7 @@ static int l_collect_process(lua_State *L) {
             process = open_query_process(pid, &can_read_memory);
             if (process) {
                 has_times = GetProcessTimes(process, &created, &exited, &kernel, &user);
-                memset(&memory, 0, sizeof(memory));
-                memory.cb = sizeof(memory);
-                has_memory = GetProcessMemoryInfo(process, &memory, sizeof(memory));
+                has_memory = wtop_process_memory(process, &memory);
                 has_path = process_path(process, can_read_memory, path, MAX_PATH);
                 owner = process_user(process);
                 (void)CloseHandle(process);
@@ -1456,8 +1463,8 @@ static int l_collect_process(lua_State *L) {
                     : "query_denied");
             }
             if (has_memory) {
-                integer_field(L, "resident_bytes", (lua_Integer)memory.WorkingSetSize);
-                integer_field(L, "virtual_bytes", (lua_Integer)memory.PagefileUsage);
+                integer_field(L, "resident_bytes", (lua_Integer)memory.working_set);
+                integer_field(L, "virtual_bytes", (lua_Integer)memory.commit);
             }
             lua_rawseti(L, -2, output_index++);
         } while (Process32NextW(snapshot, &entry));
@@ -1841,6 +1848,7 @@ static const luaL_Reg functions[] = {
 
 int __declspec(dllexport) luaopen_wtop_native(lua_State *L) {
     luaL_newlib(L, functions);
+    wtop_register_hardware(L);
     string_field(L, "VERSION", "win32-0.1");
     return 1;
 }

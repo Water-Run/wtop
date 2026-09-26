@@ -6,23 +6,25 @@ local native_default = require("wtop.native")
 
 local M = {}
 
+-- A source whose native method is absent on a platform reports itself as
+-- unavailable; the method name is the whole platform contract.
 local sources = {
   cpu = {"collect_cpu", 500},
   cpu_info = {"collect_cpu_info", 30000},
   memory = {"collect_memory", 1000},
-  pressure = {nil, 2000},
+  pressure = {"collect_pressure", 2000},
   disk = {"collect_disk", 1000},
   network = {"collect_network", 1000},
   connections = {"collect_connections", 2000},
   process = {"collect_process", 1000},
-  gpu = {nil, 5000},
-  cpufreq = {nil, 5000},
-  hwmon = {nil, 5000},
-  powercap = {nil, 5000},
+  gpu = {"collect_gpu", 1000},
+  cpufreq = {"collect_cpufreq", 1000},
+  hwmon = {"collect_hwmon", 2000},
+  powercap = {"collect_powercap", 1000},
   mounts = {"collect_mounts", 5000},
-  cgroup = {nil, 10000},
+  cgroup = {"collect_cgroup", 2000},
   system_info = {"collect_system_info", 2000},
-  power_supply = {nil, 15000},
+  power_supply = {"collect_power_supply", 5000},
 }
 
 local function previous_ok(previous)
@@ -60,6 +62,12 @@ local function cpu_data(data, previous)
     if core_used and core_total and core_total > 0 then
       core.utilization = math.max(0, math.min(100,
         core_used * 100 / core_total))
+      -- Optional time classes; a platform that does not split them leaves
+      -- the columns unavailable rather than zero.
+      for _, key in ipairs({"user", "nice", "system", "irq"}) do
+        local part = Common.delta(raw[key], old_raw[key])
+        if part then core[key] = math.max(0, math.min(100, part * 100 / core_total)) end
+      end
       core.quality = "fresh"
     else
       core.quality = "gap"
@@ -201,8 +209,14 @@ local function disk_data(data, previous, timestamp_ns)
         -- interval shows an idle disk as several percent busy. The monotonic
         -- sampling interval is the accurate denominator.
         local idle_ns = delta("idle_time_ns")
+        local service_ns = delta("service_time_ns")
         if idle_ns then
           device.busy_percent = math.max(0, math.min(100, 100 - idle_ns * 100 / elapsed_ns))
+        elseif service_ns then
+          -- Summed request service time counts overlapping requests twice,
+          -- so it only estimates the share of time the device was busy.
+          device.busy_percent = math.max(0, math.min(100, service_ns * 100 / elapsed_ns))
+          device.busy_quality = "estimated"
         end
         device.quality = "fresh"
       else
@@ -210,6 +224,157 @@ local function disk_data(data, previous, timestamp_ns)
       end
     end
     if device.quality == "gap" then any_gap = true end
+  end
+  return data, any_gap and "gap" or "fresh"
+end
+
+-- Service hosts (Windows) and resource coalitions (macOS) carry cumulative
+-- CPU and I/O counters; rates come from adjacent samples like cgroup v2.
+local function workload_data(data, previous, timestamp_ns)
+  local old_data = previous_ok(previous)
+  local old_by_id = {}
+  for _, workload in ipairs(old_data and old_data.workloads or {}) do
+    if workload.id then old_by_id[workload.id] = workload end
+  end
+  local elapsed_ns = elapsed_since(previous, timestamp_ns)
+  local root
+  local children = {}
+  local summary = {
+    node_count = 0, visible_process_count = 0, partial_node_count = 0,
+    fresh_node_count = 0, gap_node_count = 0, reset_node_count = 0,
+  }
+  local cpu_sum, cpu_complete = 0, true
+  local read_sum, write_sum, io_complete = 0, 0, true
+  for _, workload in ipairs(data.workloads or {}) do
+    local old = old_by_id[workload.id]
+    local seconds = elapsed_ns and elapsed_ns > 0 and elapsed_ns / 1e9 or nil
+    if workload.depth == 0 and not root then
+      root = workload
+    else
+      children[#children + 1] = workload
+      local raw, old_raw = workload.raw_cpu, old and old.raw_cpu
+      workload.cpu = workload.cpu or {}
+      local cpu_delta = raw and old_raw and Common.delta(raw.usage_ns, old_raw.usage_ns)
+      if cpu_delta and seconds then
+        workload.cpu.utilization_percent = cpu_delta / elapsed_ns * 100
+        cpu_sum = cpu_sum + workload.cpu.utilization_percent
+      elseif raw then
+        -- An unreadable host is excluded from the total; a readable one
+        -- without a rate yet (first sample, reset) leaves it unknown.
+        cpu_complete = false
+      end
+      local io, old_io = workload.raw_io, old and old.raw_io
+      local read_delta = io and old_io and Common.delta(io.rbytes, old_io.rbytes)
+      local write_delta = io and old_io and Common.delta(io.wbytes, old_io.wbytes)
+      if read_delta and write_delta and seconds then
+        local rates = {
+          rbytes_per_second = read_delta / seconds,
+          wbytes_per_second = write_delta / seconds,
+        }
+        workload.io = { totals = { rates = rates } }
+        read_sum = read_sum + rates.rbytes_per_second
+        write_sum = write_sum + rates.wbytes_per_second
+      elseif io then
+        io_complete = false
+      end
+      if raw and not old then
+        workload.rate_quality = "gap"
+      elseif old and not cpu_delta and raw then
+        workload.rate_quality = "reset"
+        summary.reset_node_count = summary.reset_node_count + 1
+      else
+        workload.rate_quality = raw and "fresh" or nil
+      end
+      summary.visible_process_count = summary.visible_process_count
+        + (workload.processes and workload.processes.count or 0)
+    end
+    if workload.partial then
+      workload.quality = "partial"
+      summary.partial_node_count = summary.partial_node_count + 1
+    elseif workload.rate_quality == "gap" or workload.rate_quality == "reset" then
+      workload.quality = "gap"
+      summary.gap_node_count = summary.gap_node_count + 1
+    else
+      workload.quality = "fresh"
+      summary.fresh_node_count = summary.fresh_node_count + 1
+    end
+    summary.node_count = summary.node_count + 1
+  end
+  -- A flat list of hundreds of groups is read busiest first, as in Task
+  -- Manager and Activity Monitor; names break ties so idle rows stay put.
+  table.sort(children, function(left, right)
+    local left_cpu = left.cpu and left.cpu.utilization_percent or -1
+    local right_cpu = right.cpu and right.cpu.utilization_percent or -1
+    if left_cpu ~= right_cpu then return left_cpu > right_cpu end
+    local left_name, right_name = tostring(left.name or ""):lower(), tostring(right.name or ""):lower()
+    if left_name ~= right_name then return left_name < right_name end
+    return tostring(left.id) < tostring(right.id)
+  end)
+  local ordered = {}
+  if root then
+    ordered[1] = root
+    root.cpu = root.cpu or {}
+    -- A root total is only meaningful when every host contributed a rate.
+    if cpu_complete and #children > 0 then root.cpu.utilization_percent = cpu_sum end
+    if io_complete and #children > 0 then
+      root.io = { totals = { rates = {
+        rbytes_per_second = read_sum, wbytes_per_second = write_sum,
+      } } }
+    end
+    summary.root_id = root.id
+    summary.root = {
+      id = root.id,
+      process_count = root.processes and root.processes.count,
+      cpu_utilization_percent = root.cpu.utilization_percent,
+      memory_current_bytes = root.memory and root.memory.current_bytes,
+      io_rates = root.io and root.io.totals and root.io.totals.rates or nil,
+    }
+  end
+  for _, workload in ipairs(children) do ordered[#ordered + 1] = workload end
+  data.workloads = ordered
+  data.summary = summary
+  local quality = summary.partial_node_count > 0 and "partial"
+    or (summary.gap_node_count > 0 and "gap" or "fresh")
+  if data.truncated then quality = "partial" end
+  return data, quality
+end
+
+-- Cumulative energy counters per zone become average power over the
+-- sampling interval, with the same first-sample and reset rules as powercap.
+local function power_data(data, previous, timestamp_ns)
+  local old_data = previous_ok(previous)
+  local old_by_id = {}
+  for _, zone in ipairs(old_data and old_data.zones or {}) do
+    if zone.id then old_by_id[zone.id] = zone end
+  end
+  local elapsed_ns = elapsed_since(previous, timestamp_ns)
+  local any_gap, total, total_count = false, 0, 0
+  for _, zone in ipairs(data.zones or {}) do
+    local old = old_by_id[zone.id]
+    local delta = old and type(zone.energy_joules) == "number"
+      and type(old.energy_joules) == "number"
+      and zone.energy_joules - old.energy_joules or nil
+    if type(zone.power_watts) == "number" then
+      zone.power_quality = zone.power_quality or "fresh"
+    elseif delta and delta >= 0 and elapsed_ns and elapsed_ns > 0 then
+      zone.power_watts = delta / (elapsed_ns / 1e9)
+      zone.power_source = zone.power_source or "energy_delta"
+      zone.power_quality = "fresh"
+    else
+      zone.power_quality = delta and delta < 0 and "reset" or "gap"
+      any_gap = true
+    end
+    zone.quality = zone.power_quality
+    if zone.aggregate and type(zone.power_watts) == "number" then
+      total = total + zone.power_watts
+      total_count = total_count + 1
+    end
+  end
+  if total_count > 0 then
+    data.total_power_watts = total
+    data.measured_aggregate_zones = total_count
+    data.aggregate_zone_count = total_count
+    data.aggregate_complete = not any_gap
   end
   return data, any_gap and "gap" or "fresh"
 end
@@ -335,8 +500,9 @@ local function connections_data(data)
       or (connection.base_id .. "#" .. tostring(count))
     by_id[connection.id] = connection
   end
+  local denied = type(data.denied_processes) == "number" and data.denied_processes or 0
   local partial = data.truncated == true or invalid > 0
-    or data.ipv6_unavailable == true
+    or data.ipv6_unavailable == true or denied > 0
   return {
     connections = connections,
     by_id = by_id,
@@ -346,7 +512,8 @@ local function connections_data(data)
     owner_scan = {
       enabled = owners_available,
       status = owners_available and "ok" or "unavailable",
-      partial = false,
+      partial = denied > 0,
+      denied = denied,
     },
   }, partial and "partial" or "fresh"
 end
@@ -400,6 +567,12 @@ local function new_collector(id, description, options)
       data, quality = disk_data(data, previous, timestamp_ns)
     elseif id == "connections" then
       data, quality = connections_data(data)
+    elseif id == "cgroup" then
+      data, quality = workload_data(data, previous, timestamp_ns)
+    elseif id == "powercap" then
+      data, quality = power_data(data, previous, timestamp_ns)
+    elseif type(data.quality) == "string" then
+      quality = data.quality
     end
     return Common.result("ok", timestamp_ns, data, {
       quality = quality,

@@ -76,13 +76,14 @@ Collectors and the Snapshot model retain full remote addresses internally; maski
 - Bounds the compute-page sensor table to 512 rows with alarm/fault rows ranked first, avoiding an all-row sort on unusually large hwmon inventories.
 - The ViewModel joins general sensors through GPU `hwmon_refs`, hwmon `class`, and parsed `device_target`, placing the highest matching channel temperature and power into the GPU device table. The maximum avoids summing overlapping whole-board and rail values; a metric native to the GPU takes priority.
 - Emits a `dev.waterrun.wtop.gpu/v2` snapshot model containing capabilities, quality, process-scan state, and truncation markers.
+- Opens NVML (`libnvidia-ml.so.1`) at run time when the NVIDIA driver provides it. Devices are joined on PCI address; NVML fills utilization, memory-controller load, memory, graphics/memory clocks, temperature, power and limit, fan, P-state, UUID and driver version where DRM has no value, and supplies per-process GPU memory and SM share when fdinfo has no rows. A GPU without a DRM node is listed from NVML alone. Safe mode does not load the library; `gpus.providers.nvml` records the provider status and reason.
 
 ### 4.2 Not Implemented or Not Connected
 
 - The GPU collector enumerates association keys under `device/hwmon/hwmon*` but does not reread temperature, power, or fans. Temperature/power comes from the general hwmon snapshot through the ViewModel. Without a matching `class`/`device_target`, relevant channel, or readable hwmon source, the column remains `—`. Fans are not shown in the GPU table.
 - The TUI shows process-level summaries only. It has no interactive drill-down for DRM clients, frequency domains, individual memory regions, or GPU-to-host-process details; the complete model remains available in JSON.
-- There is no NVML, AMD SMI, Level Zero Sysman, `nvidia-smi`, `amd-smi`, or `intel_gpu_top` provider, and distributions do not link these libraries.
-- There are no NVIDIA proprietary utilization/VRAM metrics, MIG, AMD `gpu_metrics`, throttle reasons, ECC, NVLink, power-limit controls, or complete multi-tile semantics. Generic PCIe link metadata is read from sysfs when available.
+- There is no AMD SMI, Level Zero Sysman, `nvidia-smi`, `amd-smi`, or `intel_gpu_top` provider. NVML is loaded dynamically; nothing links against vendor libraries.
+- There are no MIG instances, AMD `gpu_metrics`, throttle reasons, ECC, NVLink, power-limit controls, or complete multi-tile semantics. Generic PCIe link metadata is read from sysfs when available.
 - DRM fdinfo capability depends on kernel and driver. Hidden fdinfo, missing client ID/BDF, counter reset, or scan limits can produce only estimated/partial data; identical metrics are not guaranteed across all GPUs.
 
 ## 5. Process Model
@@ -129,7 +130,7 @@ Collection runs as an ordinary user by default. Direct `sudo wtop` and explicit 
 
 ## 10. Future Monitoring Capabilities
 
-- NVML, AMD SMI, Level Zero, and a real-hardware capability matrix; richer GPU sensor semantics and client/region drill-down.
+- AMD SMI, Level Zero, and a real-hardware capability matrix; richer GPU sensor semantics and client/region drill-down.
 - systemd-unit/container semantics, expandable Workloads details, and cgroup/process cross-linking.
 - NUMA, throttle reasons, frequency residency, scheduler latency, PSS/USS, and thread/namespace detail.
 - Routes, addresses, and connection filtering; configurable and reviewed privacy masking for TUI/JSON.
