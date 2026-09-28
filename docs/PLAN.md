@@ -200,7 +200,7 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
 ### Phase B: Complete 0.1 Features
 
 - Process combined filters, optional sort direction, threads/PSS/USS, namespaces, and complete detail navigation.
-- Add/remove/replace widgets, drag-and-drop, layout import/export, and tab/workspace management.
+- Add/remove/replace widgets, drag-and-drop, layout import/export, and tab/workspace management. (Import/export is done on 2026-09-28: `--export-layout`/`--import-layout` with validation, one-generation backup on install, and a defaults fallback when the persisted file is broken. The remaining items stay open.)
 - Add expand/collapse, details, systemd-unit, and container semantics to cgroup v2/Workloads.
 - Extend the current GPU hwmon `class`/`device_target` join into broader CPUFreq, sensor, mount, and device-topology links, and define fan/rail/board-power semantics.
 - Dynamic AMD SMI and Level Zero providers with fake-library tests (NVML is done).

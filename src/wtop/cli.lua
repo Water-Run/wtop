@@ -14,6 +14,8 @@ WaterRun's top: a responsive system monitor.
 Options:
   -h, --help             Show this help
   -V, --version          Show version
+      --export-layout F  Write the current layout to F as schema-v2 YAML
+      --import-layout F  Validate F and install it as the persisted layout
       --diagnose         Print capability diagnostics and exit
       --snapshot         Print one machine-readable snapshot and exit
       --agent            Print compact LLM/agent context JSON and exit
@@ -85,6 +87,17 @@ function M.parse(argv)
         elseif item == "--agent" then
             local ok, command_error = select_command("agent", item)
             if not ok then return nil, command_error end
+        elseif item == "--export-layout" or item == "--import-layout" then
+            local value, next_index, parse_error = option_value(argv, index, item)
+            if parse_error then
+                return nil, parse_error
+            end
+            local ok, command_error = select_command(
+                item == "--export-layout" and "export_layout" or "import_layout",
+                item)
+            if not ok then return nil, command_error end
+            options.layout_path = value
+            index = next_index
         elseif item == "--sudo" or item == "--elevate" then
             if elevation_option then
                 return nil, "elevation options cannot be repeated or combined: "
@@ -216,6 +229,25 @@ function M.run(argv, dependencies)
         return run_snapshot(options)
     elseif options.command == "agent" then
         return run_agent(options)
+    elseif options.command == "export_layout" then
+        local LayoutCommands = require("wtop.layout_commands")
+        local exported, result = LayoutCommands.export(options.layout_path)
+        if not exported then
+            io.stderr:write("wtop: ", tostring(result), "\n")
+            return 1
+        end
+        io.write("wtop: exported layout to ", tostring(result), "\n")
+        return 0
+    elseif options.command == "import_layout" then
+        local LayoutCommands = require("wtop.layout_commands")
+        local imported, result = LayoutCommands.import(options.layout_path)
+        if not imported then
+            io.stderr:write("wtop: ", tostring(result), "\n")
+            return 1
+        end
+        io.write("wtop: installed layout; the previous file is kept as .bak (",
+            tostring(result), ")\n")
+        return 0
     end
     return run_tui(options)
 end

@@ -76,6 +76,8 @@ the first nine; `0` selects the tenth, following the familiar browser ordering.
 
 Primary configuration at `$XDG_CONFIG_HOME/wtop/config.yml` uses configuration schema v1. The separate `$XDG_CONFIG_HOME/wtop/layout.yml` is written as layout schema v2 in the current release. Do not conflate the two `schema_version` values.
 
+`wtop --export-layout FILE` writes the layout that would load right now as schema-v2 YAML (the built-in defaults when the persisted file is broken, with the reason printed). `wtop --import-layout FILE` validates a file and installs it as the persisted layout; the previous file is kept as `layout.yml.bak`. Use the pair to copy an arrangement between machines or recover from an unreadable layout.
+
 ```yaml
 schema_version: 2
 pages:
