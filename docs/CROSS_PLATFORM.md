@@ -195,6 +195,15 @@ of the immediately preceding bundle used 3.58–3.89%. The process exited
 normally in each run. These short single-host runs do not establish a release
 performance baseline.
 
+On 2026-09-28, the bundle with all of that day's changes was re-measured with
+60-second windows on the classic console at the default update rate, covering
+full periodic-refresh cycles (15-second adapter cache, 30-second path and
+owner refreshes). Server 2008 used 1.72% of one core on Overview, 2.29% on
+Processes, and 1.56% on GPU. The 10.0.26100 host with about 380 processes
+used 2.58% on Overview and 2.81% on Processes. Both processes exited
+normally. On Linux, `make benchmark` now provides the repeatable measurement
+script for run-to-run comparison on the same host.
+
 The Processes table now formats only rows accessed by the viewport. In two
 alternating 10-second classic-console runs, the preceding bundle used 3.12%
 and 3.27% of one core; the lazy-row bundle used 2.34% and 2.02%. A separate

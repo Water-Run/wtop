@@ -188,6 +188,8 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
 - Establish repeatable performance benchmarks and calibrate CPU, RSS, first-frame, and input-latency budgets. (A fixed-script benchmark now exists: `make benchmark` reports first-frame, per-page steady CPU, peak RSS, and page-switch latency p50/p95 on the current host. On the 2026-09-28 development host with 537 processes it measured ~242 ms first frame, 3.4%/7.8% CPU on Overview/Processes, ~29 MiB peak RSS, and ~107 ms p95 page-switch latency; budget calibration on the target hardware remains open.)
 - Extend the Server 2008 whole-TUI CPU measurement to periodic refreshes and
   other Windows hosts, then reduce the Processes page's remaining overhead.
+  (Measured with 60-second windows over full refresh cycles on both hosts on
+  2026-09-28; reducing the remaining Processes-page overhead stays open.)
 - Validate the bounded Windows removable-media probe workers on Server 2008,
   including empty media, hotplug, and two nonresponsive devices; working media
   has been checked. Resolve any starvation or capacity-freshness problems
