@@ -313,24 +313,55 @@ function Parsers.net_dev(content)
   return interfaces
 end
 
+-- Field positions (after state) that process_stat needs; defined once so a
+-- per-process parse does not allocate its own lookup table.
+local PROCESS_STAT_REQUIRED = {
+  [1] = true, [2] = true, [3] = true, [4] = true, [6] = true, [7] = true,
+  [9] = true, [11] = true, [12] = true, [15] = true, [16] = true, [17] = true,
+  [19] = true, [20] = true, [21] = true,
+}
+
 function Parsers.process_stat(content)
   if type(content) ~= "string" then
     return nil, "content_required"
   end
-  -- Greedy comm capture is intentional: Linux permits ')' inside comm.
-  local pid, comm, state, rest = content:match("^(%d+)%s+%((.*)%)%s+(%S)%s+(.+)$")
-  if not pid then
+  -- Linux permits ')' inside comm, so the closing parenthesis is the last
+  -- one. Scanning for it directly avoids the greedy pattern capture that
+  -- dominated whole-table parse time.
+  local close, seek = nil, 0
+  while true do
+    local found = content:find(")", seek + 1, true)
+    if not found then break end
+    close, seek = found, found
+  end
+  local open = close and content:find("(", 1, true) or nil
+  if not close or not open or open > close or open < 2 then
     return nil, "invalid_process_stat"
   end
-  local fields = split_words(rest)
-  if #fields < 21 then
+  local pid_token = content:sub(1, open - 1):match("^(%d+)%s+$")
+  local state_pos = close and content:find("%S", close + 1) or nil
+  if not pid_token or not state_pos then
+    return nil, "invalid_process_stat"
+  end
+  local comm = content:sub(open + 1, close - 1)
+  local state = content:sub(state_pos, state_pos)
+  local rest_start = content:find("%S", state_pos + 1)
+  local numbers = {}
+  local fields = {}
+  local index = 0
+  for word in (rest_start and content:sub(rest_start) or ""):gmatch("%S+") do
+    index = index + 1
+    if PROCESS_STAT_REQUIRED[index] or index == 36 then
+      fields[index] = word
+      if index == 36 then break end
+    end
+  end
+  if index < 21 then
     return nil, "incomplete_process_stat"
   end
-  local required = { 1, 2, 3, 4, 6, 7, 9, 11, 12, 15, 16, 17, 19, 20, 21 }
-  local numbers = {}
-  for _, index in ipairs(required) do
-    numbers[index] = exact_integer(fields[index])
-    if numbers[index] == nil then return nil, "invalid_process_stat_number" end
+  for position in pairs(PROCESS_STAT_REQUIRED) do
+    numbers[position] = exact_integer(fields[position])
+    if numbers[position] == nil then return nil, "invalid_process_stat_number" end
   end
   if numbers[1] < 0 or numbers[2] < 0 or numbers[3] < 0 or numbers[6] < 0
       or numbers[7] < 0 or numbers[9] < 0 or numbers[11] < 0 or numbers[12] < 0
@@ -342,7 +373,7 @@ function Parsers.process_stat(content)
     processor = exact_integer(fields[36])
     if processor == nil or processor < 0 then return nil, "invalid_process_stat_processor" end
   end
-  local parsed_pid = exact_integer(pid)
+  local parsed_pid = exact_integer(pid_token)
   if not parsed_pid or parsed_pid <= 0 then return nil, "invalid_process_pid" end
   if numbers[11] > math.maxinteger - numbers[12] then
     return nil, "process_cpu_ticks_out_of_range"

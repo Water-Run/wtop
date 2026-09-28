@@ -108,6 +108,10 @@ function Process.new(options)
     read_cgroup = options.read_cgroup == true,
     max_processes = bounded_process_limit(options.max_processes),
     _method_style = true,
+    -- Static per-identity fields (uid, resolved user, command line) survive
+    -- between samples; a process keeps them for its whole lifetime, so
+    -- re-reading status and cmdline for every row every second was pure I/O.
+    identity_cache = {},
   }, Process)
 end
 
@@ -148,6 +152,10 @@ function Process:sample(context, previous)
   local previous_data = Common.previous_data(previous)
   local elapsed_ns = previous_data and Common.elapsed_ns(now, previous.timestamp_ns) or nil
   local previous_by_id = previous_data and previous_data.by_id or {}
+  -- This sample's cache; assigned over self.identity_cache at the end so
+  -- identities that disappeared are dropped in the same pass.
+  local live_cache = {}
+  local prior_cache = self.identity_cache
   -- Only needed on the first sample, to turn cumulative ticks into a lifetime
   -- average; a missing or unreadable /proc/uptime simply leaves the first
   -- frame without CPU values, exactly as before.
@@ -263,7 +271,15 @@ function Process:sample(context, previous)
             end
           end
 
-          if self.read_status then
+          local detail = wants_detail(context, process.id)
+          local command_value = nil
+          local cached = prior_cache[process.id]
+          if cached then
+            process.uid = cached.uid
+            process.user = cached.user
+            if cached.command then process.command = cached.command end
+          end
+          if self.read_status and (detail or not cached) then
             local status_content, status_error = fs:read(base .. "/status", 256 * 1024)
             if status_content then
               local status = Parsers.process_status(status_content)
@@ -288,13 +304,16 @@ function Process:sample(context, previous)
             end
           end
 
-          local detail = wants_detail(context, process.id)
           local supplemental_read = false
-          if self.read_cmdline or detail then
+          if (self.read_cmdline or detail) and (detail or not cached or not cached.command_read) then
             supplemental_read = true
             local cmdline, cmdline_error = fs:read(base .. "/cmdline", 64 * 1024)
             if cmdline and cmdline ~= "" then
               process.command = sanitize_text(cmdline)
+              command_value = process.command
+            elseif cmdline == "" then
+              -- A genuinely empty command line is stable; do not reread it.
+              command_value = false
             elseif cmdline_error then
               process.partial = true
               process.command_status = FS.error_status(cmdline_error)
@@ -369,6 +388,19 @@ function Process:sample(context, previous)
             by_id[process.id] = process
             by_pid[process.pid] = process
             processes[#processes + 1] = process
+            -- Forward only identities seen this sample, so the cache cannot
+            -- outlive its processes or grow without bound.
+            local entry = live_cache[process.id]
+            if not entry then
+              entry = { command_read = false }
+              live_cache[process.id] = entry
+            end
+            entry.uid = process.uid
+            entry.user = process.user
+            if command_value ~= nil then
+              entry.command_read = true
+              if command_value then entry.command = command_value end
+            end
           end
         end
       end
@@ -382,6 +414,7 @@ function Process:sample(context, previous)
     any_fresh = any_fresh or process.quality == "fresh"
     any_process_partial = any_process_partial or process.partial == true
   end
+  self.identity_cache = live_cache
   local finished = Common.now_ns(context)
   return Common.result("ok", finished, {
     list = processes,
