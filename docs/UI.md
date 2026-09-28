@@ -49,7 +49,7 @@ shows a scrollbar and a `shown/total` counter when its content does not fit.
 | --- | --- | --- |
 | `1` `overview` | CPU, memory, per-core bars, host identity (hostname, OS, kernel, uptime, load, virtualization), PSI, disk, network, GPU, CPU frequency, maximum hwmon temperature, and CPU power | Not a clickable resource drill-down page |
 | `2` `processes` | Process table with PID, user name, PRI/NI, virtual and resident memory, state, CPU, TIME+, thread count and full command; text search, eleven sort columns in both directions, PPID tree, full-path toggle, selected-item detail, and a confirmed signal menu | No thread rows, user-configurable column set, PSS/USS, namespace, or combined filters |
-| `3` `compute` | CPU identity/heterogeneous core types/topology/cache as an aligned key/value list, aggregate CPU, a per-core bar array, per-core table, load and kernel-wide counters, CPUFreq policies, powercap zones, and the hwmon table | No NUMA distance, frequency residency, or full vendor firmware inventory |
+| `3` `compute` | CPU identity/heterogeneous core types/topology/cache as an aligned key/value list, aggregate CPU, a per-core bar array, per-core table, load and kernel-wide counters, CPUFreq policies, powercap zones, and the sensor table with a scrollable reading/limit overlay | No NUMA distance or full vendor firmware inventory |
 | `4` `memory` | Utilization with history, a stacked composition bar (used/shared/buffers/cache/free), full meminfo detail with per-field share, swap totals and devices, memory PSI, and paging/fault counters | No per-process PSS/USS attribution or NUMA node breakdown |
 | `5` `storage` | Block-device rate/latency/queue with model, size, medium and scheduler; mountinfo/statvfs capacity with inode usage; I/O pressure; SMART entry | Network/autofs/FUSE/fuseblk/virtiofs skip statvfs by default; other calls share a 50 ms admission budget but individual calls cannot be preempted |
 | `6` `network` | Interface rate/link/MTU/MAC/error summary, IPv4 and IPv6 addresses with netmask and default-route marking, and the TCP/TCP6/UDP/UDP6/Unix socket table | No route table detail, connection filters, or endpoint-masking switch |
@@ -165,9 +165,10 @@ The TUI solves actual placements first, then passes the visible-widget set to th
 | `e` | Enter/leave layout edit mode (`Esc` also leaves) |
 | `r` / `Ctrl+L` | Make collectors required by actual placements immediately due, and force one complete renderer redraw |
 | `?` / `F1` | Open the help overlay |
-| `s` | Open the SMART/NVMe device selector |
-| `b` | Run the RAM-bandwidth Inspector |
-| `d` | Run the sshd Inspector |
+| `h` | Show the latest sensor readings and limits on Linux, macOS, or Windows |
+| `s` | Open the SMART/NVMe device selector on Linux |
+| `b` | Run the RAM-bandwidth Inspector on Linux |
+| `d` | Run the sshd Inspector on Linux |
 | `q` | Quit the main UI; close the current overlay/selector |
 | `Ctrl+C` | Always quit from the main UI, search, signal menu, or any overlay |
 
@@ -230,8 +231,8 @@ recycled PID is never signalled.
   process viewport three rows at a time and scrolls focused panels and
   overlays. Split dragging and widget drag-and-drop are unsupported.
 
-`h j k l`, `:`, `Ctrl+K`, a command palette, global search, and key rebinding
-are not implemented.
+Vim-style movement with `h j k l`, `:`, `Ctrl+K`, a command palette, global
+search, and key rebinding are not implemented.
 
 ## 7. Data Representation and Accessibility
 

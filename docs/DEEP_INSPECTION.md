@@ -14,6 +14,12 @@ The default registry currently registers only three on-demand Inspectors:
 
 Results appear in a scrollable text overlay. The overlay supports arrow keys, `PageUp`/`PageDown`, `Home`/`End`, and the mouse wheel; close it with `Esc`, `Enter`, or `q`. Scalar values show their quality, and common units such as bytes, bandwidth, percent, temperature, and duration are formatted. Selected collection fields show up to 128 entries inline and mark any remaining count. Field source, timestamp, and reason details are not fully expanded. There is no generic entity browser, hierarchical detail navigation, field pinning to dashboards, Inspector history, or plugin UI; these remain future directions.
 
+The separate `h` sensor overlay reads the latest shared snapshot on Linux,
+macOS, and Windows. It shows up to 256 channels with their last sampled value,
+quality, additional readings, and limits when the platform exposes them. It
+does not trigger another hardware probe. If the last sensor sample is more
+than 15 seconds old, the overlay labels it stale.
+
 Every external helper is invoked through the shell-free argv Runner with timeout, output-size, fixed-environment, and process-cleanup constraints. `--safe-mode` disables the Runner, so the parts of these three Inspectors that depend on external commands become unavailable; ordinary procfs/sysfs collectors continue working.
 
 ## 2. SMART / NVMe

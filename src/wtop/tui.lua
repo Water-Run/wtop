@@ -98,6 +98,10 @@ local function aligned_pairs(pairs_list, gap)
     return lines
 end
 
+local NUMBER_UNIT_SUFFIX = {
+    watts = " W", volts = " V", amperes = " A", joules = " J",
+}
+
 local function format_value(value, i18n, unit)
     if type(value) == "table" then
         local count = 0
@@ -119,6 +123,16 @@ local function format_value(value, i18n, unit)
             if unit == "percent" then return format:percent(value, { precision = 1 }) end
             if unit == "celsius" then return format:temperature(value) end
             if unit == "nanoseconds" then return format:duration(value / 1000000000) end
+            if unit == "seconds" then return format:duration(value) end
+            local suffix = NUMBER_UNIT_SUFFIX[unit]
+            if suffix then
+                local amount = format:number(value, { precision = unit == "volts" and 3 or 2 })
+                return amount and amount .. suffix
+            end
+            if unit == "rpm" or unit == "hours" then
+                local amount = format:number(value, { precision = 0 })
+                return amount and amount .. (unit == "rpm" and " rpm" or " h")
+            end
         end)
         if ok and type(formatted) == "string" then return formatted end
     end
@@ -275,6 +289,113 @@ local function inspector_lines(title, result, i18n)
             end
         end
     end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = translated(i18n, "inspector.close_hint", "Esc/Enter closes")
+    return lines
+end
+
+local SENSOR_DETAIL_LIMIT = 256
+local SENSOR_STALE_AFTER_NS = 15 * 1000000000
+
+local function sensor_detail_lines(snapshot, i18n, now_ns)
+    snapshot = type(snapshot) == "table" and snapshot or {}
+    local data = type(snapshot.sensors) == "table" and snapshot.sensors or {}
+    local devices = type(data.devices) == "table" and data.devices or {}
+    local quality = type(snapshot.quality) == "table" and snapshot.quality.sensors
+    local state = type(quality) == "table" and quality or {}
+    local age_ns = type(now_ns) == "number" and type(state.timestamp_ns) == "number"
+        and math.max(0, now_ns - state.timestamp_ns) or nil
+    local stale_sample = age_ns and age_ns > SENSOR_STALE_AFTER_NS
+    local shown_quality = state.quality or data.quality or "unavailable"
+    if stale_sample
+        and (shown_quality == "fresh" or shown_quality == "estimated") then
+        shown_quality = "stale"
+    end
+    local title = translated(i18n, "widgets.sensors", "Sensors")
+    local lines = {
+        title, "",
+        translated(i18n, "inspector.status", "Status") .. ": "
+            .. tostring(state.status or (#devices > 0 and "ok" or "unavailable")),
+        translated(i18n, "inspector.quality", "Quality") .. ": "
+            .. tostring(shown_quality),
+    }
+    if stale_sample and #devices > 0 then
+        lines[#lines + 1] = translated(i18n, "collector.stale",
+            "{name} has not updated for {age}", {
+                name = title, age = format_value(age_ns / 1000000000, i18n, "seconds"),
+            })
+    end
+    if state.reason then
+        lines[#lines + 1] = translated(i18n, "inspector.reason", "Reason")
+            .. ": " .. inspector_text(state.reason, INSPECTOR_ROW_WIDTH)
+    end
+    local total = 0
+    for _, device in ipairs(devices) do total = total + #(device.channels or {}) end
+    lines[#lines + 1] = translated(i18n, "metrics.sensor", "Sensor") .. ": " .. total
+    if total == 0 then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = translated(i18n, "ui.no_data", "No data")
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = translated(i18n, "inspector.close_hint", "Esc/Enter closes")
+        return lines
+    end
+
+    local function add_values(values, unit, skip_input)
+        if type(values) ~= "table" then return end
+        local keys = {}
+        for key, value in pairs(values) do
+            if (not skip_input or key ~= "input") and type(value) == "number" then
+                keys[#keys + 1] = key
+            end
+        end
+        table.sort(keys)
+        if #keys == 0 then return end
+        for first = 1, #keys, 4 do
+            local parts = {}
+            for index = first, math.min(first + 3, #keys) do
+                local key = keys[index]
+                parts[#parts + 1] = key .. "=" .. format_value(values[key], i18n, unit)
+            end
+            lines[#lines + 1] = inspector_text("    " .. table.concat(parts, "  "),
+                INSPECTOR_ROW_WIDTH)
+        end
+    end
+
+    local shown = 0
+    for _, device in ipairs(devices) do
+        if shown >= SENSOR_DETAIL_LIMIT then break end
+        if #(device.channels or {}) > 0 then
+            local device_quality = device.quality or "unavailable"
+            if stale_sample and (device_quality == "fresh" or device_quality == "estimated") then
+                device_quality = "stale"
+            end
+            lines[#lines + 1] = ""
+            lines[#lines + 1] = inspector_text(
+                inspector_text(device.name or device.class or "?", 80) .. "  ["
+                    .. device_quality .. "]  "
+                    .. inspector_text(device.source or "", 64), INSPECTOR_ROW_WIDTH)
+        end
+        for _, channel in ipairs(device.channels or {}) do
+            if shown >= SENSOR_DETAIL_LIMIT then break end
+            shown = shown + 1
+            local name = channel.label or (tostring(channel.type or "sensor")
+                .. " " .. tostring(channel.index or shown))
+            local status = channel.fault and "FAULT" or channel.alarm and "ALARM"
+                or channel.quality or "unavailable"
+            if stale_sample then
+                if status == "fresh" or status == "estimated" then status = "stale"
+                elseif status == "FAULT" or status == "ALARM" then
+                    status = status .. "/stale"
+                end
+            end
+            lines[#lines + 1] = inspector_text("  " .. inspector_text(name, 80) .. ": "
+                .. format_value(channel.input, i18n, channel.unit) .. "  ["
+                .. status .. "]", INSPECTOR_ROW_WIDTH)
+            add_values(channel.readings, channel.unit, true)
+            add_values(channel.thresholds, channel.unit, false)
+        end
+    end
+    if total > shown then lines[#lines + 1] = "  ... +" .. (total - shown) end
     lines[#lines + 1] = ""
     lines[#lines + 1] = translated(i18n, "inspector.close_hint", "Esc/Enter closes")
     return lines
@@ -437,9 +558,10 @@ local HELP_SECTIONS = {
     {
         id = "help.section_inspect", title = "Deep inspection",
         bindings = {
-            { "s", "help.inspect_smart", "choose a SMART/NVMe device" },
-            { "b", "help.inspect_bandwidth", "measure RAM bandwidth with perf" },
-            { "d", "help.inspect_sshd", "inspect the sshd service and listeners" },
+            { "h", "widgets.sensors", "Sensors" },
+            { "s", "help.inspect_smart", "choose a SMART/NVMe device", "linux" },
+            { "b", "help.inspect_bandwidth", "measure RAM bandwidth with perf", "linux" },
+            { "d", "help.inspect_sshd", "inspect the sshd service and listeners", "linux" },
         },
     },
     {
@@ -451,7 +573,7 @@ local HELP_SECTIONS = {
     },
 }
 
-local function help_lines(i18n, width)
+local function help_lines(i18n, width, linux_host)
     local title = i18n:t("app.title")
     local lines = {
         title ~= "app.title" and title or "wtop — system monitor",
@@ -460,27 +582,33 @@ local function help_lines(i18n, width)
     local key_width = 0
     for _, group in ipairs(HELP_SECTIONS) do
         for _, binding in ipairs(group.bindings) do
-            key_width = math.max(key_width, UI.Renderer.Width.display_width(binding[1]))
+            if linux_host ~= false or binding[4] ~= "linux" then
+                key_width = math.max(key_width, UI.Renderer.Width.display_width(binding[1]))
+            end
         end
     end
     for _, group in ipairs(HELP_SECTIONS) do
         lines[#lines + 1] = ""
         lines[#lines + 1] = translated(i18n, group.id, group.title)
         for _, binding in ipairs(group.bindings) do
-            local description = translated(i18n, binding[2], binding[3])
-            if width and width < key_width + 24 then
-                lines[#lines + 1] = "  " .. binding[1]
-                lines[#lines + 1] = "      " .. description
-            else
-                lines[#lines + 1] = "  " .. pad_to(binding[1], key_width) .. "  " .. description
+            if linux_host ~= false or binding[4] ~= "linux" then
+                local description = translated(i18n, binding[2], binding[3])
+                if width and width < key_width + 24 then
+                    lines[#lines + 1] = "  " .. binding[1]
+                    lines[#lines + 1] = "      " .. description
+                else
+                    lines[#lines + 1] = "  " .. pad_to(binding[1], key_width) .. "  " .. description
+                end
             end
         end
     end
-    lines[#lines + 1] = ""
-    lines[#lines + 1] = translated(i18n, "help.inspectors_safe",
-        "External inspectors use absolute argv, a fixed locale, timeouts and output limits.")
-    lines[#lines + 1] = translated(i18n, "help.smart_standby",
-        "SMART probes do not wake standby drives.")
+    if linux_host ~= false then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = translated(i18n, "help.inspectors_safe",
+            "External inspectors use absolute argv, a fixed locale, timeouts and output limits.")
+        lines[#lines + 1] = translated(i18n, "help.smart_standby",
+            "SMART probes do not wake standby drives.")
+    end
     lines[#lines + 1] = ""
     lines[#lines + 1] = translated(i18n, "help.close", "Esc/Enter closes")
     return lines
@@ -1176,6 +1304,16 @@ local function run_loop(options, backend, renderer, engine, translator)
                         fallback = action_choices == WINDOWS_ACTION_CHOICES
                             and "Terminate" or "Signal", command = "signal" })
             end
+        elseif workspace.active == "compute" then
+            status.hints = {
+                { key = "1–0", id = "actions.tabs", fallback = "Tabs", command = "tabs" },
+                { key = "Space", id = paused and "actions.resume" or "actions.pause",
+                  fallback = paused and "Resume" or "Pause", command = "pause" },
+                { key = "h", id = "widgets.sensors", fallback = "Sensors", command = "sensors" },
+                { key = "f", id = "actions.update_frequency", fallback = "Rate", command = "rate" },
+                { key = "?", id = "actions.help", fallback = "Help", command = "help" },
+                { key = "q", id = "actions.quit", fallback = "Quit", command = "quit" },
+            }
         elseif workspace.active == "storage" or workspace.active == "network" then
             status.hints = {
                 { key = "1–0", id = "actions.tabs", fallback = "Tabs", command = "tabs" },
@@ -1662,7 +1800,11 @@ local function run_loop(options, backend, renderer, engine, translator)
             workspace:toggle_edit()
             dirty = true
         elseif key == "?" or key == "f1" then
-            show_overlay(help_lines(translator, columns))
+            show_overlay(help_lines(translator, columns, linux_host))
+            dirty = true
+        elseif key == "h" then
+            show_overlay(sensor_detail_lines(engine.snapshot, translator,
+                engine.clock:now_ns()))
             dirty = true
         elseif key == "r" or (event.ctrl and key == "l") then
             sync_engine_visibility()
@@ -1691,13 +1833,13 @@ local function run_loop(options, backend, renderer, engine, translator)
                 status_message = translated(translator, "process.no_selection", "No process selected")
             end
             dirty = true
-        elseif key == "s" then
+        elseif key == "s" and linux_host then
             inspect_smart()
             dirty = true
-        elseif key == "b" then
+        elseif key == "b" and linux_host then
             inspect_bandwidth()
             dirty = true
-        elseif key == "d" then
+        elseif key == "d" and linux_host then
             inspect_sshd()
             dirty = true
         end
@@ -1709,7 +1851,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             help = "?", quit = "q", search = "/", sort = "o", reverse = "O",
             language = "L",
             tree = "t", paths = "p", details = "enter", signal = "k",
-            virtual = "v", smart = "s", bandwidth = "b", sshd = "d",
+            virtual = "v", smart = "s", bandwidth = "b", sshd = "d", sensors = "h",
         }
         local key = keys[command]
         if not key then return false end
@@ -1885,6 +2027,7 @@ end
 
 M.draw_overlay = draw_overlay
 M.inspector_lines = inspector_lines
+M.sensor_detail_lines = sensor_detail_lines
 M.process_detail_lines = process_detail_lines
 M.smart_selection_lines = smart_selection_lines
 M.utf8_backspace = utf8_backspace
