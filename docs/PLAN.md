@@ -183,7 +183,7 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
 ### Phase A: Stabilize the Development Preview
 
 - Localize remaining technical provider reasons and add pseudolocale and locale-layout tests. (Done: interface reason codes are translated across all ten catalogs; a reason-coverage test and a pseudolocale layout test guard them.)
-- Add onefile PTY, clean-environment, and locale `--check` to standard CI.
+- Add onefile PTY, clean-environment, and locale `--check` to standard CI. (Done on 2026-09-28: the `release-artifacts` CI job runs the onefile bundle through the PTY matrix, verifies generated locales against their YAML sources, and builds SBOM/checksums/baseline evidence.)
 - Add crash/signal/continuous-resize, tmux, and SSH scenarios. (Continuous resize storms and SIGTERM/SIGHUP/SIGINT clean-shutdown scenarios now run in the PTY matrix; tmux and dedicated SSH hosts remain to be covered.)
 - Establish repeatable performance benchmarks and calibrate CPU, RSS, first-frame, and input-latency budgets. (A fixed-script benchmark now exists: `make benchmark` reports first-frame, per-page steady CPU, peak RSS, and page-switch latency p50/p95 on the current host. On the 2026-09-28 development host with 537 processes it measured ~242 ms first frame, 3.4%/7.8% CPU on Overview/Processes, ~29 MiB peak RSS, and ~107 ms p95 page-switch latency; budget calibration on the target hardware remains open.)
 - Extend the Server 2008 whole-TUI CPU measurement to periodic refreshes and
@@ -256,7 +256,7 @@ The implementation already has fixed rings, diff output, collector durations, sc
 - No GPU, PSI, hwmon, systemd, or external helper still allows degraded startup.
 - TUI/exported socket, session, device-identity, and process fields complete privacy review; masking contracts and explicit full-value choices are documented and tested.
 - Experimental RAM PMU results are not presented as universally precise measurements; every claimed platform has event-formula, permission, multiplexing, and real-host comparison evidence.
-- Native-module ABI, architecture, `ldd`, and minimum glibc/kernel baseline have reproducible evidence.
+- Native-module ABI, architecture, `ldd`, and minimum glibc/kernel baseline have reproducible evidence. (Done for the packaging host: `make baseline` records the module architecture, dynamic dependencies, and minimum required glibc symbol version into `dist/BASELINE.txt`, produced in CI alongside the SBOM and checksums. The current development toolchain requires glibc `GLIBC_2.34`; a lower packaged baseline still needs an older-toolchain build host.)
 - glibc x86_64 and aarch64 targets each complete native builds and PTY smoke tests.
 - Real performance budgets pass on the minimum and typical supported hosts.
 - Release artifacts include checksums, an SBOM, third-party notices, and traceable build metadata. (Done on 2026-09-28: `make sbom` writes a CycloneDX 1.5 SBOM beside the bundle, THIRD_PARTY.md lists the bundled components and licenses, and `make build-id` embeds the git revision into `--version`, `--diagnose`, and the SBOM.)

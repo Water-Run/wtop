@@ -114,6 +114,30 @@ jobs:
             make test-pty || { echo "::error::PTY failed on attempt $attempt"; exit 1; }
           done
 
+  # Release-artifact evidence: the onefile bundle must pass the same PTY
+  # matrix from its packaged executable, locale sources must match the
+  # generated modules, and SBOM/checksums/baseline must build cleanly.
+  release-artifacts:
+    name: onefile PTY + locale check + SBOM
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Onefile bundle through the PTY matrix
+        run: make test-bundle-file
+      - name: Generated locales match their YAML sources
+        run: ./.tools/lua-5.5.1/bin/lua tools/compile_locales.lua --check
+      - name: SBOM, checksums, and baseline evidence
+        run: |
+          make sbom checksums
+          ./tools/record_baseline.sh > dist/BASELINE.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: |
+            dist/SBOM.cyclonedx.json
+            dist/SHA256SUMS
+            dist/BASELINE.txt
+
   # Memory safety for the C layer, over the real collection paths.
   sanitizers:
     name: ASan + UBSan

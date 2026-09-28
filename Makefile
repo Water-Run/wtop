@@ -59,7 +59,7 @@ CFLAGS_NATIVE += -std=c17 -fPIC -Wall -Wextra -Werror
 
 .PHONY: all resource-check resource-check-full toolchain luainstaller native locales check test test-all test-fast \
 	test-54 test-55 test-pty test-pty-quick benchmark test-fuzz run \
-	diagnose snapshot bundle-dir bundle-file test-bundle-dir test-bundle-file checksums build-id sbom \
+	diagnose snapshot bundle-dir bundle-file test-bundle-dir test-bundle-file checksums build-id sbom baseline \
 	rock-build rock-install rockspec-check luarocks-bootstrap luarocks-install test-luarocks
 
 all: native locales
@@ -182,6 +182,10 @@ build-id:
 
 sbom: bundle-dir
 	@python3 tools/make_sbom.py --bundle dist/bundle-dir --output dist/SBOM.cyclonedx.json
+
+baseline: native
+	@./tools/record_baseline.sh > dist/BASELINE.txt
+	@echo "wtop: baseline evidence written to dist/BASELINE.txt"
 
 bundle-dir: build-id native locales $(LUAI_STAMP)
 	mkdir -p dist
