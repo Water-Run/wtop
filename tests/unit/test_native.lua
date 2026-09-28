@@ -85,6 +85,28 @@ local symlink_content, _, symlink_errno = native.readfile("/proc/self/exe", 16)
 assert(symlink_content == nil and symlink_errno == 40,
     "bounded reader must not follow a final symlink")
 
+-- The batch reader shares the single-file reader's safety contract, one
+-- crossing for a whole process sample.
+local batch_contents, batch_denied = native.proc_batch(
+    { native.pid(), 4194304 }, "stat")
+assert(type(batch_contents[1]) == "string" and batch_contents[1]:find(native.pid(), 1, true),
+    "batch reader returns the process stat content")
+assert(batch_contents[2] == false and not (batch_denied and batch_denied[2]),
+    "a missing pid reports failure without a permission flag")
+local batch_missing = native.proc_batch({ native.pid() }, "no_such_file")
+assert(batch_missing[1] == false, "a missing file reports failure")
+assert(not pcall(native.proc_batch, { native.pid() }, "STAT"),
+    "uppercase names are rejected to keep the path fixed")
+assert(not pcall(native.proc_batch, { native.pid() }, "stat/../cmdline"),
+    "path separators are rejected")
+local invalid_entries = native.proc_batch({ native.pid(), 0, -1 }, "stat")
+assert(type(invalid_entries[1]) == "string" and invalid_entries[2] == false
+    and invalid_entries[3] == false,
+    "invalid pid entries fail their slot instead of erroring mid-batch")
+local oversized = native.proc_batch({ native.pid() }, "stat", 8)
+assert(oversized[1] == false,
+    "content beyond the per-file limit reports failure, not truncation")
+
 local filesystem = assert(native.statvfs("/"))
 assert(filesystem.block_size > 0)
 assert(filesystem.blocks > 0)

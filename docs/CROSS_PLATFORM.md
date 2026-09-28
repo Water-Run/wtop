@@ -227,6 +227,18 @@ fell from 7.6% to 4.8% of one core. The identity cache is rebuilt from the
 live process set each sample, so PID reuse cannot serve stale identity, and
 selected rows still reread status and command line for their detail.
 
+A final pass the same day added a native batch `/proc` reader (`proc_batch`:
+one Lua-to-C crossing for every stat file, keeping the single-file reader's
+O_NOFOLLOW, regular-file, and oversize checks, with EACCES reported
+separately) and removed a wasted second stat read-and-parse that the
+generation re-verification had still performed for fully cached rows. The
+warm 540-process sample fell to about 21 ms and the whole-TUI Processes page
+to 3.8–4.0% on that host, within 0.2–0.4 points of the Overview page; the
+remaining floor is per-process stat parsing and row construction, not I/O.
+The 2%-at-1000-processes release goal remains open: this host's shared
+rendering baseline alone is about 3.5%, so the goal needs its calibrated
+minimum hardware to be meaningful.
+
 The Processes table now formats only rows accessed by the viewport. In two
 alternating 10-second classic-console runs, the preceding bundle used 3.12%
 and 3.27% of one core; the lazy-row bundle used 2.34% and 2.02%. A separate

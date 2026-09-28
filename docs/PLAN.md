@@ -189,7 +189,13 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
 - Extend the Server 2008 whole-TUI CPU measurement to periodic refreshes and
   other Windows hosts, then reduce the Processes page's remaining overhead.
   (Measured with 60-second windows over full refresh cycles on both hosts on
-  2026-09-28; reducing the remaining Processes-page overhead stays open.)
+  2026-09-28. On Linux the collector overhead was cut 68→~21 ms per
+  540-process sample across three passes — identity caching, direct comm
+  scanning, a native batch `/proc` reader, and removal of a redundant
+  generation re-read — bringing the Processes page within 0.2–0.4 points of
+  Overview. The absolute 2%-at-1000 goal stays open pending calibrated
+  minimum hardware, whose rendering baseline differs from the development
+  host.)
 - Validate the bounded Windows removable-media probe workers on Server 2008,
   including empty media, hotplug, and two nonresponsive devices; working media
   has been checked. Resolve any starvation or capacity-freshness problems

@@ -1391,12 +1391,125 @@ static int l_readfile(lua_State *L) {
     return 1;
 }
 
+/* Batch /proc reader: one Lua->C crossing for a whole process sample.
+ * The per-process stat fetch is the collector's floor (open+read+close per
+ * PID, ~11 us each through the guarded single-file reader); doing it from Lua
+ * spent more time in table and error allocation than in the syscalls. Each
+ * entry keeps the single-file reader's safety: O_NOFOLLOW, S_ISREG, a bounded
+ * read loop, and EACCES/EPERM reported separately so the caller can keep
+ * distinguishing "denied" from "process raced away".
+ *
+ * Arguments: pids array (positive integers), file name ([a-z_]{1,31}),
+ * optional byte limit per file (default 64 KiB, max 1 MiB).
+ * Returns: contents array (string, or false for any failure) and a parallel
+ * denied array (true where the failure was a permission error). */
+#define PROC_BATCH_MAX_ENTRIES 8192
+
+static int l_proc_batch(lua_State *L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    const char *name = luaL_checkstring(L, 2);
+    lua_Integer limit_value = luaL_optinteger(L, 3, 64 * 1024);
+    size_t name_length = strlen(name);
+    if (name_length == 0 || name_length > 31) {
+        return luaL_argerror(L, 2, "name must be 1..31 bytes");
+    }
+    for (size_t index = 0; index < name_length; ++index) {
+        unsigned char character = (unsigned char)name[index];
+        if (!((character >= 'a' && character <= 'z') || character == '_')) {
+            return luaL_argerror(L, 2, "name must be lowercase letters");
+        }
+    }
+    if (limit_value < 1 || limit_value > 1024 * 1024) {
+        return luaL_argerror(L, 3, "limit must be in 1..1048576");
+    }
+    lua_Integer count = luaL_len(L, 1);
+    if (count < 0 || count > PROC_BATCH_MAX_ENTRIES) {
+        return luaL_argerror(L, 1, "pids must hold at most 8192 entries");
+    }
+
+    io_guard *guard = push_io_guard(L);
+    guard->descriptor = -1;
+    char *buffer = malloc((size_t)limit_value + 2);
+    if (!buffer) {
+        errno = ENOMEM;
+        return push_errno(L, "proc_batch_alloc");
+    }
+    /* Absolute stack slots from here on: guard, contents, denied. */
+    int guard_index = lua_gettop(L);
+    lua_createtable(L, (int)count, 0);
+    lua_createtable(L, 4, 0);
+    for (lua_Integer entry = 1; entry <= count; ++entry) {
+        char path[64];
+        long long pid;
+        int descriptor;
+        size_t length = 0;
+        struct stat metadata;
+        int denied = 0;
+        int failed = 0;
+        lua_rawgeti(L, 1, entry);
+        if (lua_type(L, -1) == LUA_TNUMBER) {
+            pid = (long long)lua_tointeger(L, -1);
+        } else {
+            pid = 0;
+        }
+        lua_pop(L, 1);
+        if (pid <= 0 || pid > 2147483647) {
+            failed = 1;
+        } else {
+            int written = snprintf(path, sizeof(path), "/proc/%lld/%s", pid, name);
+            if (written <= 0 || (size_t)written >= sizeof(path)) {
+                failed = 1;
+            } else {
+                descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW);
+                if (descriptor < 0) {
+                    failed = 1;
+                    denied = errno == EACCES || errno == EPERM;
+                } else {
+                    guard->descriptor = descriptor;
+                    if (fstat(descriptor, &metadata) != 0 || !S_ISREG(metadata.st_mode)) {
+                        failed = 1;
+                    } else {
+                        while (length <= (size_t)limit_value) {
+                            size_t remaining = (size_t)limit_value + 1 - length;
+                            ssize_t chunk = read(descriptor, buffer + length, remaining);
+                            if (chunk > 0) {
+                                length += (size_t)chunk;
+                                continue;
+                            }
+                            if (chunk == 0) break;
+                            if (errno == EINTR) continue;
+                            failed = 1;
+                            break;
+                        }
+                        if (length > (size_t)limit_value) failed = 1;
+                    }
+                    close(descriptor);
+                    guard->descriptor = -1;
+                }
+            }
+        }
+        if (failed) {
+            lua_pushboolean(L, 0);
+        } else {
+            lua_pushlstring(L, buffer, length);
+        }
+        lua_rawseti(L, guard_index + 1, entry);
+        if (denied) {
+            lua_pushboolean(L, 1);
+            lua_rawseti(L, guard_index + 2, entry);
+        }
+    }
+    free(buffer);
+    /* The to-be-closed guard stays below the results; the call machinery
+     * closes it when the frame unwinds, on every path including errors. */
+    return 2;
+}
+
 static int l_path_type(lua_State *L) {
     const char *path = check_path(L, 1, NULL);
     int follow = 0;
     struct stat metadata;
     const char *kind;
-
     if (!lua_isnoneornil(L, 2)) {
         luaL_checktype(L, 2, LUA_TBOOLEAN);
         follow = lua_toboolean(L, 2);
@@ -1780,6 +1893,7 @@ static const luaL_Reg functions[] = {
     {"atomic_write", l_atomic_write},
     {"listdir", l_listdir},
     {"readfile", l_readfile},
+    {"proc_batch", l_proc_batch},
     {"readlink", l_readlink},
     {"path_type", l_path_type},
     {"statvfs", l_statvfs},

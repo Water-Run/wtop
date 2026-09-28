@@ -94,10 +94,16 @@ function Process.new(options)
       error(key .. " must be a boolean", 2)
     end
   end
+  local native = options.native and options.native or native
   return setmetatable({
     id = "process",
     default_interval_ms = Common.positive_integer("interval_ms", options.interval_ms, 1000),
     fs = options.fs or FS.default,
+    native = native,
+    -- The batch reader talks to the real /proc only; a redirected proc_path
+    -- (fixtures, chroot-like tests) must keep the per-file reader.
+    use_native_batch = Common.absolute_path("proc_path", options.proc_path, "/proc") == "/proc"
+      and native.available == true and type(native.proc_batch) == "function",
     proc_path = Common.absolute_path("proc_path", options.proc_path, "/proc"),
     clock_ticks_per_second = clock_ticks_per_second,
     uptime_path = Common.absolute_path("uptime_path", options.uptime_path, "/proc/uptime"),
@@ -126,6 +132,11 @@ function Process:probe(context)
     return Capability.denied(err.message, { source = self.proc_path })
   end
   return Capability.unavailable(err and err.message or "proc_enumeration_unavailable", { source = self.proc_path })
+end
+
+local function context_fs(self, context)
+  if type(context) ~= "table" then return nil end
+  return context.fs
 end
 
 local function wants_detail(context, process_id)
@@ -201,14 +212,41 @@ function Process:sample(context, previous)
     return left.pid < right.pid
   end)
 
-  for _, candidate in ipairs(candidates) do
+  -- One native crossing for every stat file when the real /proc is in use.
+  -- A context-injected fs (fixtures, isolated tests) always keeps the
+  -- per-file reader even with the default proc_path, and so do pure-Lua runs.
+  local batch_contents, batch_denied
+  if self.use_native_batch and fs == FS.default and context_fs(self, context) == nil then
+    local wanted = {}
+    for index, candidate in ipairs(candidates) do
+      if index > self.max_processes then break end
+      wanted[#wanted + 1] = candidate.pid
+    end
+    local ok, contents, denied_flags = pcall(self.native.proc_batch, wanted, "stat")
+    if ok and type(contents) == "table" then
+      batch_contents, batch_denied = contents, denied_flags
+    end
+  end
+
+  for index, candidate in ipairs(candidates) do
     local entry, pid = candidate.name, candidate.pid
       if scanned >= self.max_processes then
         break
       end
       scanned = scanned + 1
       local base = self.proc_path .. "/" .. entry
-      local stat_content, stat_error = fs:read(base .. "/stat", 65536)
+      local stat_content, stat_error
+      if batch_contents then
+        stat_content = batch_contents[index]
+        if stat_content == false then
+          stat_content = nil
+          if batch_denied and batch_denied[index] then
+            stat_error = { kind = "denied" }
+          end
+        end
+      else
+        stat_content, stat_error = fs:read(base .. "/stat", 65536)
+      end
       if not stat_content then
         if stat_error and stat_error.kind == "denied" then
           denied = denied + 1
@@ -364,7 +402,11 @@ function Process:sample(context, previous)
           -- can resolve to a newly reused PID, so verify the generation again
           -- after all supplemental fields have been collected.  Mixed samples
           -- are discarded instead of attaching another process's UID/RSS/I/O.
-          supplemental_read = supplemental_read or self.read_status
+          -- Only a pass that actually opened supplemental files has a
+          -- reuse window to re-verify; a fully cached row re-reads nothing,
+          -- so the second stat fetch would be pure I/O for the same answer.
+          supplemental_read = supplemental_read
+            or (self.read_status and (detail or not cached))
           local generation_matches = true
           if supplemental_read then
             local final_content = fs:read(base .. "/stat", 65536)
