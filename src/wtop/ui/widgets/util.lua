@@ -37,4 +37,14 @@ function M.truncate(grid, text, width, ellipsis)
   return Width.truncate(text, width, grid.width_options, ellipsis)
 end
 
+function M.truncate_path(grid, text, width)
+  local basename = tostring(text or ""):match("([^/\\]+)$")
+  if basename and Width.display_width(basename, grid.width_options) >= width then
+    return Width.truncate_start(basename, width, grid.width_options, "")
+  end
+  local ellipsis = grid.width_options and grid.width_options.unicode == false
+      and "." or nil
+  return Width.truncate_start(text, width, grid.width_options, ellipsis)
+end
+
 return M

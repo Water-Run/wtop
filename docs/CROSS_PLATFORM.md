@@ -115,6 +115,12 @@ coalescing and the printable-ASCII layout path, separate runs on the same host
 used roughly 14%, 21%, and 7% on those pages. These short single-host runs do
 not establish a release performance baseline.
 
+A follow-up classic-console run on Server 2008 showed executable basenames in
+the Processes command column by default. Pressing `p` switched to image paths;
+the 80-column view shortened them from the start to keep executable names
+visible. A later run from the final source tree exited normally.
+The corresponding macOS path display has not been rerun on a Mac for this change.
+
 ## Development Builds
 
 On macOS, run `./tools/build_macos.sh`; the executable bundle is

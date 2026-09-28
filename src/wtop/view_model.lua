@@ -192,7 +192,7 @@ local function process_status_text(i18n, status)
         })
 end
 
-local function top_processes(snapshot, format, controller, i18n)
+local function top_processes(snapshot, format, controller, i18n, platform)
     local source = snapshot.processes and snapshot.processes.list or EMPTY_PROCESS_SOURCE
     controller:update_if_changed(source)
     local status = controller:status()
@@ -202,6 +202,7 @@ local function top_processes(snapshot, format, controller, i18n)
     local cached = PROCESS_VIEW_CACHE[controller]
     if cached and cached.revision == status.revision and cached.format == format
         and cached.i18n == i18n and cached.locale_id == locale_id
+        and cached.platform == platform
         and cached.collection_truncated == status.collection_truncated
         and cached.collection_limit == status.collection_limit
     then
@@ -215,7 +216,16 @@ local function top_processes(snapshot, format, controller, i18n)
         -- table built from it shows "systemd-timesyn".  cmdline is the honest
         -- name; `show_paths` decides whether its directory is kept.
         local name = process.command
-        if name and not status.show_paths then
+        if platform == "Windows" and not status.show_paths and process.name then
+            -- QueryFullProcessImageNameW supplies an image path, while
+            -- Toolhelp already supplies its basename (including names whose
+            -- directory contains spaces).
+            name = process.name
+        elseif platform == "Darwin" and not status.show_paths and name then
+            -- proc_pidpath supplies an image path without arguments. Its
+            -- basename remains intact when a parent directory has spaces.
+            name = name:match("([^/]+)$") or name
+        elseif name and not status.show_paths then
             local executable = name:match("^(%S+)") or name
             local base = executable:match("([^/]+)$")
             if base and base ~= "" then
@@ -260,6 +270,7 @@ local function top_processes(snapshot, format, controller, i18n)
         format = format,
         i18n = i18n,
         locale_id = locale_id,
+        platform = platform,
         collection_truncated = status.collection_truncated,
         collection_limit = status.collection_limit,
         rows = rows,
@@ -1403,7 +1414,8 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
     local format = i18n.format
     local kernel_type = snapshot.system and snapshot.system.kernel
         and snapshot.system.kernel.type
-    local linux_host = (options.platform or kernel_type or "Linux") == "Linux"
+    local platform = options.platform or kernel_type
+    local linux_host = (platform or "Linux") == "Linux"
     local function visible(widget_id)
         return type(visible_widgets) ~= "table" or visible_widgets[widget_id] == true
     end
@@ -1439,7 +1451,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
     if on("processes", "process_table") then
         process_controller = process_controller or ProcessTable.new()
         process_rows, process_status, process_status_display = top_processes(
-            snapshot, format, process_controller, i18n)
+            snapshot, format, process_controller, i18n, platform)
     else
         process_rows = {}
         process_status = process_controller and process_controller:status() or ProcessTable.new():status()
@@ -1614,7 +1626,10 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                     align = "right", priority = 25, full_only = true },
                 { key = "name", label = translated(i18n, "metrics.command", "Command"),
                     sort_key = "name", width = 40, min_width = 12, priority = 85,
-                    highlight = true },
+                    highlight = true,
+                    truncate = process_status.show_paths
+                        and (platform == "Windows" or platform == "Darwin")
+                        and "path" or nil },
             },
             rows = process_rows,
             highlights = process_status.query_highlights,

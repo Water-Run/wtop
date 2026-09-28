@@ -463,6 +463,38 @@ function M.truncate(text, max_width, options, ellipsis)
   return table.concat(pieces) .. ellipsis, true
 end
 
+-- Keep the end of a path visible in a narrow column so its executable name
+-- remains identifiable. Work in display cells, not bytes, for Unicode paths.
+function M.truncate_start(text, max_width, options, ellipsis)
+  text = tostring(text or "")
+  max_width = math.max(0, math.floor(max_width or 0))
+  local plain_ascii = (not options or not options.width_fn or options.ascii_unit_width)
+    and not text:find("[^ -~]")
+  if plain_ascii and #text <= max_width then return text, false end
+  if M.display_width(text, options) <= max_width then return text, false end
+  ellipsis = ellipsis == nil and "…" or ellipsis
+  local ellipsis_width = M.display_width(ellipsis, options)
+  if ellipsis_width > max_width then
+    ellipsis, ellipsis_width = "", 0
+  end
+  local limit = max_width - ellipsis_width
+  if plain_ascii then return ellipsis .. text:sub(#text - limit + 1), true end
+  local clusters, widths = {}, {}
+  for cluster, width in M.graphemes(text, options) do
+    clusters[#clusters + 1] = cluster
+    widths[#widths + 1] = width
+  end
+  local first, used = #clusters + 1, 0
+  for index = #clusters, 1, -1 do
+    if used + widths[index] > limit then break end
+    used = used + widths[index]
+    first = index
+  end
+  local pieces = {}
+  for index = first, #clusters do pieces[#pieces + 1] = clusters[index] end
+  return ellipsis .. table.concat(pieces), true
+end
+
 function M.pad(text, width, align, options)
   local clipped = M.truncate(text, width, options)
   local used = M.display_width(clipped, options)

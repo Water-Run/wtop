@@ -48,8 +48,12 @@ local function cell_fraction(row, column)
   return math.max(0, math.min(1, fraction))
 end
 
-local function aligned(grid, text, width, alignment)
-  text = Util.truncate(grid, text, width)
+local function aligned(grid, text, width, alignment, truncation)
+  if truncation == "path" then
+    text = Util.truncate_path(grid, text, width)
+  else
+    text = Util.truncate(grid, text, width)
+  end
   local used = Width.display_width(text, grid.width_options)
   if alignment == "right" then
     return string.rep(" ", math.max(0, width - used)) .. text
@@ -63,9 +67,8 @@ end
 -- Render a value cell as a proportional bar behind its text.  Two cells of
 -- headroom keep the number readable; below that the bar is dropped entirely
 -- rather than fighting the digits for space.
-local function render_bar_cell(grid, x, y, width, text, fraction, style, bar_style, alignment)
+local function render_bar_cell(grid, x, y, width, label, fraction, style, bar_style)
   if width < 4 then return false end
-  local label = aligned(grid, text, width, alignment)
   local filled = math.max(0, math.min(width, math.floor(width * fraction + 0.5)))
   if filled < 1 then return false end
   grid:write(x, y, label, style, width)
@@ -253,14 +256,14 @@ function M.render(grid, area, model, context, variant)
       local cell_style = token and Util.style(context, token, row_surface) or style
       local text = cell_text(row, source)
       local fraction = cell_fraction(row, source)
+      local rendered = aligned(grid, text, column.width, source.align, source.truncate)
       local drawn = false
       if fraction then
         local bar_style = Util.style(context, token or base_token,
           selected and "surface.selected" or "surface.focus", { bold = selected })
-        drawn = render_bar_cell(grid, x, y, column.width, text, fraction,
-          cell_style, bar_style, source.align)
+        drawn = render_bar_cell(grid, x, y, column.width, rendered, fraction,
+          cell_style, bar_style)
       end
-      local rendered = aligned(grid, text, column.width, source.align)
       if not drawn then
         grid:write(x, y, rendered, cell_style, column.width)
       end
