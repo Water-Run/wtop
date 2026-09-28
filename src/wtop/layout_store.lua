@@ -3,6 +3,7 @@ local Layout = require("wtop.model.layout")
 local FS = require("wtop.linux.fs")
 local native = require("wtop.native")
 local ConfigPath = require("wtop.config_path")
+local FileBackup = require("wtop.file_backup")
 
 local M = {}
 
@@ -294,6 +295,14 @@ function M.encode(orders, trees)
     return table.concat(lines, "\n") .. "\n"
 end
 
+local function recover_from_backup(defaults, path)
+    local text = FileBackup.read(path)
+    if not text then return nil, nil end
+    local orders, trees = M.parse(text, defaults, FileBackup.backup_path(path))
+    if not orders then return nil, nil end
+    return orders, trees
+end
+
 function M.load(defaults, path)
     local valid_defaults, defaults_error = validate_defaults(defaults)
     if not valid_defaults then
@@ -315,12 +324,23 @@ function M.load(defaults, path)
         end
         local reason = read_error and read_error.kind == "too_large" and "layout exceeds 1 MiB"
             or tostring(read_error and read_error.message or "layout read failed")
+        local orders, trees = recover_from_backup(defaults, path)
+        if orders then
+            return orders, { state = "recovered_backup", path = path,
+                reason = reason }, trees
+        end
         return copy_orders(defaults), { state = "error", path = path, reason = reason }, nil
     end
     local orders, trees_or_error = M.parse(text, defaults, path)
     if not orders then
+        local recovered, trees = recover_from_backup(defaults, path)
+        if recovered then
+            return recovered, { state = "recovered_backup", path = path,
+                reason = trees_or_error }, trees
+        end
         return copy_orders(defaults), { state = "error", path = path, reason = trees_or_error }, nil
     end
+    FileBackup.refresh(path)
     return orders, { state = "loaded", path = path }, trees_or_error
 end
 
@@ -354,6 +374,8 @@ function M.save(orders, path, trees)
     if not directory then return nil, "layout path has no directory" end
     local ensured, ensure_error = ensure_directory(directory)
     if not ensured then return nil, ensure_error end
+    -- Keep the replaced file recoverable before the atomic write lands.
+    FileBackup.capture(path)
     local encoded, content = pcall(M.encode, orders, trees)
     if not encoded then return nil, tostring(content) end
     local called, written, write_error = pcall(native.atomic_write, path, content, 384)

@@ -425,6 +425,7 @@ messages:
   status.paused: "Paused"
   status.paused_at: "Paused at {time}"
   status.ready: "Ready"
+  status.recovered_backup: "Recovered {path} from its backup after: {reason}"
   status.reset: "Reset"
   status.stale: "Stale"
   status.theme: "Theme: {name}"

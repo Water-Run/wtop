@@ -440,6 +440,7 @@ messages:
   status.paused: "Пауза"
   status.paused_at: "Пауза с {time}"
   status.ready: "Готово"
+  status.recovered_backup: "{path} восстановлен из резервной копии (причина: {reason})"
   status.reset: "Сброс"
   status.stale: "Устарело"
   status.theme: "Тема: {name}"

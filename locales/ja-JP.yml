@@ -419,6 +419,7 @@ messages:
   status.paused: "一時停止中"
   status.paused_at: "{time} に一時停止"
   status.ready: "準備完了"
+  status.recovered_backup: "バックアップから {path} を復元しました（理由: {reason}）"
   status.reset: "リセット"
   status.stale: "更新停止"
   status.theme: "テーマ: {name}"

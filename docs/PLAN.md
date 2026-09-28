@@ -192,7 +192,7 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
   including empty media, hotplug, and two nonresponsive devices; working media
   has been checked. Resolve any starvation or capacity-freshness problems
   found there.
-- Add explicit migration tools, backup, and clearer error recovery for configuration/layout; current behavior only reads layout v1 compatibly and rewrites v2.
+- Add explicit migration tools, backup, and clearer error recovery for configuration/layout. (Backup and recovery are done: successful loads refresh a one-generation `.bak`, saves capture the replaced file, and unreadable or unparseable `config.yml`/`layout.yml` recover from the backup with a status-bar notice. Layout v1 is still read compatibly and rewritten as v2; a standalone migration command remains open.)
 - Add a privacy masking/export policy to the TUI connection table and define explicit JSON contracts for ports, local addresses, Unix socket paths, and MAC addresses. (Done: `m` toggles table masking, `mask_remote_addresses` pins the startup state, and the field-by-field contract is documented in MONITORING.md with one shared masking implementation.)
 
 ### Phase B: Complete 0.1 Features

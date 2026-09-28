@@ -419,6 +419,7 @@ messages:
   status.paused: "已暫停"
   status.paused_at: "暫停於 {time}"
   status.ready: "就緒"
+  status.recovered_backup: "已從備份還原 {path}（原因：{reason}）"
   status.reset: "已重設"
   status.stale: "已過期"
   status.theme: "主題：{name}"

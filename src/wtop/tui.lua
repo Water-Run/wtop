@@ -1319,8 +1319,20 @@ local function run_loop(options, backend, renderer, engine, translator)
         local config_status = options.config_status
         local persisted_error = config_status and config_status.state == "error" and config_status.reason
             or (layout_status and layout_status.state == "error" and layout_status.reason)
+        local recovered_note
+        if not persisted_error then
+            for _, persisted in ipairs({ config_status, layout_status }) do
+                if type(persisted) == "table" and persisted.state == "recovered_backup" then
+                    recovered_note = translated(translator, "status.recovered_backup",
+                        "Recovered {path} from its backup after: {reason}",
+                        { path = persisted.path or "?",
+                          reason = tostring(persisted.reason or "") })
+                    break
+                end
+            end
+        end
         local status = {
-            message = status_message,
+            message = status_message or recovered_note,
             error = persisted_error,
             privilege = options.privilege,
             -- The process table prints its own sort/filter status inside the

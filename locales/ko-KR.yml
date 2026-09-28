@@ -419,6 +419,7 @@ messages:
   status.paused: "일시 정지됨"
   status.paused_at: "{time}에 일시 정지"
   status.ready: "준비됨"
+  status.recovered_backup: "백업에서 {path}을(를) 복구했습니다(이유: {reason})"
   status.reset: "재설정"
   status.stale: "오래됨"
   status.theme: "테마: {name}"

@@ -1,5 +1,6 @@
 local I18n = require("wtop.i18n")
 local FS = require("wtop.linux.fs")
+local FileBackup = require("wtop.file_backup")
 local ConfigPath = require("wtop.config_path")
 local Theme = require("wtop.ui.theme")
 
@@ -120,6 +121,14 @@ function M.parse(text, source)
     return validate(raw)
 end
 
+local function recover_from_backup(path)
+    local text = FileBackup.read(path)
+    if not text then return nil end
+    local parsed = M.parse(text, path)
+    if not parsed then return nil end
+    return parsed
+end
+
 function M.load(path)
     path = path or M.path()
     if not path then
@@ -136,12 +145,22 @@ function M.load(path)
         local reason = read_error and read_error.kind == "too_large"
             and "configuration exceeds 1 MiB"
             or tostring(read_error and read_error.message or "configuration read failed")
+        local recovered = recover_from_backup(path)
+        if recovered then
+            return recovered, { state = "recovered_backup", path = path, reason = reason }
+        end
         return M.defaults(), { state = "error", path = path, reason = reason }
     end
     local parsed, parse_error = M.parse(text, path)
     if not parsed then
+        local recovered = recover_from_backup(path)
+        if recovered then
+            return recovered,
+                { state = "recovered_backup", path = path, reason = parse_error }
+        end
         return M.defaults(), { state = "error", path = path, reason = parse_error }
     end
+    FileBackup.refresh(path)
     return parsed, { state = "loaded", path = path }
 end
 

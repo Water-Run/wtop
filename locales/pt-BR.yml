@@ -433,6 +433,7 @@ messages:
   status.paused: "Pausado"
   status.paused_at: "Pausado às {time}"
   status.ready: "Pronto"
+  status.recovered_backup: "{path} foi recuperado do backup (motivo: {reason})"
   status.reset: "Reiniciado"
   status.stale: "Desatualizado"
   status.theme: "Tema: {name}"

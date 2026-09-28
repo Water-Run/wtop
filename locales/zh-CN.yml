@@ -419,6 +419,7 @@ messages:
   status.paused: "已暂停"
   status.paused_at: "已暂停于 {time}"
   status.ready: "就绪"
+  status.recovered_backup: "已从备份恢复 {path}（原因：{reason}）"
   status.reset: "已重置"
   status.stale: "已过期"
   status.theme: "主题：{name}"

@@ -426,6 +426,7 @@ messages:
   status.paused: "Pausiert"
   status.paused_at: "Pausiert um {time}"
   status.ready: "Bereit"
+  status.recovered_backup: "{path} wurde aus der Sicherung wiederhergestellt (Grund: {reason})"
   status.reset: "Zurückgesetzt"
   status.stale: "Veraltet"
   status.theme: "Theme: {name}"
