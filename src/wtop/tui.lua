@@ -601,6 +601,8 @@ local HELP_SECTIONS = {
                 "move the workload selection; the detail panel follows" },
             { "c", "help.workload_collapse",
                 "collapse or expand the selected workload subtree" },
+            { "Enter on GPU", "help.gpu_detail",
+                "open the host-process detail for the selected GPU process" },
         },
     },
     {
@@ -1074,6 +1076,7 @@ local function run_loop(options, backend, renderer, engine, translator)
     local mask_remote = options.mask_remote_addresses == true
     local workload_collapsed = {}
     local workload_selected_id = nil
+    local gpu_selected_pid = nil
     local available_locales = I18n.available() or { translator:locale() }
 
     --- Rebuild the translator and every string the workspace baked in.
@@ -1163,6 +1166,42 @@ local function run_loop(options, backend, renderer, engine, translator)
         if current < offset + 1 then offset = current - 1 end
         if current > offset + visible then offset = current - visible end
         widget_offsets.workload_table = math.max(0, offset)
+    end
+
+    local function move_gpu_selection(step)
+        local table_model = models and models.gpu_process_table
+        local ids = table_model and table_model.ids
+        if type(ids) ~= "table" or #ids == 0 then return end
+        local current = 1
+        for index, id in ipairs(ids) do
+            if id == gpu_selected_pid then current = index break end
+        end
+        current = math.max(1, math.min(#ids, current + step))
+        gpu_selected_pid = ids[current]
+        local widget = last_metadata and last_metadata.widgets
+            and last_metadata.widgets.gpu_process_table
+        local visible = widget and widget.visible_rows
+            and widget.visible_rows or math.max(1, rows - 6)
+        local offset = widget_offsets.gpu_process_table or 0
+        if current < offset + 1 then offset = current - 1 end
+        if current > offset + visible then offset = current - visible end
+        widget_offsets.gpu_process_table = math.max(0, offset)
+    end
+
+    local function gpu_selected_process()
+        -- Reverse navigation: the GPU row keys back into the host process
+        -- table by PID, matching the exact identity when several rows share
+        -- a PID (multi-GPU clients).
+        if gpu_selected_pid == nil then return nil end
+        local processes = engine.snapshot and engine.snapshot.processes
+            and engine.snapshot.processes.list or {}
+        local matches = {}
+        for _, process in ipairs(processes) do
+            if process.pid == gpu_selected_pid then matches[#matches + 1] = process end
+        end
+        -- A multi-GPU client has several GPU rows for one host PID; the host
+        -- detail is the same row either way, so the first match is correct.
+        return matches[1] or nil
     end
 
     --- Rows the process table actually drew last frame.
@@ -1332,6 +1371,7 @@ local function run_loop(options, backend, renderer, engine, translator)
                 mask_remote_addresses = mask_remote,
                 workload_collapsed = workload_collapsed,
                 workload_selected = workload_selected_id,
+                gpu_selected = gpu_selected_pid,
             })
         local process_count = #models.process_table.rows
         local process_selected = models.process_table.status.selected_index or 0
@@ -1436,6 +1476,17 @@ local function run_loop(options, backend, renderer, engine, translator)
                 { key = "v", id = "actions.toggle_virtual", fallback = "Virtual", command = "virtual" },
                 { key = "m", id = "actions.toggle_masking", fallback = "Mask", command = "mask" },
                 { key = "s", id = "actions.inspect_smart", fallback = "SMART", command = "smart" },
+                { key = "?", id = "actions.help", fallback = "Help", command = "help" },
+                { key = "q", id = "actions.quit", fallback = "Quit", command = "quit" },
+            }
+        elseif workspace.active == "gpu" then
+            status.hints = {
+                { key = "1–0", id = "actions.tabs", fallback = "Tabs", command = "tabs" },
+                { key = "↑↓", id = "actions.workload_select", fallback = "Select",
+                  command = "gpu_select" },
+                { key = "Enter", id = "actions.details", fallback = "Details",
+                  command = "details" },
+                { key = "h", id = "widgets.sensors", fallback = "Sensors", command = "sensors" },
                 { key = "?", id = "actions.help", fallback = "Help", command = "help" },
                 { key = "q", id = "actions.quit", fallback = "Quit", command = "quit" },
             }
@@ -1851,6 +1902,44 @@ local function run_loop(options, backend, renderer, engine, translator)
             dirty = true
         elseif (key == "u" or key == "U") and workspace.edit_mode then
             if key == "U" or event.shift then workspace:redo() else workspace:undo() end
+            dirty = true
+        elseif (key == "up" or key == "down" or key == "pageup"
+                or key == "pagedown" or key == "home" or key == "end")
+            and workspace.active == "gpu" then
+            local table_model = models and models.gpu_process_table
+            local count = table_model and table_model.ids and #table_model.ids or 0
+            if count > 0 then
+                if gpu_selected_pid == nil then gpu_selected_pid = table_model.ids[1] end
+                if key == "home" then
+                    move_gpu_selection(-count)
+                elseif key == "end" then
+                    move_gpu_selection(count)
+                else
+                    local widget = last_metadata and last_metadata.widgets
+                        and last_metadata.widgets.gpu_process_table
+                    local visible = widget and widget.visible_rows
+                        and widget.visible_rows or math.max(1, rows - 6)
+                    local step = (key == "pageup" or key == "pagedown")
+                        and math.max(1, visible - 1) or 1
+                    if key == "up" or key == "pageup" then step = -step end
+                    move_gpu_selection(step)
+                end
+                dirty = true
+            end
+        elseif key == "enter" and workspace.active == "gpu" then
+            if gpu_selected_pid == nil then
+                local table_model = models and models.gpu_process_table
+                local ids = table_model and table_model.ids
+                if type(ids) == "table" and ids[1] then gpu_selected_pid = ids[1] end
+            end
+            local process = gpu_selected_process()
+            if process then
+                show_overlay(process_detail_lines(process_with_io_detail(process),
+                    translator))
+            else
+                status_message = translated(translator, "gpu.process_gone",
+                    "That process is no longer in the process table")
+            end
             dirty = true
         elseif (key == "up" or key == "down" or key == "pageup"
                 or key == "pagedown" or key == "home" or key == "end")

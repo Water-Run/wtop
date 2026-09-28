@@ -83,6 +83,7 @@ messages:
   diagnostics.title: "診断"
   gpu.count:
     other: "GPU {count} 基"
+  gpu.process_gone: "そのプロセスはプロセステーブルにありません"
   gpu.process_status: "GPU プロセス: {visible}/{total} · スキャン {quality}"
   help.close: "Esc/Enter で閉じる"
   help.cycle_language: "表示言語を切り替える"
@@ -91,6 +92,7 @@ messages:
   help.edit_layout: "レイアウト編集モードに入る"
   help.focus_widget: "表示中のウィジェット間でフォーカスを移動"
   help.force_quit: "常に終了する"
+  help.gpu_detail: "選択した GPU プロセスのホストプロセス詳細を開く"
   help.inspect_bandwidth: "perf で RAM 帯域幅を測定"
   help.inspect_smart: "SMART/NVMe デバイスを選ぶ"
   help.inspect_sshd: "sshd サービスとリスナーを調べる"

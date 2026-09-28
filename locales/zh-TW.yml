@@ -83,6 +83,7 @@ messages:
   diagnostics.title: "診斷"
   gpu.count:
     other: "{count} 張 GPU"
+  gpu.process_gone: "該程序已不在程序表中"
   gpu.process_status: "GPU 程序：{visible}/{total} · 掃描 {quality}"
   help.close: "Esc/Enter 關閉"
   help.cycle_language: "循環切換介面語言"
@@ -91,6 +92,7 @@ messages:
   help.edit_layout: "進入版面編輯模式"
   help.focus_widget: "在可見元件間移動焦點"
   help.force_quit: "永遠可退出"
+  help.gpu_detail: "開啟所選 GPU 程序對應的宿主程序詳情"
   help.inspect_bandwidth: "用 perf 實測記憶體頻寬"
   help.inspect_smart: "選擇 SMART/NVMe 裝置"
   help.inspect_sshd: "檢查 sshd 服務與監聽埠"

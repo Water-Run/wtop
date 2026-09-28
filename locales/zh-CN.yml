@@ -83,6 +83,7 @@ messages:
   diagnostics.title: "诊断"
   gpu.count:
     other: "{count} 个 GPU"
+  gpu.process_gone: "该进程已不在进程表中"
   gpu.process_status: "GPU 进程：{visible}/{total} · 扫描 {quality}"
   help.close: "Esc/Enter 关闭"
   help.cycle_language: "循环切换界面语言"
@@ -91,6 +92,7 @@ messages:
   help.edit_layout: "进入布局编辑模式"
   help.focus_widget: "在可见组件间移动焦点"
   help.force_quit: "始终退出"
+  help.gpu_detail: "打开所选 GPU 进程对应的宿主进程详情"
   help.inspect_bandwidth: "用 perf 实测内存带宽"
   help.inspect_smart: "选择 SMART/NVMe 设备"
   help.inspect_sshd: "检查 sshd 服务与监听端口"

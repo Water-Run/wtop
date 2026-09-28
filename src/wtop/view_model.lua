@@ -597,6 +597,7 @@ local function gpu_process_rows(snapshot, format)
             rows[#rows + 1] = {
                 gpu = candidate.gpu,
                 pid = process.pid and tostring(process.pid) or "—",
+                pid_number = candidate.pid_number,
                 process = process.name or "?",
                 utilization = percent(format, process.utilization_percent),
                 memory = bytes(format, candidate.memory_bytes),
@@ -1682,8 +1683,15 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
     local addresses = on("network", "address_table") and address_rows(snapshot) or {}
     local gpu_table_rows = on("gpu", "gpu_table") and gpu_rows(snapshot, format) or {}
     local gpu_process_table_rows, gpu_process_total = {}, 0
+    local gpu_process_table_ids, gpu_process_selected_index = {}, nil
     if on("gpu", "gpu_process_table") then
         gpu_process_table_rows, gpu_process_total = gpu_process_rows(snapshot, format)
+        for index, row in ipairs(gpu_process_table_rows) do
+            gpu_process_table_ids[index] = row.pid_number
+            if options.gpu_selected == row.pid_number then
+                gpu_process_selected_index = index
+            end
+        end
     end
     local cpufreq_table_rows = on("compute", "cpufreq_table") and cpufreq_rows(snapshot, format) or {}
     local sensor_table_rows = on("compute", "sensor_table") and sensor_rows(snapshot, format) or {}
@@ -2054,6 +2062,8 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             rows = gpu_table_rows,
         },
         gpu_process_table = {
+            ids = gpu_process_table_ids,
+            selected = gpu_process_selected_index,
             columns = {
                 { key = "gpu", label = "GPU", width = 10, min_width = 6, priority = 70 },
                 { key = "pid", label = "PID", width = 8, min_width = 6, align = "right", priority = 80 },

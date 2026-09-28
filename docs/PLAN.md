@@ -210,7 +210,7 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
 - Add expand/collapse, details, systemd-unit, and container semantics to cgroup v2/Workloads. (Expand/collapse and selected-item detail are done on 2026-09-28, keyboard-driven and verified against a live cgroup v2 host; systemd-unit and container semantics remain.)
 - Extend the current GPU hwmon `class`/`device_target` join into broader CPUFreq, sensor, mount, and device-topology links, and define fan/rail/board-power semantics.
 - Dynamic AMD SMI and Level Zero providers with fake-library tests (NVML is done).
-- Extend GPU process summaries into client/engine/memory-region drill-down and reverse navigation to host-process detail.
+- Extend GPU process summaries into client/engine/memory-region drill-down and reverse navigation to host-process detail. (Reverse navigation is done on 2026-09-28: the GPU process table takes a keyboard selection and `Enter` opens the host-process detail overlay, reusing the Processes-page detail; client/engine/memory-region drill-down remains.)
 - Establish CPU family/model event allowlists, multiplex correction, per-socket/controller aggregation, and real-hardware error gates for RAM PMU; keep it experimental until then.
 - Unify resource navigation for SMART, RAM-bandwidth, and service Inspectors.
 

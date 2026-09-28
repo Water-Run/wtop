@@ -83,6 +83,7 @@ messages:
   diagnostics.title: "진단"
   gpu.count:
     other: "GPU {count}개"
+  gpu.process_gone: "해당 프로세스가 프로세스 테이블에 없습니다"
   gpu.process_status: "GPU 프로세스: {visible}/{total} · 스캔 {quality}"
   help.close: "Esc/Enter 닫기"
   help.cycle_language: "인터페이스 언어 순환"
@@ -91,6 +92,7 @@ messages:
   help.edit_layout: "레이아웃 편집 모드로 전환"
   help.focus_widget: "표시된 위젯 사이로 포커스 이동"
   help.force_quit: "항상 종료"
+  help.gpu_detail: "선택한 GPU 프로세스의 호스트 프로세스 상세 열기"
   help.inspect_bandwidth: "perf로 RAM 대역폭 측정"
   help.inspect_smart: "SMART/NVMe 장치 선택"
   help.inspect_sshd: "sshd 서비스와 리스너 검사"

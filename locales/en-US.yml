@@ -88,6 +88,7 @@ messages:
   gpu.count:
     one: "{count} GPU"
     other: "{count} GPUs"
+  gpu.process_gone: "That process is no longer in the process table"
   gpu.process_status: "GPU processes: {visible}/{total} · scan {quality}"
   help.close: "Esc/Enter closes"
   help.cycle_language: "cycle the interface language"
@@ -96,6 +97,7 @@ messages:
   help.edit_layout: "enter layout edit mode"
   help.focus_widget: "move focus between visible widgets"
   help.force_quit: "always quit"
+  help.gpu_detail: "open the host-process detail for the selected GPU process"
   help.inspect_bandwidth: "measure RAM bandwidth with perf"
   help.inspect_smart: "choose a SMART/NVMe device"
   help.inspect_sshd: "inspect the sshd service and listeners"

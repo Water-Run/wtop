@@ -60,6 +60,21 @@ assert(models.gpu_table.rows[1].temperature:find("72.5", 1, true))
 assert(models.gpu_table.rows[1].power == "118.2 W")
 assert(#models.gpu_table.rows[1].sensor_sources == 1)
 
+-- Reverse navigation feeds: every row carries its numeric PID, the model
+-- exposes the id list, and a selected PID maps to a row index.
+local nav_models = ViewModel.build(engine, snapshot, translator, {}, "gpu", nil,
+  nil, { gpu_selected = 10 })
+assert(#nav_models.gpu_process_table.ids == 2, "ids list the visible rows")
+assert(nav_models.gpu_process_table.ids[1] == 20
+  and nav_models.gpu_process_table.ids[2] == 10, "ids follow row order")
+assert(nav_models.gpu_process_table.selected == 2,
+  "a selected PID maps onto its row index")
+local unselected = ViewModel.build(engine, snapshot, translator, {}, "gpu")
+assert(unselected.gpu_process_table.selected == nil,
+  "without a selection no row is highlighted")
+assert(type(nav_models.gpu_process_table.rows[1].pid_number) == "number",
+  "rows keep their numeric PID for host-process lookup")
+
 local summary_only_models = ViewModel.build(engine, snapshot, translator, {}, "gpu", nil,
   { gpu_summary = true })
 assert(#summary_only_models.gpu_process_table.rows == 0 and #summary_only_models.gpu_table.rows == 0,

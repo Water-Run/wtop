@@ -89,6 +89,7 @@ messages:
   gpu.count:
     one: "{count} GPU"
     other: "{count} GPUs"
+  gpu.process_gone: "Dieser Prozess ist nicht mehr in der Prozesstabelle"
   gpu.process_status: "GPU-Prozesse: {visible}/{total} · Scan {quality}"
   help.close: "Esc/Enter schließt"
   help.cycle_language: "Oberflächensprache durchschalten"
@@ -97,6 +98,7 @@ messages:
   help.edit_layout: "in den Layout-Bearbeitungsmodus wechseln"
   help.focus_widget: "Fokus zwischen sichtbaren Widgets bewegen"
   help.force_quit: "immer beenden"
+  help.gpu_detail: "die Host-Prozessdetails des gewählten GPU-Prozesses öffnen"
   help.inspect_bandwidth: "RAM-Bandbreite mit perf messen"
   help.inspect_smart: "ein SMART/NVMe-Gerät wählen"
   help.inspect_sshd: "den sshd-Dienst und seine Listener prüfen"
