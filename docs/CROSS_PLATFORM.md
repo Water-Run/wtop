@@ -209,7 +209,14 @@ owner refreshes). Server 2008 used 1.72% of one core on Overview, 2.29% on
 Processes, and 1.56% on GPU. The 10.0.26100 host with about 380 processes
 used 2.58% on Overview and 2.81% on Processes. Both processes exited
 normally. On Linux, `make benchmark` now provides the repeatable measurement
-script for run-to-run comparison on the same host.
+script for run-to-run comparison on the same host. Later on 2026-09-28 the
+Linux process collector cached static identity fields (UID, resolved user,
+command line) per `(pid,starttime)` and replaced the greedy `/proc/stat`
+comm pattern with direct scanning: a warm 550-process sample dropped from
+about 68 ms to about 29 ms, and the whole-TUI Processes page on that host
+fell from 7.6% to 4.8% of one core. The identity cache is rebuilt from the
+live process set each sample, so PID reuse cannot serve stale identity, and
+selected rows still reread status and command line for their detail.
 
 The Processes table now formats only rows accessed by the viewport. In two
 alternating 10-second classic-console runs, the preceding bundle used 3.12%
