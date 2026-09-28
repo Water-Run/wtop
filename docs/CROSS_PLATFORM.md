@@ -118,6 +118,14 @@ of the immediately preceding bundle used 3.58–3.89%. The process exited
 normally in each run. These short single-host runs do not establish a release
 performance baseline.
 
+The Processes table now formats only rows accessed by the viewport. In two
+alternating 10-second classic-console runs, the preceding bundle used 3.12%
+and 3.27% of one core; the lazy-row bundle used 2.34% and 2.02%. A separate
+instrumented run measured 43.2 ms of ViewModel work across nine process-page
+frames before skipping other pages' models, and 20.2 ms afterward. The later
+whole-process CPU samples varied, so these measurements do not establish a
+stable 2% result or the 1,000-process target.
+
 A follow-up classic-console run on Server 2008 showed executable basenames in
 the Processes command column by default. Pressing `p` switched to image paths;
 the 80-column view shortened them from the start to keep executable names
@@ -155,9 +163,11 @@ still unverified on XP itself.
   collector skips absent physical-drive numbers between periodic rescans.
   Warm collector calls and whole-TUI CPU were measured on Server 2008 as noted
   above. The TUI now merges automatic redraws at the selected update interval
-  and uses a direct width path for printable ASCII. The Processes page still
-  exceeds the 2% single-core goal on that host. Periodic-refresh timing and
-  broader hardware measurements are still needed.
+  and uses a direct width path for printable ASCII. Process rows are formatted
+  when the viewport accesses them, and the active Processes page skips other
+  pages' models. The Processes page still exceeds the 2% single-core goal in
+  some runs on that host. Periodic-refresh timing and broader hardware
+  measurements are still needed.
 - Windows has no pressure or power-zone source and shows them as
   unavailable. Its CPU frequency comes from PDH from Windows 7 / 2008 R2 on;
   older systems report the rated frequency as an estimate. An adapter without

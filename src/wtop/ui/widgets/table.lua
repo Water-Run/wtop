@@ -241,8 +241,8 @@ function M.render(grid, area, model, context, variant)
   local data_top = y
 
   for index = offset + 1, #rows do
-    local row = rows[index]
     if y > data_bottom then break end
+    local row = rows[index]
     local selected = index == model.selected
     local row_surface = selected and "surface.selected"
       or (((index - offset) % 2 == 0) and "surface.row_alt" or surface)

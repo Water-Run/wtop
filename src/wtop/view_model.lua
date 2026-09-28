@@ -208,10 +208,11 @@ local function top_processes(snapshot, format, controller, i18n, platform)
     then
         return cached.rows, status, cached.status_text
     end
-    local rows = {}
+    local source_rows = controller:rows()
+    local row_count = #source_rows
     local clock_ticks = snapshot.processes and snapshot.processes.clock_ticks_per_second or 100
     local total_memory = snapshot.memory and snapshot.memory.total_bytes
-    for _, process in ipairs(controller:rows()) do
+    local function format_row(process)
         -- The kernel truncates /proc/<pid>/stat's comm at 15 characters, so a
         -- table built from it shows "systemd-timesyn".  cmdline is the honest
         -- name; `show_paths` decides whether its directory is kept.
@@ -240,7 +241,7 @@ local function top_processes(snapshot, format, controller, i18n, platform)
         end
         local cpu_seconds = type(process.cpu_ticks) == "number"
             and clock_ticks > 0 and process.cpu_ticks / clock_ticks or nil
-        rows[#rows + 1] = {
+        return {
             id = process.id,
             pid = tostring(process.pid),
             name = name,
@@ -264,6 +265,25 @@ local function top_processes(snapshot, format, controller, i18n, platform)
             process = process,
         }
     end
+    -- The controller has already sorted and filtered every process. The table
+    -- only draws the current viewport, so format rows when they are accessed.
+    local rows = setmetatable({}, {
+        __len = function() return row_count end,
+        __index = function(result, index)
+            if type(index) ~= "number" or index < 1 or index > row_count
+                or index % 1 ~= 0 then return nil end
+            local row = format_row(source_rows[index])
+            rawset(result, index, row)
+            return row
+        end,
+        __pairs = function(result)
+            local function next_row(_, index)
+                index = index + 1
+                if index <= row_count then return index, result[index] end
+            end
+            return next_row, nil, 0
+        end,
+    })
     local status_text = process_status_text(i18n, status)
     PROCESS_VIEW_CACHE[controller] = {
         revision = status.revision,
@@ -1408,6 +1428,72 @@ local function smart_hint_entries(snapshot, capabilities, i18n)
     }
 end
 
+local function process_table_model(i18n, process_rows, process_status,
+        process_status_display, platform)
+    return {
+        panel_title = translated(i18n, "widgets.processes_sorted",
+            "Processes · {sort} {direction}", {
+                sort = process_sort_label(i18n, process_status.sort_key),
+                direction = translated(i18n, process_status.descending
+                    and "process.direction.descending" or "process.direction.ascending",
+                    process_status.descending and "descending" or "ascending"),
+            }),
+        columns = {
+            { key = "pid", label = "PID", sort_key = "pid",
+                width = 8, min_width = 5, priority = 90, align = "right",
+                highlight = true },
+            { key = "user", label = translated(i18n, "metrics.user", "User"),
+                sort_key = "user", width = 12, min_width = 8, priority = 55,
+                highlight = true },
+            { key = "priority", label = "PRI", width = 4, min_width = 3,
+                align = "right", priority = 20, full_only = true },
+            { key = "nice", label = "NI", width = 4, min_width = 3,
+                align = "right", priority = 22, full_only = true },
+            { key = "virtual_memory", label = translated(i18n, "metrics.virtual", "Virt"),
+                sort_key = "virtual", width = 10, min_width = 8,
+                align = "right", priority = 35, full_only = true },
+            { key = "memory", label = translated(i18n, "metrics.memory", "Res"),
+                sort_key = "memory", width = 10, min_width = 8, align = "right", priority = 80,
+                token = function(_, row)
+                    return severity_token(row.memory_fraction and row.memory_fraction * 100, 10, 25)
+                end,
+                bar = function(_, row) return row.memory_fraction end },
+            { key = "state", label = "S", width = 3, min_width = 3, priority = 45,
+                sort_key = "state",
+                token = function(value)
+                    if value == "R" then return "metric.good" end
+                    if value == "D" then return "metric.critical" end
+                    if value == "Z" then return "metric.warn" end
+                    return nil
+                end },
+            { key = "cpu", label = "CPU", sort_key = "cpu",
+                width = 9, min_width = 7, align = "right", priority = 95,
+                token = function(_, row) return severity_token(row.cpu_value, 40, 80) end,
+                bar = function(_, row)
+                    return row.cpu_value and math.min(1, row.cpu_value / 100) or nil
+                end },
+            { key = "time", label = "TIME+", sort_key = "time",
+                width = 10, min_width = 8, align = "right", priority = 40 },
+            { key = "threads", label = translated(i18n, "metrics.threads", "Thr"),
+                sort_key = "threads", width = 5, min_width = 4,
+                align = "right", priority = 25, full_only = true },
+            { key = "name", label = translated(i18n, "metrics.command", "Command"),
+                sort_key = "name", width = 40, min_width = 12, priority = 85,
+                highlight = true,
+                truncate = process_status.show_paths
+                    and (platform == "Windows" or platform == "Darwin")
+                    and "path" or nil },
+        },
+        rows = process_rows,
+        highlights = process_status.query_highlights,
+        selected = process_status.selected_index,
+        sort_key = process_status.sort_key,
+        sort_descending = process_status.descending,
+        status = process_status,
+        status_text = process_status_display,
+    }
+end
+
 function M.build(engine, snapshot, i18n, capabilities, active_tab, process_controller,
         visible_widgets, options)
     options = options or {}
@@ -1421,6 +1507,22 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
     end
     local function on(tab, widget_id)
         return (not active_tab or active_tab == tab) and visible(widget_id)
+    end
+    local function process_view()
+        if on("processes", "process_table") then
+            process_controller = process_controller or ProcessTable.new()
+            return top_processes(snapshot, format, process_controller, i18n, platform)
+        end
+        local status = process_controller and process_controller:status()
+            or ProcessTable.new():status()
+        return {}, status, process_status_text(i18n, status)
+    end
+    if active_tab == "processes" then
+        -- This page contains only the process table. Avoid building models for
+        -- the other pages on every process refresh.
+        local rows, status, status_display = process_view()
+        return { process_table = process_table_model(i18n, rows, status,
+            status_display, platform) }
     end
 
     local cpu_value = snapshot.cpu and snapshot.cpu.total and snapshot.cpu.total.utilization
@@ -1447,16 +1549,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
     local process_count = snapshot.processes and snapshot.processes.process_candidates
         or #(snapshot.processes and snapshot.processes.list or {})
 
-    local process_rows, process_status, process_status_display
-    if on("processes", "process_table") then
-        process_controller = process_controller or ProcessTable.new()
-        process_rows, process_status, process_status_display = top_processes(
-            snapshot, format, process_controller, i18n, platform)
-    else
-        process_rows = {}
-        process_status = process_controller and process_controller:status() or ProcessTable.new():status()
-        process_status_display = process_status_text(i18n, process_status)
-    end
+    local process_rows, process_status, process_status_display = process_view()
 
     local cores = on("compute", "core_table") and core_rows(snapshot, format) or {}
     local core_items = {}
@@ -1577,68 +1670,8 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         },
 
         -- Processes ------------------------------------------------------
-        process_table = {
-            panel_title = translated(i18n, "widgets.processes_sorted",
-                "Processes · {sort} {direction}", {
-                    sort = process_sort_label(i18n, process_status.sort_key),
-                    direction = translated(i18n, process_status.descending
-                        and "process.direction.descending" or "process.direction.ascending",
-                        process_status.descending and "descending" or "ascending"),
-                }),
-            columns = {
-                { key = "pid", label = "PID", sort_key = "pid",
-                    width = 8, min_width = 5, priority = 90, align = "right",
-                    highlight = true },
-                { key = "user", label = translated(i18n, "metrics.user", "User"),
-                    sort_key = "user", width = 12, min_width = 8, priority = 55,
-                    highlight = true },
-                { key = "priority", label = "PRI", width = 4, min_width = 3,
-                    align = "right", priority = 20, full_only = true },
-                { key = "nice", label = "NI", width = 4, min_width = 3,
-                    align = "right", priority = 22, full_only = true },
-                { key = "virtual_memory", label = translated(i18n, "metrics.virtual", "Virt"),
-                    sort_key = "virtual", width = 10, min_width = 8,
-                    align = "right", priority = 35, full_only = true },
-                { key = "memory", label = translated(i18n, "metrics.memory", "Res"),
-                    sort_key = "memory", width = 10, min_width = 8, align = "right", priority = 80,
-                    token = function(_, row)
-                        return severity_token(row.memory_fraction and row.memory_fraction * 100, 10, 25)
-                    end,
-                    bar = function(_, row) return row.memory_fraction end },
-                { key = "state", label = "S", width = 3, min_width = 3, priority = 45,
-                    sort_key = "state",
-                    token = function(value)
-                        if value == "R" then return "metric.good" end
-                        if value == "D" then return "metric.critical" end
-                        if value == "Z" then return "metric.warn" end
-                        return nil
-                    end },
-                { key = "cpu", label = "CPU", sort_key = "cpu",
-                    width = 9, min_width = 7, align = "right", priority = 95,
-                    token = function(_, row) return severity_token(row.cpu_value, 40, 80) end,
-                    bar = function(_, row)
-                        return row.cpu_value and math.min(1, row.cpu_value / 100) or nil
-                    end },
-                { key = "time", label = "TIME+", sort_key = "time",
-                    width = 10, min_width = 8, align = "right", priority = 40 },
-                { key = "threads", label = translated(i18n, "metrics.threads", "Thr"),
-                    sort_key = "threads", width = 5, min_width = 4,
-                    align = "right", priority = 25, full_only = true },
-                { key = "name", label = translated(i18n, "metrics.command", "Command"),
-                    sort_key = "name", width = 40, min_width = 12, priority = 85,
-                    highlight = true,
-                    truncate = process_status.show_paths
-                        and (platform == "Windows" or platform == "Darwin")
-                        and "path" or nil },
-            },
-            rows = process_rows,
-            highlights = process_status.query_highlights,
-            selected = process_status.selected_index,
-            sort_key = process_status.sort_key,
-            sort_descending = process_status.descending,
-            status = process_status,
-            status_text = process_status_display,
-        },
+        process_table = process_table_model(i18n, process_rows, process_status,
+            process_status_display, platform),
 
         -- Compute --------------------------------------------------------
         cpu_total = {
