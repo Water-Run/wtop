@@ -49,6 +49,7 @@ local INTERVAL_FLOORS_MS = {
     cgroup = 2000,
     system_info = 2000,
     power_supply = 2000,
+    inventory = 30000,
 }
 
 -- Expensive and high-cardinality sources continue sampling while their page
@@ -71,6 +72,7 @@ local BACKGROUND_INTERVALS_MS = {
     cgroup = 10000,
     system_info = 30000,
     power_supply = 15000,
+    inventory = 120000,
 }
 
 local TAB_COLLECTORS = {
@@ -89,7 +91,8 @@ local TAB_COLLECTORS = {
     network = { network = true, connections = true },
     gpu = { gpu = true, hwmon = true },
     workloads = { cpu = true, memory = true, pressure = true, cgroup = true },
-    system = { system_info = true, cpu_info = true, memory = true, power_supply = true },
+    system = { system_info = true, cpu_info = true, memory = true,
+        power_supply = true, inventory = true },
     -- Insights is a static capability summary.  Its counts may use the bounded
     -- background samples; keeping the full process collector at 1 Hz here
     -- would burn a core merely to refresh a decorative count.
@@ -140,6 +143,7 @@ local TAB_WIDGET_COLLECTORS = {
         system_identity = { "system_info" }, system_kernel = { "system_info" },
         system_firmware = { "system_info", "cpu_info" },
         system_limits = { "system_info" }, battery_bars = { "power_supply" },
+        system_devices = { "inventory" },
     },
     insights = { collector_table = {}, inspector_table = {}, advice_list = {} },
 }
@@ -346,7 +350,7 @@ function Engine.new(options)
     local ordered = {
         "cpu", "cpu_info", "memory", "pressure", "disk", "network", "connections",
         "process", "gpu", "cpufreq", "hwmon", "powercap", "mounts", "cgroup",
-        "system_info", "power_supply",
+        "system_info", "power_supply", "inventory",
     }
     local foreground_floors = {}
     local background_targets = {}

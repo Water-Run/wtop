@@ -1078,6 +1078,39 @@ local function system_firmware_entries(snapshot, format, i18n)
     return entries
 end
 
+local function system_device_rows(snapshot)
+    local inventory = type(snapshot.inventory) == "table" and snapshot.inventory or {}
+    local rows, pci_total, usb_total, truncated = {}, 0, 0, false
+    local pci = type(inventory.pci) == "table" and inventory.pci or {}
+    local usb = type(inventory.usb) == "table" and inventory.usb or {}
+    pci_total = pci.total or #pci.devices or 0
+    usb_total = usb.total or #usb.devices or 0
+    truncated = pci.truncated == true or usb.truncated == true
+    for _, device in ipairs(pci.devices or {}) do
+        local name = device.vendor_name
+            or (device.vendor_id and string.format("%04x", device.vendor_id) or "?")
+        if device.device_name then name = name .. " " .. device.device_name end
+        rows[#rows + 1] = {
+            bus = "PCI",
+            id = tostring(device.address or "?"),
+            device = name,
+            class = device.class_id and string.format("%06x", device.class_id) or "—",
+        }
+    end
+    for _, device in ipairs(usb.devices or {}) do
+        local name = device.manufacturer
+            or (device.vendor_id and string.format("%04x", device.vendor_id) or "?")
+        if device.product then name = name .. " " .. device.product end
+        rows[#rows + 1] = {
+            bus = "USB",
+            id = string.format("%d:%d", device.bus or 0, device.device or 0),
+            device = name,
+            class = device.product_id and string.format("%04x", device.product_id) or "—",
+        }
+    end
+    return rows, pci_total, usb_total, truncated
+end
+
 local function system_limits_entries(snapshot, format, i18n)
     local system = snapshot.system or {}
     local limits = system.limits or {}
@@ -1569,6 +1602,13 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         disks, disks_hidden = disk_rows(snapshot, format, { show_virtual = options.show_virtual_devices })
     end
     local interfaces = on("network", "network_table") and network_rows(snapshot, format) or {}
+    local system_devices_rows, system_pci_total, system_usb_total, system_devices_truncated
+    if on("system", "system_devices") then
+        system_devices_rows, system_pci_total, system_usb_total,
+            system_devices_truncated = system_device_rows(snapshot)
+    else
+        system_devices_rows = {}
+    end
     local connections = on("network", "connection_table")
         and connection_rows(snapshot, options.mask_remote_addresses == true) or {}
     local addresses = on("network", "address_table") and address_rows(snapshot) or {}
@@ -2003,6 +2043,23 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             thresholds = { warn = 30, critical = 15 },
             severity_invert = true,
             empty_text = translated(i18n, "system.no_power_supply", "No battery or adapter"),
+        },
+        system_devices = {
+            columns = {
+                { key = "bus", label = translated(i18n, "inventory.bus", "Bus"),
+                  width = 5, min_width = 4, priority = 80 },
+                { key = "id", label = translated(i18n, "inventory.identifier", "ID"),
+                  width = 12, min_width = 8, priority = 75 },
+                { key = "device", label = translated(i18n, "inventory.device", "Device"),
+                  width = 34, min_width = 16, priority = 95 },
+                { key = "class", label = translated(i18n, "inventory.class", "Class"),
+                  width = 8, min_width = 6, priority = 60 },
+            },
+            rows = system_devices_rows,
+            empty_text = translated(i18n, "system.no_devices", "No PCI or USB devices exposed"),
+            status_text = string.format("PCI %d · USB %d%s",
+                system_pci_total or 0, system_usb_total or 0,
+                system_devices_truncated and " · …" or ""),
         },
 
         -- Insights -------------------------------------------------------

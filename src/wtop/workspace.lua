@@ -169,6 +169,8 @@ local function build_pages(tabs, i18n)
                 80, { width = 40, height = 10 }),
             widget("battery_bars", "bars", t("widgets.power_supplies", "Power supplies"),
                 70, { width = 34, height = 6 }),
+            widget("system_devices", "table", t("widgets.system_devices", "Hardware devices"),
+                60, { width = 72, height = 14 }),
         }),
         insights = page("insights", tabs, {
             widget("collector_table", "table", t("widgets.collectors", "Collectors"),

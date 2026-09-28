@@ -755,6 +755,36 @@ local function export_power_supplies(supplies)
     })
 end
 
+local function export_inventory(inventory)
+    if type(inventory) ~= "table" then return json.object({}) end
+    local function devices(source, fields, limit)
+        local result = json.array({})
+        for index, device in ipairs(source or {}) do
+            if index > limit then break end
+            result[index] = copy_fields(device, fields)
+        end
+        return result
+    end
+    local pci = type(inventory.pci) == "table" and inventory.pci or {}
+    local usb = type(inventory.usb) == "table" and inventory.usb or {}
+    return json.object({
+        pci = json.object({
+            devices = devices(pci.devices, {
+                "address", "vendor_id", "device_id", "class_id", "revision",
+                "vendor_name", "device_name",
+            }, 256),
+            total = pci.total, truncated = pci.truncated,
+        }),
+        usb = json.object({
+            devices = devices(usb.devices, {
+                "id", "bus", "device", "vendor_id", "product_id",
+                "manufacturer", "product",
+            }, 128),
+            total = usb.total, truncated = usb.truncated,
+        }),
+    })
+end
+
 function M.snapshot(snapshot, options)
     if type(snapshot) ~= "table" then snapshot = {} end
     if type(options) ~= "table" then options = {} end
@@ -787,6 +817,7 @@ function M.snapshot(snapshot, options)
         workloads = export_workloads(snapshot.workloads, options.workload_limit),
         system = export_system(snapshot.system),
         power_supplies = export_power_supplies(snapshot.power_supplies),
+        inventory = export_inventory(snapshot.inventory),
     })
 end
 

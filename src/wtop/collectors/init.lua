@@ -18,6 +18,7 @@ local constructors = {
   cgroup = require("wtop.collectors.cgroup"),
   system_info = require("wtop.collectors.system_info"),
   power_supply = require("wtop.collectors.power_supply"),
+  inventory = require("wtop.collectors.inventory"),
 }
 
 function M.new_all(options)

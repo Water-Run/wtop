@@ -61,6 +61,8 @@ local interface_reasons = {
   "memory_unavailable",
   "no_cpufreq_policies",
   "no_drm_card_devices",
+  "device_inventory_unavailable",
+  "no_device_inventory",
   "no_hwmon_devices",
   "no_power_supplies",
   "no_powercap_zones",

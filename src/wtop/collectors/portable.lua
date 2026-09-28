@@ -25,6 +25,7 @@ local sources = {
   cgroup = {"collect_cgroup", 2000},
   system_info = {"collect_system_info", 2000},
   power_supply = {"collect_power_supply", 5000},
+  inventory = {"collect_inventory", 30000},
 }
 
 local function previous_ok(previous)

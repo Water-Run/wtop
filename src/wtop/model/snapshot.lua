@@ -17,6 +17,7 @@ local RESOURCE_KEYS = {
   workloads = true,
   system = true,
   power_supplies = true,
+  inventory = true,
 }
 
 local ID_TO_RESOURCE = {
@@ -30,6 +31,7 @@ local ID_TO_RESOURCE = {
   psi = "pressure",
   system_info = "system",
   power_supply = "power_supplies",
+  inventory = "inventory",
 }
 
 local VALID_STATUS = { ok = true, unavailable = true, denied = true, error = true }
