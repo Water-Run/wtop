@@ -105,7 +105,24 @@ network drives remain untested with this build.
 In a separate back-to-back native call sample on that host, discarding each
 collector's first call, the median of eight calls was 2.56 ms for processes,
 0.01 ms for GPU, 0.74 ms for disks, and 0.04 ms for mounts. This measures warm
-collector calls only; it does not include periodic rescans or TUI CPU usage.
+collector calls before the bulk process collector; it does not include periodic
+rescans or TUI CPU usage.
+
+The x86 Windows collector now reads the process table with a dynamically
+resolved [`NtQuerySystemInformation` SystemProcessInformation call](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntquerysysteminformation).
+It validates the returned layout against its own process and keeps the
+Toolhelp collector as a fallback. Paths and owner labels are still resolved
+per process when their identity-keyed caches need a refresh. On Server 2008,
+eight warm calls for about 78 processes took 0.80–0.94 ms with the bulk path,
+versus 2.49–2.62 ms with the previous collector. On the 10.0.26100 host,
+about 380-process warm calls took 4.26–5.09 ms, versus 9.69–10.57 ms. Both
+development bundles produced fresh snapshots. On the newer host, the bulk
+table's 55,963,648-byte working set for the protected Secure System process
+matched PowerShell; the previous per-process query reported 131,072 bytes.
+The 32-bit bulk memory fields are reread through the existing 64-bit-aware
+process query if saturated. A 10-second Processes-page classic-console run on
+Server 2008 used 1.56% of one core and exited with the console restored.
+These runs do not establish XP compatibility or 1,000-process performance.
 
 The classic-console harness now measures child CPU time over a chosen window.
 On this Server 2008 host, the bundle with frame coalescing and printable-ASCII
@@ -176,9 +193,9 @@ still unverified on XP itself.
 ## Known Issues
 
 - Windows Processes-page performance is still unproven at scale.
-  Before the current cache changes, the TUI on its default page used about
-  15% of one core on the 10.0.26100 host. Per call, the process list took
-  about 15 ms there and the socket table about 6 ms; on Server 2008 the
+  An earlier TUI bundle on its default page used about 15% of one core on the
+  10.0.26100 host. Its process list took about 15 ms per call there and the
+  socket table about 6 ms; on Server 2008 the
   display-adapter query took about 18 ms, disks 11 ms and mounts 8 ms.
   Display-adapter identity is now cached for up to 15 seconds. Process paths
   and owner labels are keyed by PID and creation time; owner labels are queried

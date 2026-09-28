@@ -9,6 +9,7 @@
 #include <psapi.h>
 #include <iphlpapi.h>
 #include <tlhelp32.h>
+#include <winternl.h>
 #include <winioctl.h>
 #include <sddl.h>
 #include <stddef.h>
@@ -1305,6 +1306,7 @@ static int l_collect_memory(lua_State *L) {
 #define USER_CACHE_SIZE 128
 #define PROCESS_PATH_CACHE_SIZE 1024
 #define PROCESS_OWNER_CACHE_SIZE 1024
+#define PROCESS_PATH_MISS_REFRESH_MS 5000
 #define PROCESS_OWNER_REFRESH_MS 30000
 #define PROCESS_OWNER_MISS_REFRESH_MS 5000
 
@@ -1320,8 +1322,11 @@ static int user_cache_next = 0;
 typedef struct {
     DWORD pid;
     uint64_t started;
+    DWORD checked_at;
     WCHAR path[MAX_PATH];
     int valid;
+    int has_path;
+    int access_denied;
 } process_path_cache_entry;
 
 static process_path_cache_entry process_path_cache[PROCESS_PATH_CACHE_SIZE];
@@ -1332,6 +1337,7 @@ typedef struct {
     DWORD checked_at;
     char name[192];
     int valid;
+    int access_denied;
 } process_owner_cache_entry;
 
 static process_owner_cache_entry process_owner_cache[PROCESS_OWNER_CACHE_SIZE];
@@ -1388,27 +1394,56 @@ static const char *process_user(HANDLE process) {
     return entry->name[0] ? entry->name : NULL;
 }
 
-/* Opening every process token on every sample is costly even when its SID
- * name is cached. Refresh by process identity so PID reuse is never mistaken
- * for the previous owner's token. Denied lookups retry sooner. */
+static size_t process_cache_slot(DWORD pid, uint64_t started, size_t mask) {
+    return ((uint32_t)pid * 2654435761U ^ (uint32_t)started
+        ^ (uint32_t)(started >> 32)) & mask;
+}
+
+static int cached_process_user_lookup(DWORD pid, uint64_t started, DWORD now,
+    const char **owner, int *access_denied) {
+    process_owner_cache_entry *cached;
+    DWORD interval;
+    cached = &process_owner_cache[process_cache_slot(pid, started,
+        PROCESS_OWNER_CACHE_SIZE - 1)];
+    interval = cached->name[0] ? PROCESS_OWNER_REFRESH_MS
+        : PROCESS_OWNER_MISS_REFRESH_MS;
+    if (cached->valid && cached->pid == pid && cached->started == started
+        && (DWORD)(now - cached->checked_at) < interval) {
+        *owner = cached->name[0] ? cached->name : NULL;
+        *access_denied = cached->access_denied;
+        return 1;
+    }
+    *owner = NULL;
+    *access_denied = 0;
+    return 0;
+}
+
+static void cache_process_user_denied(DWORD pid, uint64_t started, DWORD now) {
+    process_owner_cache_entry *cached = &process_owner_cache[
+        process_cache_slot(pid, started, PROCESS_OWNER_CACHE_SIZE - 1)];
+    cached->pid = pid;
+    cached->started = started;
+    cached->checked_at = now;
+    cached->name[0] = 0;
+    cached->access_denied = 1;
+    cached->valid = 1;
+}
+
+/* Refresh by process identity so PID reuse cannot inherit an old owner.
+ * Failed lookups retry sooner than successful ones. */
 static const char *cached_process_user(HANDLE process, DWORD pid,
     FILETIME created, int has_times, DWORD now) {
     process_owner_cache_entry *cached;
     const char *owner;
+    int access_denied;
     uint64_t started;
-    DWORD interval;
-    size_t slot;
     if (!has_times) return process_user(process);
     started = filetime_value(created);
-    slot = ((uint32_t)pid * 2654435761U ^ (uint32_t)started
-        ^ (uint32_t)(started >> 32)) & (PROCESS_OWNER_CACHE_SIZE - 1);
-    cached = &process_owner_cache[slot];
-    interval = cached->name[0] ? PROCESS_OWNER_REFRESH_MS
-        : PROCESS_OWNER_MISS_REFRESH_MS;
-    if (cached->valid && cached->pid == pid && cached->started == started
-        && (DWORD)(now - cached->checked_at) < interval)
-        return cached->name[0] ? cached->name : NULL;
+    if (cached_process_user_lookup(pid, started, now, &owner, &access_denied))
+        return owner;
     owner = process_user(process);
+    cached = &process_owner_cache[process_cache_slot(pid, started,
+        PROCESS_OWNER_CACHE_SIZE - 1)];
     cached->pid = pid;
     cached->started = started;
     cached->checked_at = now;
@@ -1417,6 +1452,7 @@ static const char *cached_process_user(HANDLE process, DWORD pid,
         strncpy(cached->name, owner, sizeof(cached->name) - 1);
         cached->name[sizeof(cached->name) - 1] = 0;
     }
+    cached->access_denied = 0;
     cached->valid = 1;
     return cached->name[0] ? cached->name : NULL;
 }
@@ -1456,34 +1492,61 @@ static int process_path(HANDLE process, int can_read_memory, WCHAR *path,
     return 0;
 }
 
-/* The path is fixed for a process lifetime. Key the bounded cache by both PID
- * and creation time so reuse cannot display the previous process's image. */
+/* The path is fixed for a process lifetime. Failed lookups are retried after a
+ * short delay, while a successful path remains tied to PID and creation time. */
+static int cached_process_path_lookup(DWORD pid, uint64_t started, DWORD now,
+    WCHAR path[MAX_PATH], int *access_denied) {
+    process_path_cache_entry *cached = &process_path_cache[
+        process_cache_slot(pid, started, PROCESS_PATH_CACHE_SIZE - 1)];
+    if (cached->valid && cached->pid == pid && cached->started == started
+        && (cached->has_path
+            || (DWORD)(now - cached->checked_at) < PROCESS_PATH_MISS_REFRESH_MS)) {
+        *access_denied = cached->access_denied;
+        if (cached->has_path) wcscpy(path, cached->path);
+        return cached->has_path;
+    }
+    *access_denied = 0;
+    return -1;
+}
+
+static void cache_process_path_denied(DWORD pid, uint64_t started, DWORD now) {
+    process_path_cache_entry *cached = &process_path_cache[
+        process_cache_slot(pid, started, PROCESS_PATH_CACHE_SIZE - 1)];
+    cached->pid = pid;
+    cached->started = started;
+    cached->checked_at = now;
+    cached->has_path = 0;
+    cached->access_denied = 1;
+    cached->valid = 1;
+}
+
 static int cached_process_path(HANDLE process, int can_read_memory, DWORD pid,
-    FILETIME created, int has_times, WCHAR path[MAX_PATH]) {
+    FILETIME created, int has_times, DWORD now, WCHAR path[MAX_PATH]) {
     process_path_cache_entry *cached = NULL;
     uint64_t started = 0;
     if (has_times) {
-        size_t slot;
+        int access_denied;
         started = filetime_value(created);
-        slot = ((uint32_t)pid * 2654435761U ^ (uint32_t)started
-            ^ (uint32_t)(started >> 32)) & (PROCESS_PATH_CACHE_SIZE - 1);
-        cached = &process_path_cache[slot];
-        if (cached->valid && cached->pid == pid && cached->started == started) {
-            wcscpy(path, cached->path);
-            return 1;
-        }
+        int status = cached_process_path_lookup(pid, started, now, path,
+            &access_denied);
+        if (status >= 0) return status;
+        cached = &process_path_cache[process_cache_slot(pid, started,
+            PROCESS_PATH_CACHE_SIZE - 1)];
     }
-    if (!process_path(process, can_read_memory, path, MAX_PATH)) return 0;
+    int found = process_path(process, can_read_memory, path, MAX_PATH);
     if (cached) {
         cached->pid = pid;
         cached->started = started;
-        wcscpy(cached->path, path);
+        cached->checked_at = now;
+        cached->has_path = found;
+        cached->access_denied = !found && GetLastError() == ERROR_ACCESS_DENIED;
+        if (found) wcscpy(cached->path, path);
         cached->valid = 1;
     }
-    return 1;
+    return found;
 }
 
-static int l_collect_process(lua_State *L) {
+static int l_collect_process_legacy(lua_State *L) {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     PROCESSENTRY32W entry;
     DWORD sampled_at = GetTickCount();
@@ -1516,7 +1579,7 @@ static int l_collect_process(lua_State *L) {
                 has_times = GetProcessTimes(process, &created, &exited, &kernel, &user);
                 has_memory = wtop_process_memory(process, &memory);
                 has_path = cached_process_path(process, can_read_memory, pid,
-                    created, has_times, path);
+                    created, has_times, sampled_at, path);
                 owner = cached_process_user(process, pid, created, has_times,
                     sampled_at);
                 (void)CloseHandle(process);
@@ -1568,6 +1631,231 @@ static int l_collect_process(lua_State *L) {
     integer_field(L, "clock_ticks_per_second", 100);
     string_field(L, "starttime_unit", "filetime");
     lua_pushboolean(L, truncated);
+    lua_setfield(L, -2, "truncated");
+    return 1;
+}
+
+/* Class 5 returns one coherent process table, including protected processes.
+ * Keep the Toolhelp collector as a fallback for systems that reject it or
+ * expose a different layout. This entry point is resolved at run time so the
+ * XP import set stays unchanged. */
+#define MAX_BULK_PROCESS_BYTES (32U * 1024U * 1024U)
+typedef LONG (WINAPI *system_query_function)(ULONG, PVOID, ULONG, PULONG);
+static unsigned char *bulk_process_buffer = NULL;
+static ULONG bulk_process_capacity = 0;
+static int bulk_process_layout_checked = 0;
+static int bulk_process_disabled = 0;
+
+static int bulk_process_layout(ULONG bytes, DWORD *count) {
+    ULONG offset = 0;
+    DWORD found = 0;
+    int verify_self = !bulk_process_layout_checked;
+    int self_found = 0;
+    FILETIME self_created, self_exited, self_kernel, self_user;
+    if (verify_self && !GetProcessTimes(GetCurrentProcess(), &self_created,
+            &self_exited, &self_kernel, &self_user)) return 0;
+    for (;;) {
+        SYSTEM_PROCESS_INFORMATION *entry;
+        ULONG next;
+        uintptr_t name, start = (uintptr_t)bulk_process_buffer;
+        if (offset > bytes || bytes - offset < sizeof(*entry)) return 0;
+        entry = (SYSTEM_PROCESS_INFORMATION *)(void *)(bulk_process_buffer + offset);
+        next = entry->NextEntryOffset;
+        name = (uintptr_t)entry->ImageName.Buffer;
+        if (entry->ImageName.Length > 0
+            && ((entry->ImageName.Length % sizeof(WCHAR)) != 0
+                || name < start || name - start > bytes
+                || entry->ImageName.Length > bytes - (name - start))) return 0;
+        if (verify_self
+            && (DWORD)(uintptr_t)entry->UniqueProcessId == GetCurrentProcessId()) {
+            if ((uint64_t)entry->CreateTime.QuadPart != filetime_value(self_created))
+                return 0;
+            self_found = 1;
+        }
+        if ((DWORD)(uintptr_t)entry->UniqueProcessId != 0) ++found;
+        if (next == 0) break;
+        if (next < sizeof(*entry) || next > bytes - offset) return 0;
+        offset += next;
+    }
+    if ((verify_self && !self_found) || found == 0) return 0;
+    *count = found;
+    return 1;
+}
+
+static int query_bulk_processes(DWORD *count) {
+    static system_query_function query = NULL;
+    static int resolved = 0;
+    if (bulk_process_disabled) return 0;
+    if (!resolved) {
+        HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+        query = ntdll ? (system_query_function)(void *)GetProcAddress(ntdll,
+            "NtQuerySystemInformation") : NULL;
+        resolved = 1;
+    }
+    if (!query) return 0;
+    if (!bulk_process_buffer) {
+        bulk_process_capacity = 256U * 1024U;
+        bulk_process_buffer = malloc(bulk_process_capacity);
+        if (!bulk_process_buffer) return 0;
+    }
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        ULONG returned = 0;
+        LONG status = query(5, bulk_process_buffer, bulk_process_capacity, &returned);
+        if (status >= 0) {
+            if (returned < sizeof(SYSTEM_PROCESS_INFORMATION)
+                || returned > bulk_process_capacity
+                || !bulk_process_layout(returned, count)) {
+                bulk_process_disabled = 1;
+                return 0;
+            }
+            bulk_process_layout_checked = 1;
+            return 1;
+        }
+        if ((uint32_t)status != 0xC0000004U) return 0;
+        if (bulk_process_capacity >= MAX_BULK_PROCESS_BYTES) return 0;
+        if (returned > MAX_BULK_PROCESS_BYTES) return 0;
+        ULONG wanted = returned > bulk_process_capacity
+            ? returned + 65536U : bulk_process_capacity * 2U;
+        if (wanted > MAX_BULK_PROCESS_BYTES) wanted = MAX_BULK_PROCESS_BYTES;
+        unsigned char *grown = realloc(bulk_process_buffer, wanted);
+        if (!grown) return 0;
+        bulk_process_buffer = grown;
+        bulk_process_capacity = wanted;
+    }
+    return 0;
+}
+
+static int l_collect_process(lua_State *L) {
+    DWORD count = 0, denied = 0, races = 0, emitted = 0;
+    ULONG offset = 0;
+    DWORD sampled_at = GetTickCount();
+    if (!query_bulk_processes(&count)) return l_collect_process_legacy(L);
+    lua_createtable(L, 0, 9);
+    lua_createtable(L, (int)(count < MAX_PROCESSES ? count : MAX_PROCESSES), 0);
+    for (;;) {
+        SYSTEM_PROCESS_INFORMATION *entry = (SYSTEM_PROCESS_INFORMATION *)(void *)
+            (bulk_process_buffer + offset);
+        DWORD pid = (DWORD)(uintptr_t)entry->UniqueProcessId;
+        if (pid != 0 && emitted < MAX_PROCESSES) {
+            uint64_t started = (uint64_t)entry->CreateTime.QuadPart;
+            uint64_t working = (uint64_t)entry->VirtualMemoryCounters.WorkingSetSize;
+            uint64_t commit = (uint64_t)entry->VirtualMemoryCounters.PagefileUsage;
+            int has_times = started > 0, can_read_memory = 0;
+            int has_working = working != UINT32_MAX;
+            int has_commit = commit != UINT32_MAX;
+            int identity_matches = 0;
+            int has_path = 0, path_status = -1, path_denied = 0;
+            int owner_known = 0, owner_denied = 0, row_denied = 0;
+            int needs_handle;
+            HANDLE process = NULL;
+            WCHAR path[MAX_PATH];
+            const char *owner = NULL;
+            FILETIME created = { (DWORD)started, (DWORD)(started >> 32) };
+            char identity[64];
+            if (has_times) {
+                path_status = cached_process_path_lookup(pid, started, sampled_at,
+                    path, &path_denied);
+                has_path = path_status == 1;
+                owner_known = cached_process_user_lookup(pid, started, sampled_at,
+                    &owner, &owner_denied);
+            }
+            row_denied = path_denied || owner_denied;
+            needs_handle = !has_times || path_status < 0 || !owner_known
+                || !has_working || !has_commit;
+            if (needs_handle) process = open_query_process(pid, &can_read_memory);
+            if (process) {
+                FILETIME actual, exited, kernel, user;
+                identity_matches = has_times && GetProcessTimes(process, &actual,
+                    &exited, &kernel, &user)
+                    && filetime_value(actual) == started;
+                if (identity_matches) {
+                    if (path_status < 0) {
+                        has_path = cached_process_path(process, can_read_memory, pid,
+                            created, 1, sampled_at, path);
+                        (void)cached_process_path_lookup(pid, started, sampled_at,
+                            path, &path_denied);
+                    }
+                    if (!owner_known) {
+                        owner = cached_process_user(process, pid, created, 1,
+                            sampled_at);
+                    }
+                    if (!has_working || !has_commit) {
+                        wtop_memory_counters memory;
+                        if (wtop_process_memory(process, &memory)) {
+                            working = memory.working_set;
+                            commit = memory.commit;
+                            has_working = has_commit = 1;
+                        }
+                    }
+                } else ++races;
+                CloseHandle(process);
+            } else if (needs_handle) {
+                if (has_times) {
+                    if (path_status < 0)
+                        cache_process_path_denied(pid, started, sampled_at);
+                    if (!owner_known)
+                        cache_process_user_denied(pid, started, sampled_at);
+                }
+                row_denied = 1;
+            }
+            if (path_denied || owner_denied) row_denied = 1;
+            if (row_denied) ++denied;
+            lua_createtable(L, 0, 13);
+            integer_field(L, "pid", (lua_Integer)pid);
+            integer_field(L, "parent_pid",
+                (lua_Integer)(DWORD)(uintptr_t)entry->InheritedFromUniqueProcessId);
+            integer_field(L, "threads", (lua_Integer)entry->NumberOfThreads);
+            integer_field(L, "priority", (lua_Integer)entry->BasePriority);
+            if (entry->ImageName.Length > 0) {
+                WCHAR name[MAX_PATH];
+                size_t characters = entry->ImageName.Length / sizeof(WCHAR);
+                if (characters >= MAX_PATH) characters = MAX_PATH - 1;
+                memcpy(name, entry->ImageName.Buffer, characters * sizeof(WCHAR));
+                name[characters] = 0;
+                utf8_field(L, "name", name);
+            } else {
+                WCHAR fallback[48];
+                swprintf(fallback, 48, L"PID %lu", (unsigned long)pid);
+                utf8_field(L, "name", fallback);
+            }
+            if (has_path) utf8_field(L, "command", path);
+            if (owner) string_field(L, "user", owner);
+            if (has_times) {
+                snprintf(identity, sizeof(identity), "%lu:%llu",
+                    (unsigned long)pid, (unsigned long long)started);
+                string_field(L, "id", identity);
+                integer_field(L, "starttime_ticks", (lua_Integer)started);
+                integer_field(L, "cpu_ticks", (lua_Integer)(
+                    ((uint64_t)entry->KernelTime.QuadPart
+                        + (uint64_t)entry->UserTime.QuadPart) / 100000ULL));
+            } else {
+                snprintf(identity, sizeof(identity), "pid:%lu", (unsigned long)pid);
+                string_field(L, "id", identity);
+            }
+            if (has_working) integer_field(L, "resident_bytes", (lua_Integer)working);
+            if (has_commit) integer_field(L, "virtual_bytes", (lua_Integer)commit);
+            if (!has_times || !has_working || !has_commit || row_denied
+                || (needs_handle && process && !identity_matches)) {
+                lua_pushboolean(L, 1);
+                lua_setfield(L, -2, "partial");
+                string_field(L, "partial_reason", row_denied ? "query_denied"
+                    : !has_times ? "times_unavailable"
+                    : !has_working || !has_commit ? "memory_unavailable"
+                    : "process_identity_changed");
+            }
+            lua_rawseti(L, -2, (lua_Integer)++emitted);
+        }
+        if (entry->NextEntryOffset == 0) break;
+        offset += entry->NextEntryOffset;
+    }
+    lua_setfield(L, -2, "list");
+    integer_field(L, "process_candidates", (lua_Integer)count);
+    integer_field(L, "process_limit", MAX_PROCESSES);
+    integer_field(L, "denied", (lua_Integer)denied);
+    integer_field(L, "races", (lua_Integer)races);
+    integer_field(L, "clock_ticks_per_second", 100);
+    string_field(L, "starttime_unit", "filetime");
+    lua_pushboolean(L, count > MAX_PROCESSES);
     lua_setfield(L, -2, "truncated");
     return 1;
 }
