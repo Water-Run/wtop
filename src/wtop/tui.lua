@@ -98,7 +98,7 @@ local function aligned_pairs(pairs_list, gap)
     return lines
 end
 
-local function format_value(value, i18n)
+local function format_value(value, i18n, unit)
     if type(value) == "table" then
         local count = 0
         for _ in pairs(value) do count = count + 1 end
@@ -108,7 +108,127 @@ local function format_value(value, i18n)
     elseif type(value) == "boolean" then
         return value and translated(i18n, "ui.yes", "yes") or translated(i18n, "ui.no", "no")
     end
+    if type(value) == "number" and i18n and i18n.format then
+        local format = i18n.format
+        local ok, formatted = pcall(function()
+            if unit == "bytes" then return format:bytes(value) end
+            if unit == "bytes_per_second" then
+                local amount = format:bytes(value, { system = "si" })
+                return amount and amount .. "/s"
+            end
+            if unit == "percent" then return format:percent(value, { precision = 1 }) end
+            if unit == "celsius" then return format:temperature(value) end
+            if unit == "nanoseconds" then return format:duration(value / 1000000000) end
+        end)
+        if ok and type(formatted) == "string" then return formatted end
+    end
+    if type(value) == "number" and unit == "rpm" then return tostring(value) .. " rpm" end
+    if type(value) == "number" and unit == "hours" then return tostring(value) .. " h" end
     return tostring(value)
+end
+
+local INSPECTOR_LIST_LIMIT = 128
+local INSPECTOR_ROW_WIDTH = 160
+local INSPECTOR_FIELD_WIDTH = 80
+local INSPECTOR_ROW_FIELDS = {
+    items = { "id", "name", "normalized", "worst", "threshold", "raw", "when_failed" },
+    processes = { "pid", "parent_pid", "state", "cpu_percent", "resident_bytes", "command" },
+    listeners = { "address", "port", "family", "pid", "state" },
+    active_sessions = { "user", "tty", "remote", "login_time", "idle_seconds", "pid" },
+}
+local INSPECTOR_EXPAND_FIELDS = {
+    ata_attributes = { items = true },
+    processes = { processes = true },
+    listeners = { listeners = true },
+    sessions = { active_sessions = true },
+    configuration = { effective = true },
+}
+local INSPECTOR_METADATA = {
+    source = true, timestamp_ns = true, quality = true, provider = true,
+    provider_version = true,
+}
+
+local function inspector_text(value, columns)
+    if value == nil then value = "—" end
+    local text = tostring(value):gsub("[%c]", " ")
+    if UI.Renderer.Width.display_width(text) > columns then
+        return UI.Renderer.Width.truncate(text, columns - 3, nil, "") .. "..."
+    end
+    return text
+end
+
+local function inspector_item_value(value, i18n, key)
+    if type(value) == "table" then
+        if type(value.string) == "string" then return value.string end
+        if value.value ~= nil and type(value.value) ~= "table" then
+            return format_value(value.value, i18n)
+        end
+        if #value > 0 then
+            local parts = {}
+            for index = 1, math.min(#value, 4) do
+                local item = value[index]
+                if type(item) == "table" then break end
+                parts[#parts + 1] = format_value(item, i18n)
+            end
+            if #parts > 0 then
+                if #value > #parts then parts[#parts + 1] = "..." end
+                return table.concat(parts, ", ")
+            end
+        end
+        return format_value(value, i18n)
+    end
+    local unit = key == "resident_bytes" and "bytes"
+        or key == "cpu_percent" and "percent" or nil
+    return format_value(value, i18n, unit)
+end
+
+local function inspector_item_line(item, field_key, i18n)
+    if type(item) ~= "table" then
+        return inspector_text(format_value(item, i18n), INSPECTOR_ROW_WIDTH)
+    end
+    local keys = INSPECTOR_ROW_FIELDS[field_key]
+    if not keys then
+        keys = {}
+        for key in pairs(item) do
+            if not INSPECTOR_METADATA[key] then keys[#keys + 1] = key end
+        end
+        table.sort(keys, function(left, right) return tostring(left) < tostring(right) end)
+    end
+    local parts = {}
+    for _, key in ipairs(keys) do
+        local value = item[key]
+        if value ~= nil then
+            parts[#parts + 1] = tostring(key) .. "=" .. inspector_text(
+                inspector_item_value(value, i18n, key), INSPECTOR_FIELD_WIDTH)
+            if #parts >= 8 then break end
+        end
+    end
+    return inspector_text(table.concat(parts, "  "), INSPECTOR_ROW_WIDTH)
+end
+
+local function inspector_collection_lines(value, field_key, i18n)
+    local lines = {}
+    local count = #value
+    if count > 0 then
+        for index = 1, math.min(count, INSPECTOR_LIST_LIMIT) do
+            lines[#lines + 1] = "    " .. index .. ". "
+                .. inspector_item_line(value[index], field_key, i18n)
+        end
+    else
+        local keys = {}
+        for key in pairs(value) do keys[#keys + 1] = key end
+        table.sort(keys, function(left, right) return tostring(left) < tostring(right) end)
+        count = #keys
+        for index = 1, math.min(count, INSPECTOR_LIST_LIMIT) do
+            local key = keys[index]
+            lines[#lines + 1] = "    " .. tostring(key) .. ": " .. inspector_text(
+                inspector_item_value(value[key], i18n, key), INSPECTOR_ROW_WIDTH)
+        end
+    end
+    if count > INSPECTOR_LIST_LIMIT then
+        lines[#lines + 1] = "    ... +" .. (count - INSPECTOR_LIST_LIMIT)
+    end
+    return lines
 end
 
 local function inspector_lines(title, result, i18n)
@@ -139,10 +259,21 @@ local function inspector_lines(title, result, i18n)
         local rows = {}
         for _, key in ipairs(keys) do
             local field = section.fields[key]
-            rows[#rows + 1] = { key, format_value(field and field.value, i18n)
+            rows[#rows + 1] = { key, format_value(field and field.value, i18n,
+                field and field.unit)
                 .. "  [" .. tostring(field and field.quality or "unknown") .. "]" }
         end
-        for _, line in ipairs(aligned_pairs(rows)) do lines[#lines + 1] = line end
+        local field_lines = aligned_pairs(rows)
+        for index, key in ipairs(keys) do
+            lines[#lines + 1] = field_lines[index]
+            local field = section.fields[key]
+            local expanded = INSPECTOR_EXPAND_FIELDS[section.id]
+            if field and type(field.value) == "table" and expanded and expanded[key] then
+                for _, line in ipairs(inspector_collection_lines(field.value, key, i18n)) do
+                    lines[#lines + 1] = line
+                end
+            end
+        end
     end
     lines[#lines + 1] = ""
     lines[#lines + 1] = translated(i18n, "inspector.close_hint", "Esc/Enter closes")
