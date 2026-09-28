@@ -144,6 +144,18 @@ function Grid:set(x, y, grapheme, style, cell_width)
     return false
   end
 
+  -- A one-cell glyph replacing another one-cell glyph cannot intersect a
+  -- neighbouring wide glyph. Skip clearing and marking the same cell twice.
+  if cell_width == 1 then
+    local index = self:_index(x, y)
+    local previous = self.cells[index]
+    if previous and not previous.continuation and previous.width == 1 then
+      self.cells[index] = {char = grapheme, width = 1, style = style}
+      self:_mark_dirty(x, y)
+      return true
+    end
+  end
+
   -- Remove both an old wide glyph under the target and wide glyphs intersected
   -- by the new span before writing the new leader/continuations.
   for current = x, x + cell_width - 1 do
@@ -181,8 +193,31 @@ function Grid:write(x, y, text, style, max_width)
       and (not self.width_options.width_fn or self.width_options.ascii_unit_width)
       and not text:sub(1, ascii_cells):find("[^ -~]")
       and (not next_byte or (next_byte >= 32 and next_byte <= 126)) then
-    for index = 1, ascii_cells do
-      self:set(x + index - 1, y, text:sub(index, index), style, 1)
+    if x >= 1 and y >= 1 and y <= self.height then
+      local cells = self.cells
+      local row_start = (y - 1) * self.width
+      local dirty_row = self.dirty[y]
+      if not dirty_row then
+        dirty_row = {}
+        self.dirty[y] = dirty_row
+      end
+      for index = 1, ascii_cells do
+        local column = x + index - 1
+        local cell_index = row_start + column
+        local previous = cells[cell_index]
+        local character = text:sub(index, index)
+        -- A wide-cell overlap still needs the full clearing path.
+        if previous and not previous.continuation and previous.width == 1 then
+          cells[cell_index] = {char = character, width = 1, style = style}
+          dirty_row[column] = true
+        else
+          self:set(column, y, character, style, 1)
+        end
+      end
+    else
+      for index = 1, ascii_cells do
+        self:set(x + index - 1, y, text:sub(index, index), style, 1)
+      end
     end
     return x + ascii_cells, ascii_cells
   end

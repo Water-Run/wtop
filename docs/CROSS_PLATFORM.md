@@ -108,12 +108,15 @@ collector's first call, the median of eight calls was 2.56 ms for processes,
 collector calls only; it does not include periodic rescans or TUI CPU usage.
 
 The classic-console harness now measures child CPU time over a chosen window.
-On this Server 2008 host, the current bundle used 1.71–1.87% of one core on
-Overview, 3.43–4.05% on Processes, and 1.71% on GPU across repeated 10-second
-windows after a two-second warm-up. The process exited normally. Before frame
-coalescing and the printable-ASCII layout path, separate runs on the same host
-used roughly 14%, 21%, and 7% on those pages. These short single-host runs do
-not establish a release performance baseline.
+On this Server 2008 host, the bundle with frame coalescing and printable-ASCII
+layout used 1.71–1.87% of one core on Overview, 3.43–4.05% on Processes,
+and 1.71% on GPU across repeated 10-second windows after a two-second warm-up.
+Before those changes, separate runs used roughly 14%, 21%, and 7% on the same
+pages. The later single-cell grid overwrite and direct ASCII write paths used
+2.80–2.96% on Processes and 1.56% on Overview; alternating process-page runs
+of the immediately preceding bundle used 3.58–3.89%. The process exited
+normally in each run. These short single-host runs do not establish a release
+performance baseline.
 
 A follow-up classic-console run on Server 2008 showed executable basenames in
 the Processes command column by default. Pressing `p` switched to image paths;
