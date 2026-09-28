@@ -95,7 +95,14 @@ process did not exceed a subsequent direct `GetProcessIoCounters` reading, and
 the direct query rejected a deliberately mismatched creation time. One newer
 host process had more than 144 billion read bytes, exercising the 64-bit
 counter path in the x86 build. These are cumulative process I/O transfers, not
-disk throughput. Microsoft's
+disk throughput.
+
+On 2026-09-28 the same day's build gained a device inventory on both Windows
+hosts: SetupAPI's PCI and USB enumerators list present devices with ids and
+driver-provided names (25 PCI + 5 USB on Server 2008; 20 PCI + 8 USB on
+10.0.26100), exported under `inventory` and shown on the System page. The PCI
+class column stays empty there because SetupAPI exposes no class code; serial
+numbers are not read on any platform. Microsoft's
 [`GetProcessIoCounters` reference](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getprocessiocounters)
 lists Windows XP as its minimum client version; this is API evidence, not an
 XP runtime result.

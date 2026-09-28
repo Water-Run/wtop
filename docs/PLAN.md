@@ -222,8 +222,9 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
 - Assess the scope of a HWiNFO-like TUI: hardware inventory, sensor coverage,
   device relationships, and vendor-specific detail across supported systems.
   (First slice delivered on 2026-09-28: PCI/USB device inventory with
-  `pci.ids` names on Linux, on the System page and in `--snapshot`/`--agent`
-  exports. Windows SetupAPI and macOS IOKit device sources remain.)
+  `pci.ids` names on Linux and SetupAPI enumerator names on Windows, on the
+  System page and in `--snapshot`/`--agent` exports. The macOS IOKit device
+  source remains.)
 - Metric recording and replay.
 - Optional perf/eBPF backends, hot call stacks, and flame graphs.
 - Cross-resource timeline correlation and alert rules.

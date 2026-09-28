@@ -1429,12 +1429,118 @@ int wtop_launcher_gone(void) {
         && WaitForSingleObject(watched_launcher, 0) == WAIT_OBJECT_0;
 }
 
+/* PCI and USB device inventory through SetupAPI enumerators, mirroring the
+ * Linux sysfs collector: bounded device lists with ids and the names the
+ * driver reports. The PCI class code has no SetupAPI equivalent, so that one
+ * column stays empty on Windows instead of carrying a made-up value. */
+#define MAX_INVENTORY_PCI 256
+#define MAX_INVENTORY_USB 128
+
+static void finish_inventory_bus(lua_State *L, int pushed, int total,
+    const char *key) {
+    /* Stack here: [result, devices-array]. Wrap the array with its counts. */
+    lua_createtable(L, 0, 3);
+    lua_pushvalue(L, -2);
+    lua_setfield(L, -2, "devices");
+    integer_field(L, "total", total);
+    lua_pushboolean(L, total > pushed);
+    lua_setfield(L, -2, "truncated");
+    lua_remove(L, -2);
+    lua_setfield(L, -2, key);
+}
+
+static int l_collect_inventory(lua_State *L) {
+    static const struct {
+        const WCHAR *enumerator;
+        const WCHAR *vendor_key;
+        const WCHAR *product_key;
+        int limit;
+    } buses[2] = {
+        { L"PCI", L"VEN_", L"DEV_", MAX_INVENTORY_PCI },
+        { L"USB", L"VID_", L"PID_", MAX_INVENTORY_USB },
+    };
+    lua_createtable(L, 0, 2);
+    for (int bus = 0; bus < 2; ++bus) {
+        HDEVINFO set = SetupDiGetClassDevsW(NULL, buses[bus].enumerator, NULL,
+            DIGCF_PRESENT | DIGCF_ALLCLASSES);
+        SP_DEVINFO_DATA device;
+        int pushed = 0, total = 0;
+        lua_createtable(L, 8, 0);
+        if (set != INVALID_HANDLE_VALUE) {
+            for (DWORD index = 0;; ++index) {
+                WCHAR ids[512], wide[160], instance[256];
+                char utf8[160];
+                DWORD type = 0, bus_number = 0, slot = 0;
+                unsigned vendor_id, product_id;
+                memset(&device, 0, sizeof(device));
+                device.cbSize = sizeof(device);
+                if (!SetupDiEnumDeviceInfo(set, index, &device)) break;
+                memset(ids, 0, sizeof(ids));
+                if (!SetupDiGetDeviceRegistryPropertyW(set, &device,
+                        SPDRP_HARDWAREID, &type, (BYTE *)ids,
+                        sizeof(ids) - 2 * sizeof(WCHAR), NULL)) continue;
+                vendor_id = hex_after(ids, buses[bus].vendor_key);
+                product_id = hex_after(ids, buses[bus].product_key);
+                if (!vendor_id || !product_id) continue;
+                ++total;
+                if (pushed >= buses[bus].limit) continue;
+
+                lua_createtable(L, 0, 8);
+                integer_field(L, "vendor_id", (lua_Integer)vendor_id);
+                integer_field(L, bus == 0 ? "device_id" : "product_id",
+                    (lua_Integer)product_id);
+                if (bus == 0
+                        && SetupDiGetDeviceRegistryPropertyW(set, &device,
+                            SPDRP_BUSNUMBER, &type, (BYTE *)&bus_number,
+                            sizeof(bus_number), NULL)
+                        && SetupDiGetDeviceRegistryPropertyW(set, &device,
+                            SPDRP_ADDRESS, &type, (BYTE *)&slot,
+                            sizeof(slot), NULL)) {
+                    char address[40];
+                    snprintf(address, sizeof(address), "%02lu:%02lu.%lu",
+                        (unsigned long)bus_number, (unsigned long)(slot >> 16),
+                        (unsigned long)(slot & 0xffff));
+                    string_field(L, "address", address);
+                } else if (SetupDiGetDeviceInstanceIdW(set, &device, instance,
+                        255, NULL)) {
+                    instance[255] = 0;
+                    WideCharToMultiByte(CP_UTF8, 0, instance, -1, utf8,
+                        sizeof(utf8), NULL, NULL);
+                    string_field(L, bus == 0 ? "address" : "id", utf8);
+                }
+                if (SetupDiGetDeviceRegistryPropertyW(set, &device, SPDRP_MFG,
+                        &type, (BYTE *)wide, sizeof(wide) - sizeof(WCHAR),
+                        NULL)) {
+                    wide[79] = 0;
+                    WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8,
+                        sizeof(utf8), NULL, NULL);
+                    string_field(L, bus == 0 ? "vendor_name" : "manufacturer",
+                        utf8);
+                }
+                if (SetupDiGetDeviceRegistryPropertyW(set, &device,
+                        SPDRP_DEVICEDESC, &type, (BYTE *)wide,
+                        sizeof(wide) - sizeof(WCHAR), NULL)) {
+                    wide[79] = 0;
+                    WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8,
+                        sizeof(utf8), NULL, NULL);
+                    string_field(L, bus == 0 ? "device_name" : "product", utf8);
+                }
+                lua_rawseti(L, -2, ++pushed);
+            }
+            SetupDiDestroyDeviceInfoList(set);
+        }
+        finish_inventory_bus(L, pushed, total, bus == 0 ? "pci" : "usb");
+    }
+    return 1;
+}
+
 static const luaL_Reg hardware_functions[] = {
     {"collect_gpu", l_collect_gpu},
     {"collect_cpufreq", l_collect_cpufreq},
     {"collect_power_supply", l_collect_power_supply},
     {"collect_hwmon", l_collect_hwmon},
     {"collect_cgroup", l_collect_cgroup},
+    {"collect_inventory", l_collect_inventory},
     {NULL, NULL},
 };
 

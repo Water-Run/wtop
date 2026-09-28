@@ -1103,7 +1103,9 @@ local function system_device_rows(snapshot)
         if device.product then name = name .. " " .. device.product end
         rows[#rows + 1] = {
             bus = "USB",
-            id = string.format("%d:%d", device.bus or 0, device.device or 0),
+            id = type(device.bus) == "number" and type(device.device) == "number"
+                and string.format("%d:%d", device.bus, device.device)
+                or tostring(device.id or "?"),
             device = name,
             class = device.product_id and string.format("%04x", device.product_id) or "—",
         }
