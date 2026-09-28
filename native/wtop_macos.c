@@ -804,48 +804,110 @@ static const char *process_state(uint32_t status) {
     }
 }
 
+static struct kinfo_proc *process_table(size_t *count) {
+    int mib[] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL };
+    size_t needed = 0;
+    if (sysctl(mib, 3, NULL, &needed, NULL, 0) != 0) return NULL;
+    if (needed > SIZE_MAX - 64 * sizeof(struct kinfo_proc)) {
+        errno = EOVERFLOW;
+        return NULL;
+    }
+    size_t capacity = needed + 64 * sizeof(struct kinfo_proc);
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        struct kinfo_proc *rows = malloc(capacity);
+        if (!rows) { errno = ENOMEM; return NULL; }
+        size_t bytes = capacity;
+        if (sysctl(mib, 3, rows, &bytes, NULL, 0) == 0) {
+            *count = bytes / sizeof(*rows);
+            return rows;
+        }
+        int error = errno;
+        free(rows);
+        if (error != ENOMEM) { errno = error; return NULL; }
+        if (capacity > SIZE_MAX / 2) { errno = EOVERFLOW; return NULL; }
+        capacity *= 2;
+    }
+    errno = ENOMEM;
+    return NULL;
+}
+
 static int l_collect_process(lua_State *L) {
-    pid_t pids[MAX_PROCESS_COUNT];
-    int bytes = proc_listpids(PROC_ALL_PIDS, 0, pids, sizeof(pids));
-    int count, output_index = 1;
-    if (bytes < 0) return push_errno(L, "proc_listpids");
-    count = bytes / (int)sizeof(pid_t);
+    size_t count = 0;
+    struct kinfo_proc *rows = process_table(&count);
+    size_t limit = count < MAX_PROCESS_COUNT ? count : MAX_PROCESS_COUNT;
+    int output_index = 1, denied = 0, races = 0, parse_errors = 0;
+    if (!rows) return push_errno(L, "sysctl(KERN_PROC_ALL)");
     lua_createtable(L, 0, 4);
-    lua_createtable(L, count, 0);
-    for (int index = 0; index < count; ++index) {
+    lua_createtable(L, (int)limit, 0);
+    for (size_t index = 0; index < limit; ++index) {
+        const struct kinfo_proc *entry = &rows[index];
         struct proc_bsdinfo bsd;
         struct proc_taskinfo task;
-        char name[PROC_PIDPATHINFO_MAXSIZE];
-        char path[PROC_PIDPATHINFO_MAXSIZE];
+        char name[PROC_PIDPATHINFO_MAXSIZE] = { 0 };
+        char path[PROC_PIDPATHINFO_MAXSIZE] = { 0 };
         char identity[80];
-        pid_t pid = pids[index];
-        int bsd_bytes, task_bytes;
+        pid_t pid = entry->kp_proc.p_pid;
+        int bsd_bytes, bsd_error, task_bytes, task_error;
+        int bsd_ok, task_ok, row_denied = 0;
         if (pid <= 0) continue;
+        errno = 0;
         bsd_bytes = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, sizeof(bsd));
+        bsd_error = errno;
+        errno = 0;
         task_bytes = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &task, sizeof(task));
-        if (bsd_bytes != sizeof(bsd)) continue;
-        memset(name, 0, sizeof(name));
-        if (proc_name(pid, name, sizeof(name)) <= 0) {
-            snprintf(name, sizeof(name), "PID %d", pid);
+        task_error = errno;
+        bsd_ok = bsd_bytes == sizeof(bsd);
+        task_ok = task_bytes == sizeof(task);
+        if (bsd_ok && (bsd.pbi_start_tvsec != (uint64_t)entry->kp_proc.p_starttime.tv_sec
+                || bsd.pbi_start_tvusec != (uint64_t)entry->kp_proc.p_starttime.tv_usec)) {
+            ++races;
+            continue;
         }
+        if (!bsd_ok && (bsd_error == ESRCH || bsd_error == ENOENT)) {
+            ++races;
+            continue;
+        }
+        if (!bsd_ok) {
+            if (bsd_error == EPERM || bsd_error == EACCES) row_denied = 1;
+            else ++parse_errors;
+        }
+        if (!task_ok) {
+            if (task_error == EPERM || task_error == EACCES) row_denied = 1;
+            else if (task_error == ESRCH || task_error == ENOENT) ++races;
+            else ++parse_errors;
+        }
+        if (row_denied) ++denied;
+        int path_bytes = proc_pidpath(pid, path, sizeof(path));
+        if (bsd_ok) proc_name(pid, name, sizeof(name));
+        path[sizeof(path) - 1] = '\0';
+        name[sizeof(name) - 1] = '\0';
+        if (!name[0] && path_bytes > 0) {
+            const char *base = strrchr(path, '/');
+            snprintf(name, sizeof(name), "%s", base ? base + 1 : path);
+        }
+        if (!name[0] && entry->kp_proc.p_comm[0])
+            snprintf(name, sizeof(name), "%s", entry->kp_proc.p_comm);
+        if (!name[0])
+            snprintf(name, sizeof(name), "PID %d", pid);
         snprintf(identity, sizeof(identity), "%d:%llu:%llu", pid,
-            (unsigned long long)bsd.pbi_start_tvsec,
-            (unsigned long long)bsd.pbi_start_tvusec);
+            (unsigned long long)entry->kp_proc.p_starttime.tv_sec,
+            (unsigned long long)entry->kp_proc.p_starttime.tv_usec);
         lua_createtable(L, 0, 10);
         integer_field(L, "pid", pid);
         string_field(L, "id", identity);
         string_field(L, "name", name);
-        integer_field(L, "starttime_ticks", (lua_Integer)bsd.pbi_start_tvsec
-            * 1000000LL + bsd.pbi_start_tvusec);
-        integer_field(L, "uid", bsd.pbi_uid);
-        string_field(L, "user", user_name(bsd.pbi_uid));
-        integer_field(L, "parent_pid", bsd.pbi_ppid);
-        integer_field(L, "nice", bsd.pbi_nice);
-        if (process_state(bsd.pbi_status))
-            string_field(L, "state", process_state(bsd.pbi_status));
-        if (proc_pidpath(pid, path, sizeof(path)) > 0)
+        integer_field(L, "starttime_ticks", (lua_Integer)entry->kp_proc.p_starttime.tv_sec
+            * 1000000LL + entry->kp_proc.p_starttime.tv_usec);
+        uid_t uid = bsd_ok ? bsd.pbi_uid : entry->kp_eproc.e_ucred.cr_uid;
+        integer_field(L, "uid", uid);
+        string_field(L, "user", user_name(uid));
+        integer_field(L, "parent_pid", bsd_ok ? bsd.pbi_ppid : entry->kp_eproc.e_ppid);
+        integer_field(L, "nice", bsd_ok ? bsd.pbi_nice : entry->kp_proc.p_nice);
+        const char *state = process_state(bsd_ok ? bsd.pbi_status : entry->kp_proc.p_stat);
+        if (state) string_field(L, "state", state);
+        if (path_bytes > 0)
             string_field(L, "command", path);
-        if (task_bytes == sizeof(task)) {
+        if (task_ok) {
             integer_field(L, "cpu_ticks", (lua_Integer)(wtop_mach_to_ns(
                 (uint64_t)task.pti_total_user + task.pti_total_system)
                     / 10000000ULL));
@@ -853,14 +915,28 @@ static int l_collect_process(lua_State *L) {
             integer_field(L, "virtual_bytes", (lua_Integer)task.pti_virtual_size);
             integer_field(L, "threads", task.pti_threadnum);
         }
+        if (!bsd_ok || !task_ok) {
+            lua_pushboolean(L, 1);
+            lua_setfield(L, -2, "partial");
+            string_field(L, "partial_reason", !bsd_ok
+                ? ((bsd_error == EPERM || bsd_error == EACCES)
+                    ? "process_info_denied" : "process_info_unavailable")
+                : ((task_error == EPERM || task_error == EACCES)
+                    ? "task_info_denied" : "task_info_unavailable"));
+        }
         lua_rawseti(L, -2, output_index++);
     }
+    free(rows);
     lua_setfield(L, -2, "list");
+    integer_field(L, "scanned", limit);
+    integer_field(L, "races", races);
+    integer_field(L, "denied", denied);
+    integer_field(L, "parse_errors", parse_errors);
     integer_field(L, "process_candidates", count);
     integer_field(L, "process_limit", MAX_PROCESS_COUNT);
     integer_field(L, "clock_ticks_per_second", 100);
     string_field(L, "starttime_unit", "unix_us");
-    lua_pushboolean(L, count == MAX_PROCESS_COUNT);
+    lua_pushboolean(L, count > MAX_PROCESS_COUNT);
     lua_setfield(L, -2, "truncated");
     return 1;
 }

@@ -132,7 +132,8 @@ local function process_data(data, previous, timestamp_ns, realtime_ns)
   data.by_id = by_id
   data.by_pid = by_pid
   data.process_candidates = data.process_candidates or #(data.list or {})
-  data.partial = data.truncated == true or (data.denied or 0) > 0 or any_partial
+  data.partial = data.truncated == true or (data.denied or 0) > 0
+    or (data.parse_errors or 0) > 0 or any_partial
   local quality = data.partial and "partial" or (any_fresh and "fresh" or "gap")
   return data, quality
 end

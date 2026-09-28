@@ -79,7 +79,7 @@ smoke evidence below; they have not been shipped as a cross-platform release.
 | Linux x86_64 | Fedora 44 development host | 50 Lua test files, the Lua 5.4 subset, and the PTY matrix; Snapshot with DRM/fdinfo GPU data; NVML reported unavailable without the NVIDIA driver |
 | Linux aarch64 | Ubuntu 24.04, DGX Spark (Cortex-X925/A725, NVIDIA GB10, driver 580), SSH | Native build and the 50 Lua test files; NVML joined onto the DRM node: utilization, clocks, temperature, power, UUID, driver version, per-process GPU memory |
 | Linux | Debian 13 x86_64 SSH PTY | Snapshot, Agent, diagnose, TUI quit (earlier run) |
-| macOS | macOS 26.5 arm64 (M4) SSH PTY | CPU with per-core user/system/nice, P/E cluster frequency from performance-state residency, memory, processes, IOKit disk I/O with estimated busy time, 64-bit interface counters, sockets with owners, GPU utilization, clock and memory, HID temperatures, SMC fan and system power, IOReport CPU/GPU/ANE/DRAM energy, coalition workloads, load average; Snapshot and TUI |
+| macOS | macOS 26.5 arm64 (M4) SSH PTY | CPU with per-core user/system/nice, P/E cluster frequency from performance-state residency, memory, processes including protected-process identity, IOKit disk I/O with estimated busy time, 64-bit interface counters, sockets with owners, GPU utilization, clock and memory, HID temperatures, SMC fan and system power, IOReport CPU/GPU/ANE/DRAM energy, coalition workloads, load average; Snapshot and TUI |
 | Windows XP, 32-bit x86 | No test environment available | PE32 i386 build; every import of the native DLL is present on XP (reviewed with objdump); runtime remains unverified |
 | Windows Server 2008 | 6.0.6003 x86_64 host running the x86 artifact | Native resources including per-core CPU utilization and time classes, CPU identity and caches, memory composition, physical-disk I/O, sockets with owning processes, the display adapter with driver version and memory through SetupAPI, power-plan and rated CPU frequency, service-host workloads, Snapshot, Agent, diagnose, configuration/layout I/O, and Cygwin/OpenSSH PTY TUI including hang-up exit |
 | Newer Windows | 10.0.26100 x86_64 host running the x86 artifact | The same resources as Server 2008 with 64-bit interface counters, effective CPU frequency including turbo, an ACPI thermal zone, 64-bit process memory read from a 32-bit build, Snapshot, Agent, diagnose, and native Win32 console TUI through PowerShell/OpenSSH ConPTY |
@@ -130,7 +130,19 @@ A follow-up classic-console run on Server 2008 showed executable basenames in
 the Processes command column by default. Pressing `p` switched to image paths;
 the 80-column view shortened them from the start to keep executable names
 visible. A later run from the final source tree exited normally.
-The corresponding macOS path display has not been rerun on a Mac for this change.
+On macOS 26.5, two 160-column SSH PTY runs confirmed basenames by default and
+executable paths shortened from the start after `p`; both sessions exited
+normally.
+
+On the same Mac, `proc_pidinfo` denied about 300 of roughly 760 processes to
+the unprivileged account. The earlier collector dropped those rows and
+reported the remaining rows as fresh. A `KERN_PROC_ALL` process-table fallback
+now retains their PID, start time, name, user, parent and executable path while
+marking CPU and memory unavailable. In a follow-up snapshot, 766 rows were
+exported from 768 candidates, with 306 permission-limited rows, one process
+race and partial process quality. Eight direct collector calls took 2.06–10.96
+ms; the last four took 2.06–2.37 ms. This is a single M4 host sample, not an
+older-device performance result.
 
 ## Development Builds
 
@@ -185,10 +197,11 @@ still unverified on XP itself.
   Mapped network drives remain in the list with capacity marked partial, since
   querying a disconnected server can block.
   The wide storage table shows mount quality.
-- macOS has no pressure source, no per-process GPU usage, and, without root,
-  sockets and workloads only for the caller's own processes. Disk busy time is
-  an estimate from summed request service time. Cluster-to-CPU numbering is
-  inferred from the performance-level counts.
+- macOS has no pressure source or per-process GPU usage. Without root,
+  protected processes appear with basic identity but without CPU or memory
+  metrics; sockets and workloads cover only the caller's own processes. Disk
+  busy time is an estimate from summed request service time. Cluster-to-CPU
+  numbering is inferred from the performance-level counts.
 - The macOS sensor, energy, frequency and workload sources use private
   interfaces. They were validated on M4 and macOS 26.5 only; other chips and
   releases may report them as unavailable.
