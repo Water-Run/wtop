@@ -9,6 +9,7 @@ import pathlib
 import pty
 import re
 import select
+import random
 import signal
 import stat
 import struct
@@ -212,6 +213,7 @@ def _run_session(
     frequency_click: bool = False,
     terminal_environment: dict[str, str | None] | None = None,
     cli_options: tuple[str, ...] = (),
+    script: list[tuple[object, object]] | None = None,
 ) -> bytes:
     pid, master = pty.fork()
     if pid == 0:
@@ -258,7 +260,9 @@ def _run_session(
     deadline = time.monotonic() + 8.0
     # None is a live TIOCSWINSZ/SIGWINCH transition from narrow-tall to
     # wide-short; byte entries are terminal input.
-    if exercise:
+    if script is not None:
+        actions = script
+    elif exercise:
         # Each entry is (input, required_markers).  Gating by what must already
         # be on screen keeps the script reorderable; the previous version
         # gated on a hard-coded action index, so inserting a binding silently
@@ -309,7 +313,9 @@ def _run_session(
     # scheduler to keep the writes apart.
     escape_delay = max(action_delay * 4, 0.6)
     budget = sum(
-        escape_delay if action == b"\x1b" else action_delay for action, _ in actions
+        (action[1] if isinstance(action, tuple) and action[0] == "sleep" else 0.0)
+        + (escape_delay if action == b"\x1b" else action_delay)
+        for action, _ in actions
     )
     deadline = max(deadline, time.monotonic() + 8.0 + budget * 2.0)
     action_index = 0
@@ -346,6 +352,10 @@ def _run_session(
                 )
             ):
                 action = actions[action_index][0]
+                extra_delay = 0.0
+                if isinstance(action, tuple) and action[0] == "sleep":
+                    # Hold the current view while frames render, then continue.
+                    extra_delay = max(0.0, action[1] - action_delay)
                 if action is None:
                     fcntl.ioctl(
                         master,
@@ -353,13 +363,24 @@ def _run_session(
                         struct.pack("HHHH", 24, 160, 0, 0),
                     )
                     os.kill(pid, signal.SIGWINCH)
+                elif isinstance(action, tuple) and action[0] == "resize":
+                    fcntl.ioctl(
+                        master,
+                        termios.TIOCSWINSZ,
+                        struct.pack("HHHH", action[1], action[2], 0, 0),
+                    )
+                    os.kill(pid, signal.SIGWINCH)
+                elif isinstance(action, tuple) and action[0] == "signal":
+                    os.kill(pid, action[1])
+                elif isinstance(action, tuple) and action[0] == "sleep":
+                    pass
                 else:
                     os.write(master, action)
                 action_index += 1
                 # Separate edit, move, finish and quit across poll/render turns.
                 next_action_at = now + (
                     escape_delay if action == b"\x1b" else action_delay
-                )
+                ) + extra_delay
             waited, wait_status = os.waitpid(pid, os.WNOHANG)
             if waited == pid:
                 status = wait_status
@@ -464,6 +485,7 @@ def run_session(
     frequency_click: bool = False,
     terminal_environment: dict[str, str | None] | None = None,
     cli_options: tuple[str, ...] = (),
+    script: list[tuple[object, object]] | None = None,
 ) -> bytes:
     # Every PTY case receives a unique XDG root. This protects the developer's
     # real layout even when a smoke test crashes midway and also prevents cases
@@ -480,6 +502,7 @@ def run_session(
             frequency_click,
             terminal_environment,
             cli_options,
+            script,
         )
 
 
@@ -510,6 +533,36 @@ def run_ascii_profile() -> bytes:
     return output
 
 
+def run_resize_storm() -> bytes:
+    """A continuous resize storm must not crash the loop or corrupt the final
+    frame; the settled size renders a complete screen again."""
+    walker = random.Random(20260928)
+    script: list[tuple[object, object]] = []
+    for _ in range(48):
+        columns = walker.choice((24, 40, 60, 80, 100, 132, 160, 200))
+        rows = walker.choice((8, 10, 16, 24, 30, 40, 50))
+        script.append((("resize", rows, columns), None))
+    # Settle long enough for several complete frames at the final size, then
+    # quit normally so the restore path still runs after the storm.
+    script.append((("resize", 24, 80), None))
+    script.append((("sleep", 1.5), None))
+    script.append((b"q", None))
+    # The session starts and settles at the same size so the built-in final
+    # screen assertion applies to the post-storm frame.
+    return run_session(80, 24, exercise=False, script=script)
+
+
+def run_signal_shutdown() -> None:
+    """SIGTERM, SIGHUP, and SIGINT must exit like `q`: status 0, alternate
+    screen restored, never killed by the signal itself."""
+    for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        script: list[tuple[object, object]] = [
+            (("sleep", 1.2), None),
+            (("signal", number), None),
+        ]
+        run_session(100, 30, exercise=False, script=script)
+
+
 def main() -> None:
     profile = os.environ.get("WTOP_PTY_PROFILE", "full")
     if profile not in ("full", "quick"):
@@ -523,6 +576,8 @@ def main() -> None:
         print("PTY 180x45 GPU page: ok")
         run_ascii_profile()
         print("PTY 100x30 ASCII/no-colour profile: ok")
+        run_signal_shutdown()
+        print("PTY signal shutdown: ok")
         assert any("进程".encode() in capture or "概览".encode() in capture for capture in captures), (
             "zh-CN catalog was not visible in the quick PTY profile"
         )
@@ -543,6 +598,10 @@ def main() -> None:
         print(f"PTY {columns}x{rows}: ok")
     captures.append(run_session(200, 45, exercise=False, page_switch=True))
     print("PTY 200x45 page-switch final screen: ok")
+    run_resize_storm()
+    print("PTY 80x24 after 49-step resize storm: ok")
+    run_signal_shutdown()
+    print("PTY SIGTERM/SIGHUP/SIGINT shutdown: ok")
     for page in range(2, 11):
         captures.append(run_session(180, 45, exercise=False, final_page=page))
         print(f"PTY 180x45 page {page} final screen: ok")

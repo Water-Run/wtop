@@ -184,7 +184,7 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
 
 - Localize remaining technical provider reasons and add pseudolocale and locale-layout tests. (Done: interface reason codes are translated across all ten catalogs; a reason-coverage test and a pseudolocale layout test guard them.)
 - Add onefile PTY, clean-environment, and locale `--check` to standard CI.
-- Add crash/signal/continuous-resize, tmux, and SSH scenarios.
+- Add crash/signal/continuous-resize, tmux, and SSH scenarios. (Continuous resize storms and SIGTERM/SIGHUP/SIGINT clean-shutdown scenarios now run in the PTY matrix; tmux and dedicated SSH hosts remain to be covered.)
 - Establish repeatable performance benchmarks and calibrate CPU, RSS, first-frame, and input-latency budgets.
 - Extend the Server 2008 whole-TUI CPU measurement to periodic refreshes and
   other Windows hosts, then reduce the Processes page's remaining overhead.
