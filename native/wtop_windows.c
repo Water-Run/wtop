@@ -1544,8 +1544,8 @@ static HANDLE open_query_process(DWORD pid, int *can_read_memory) {
     return process;
 }
 
-/* A selected row only: the regular process scan must not open another handle
- * for every process just to populate a detail overlay. XP requires the full
+/* A selected row only: the bulk scan must not open a handle for every process
+ * just to populate a detail overlay. XP requires the full
  * PROCESS_QUERY_INFORMATION right for GetProcessIoCounters. */
 static int l_collect_process_io(lua_State *L) {
     lua_Integer pid_value = luaL_checkinteger(L, 1);
@@ -1686,8 +1686,10 @@ static int l_collect_process_legacy(lua_State *L) {
             HANDLE process;
             FILETIME created, exited, kernel, user;
             wtop_memory_counters memory;
+            IO_COUNTERS io;
             WCHAR path[MAX_PATH];
-            int has_times = 0, has_memory = 0, has_path = 0, can_read_memory = 0;
+            int has_times = 0, has_memory = 0, has_io = 0;
+            int has_path = 0, can_read_memory = 0;
             const char *owner = NULL;
             char fallback_id[48];
             /* PID 0 is the idle accounting pseudo-process, not a program. */
@@ -1701,6 +1703,7 @@ static int l_collect_process_legacy(lua_State *L) {
             if (process) {
                 has_times = GetProcessTimes(process, &created, &exited, &kernel, &user);
                 has_memory = wtop_process_memory(process, &memory);
+                has_io = GetProcessIoCounters(process, &io);
                 has_path = cached_process_path(process, can_read_memory, pid,
                     created, has_times, sampled_at, path);
                 owner = cached_process_user(process, pid, created, has_times,
@@ -1709,7 +1712,7 @@ static int l_collect_process_legacy(lua_State *L) {
             } else {
                 ++denied;
             }
-            lua_createtable(L, 0, 13);
+            lua_createtable(L, 0, 15);
             integer_field(L, "pid", (lua_Integer)pid);
             integer_field(L, "parent_pid", (lua_Integer)entry.th32ParentProcessID);
             integer_field(L, "threads", (lua_Integer)entry.cntThreads);
@@ -1734,14 +1737,21 @@ static int l_collect_process_legacy(lua_State *L) {
                 snprintf(fallback_id, sizeof(fallback_id), "pid:%lu",
                     (unsigned long)pid);
                 string_field(L, "id", fallback_id);
-                lua_pushboolean(L, 1);
-                lua_setfield(L, -2, "partial");
-                string_field(L, "partial_reason", process ? "times_unavailable"
-                    : "query_denied");
             }
             if (has_memory) {
                 integer_field(L, "resident_bytes", (lua_Integer)memory.working_set);
                 integer_field(L, "virtual_bytes", (lua_Integer)memory.commit);
+            }
+            if (has_io) {
+                uint64_field(L, "io_read_bytes", io.ReadTransferCount);
+                uint64_field(L, "io_write_bytes", io.WriteTransferCount);
+            }
+            if (!has_times || !has_memory || !has_io) {
+                lua_pushboolean(L, 1);
+                lua_setfield(L, -2, "partial");
+                string_field(L, "partial_reason", !process ? "query_denied"
+                    : !has_times ? "times_unavailable"
+                    : !has_memory ? "memory_unavailable" : "process_io_unavailable");
             }
             lua_rawseti(L, -2, output_index++);
         } while (Process32NextW(snapshot, &entry));
