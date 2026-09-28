@@ -100,6 +100,17 @@ disk throughput. Microsoft's
 lists Windows XP as its minimum client version; this is API evidence, not an
 XP runtime result.
 
+Also on 2026-09-28, a verification build with the bulk collector disabled ran
+the same checks on Server 2008 through the Toolhelp fallback. All 76 process
+rows carried cumulative read and write bytes with no partial rows; the current
+process's row counters did not exceed a subsequent direct
+`GetProcessIoCounters` reading, and a deliberately mismatched creation time
+was rejected. `--snapshot` exported `io_read_bytes`/`io_write_bytes` for all
+50 top processes, and an 80×25 code-page-936 classic-console run opened a
+process detail whose I/O section showed nonzero counters before a clean exit.
+This verifies the fallback collector on that host; it is not an XP runtime
+result.
+
 The Server 2008 SSH session runs through a Cygwin pipe. To exercise the
 legacy console itself, `tools/console_harness.c` allocates a real console on
 that host, starts wtop on it, then reads the screen buffer and injects key
