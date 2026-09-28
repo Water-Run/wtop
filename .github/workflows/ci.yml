@@ -114,6 +114,21 @@ jobs:
             make test-pty || { echo "::error::PTY failed on attempt $attempt"; exit 1; }
           done
 
+  # The aarch64 release target: same suite, native build and PTY matrix, on
+  # arm64 hardware. Public repositories get GitHub's arm64 runners.
+  arm64:
+    name: unit + PTY / aarch64
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - run: make check
+      - run: make test-55
+      - run: make test-pty
+      - name: aarch64 baseline evidence
+        run: |
+          make native
+          ./tools/record_baseline.sh > dist/BASELINE-arm64.txt
+
   # Release-artifact evidence: the onefile bundle must pass the same PTY
   # matrix from its packaged executable, locale sources must match the
   # generated modules, and SBOM/checksums/baseline must build cleanly.
