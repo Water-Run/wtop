@@ -1,6 +1,7 @@
 local Engine = require("wtop.engine")
 local Technical = require("wtop.i18n.technical")
 local ProcessTable = require("wtop.model.process_table")
+local Privacy = require("wtop.privacy")
 
 local M = {}
 local EMPTY_PROCESS_SOURCE = {}
@@ -381,7 +382,7 @@ local function network_rows(snapshot, format)
     return rows
 end
 
-local function connection_rows(snapshot)
+local function connection_rows(snapshot, mask_remote)
     local rank = { ESTABLISHED = 1, LISTEN = 2, SYN_SENT = 3, SYN_RECV = 4 }
     local function better(left, right)
         local left_rank, right_rank = rank[left.state] or 10, rank[right.state] or 10
@@ -415,7 +416,11 @@ local function connection_rows(snapshot)
             protocol = string.upper(connection.protocol or connection.table or "?"),
             local_endpoint = connection.local_endpoint and connection.local_endpoint.text
                 or connection.path or "—",
-            remote_endpoint = connection.remote_endpoint and connection.remote_endpoint.text or "—",
+            remote_endpoint = connection.remote_endpoint
+                and (mask_remote
+                    and Privacy.masked_endpoint_text(connection.remote_endpoint)
+                    or connection.remote_endpoint.text)
+                or "—",
             state = connection.state or "—",
             process = #owners > 0 and table.concat(owners, ", ") or "—",
             queue = tostring((connection.tx_queue or 0) + (connection.rx_queue or 0)),
@@ -1564,7 +1569,8 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         disks, disks_hidden = disk_rows(snapshot, format, { show_virtual = options.show_virtual_devices })
     end
     local interfaces = on("network", "network_table") and network_rows(snapshot, format) or {}
-    local connections = on("network", "connection_table") and connection_rows(snapshot) or {}
+    local connections = on("network", "connection_table")
+        and connection_rows(snapshot, options.mask_remote_addresses == true) or {}
     local addresses = on("network", "address_table") and address_rows(snapshot) or {}
     local gpu_table_rows = on("gpu", "gpu_table") and gpu_rows(snapshot, format) or {}
     local gpu_process_table_rows, gpu_process_total = {}, 0

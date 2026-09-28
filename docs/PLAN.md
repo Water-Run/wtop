@@ -106,7 +106,7 @@ Every collector returns status, quality, timestamp, duration, source, and reason
 - `en-US` and `zh-CN` are stable; the other eight are preview. All ten are complete: the fallback chain still exists for user-supplied catalogs, but no shipped catalog relies on it.
 - The CLI provides TUI, `--snapshot` JSON, `--agent` JSON, and `--diagnose`.
 - The TUI loads bounded XDG custom-locale files at startup. `--snapshot`/`--diagnose` do not create a translator or scan that directory.
-- JSON snapshots mask remote socket IPs by default and rebuild exported connection IDs from masked endpoints, preventing full remote addresses from leaking through internal IDs. Remote ports, local addresses, Unix socket paths, and interface MAC addresses remain unmasked. The Network-page TUI displays full endpoints and has no masking switch.
+- JSON snapshots mask remote socket IPs by default and rebuild exported connection IDs from masked endpoints, preventing full remote addresses from leaking through internal IDs. Remote ports, local addresses, Unix socket paths, and interface MAC addresses remain unmasked. The Network-page TUI displays full endpoints by default; `m` switches the connection table to the same masked form, and `mask_remote_addresses` selects the startup state.
 - Snapshot JSON exports `configuration.state` and optional `configuration.reason` without the internal `path`, allowing scripts to distinguish loaded/default/error/unavailable.
 - Snapshot, diagnose, and agent output include bounded privilege identity metadata so callers can distinguish ordinary, direct-sudo, and explicitly elevated execution.
 - The strict JSON decoder defaults to 4 MiB, depth 64, and 100000 value nodes with linear numeric scanning. The encoder replaces invalid UTF-8 in string values and object keys with U+FFFD.
@@ -193,7 +193,7 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
   has been checked. Resolve any starvation or capacity-freshness problems
   found there.
 - Add explicit migration tools, backup, and clearer error recovery for configuration/layout; current behavior only reads layout v1 compatibly and rewrites v2.
-- Add a privacy masking/export policy to the TUI connection table and define explicit JSON contracts for ports, local addresses, Unix socket paths, and MAC addresses.
+- Add a privacy masking/export policy to the TUI connection table and define explicit JSON contracts for ports, local addresses, Unix socket paths, and MAC addresses. (Done: `m` toggles table masking, `mask_remote_addresses` pins the startup state, and the field-by-field contract is documented in MONITORING.md with one shared masking implementation.)
 
 ### Phase B: Complete 0.1 Features
 

@@ -18,6 +18,10 @@ safe_mode: false
 color: true
 mouse: true
 
+# Start the TUI with remote connection addresses masked on the network page.
+# Press m there to switch at runtime. JSON snapshots always mask by default.
+mask_remote_addresses: false
+
 # overview, processes, compute, memory, storage, network, gpu, workloads,
 # system, insights
 active_tab: "overview"

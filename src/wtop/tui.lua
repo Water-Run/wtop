@@ -595,6 +595,13 @@ local HELP_SECTIONS = {
         },
     },
     {
+        id = "help.section_privacy", title = "Privacy",
+        bindings = {
+            { "m", "help.mask_remote",
+                "toggle remote-address masking on the network page" },
+        },
+    },
+    {
         id = "help.section_inspect", title = "Deep inspection",
         bindings = {
             { "h", "widgets.sensors", "Sensors" },
@@ -1055,6 +1062,7 @@ local function run_loop(options, backend, renderer, engine, translator)
     -- jump from the theme actually on screen to the second in the list.
     local theme_name = options.theme or UI.Theme.DEFAULT
     local show_virtual = false
+    local mask_remote = options.mask_remote_addresses == true
     local available_locales = I18n.available() or { translator:locale() }
 
     --- Rebuild the translator and every string the workspace baked in.
@@ -1284,6 +1292,7 @@ local function run_loop(options, backend, renderer, engine, translator)
                 platform = options.platform,
                 show_virtual_devices = show_virtual,
                 show_pseudo_filesystems = show_virtual,
+                mask_remote_addresses = mask_remote,
             })
         local process_count = #models.process_table.rows
         local process_selected = models.process_table.status.selected_index or 0
@@ -1362,10 +1371,19 @@ local function run_loop(options, backend, renderer, engine, translator)
                 { key = "?", id = "actions.help", fallback = "Help", command = "help" },
                 { key = "q", id = "actions.quit", fallback = "Quit", command = "quit" },
             }
-        elseif workspace.active == "storage" or workspace.active == "network" then
+        elseif workspace.active == "storage" then
             status.hints = {
                 { key = "1–0", id = "actions.tabs", fallback = "Tabs", command = "tabs" },
                 { key = "v", id = "actions.toggle_virtual", fallback = "Virtual", command = "virtual" },
+                { key = "s", id = "actions.inspect_smart", fallback = "SMART", command = "smart" },
+                { key = "?", id = "actions.help", fallback = "Help", command = "help" },
+                { key = "q", id = "actions.quit", fallback = "Quit", command = "quit" },
+            }
+        elseif workspace.active == "network" then
+            status.hints = {
+                { key = "1–0", id = "actions.tabs", fallback = "Tabs", command = "tabs" },
+                { key = "v", id = "actions.toggle_virtual", fallback = "Virtual", command = "virtual" },
+                { key = "m", id = "actions.toggle_masking", fallback = "Mask", command = "mask" },
                 { key = "s", id = "actions.inspect_smart", fallback = "SMART", command = "smart" },
                 { key = "?", id = "actions.help", fallback = "Help", command = "help" },
                 { key = "q", id = "actions.quit", fallback = "Quit", command = "quit" },
@@ -1834,6 +1852,13 @@ local function run_loop(options, backend, renderer, engine, translator)
                 or translated(translator, "status.virtual_hidden",
                     "Hiding virtual devices and pseudo filesystems")
             dirty = true
+        elseif key == "m" and workspace.active == "network" then
+            mask_remote = not mask_remote
+            status_message = translated(translator,
+                mask_remote and "status.mask_on" or "status.mask_off",
+                mask_remote and "Remote addresses are masked"
+                or "Remote addresses are shown in full")
+            dirty = true
         elseif key == "L" then
             -- `L` is itself a shifted key, so the shift flag is always set and
             -- cannot select a direction here; the cycle simply wraps.
@@ -1907,7 +1932,8 @@ local function run_loop(options, backend, renderer, engine, translator)
             help = "?", quit = "q", search = "/", sort = "o", reverse = "O",
             language = "L",
             tree = "t", paths = "p", details = "enter", signal = "k",
-            virtual = "v", smart = "s", bandwidth = "b", sshd = "d", sensors = "h",
+            virtual = "v", mask = "m", smart = "s", bandwidth = "b", sshd = "d",
+            sensors = "h",
         }
         local key = keys[command]
         if not key then return false end

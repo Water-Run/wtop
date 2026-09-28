@@ -14,6 +14,7 @@ local KNOWN = {
     color = true,
     mouse = true,
     active_tab = true,
+    mask_remote_addresses = true,
 }
 
 local VALID_TABS = {
@@ -46,6 +47,7 @@ function M.defaults()
         color = true,
         mouse = true,
         active_tab = "overview",
+        mask_remote_addresses = false,
     }
 end
 
@@ -92,7 +94,7 @@ local function validate(raw)
         end
         output.interval_ms = raw.interval_ms
     end
-    for _, key in ipairs({ "safe_mode", "color", "mouse" }) do
+    for _, key in ipairs({ "safe_mode", "color", "mouse", "mask_remote_addresses" }) do
         if raw[key] ~= nil then
             if type(raw[key]) ~= "boolean" then
                 return nil, key .. " must be true or false"

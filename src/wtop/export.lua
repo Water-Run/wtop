@@ -1,6 +1,7 @@
 local native = require("wtop.native")
 local version = require("wtop.version")
 local json = require("wtop.format.json")
+local Privacy = require("wtop.privacy")
 
 local M = {}
 
@@ -275,16 +276,7 @@ local function export_network(network)
 end
 
 local function mask_remote_address(address)
-    if type(address) ~= "string" then return address end
-    local prefix = address:match("^(%d+%.%d+%.%d+%.)%d+$")
-    if prefix then return prefix .. "x" end
-    if address:find(":", 1, true) then
-        local groups = {}
-        for group in address:gmatch("[^:]+") do groups[#groups + 1] = group end
-        if #groups > 2 then return table.concat({ groups[1], groups[2], "…" }, ":") end
-        return address == "::" and address or "…"
-    end
-    return address
+    return Privacy.mask_address(address)
 end
 
 local function export_connection_id(connection, include_remote_addresses)
