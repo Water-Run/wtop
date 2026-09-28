@@ -102,7 +102,16 @@ hosts: SetupAPI's PCI and USB enumerators list present devices with ids and
 driver-provided names (25 PCI + 5 USB on Server 2008; 20 PCI + 8 USB on
 10.0.26100), exported under `inventory` and shown on the System page. The PCI
 class column stays empty there because SetupAPI exposes no class code; serial
-numbers are not read on any platform. Microsoft's
+numbers are not read on any platform.
+
+The macOS 26.5 arm64 host joined the same day: IOKit's IOPCIDevice and
+IOUSBHostDevice enumerations reported 8 PCI entries (Apple Silicon exposes
+mostly internal bridges, with registry names such as `pcic3-bridge`) and
+2 USB hubs with `locationID` identities, exported under `inventory` in a
+`--snapshot` run. Apple Silicon PCI entries carry no OpenFirmware `reg`
+address, so the address column stays empty there instead of inventing
+`00:00.0`; vendor names use the small vendor map shared with the GPU source
+because macOS ships no `pci.ids`. Microsoft's
 [`GetProcessIoCounters` reference](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getprocessiocounters)
 lists Windows XP as its minimum client version; this is API evidence, not an
 XP runtime result.

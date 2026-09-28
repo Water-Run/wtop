@@ -1414,6 +1414,160 @@ static int l_collect_cgroup(lua_State *L) {
     return 1;
 }
 
+/* PCI and USB device inventory through IOKit, mirroring the sysfs and
+ * SetupAPI collectors. Registry ids are little-endian CFData or CFNumber;
+ * names come from the registry model strings. macOS ships no pci.ids, so
+ * vendor names use the same small vendor map as the GPU source. */
+#define MAX_MACOS_PCI 256
+#define MAX_MACOS_USB 128
+
+static uint32_t registry_data32(CFDictionaryRef properties, CFStringRef name) {
+    CFTypeRef value = CFDictionaryGetValue(properties, name);
+    if (!value || CFGetTypeID(value) != CFDataGetTypeID()) return 0;
+    CFIndex length = CFDataGetLength((CFDataRef)value);
+    const uint8_t *bytes = CFDataGetBytePtr((CFDataRef)value);
+    if (length >= 4) return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8)
+        | ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
+    if (length >= 2) return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8);
+    if (length >= 1) return bytes[0];
+    return 0;
+}
+
+static void macos_vendor_name(uint32_t vendor, char *output, size_t size) {
+    const char *name = "Unknown";
+    if (vendor == 0x106b) name = "Apple";
+    else if (vendor == 0x1002) name = "AMD";
+    else if (vendor == 0x8086) name = "Intel";
+    else if (vendor == 0x10de) name = "NVIDIA";
+    else if (vendor == 0x14e4) name = "Broadcom";
+    snprintf(output, size, "%s", name);
+}
+
+static void finish_macos_bus(lua_State *L, int pushed, int total,
+    const char *key) {
+    /* Stack here: [result, devices-array]. */
+    lua_createtable(L, 0, 3);
+    lua_pushvalue(L, -2);
+    lua_setfield(L, -2, "devices");
+    integer_field(L, "total", total);
+    lua_pushboolean(L, total > pushed);
+    lua_setfield(L, -2, "truncated");
+    lua_remove(L, -2);
+    lua_setfield(L, -2, key);
+}
+
+static int l_collect_inventory(lua_State *L) {
+    lua_createtable(L, 0, 2);
+
+    io_iterator_t iterator = MACH_PORT_NULL;
+    kern_return_t status = IOServiceGetMatchingServices(MACH_PORT_NULL,
+        IOServiceMatching("IOPCIDevice"), &iterator);
+    int pushed = 0, total = 0;
+    lua_createtable(L, 8, 0);
+    if (status == KERN_SUCCESS) {
+        io_service_t entry;
+        while ((entry = IOIteratorNext(iterator)) != 0) {
+            CFMutableDictionaryRef properties = NULL;
+            char text[160];
+            uint32_t vendor, device, class_code, revision, reg;
+            if (IORegistryEntryCreateCFProperties(entry, &properties,
+                    kCFAllocatorDefault, 0) != KERN_SUCCESS || !properties) {
+                IOObjectRelease(entry);
+                continue;
+            }
+            vendor = registry_data32(properties, CFSTR("vendor-id"));
+            device = registry_data32(properties, CFSTR("device-id"));
+            if (vendor == 0 || device == 0) {
+                CFRelease(properties);
+                IOObjectRelease(entry);
+                continue;
+            }
+            ++total;
+            if (pushed < MAX_MACOS_PCI) {
+                {
+                    class_code = registry_data32(properties, CFSTR("class-code"));
+                    revision = registry_data32(properties, CFSTR("revision-id"));
+                    reg = registry_data32(properties, CFSTR("reg"));
+                    lua_createtable(L, 0, 7);
+                    integer_field(L, "vendor_id", (lua_Integer)vendor);
+                    integer_field(L, "device_id", (lua_Integer)device);
+                    if (class_code) integer_field(L, "class_id", (lua_Integer)class_code);
+                    if (revision) integer_field(L, "revision", (lua_Integer)revision);
+                    /* OpenFirmware PCI reg word 0 packs the config address
+                     * (bus<<16 | device<<11 | function<<8). Apple Silicon
+                     * entries often carry no usable reg; omitting the address
+                     * beats inventing 00:00.0 for every row. */
+                    if (reg != 0) {
+                        snprintf(text, sizeof(text), "%02u:%02u.%u",
+                            (reg >> 16) & 0xff, (reg >> 11) & 0x1f,
+                            (reg >> 8) & 0x7);
+                        string_field(L, "address", text);
+                    }
+                    macos_vendor_name(vendor, text, sizeof(text));
+                    string_field(L, "vendor_name", text);
+                    if (cf_text(CFDictionaryGetValue(properties, CFSTR("model")),
+                        text, sizeof(text))
+                        || (IORegistryEntryGetName(entry, text) == KERN_SUCCESS
+                            && text[0] != 0))
+                        string_field(L, "device_name", text);
+                    lua_rawseti(L, -2, ++pushed);
+                }
+            }
+            CFRelease(properties);
+            IOObjectRelease(entry);
+        }
+        IOObjectRelease(iterator);
+    }
+    finish_macos_bus(L, pushed, total, "pci");
+
+    iterator = MACH_PORT_NULL;
+    status = IOServiceGetMatchingServices(MACH_PORT_NULL,
+        IOServiceMatching("IOUSBHostDevice"), &iterator);
+    pushed = total = 0;
+    lua_createtable(L, 4, 0);
+    if (status == KERN_SUCCESS) {
+        io_service_t entry;
+        while ((entry = IOIteratorNext(iterator)) != 0) {
+            CFMutableDictionaryRef properties = NULL;
+            char text[160];
+            int64_t vendor = 0, product = 0, location = 0;
+            ++total;
+            if (pushed < MAX_MACOS_USB
+                && IORegistryEntryCreateCFProperties(entry, &properties,
+                    kCFAllocatorDefault, 0) == KERN_SUCCESS && properties
+                && cf_int64(CFDictionaryGetValue(properties, CFSTR("idVendor")),
+                    &vendor) && vendor > 0 && vendor <= 0xffff
+                && cf_int64(CFDictionaryGetValue(properties, CFSTR("idProduct")),
+                    &product) && product >= 0 && product <= 0xffff) {
+                lua_createtable(L, 0, 6);
+                integer_field(L, "vendor_id", (lua_Integer)vendor);
+                integer_field(L, "product_id", (lua_Integer)product);
+                if (cf_int64(CFDictionaryGetValue(properties,
+                        CFSTR("locationID")), &location) && location != 0) {
+                    snprintf(text, sizeof(text), "%08llx", (long long)location);
+                    string_field(L, "id", text);
+                }
+                if (cf_text(CFDictionaryGetValue(properties,
+                        CFSTR("kUSBVendorString")), text, sizeof(text))
+                    || cf_text(CFDictionaryGetValue(properties,
+                        CFSTR("USB Vendor String")), text, sizeof(text)))
+                    string_field(L, "manufacturer", text);
+                if (cf_text(CFDictionaryGetValue(properties,
+                        CFSTR("kUSBProductString")), text, sizeof(text))
+                    || cf_text(CFDictionaryGetValue(properties,
+                        CFSTR("USB Product String")), text, sizeof(text)))
+                    string_field(L, "product", text);
+                lua_rawseti(L, -2, ++pushed);
+            }
+            if (properties) CFRelease(properties);
+            IOObjectRelease(entry);
+        }
+        IOObjectRelease(iterator);
+    }
+    finish_macos_bus(L, pushed, total, "usb");
+    return 1;
+}
+
 static const luaL_Reg hardware_functions[] = {
     {"collect_gpu", l_collect_gpu},
     {"collect_hwmon", l_collect_hwmon},
@@ -1422,6 +1576,7 @@ static const luaL_Reg hardware_functions[] = {
     {"collect_power_supply", l_collect_power_supply},
     {"collect_connections", l_collect_connections},
     {"collect_cgroup", l_collect_cgroup},
+    {"collect_inventory", l_collect_inventory},
     {NULL, NULL},
 };
 
