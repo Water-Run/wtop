@@ -45,6 +45,7 @@ function M.collect(options)
         application = {
             name = version.name,
             version = version.version,
+            revision = version.revision,
             lua = _VERSION,
         },
         platform = uname or { sysname = "unknown" },

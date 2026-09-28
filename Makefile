@@ -59,7 +59,7 @@ CFLAGS_NATIVE += -std=c17 -fPIC -Wall -Wextra -Werror
 
 .PHONY: all resource-check resource-check-full toolchain luainstaller native locales check test test-all test-fast \
 	test-54 test-55 test-pty test-pty-quick benchmark test-fuzz run \
-	diagnose snapshot bundle-dir bundle-file test-bundle-dir test-bundle-file checksums \
+	diagnose snapshot bundle-dir bundle-file test-bundle-dir test-bundle-file checksums build-id sbom \
 	rock-build rock-install rockspec-check luarocks-bootstrap luarocks-install test-luarocks
 
 all: native locales
@@ -177,7 +177,13 @@ test-luarocks: luarocks-install
 	@"$(WTOP_ROCK_TREE)/bin/wtop" --snapshot | python3 tests/json_contract_smoke.py snapshot
 	@"$(WTOP_ROCK_TREE)/bin/wtop" --agent | python3 tests/json_contract_smoke.py agent
 
-bundle-dir: native locales $(LUAI_STAMP)
+build-id:
+	@./tools/write_build_id.sh
+
+sbom: bundle-dir
+	@python3 tools/make_sbom.py --bundle dist/bundle-dir --output dist/SBOM.cyclonedx.json
+
+bundle-dir: build-id native locales $(LUAI_STAMP)
 	mkdir -p dist
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAI) -b --dir \
 		src/wtop.lua -o dist/wtop --lua '$(LUA)' --lua-prefix '$(LUA_PREFIX)' \
@@ -187,7 +193,7 @@ bundle-dir: native locales $(LUAI_STAMP)
 	@chmod 0755 dist/wtop/wtop
 	@find dist/wtop/.luai/native -type f -exec chmod 0755 {} +
 
-bundle-file: native locales $(LUAI_STAMP)
+bundle-file: build-id native locales $(LUAI_STAMP)
 	mkdir -p dist
 	rm -f dist/.wtop-onefile.next
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAI) -b --file \

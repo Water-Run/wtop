@@ -206,7 +206,9 @@ function M.run(argv, dependencies)
         io.write(HELP)
         return 0
     elseif options.command == "version" then
-        io.write(version.name, " ", version.version, "\n")
+        io.write(version.name, " ", version.version)
+        if version.revision then io.write(" (rev ", version.revision, ")") end
+        io.write("\n")
         return 0
     elseif options.command == "diagnose" then
         return run_diagnose(options)

@@ -11,3 +11,6 @@
 luacov.*.out
 __pycache__/
 *.pyc
+
+# Generated per build; never committed.
+/src/wtop/build_id.lua

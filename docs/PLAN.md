@@ -259,7 +259,7 @@ The implementation already has fixed rings, diff output, collector durations, sc
 - Native-module ABI, architecture, `ldd`, and minimum glibc/kernel baseline have reproducible evidence.
 - glibc x86_64 and aarch64 targets each complete native builds and PTY smoke tests.
 - Real performance budgets pass on the minimum and typical supported hosts.
-- Release artifacts include checksums, an SBOM, third-party notices, and traceable build metadata.
+- Release artifacts include checksums, an SBOM, third-party notices, and traceable build metadata. (Done on 2026-09-28: `make sbom` writes a CycloneDX 1.5 SBOM beside the bundle, THIRD_PARTY.md lists the bundled components and licenses, and `make build-id` embeds the git revision into `--version`, `--diagnose`, and the SBOM.)
 
 ## 10. Version 0.1 Fixed Decisions and Open Questions
 
