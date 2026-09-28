@@ -107,6 +107,14 @@ collector's first call, the median of eight calls was 2.56 ms for processes,
 0.01 ms for GPU, 0.74 ms for disks, and 0.04 ms for mounts. This measures warm
 collector calls only; it does not include periodic rescans or TUI CPU usage.
 
+The classic-console harness now measures child CPU time over a chosen window.
+On this Server 2008 host, the current bundle used 1.71–1.87% of one core on
+Overview, 3.43–4.05% on Processes, and 1.71% on GPU across repeated 10-second
+windows after a two-second warm-up. The process exited normally. Before frame
+coalescing and the printable-ASCII layout path, separate runs on the same host
+used roughly 14%, 21%, and 7% on those pages. These short single-host runs do
+not establish a release performance baseline.
+
 ## Development Builds
 
 On macOS, run `./tools/build_macos.sh`; the executable bundle is
@@ -127,7 +135,7 @@ still unverified on XP itself.
 
 ## Known Issues
 
-- On Windows the collectors cost more CPU than the performance goal allows.
+- On Windows the Processes page still exceeds the CPU performance goal.
   Before the current cache changes, the TUI on its default page used about
   15% of one core on the 10.0.26100 host. Per call, the process list took
   about 15 ms there and the socket table about 6 ms; on Server 2008 the
@@ -136,9 +144,11 @@ still unverified on XP itself.
   and owner labels are keyed by PID and creation time; owner labels are queried
   again after 30 seconds, or after 5 seconds when lookup failed. The disk
   collector skips absent physical-drive numbers between periodic rescans.
-  Warm collector calls were measured on Server 2008 as noted above. The new
-  build still needs a whole-TUI CPU measurement and periodic-refresh timing;
-  process enumeration remains a candidate for further work.
+  Warm collector calls and whole-TUI CPU were measured on Server 2008 as noted
+  above. The TUI now merges automatic redraws at the selected update interval
+  and uses a direct width path for printable ASCII. The Processes page still
+  exceeds the 2% single-core goal on that host. Periodic-refresh timing and
+  broader hardware measurements are still needed.
 - Windows has no pressure or power-zone source and shows them as
   unavailable. Its CPU frequency comes from PDH from Windows 7 / 2008 R2 on;
   older systems report the rated frequency as an estimate. An adapter without

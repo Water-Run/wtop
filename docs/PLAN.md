@@ -36,7 +36,7 @@ The current version is `0.1.0`, the first tagged release. The first vertical sli
 | Deep inspection | Selectable SMART/NVMe, experimental `perf stat` RAM PMU sampling, and sshd Inspectors work | Unified resource navigation, complete session/event providers, PMU platform mapping and validation |
 | GPU | DRM devices, PCI IDs/link metadata, AMD sysfs/DPM, Intel i915/xe frequencies, DRM fdinfo utilization/process tables, hwmon temperature/power joins, and a dynamically loaded NVML provider (validated on NVIDIA GB10) are implemented; Windows uses SetupAPI/DXGI identity with PDH GPU counters and macOS uses IOAccelerator statistics with IOReport clock residency | Client/region drill-down, AMD SMI, Level Zero, MIG/tile, per-process GPU usage on macOS |
 | Performance release/actions | A confirmed signal menu exposes `SIGTERM`, `SIGKILL`, `SIGSTOP` and `SIGCONT`, each with pidfd + start-time revalidation | renice, cgroup limits, and tuning protocols still need a product scope |
-| Cross-platform runtime | Linux release path remains; source-development macOS arm64 and Windows x86 backends provide CPU identity, utilization and time classes, memory composition, processes, disk I/O, mounts, network, sockets, system, GPU, CPU frequency, sensors, batteries, and workloads (Windows service hosts, macOS app coalitions); macOS adds per-block energy. TUI, Snapshot, Agent, and diagnose run on tested hosts; the Server 2008 legacy console is exercised through a console harness | XP runtime, Windows collector CPU cost, Windows power and pressure sources, older macOS, performance baselines |
+| Cross-platform runtime | Linux release path remains; source-development macOS arm64 and Windows x86 backends provide CPU identity, utilization and time classes, memory composition, processes, disk I/O, mounts, network, sockets, system, GPU, CPU frequency, sensors, batteries, and workloads (Windows service hosts, macOS app coalitions); macOS adds per-block energy. TUI, Snapshot, Agent, and diagnose run on tested hosts; the Server 2008 legacy console is exercised through a console harness | XP runtime, Windows Processes-page CPU cost, Windows power and pressure sources, older macOS, performance baselines |
 | Lua | Business logic, collection, UI, configuration, and i18n use PUC Lua | Retain the Lua 5.4 syntax subset and Lua 5.5 release ABI |
 | LuaRocks installation | Linux-only `scm-1` rockspec, isolated installation, and installed-CLI smoke paths exist | Versioned release rock |
 | luainstaller | onedir/onefile, explicit locale inclusion, locked payload validation, and `make checksums` exist | Multi-architecture/libc, final-candidate rebuild, SBOM/signing |
@@ -186,8 +186,8 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
 - Add onefile PTY, clean-environment, and locale `--check` to standard CI.
 - Add crash/signal/continuous-resize, tmux, and SSH scenarios.
 - Establish repeatable performance benchmarks and calibrate CPU, RSS, first-frame, and input-latency budgets.
-- Measure Windows x86 whole-TUI CPU cost and periodic refreshes after the
-  warm-call collector baseline, then reduce remaining process overhead.
+- Extend the Server 2008 whole-TUI CPU measurement to periodic refreshes and
+  other Windows hosts, then reduce the Processes page's remaining overhead.
 - Validate the bounded Windows removable-media probe workers on Server 2008,
   including empty media, hotplug, and two nonresponsive devices; working media
   has been checked. Resolve any starvation or capacity-freshness problems

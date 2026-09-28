@@ -25,7 +25,7 @@ Options:
       --safe-mode        Disable optional external helper commands
       --no-color         Disable terminal colors
 
-Interactive defaults: F1 help, 1..8 tabs, f update rate, Tab/Shift-Tab focus, q quit.
+Interactive defaults: F1 help, 1..0 tabs, f update rate, Tab/Shift-Tab focus, q quit.
 ]]
 
 local function option_value(argv, index, name)

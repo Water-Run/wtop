@@ -422,6 +422,13 @@ function M.graphemes(text, options)
 end
 
 function M.display_width(text, options)
+  -- The native terminal width functions return one cell for printable ASCII.
+  -- Custom width functions keep the full path unless they opt into that rule.
+  if type(text) == "string"
+      and (not options or not options.width_fn or options.ascii_unit_width)
+      and not text:find("[^ -~]") then
+    return #text
+  end
   local result = 0
   for _, width in M.graphemes(tostring(text or ""), options) do
     result = result + width
@@ -432,6 +439,9 @@ end
 function M.truncate(text, max_width, options, ellipsis)
   text = tostring(text or "")
   max_width = math.max(0, math.floor(max_width or 0))
+  local plain_ascii = (not options or not options.width_fn or options.ascii_unit_width)
+    and not text:find("[^ -~]")
+  if plain_ascii and #text <= max_width then return text, false end
   if M.display_width(text, options) <= max_width then
     return text, false
   end
@@ -441,6 +451,7 @@ function M.truncate(text, max_width, options, ellipsis)
     ellipsis, ellipsis_width = "", 0
   end
   local limit = max_width - ellipsis_width
+  if plain_ascii then return text:sub(1, limit) .. ellipsis, true end
   local pieces, used = {}, 0
   for cluster, width in M.graphemes(text, options) do
     if used + width > limit then

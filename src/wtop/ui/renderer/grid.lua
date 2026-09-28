@@ -39,7 +39,7 @@ function Grid.new(width, height, options)
       error("grid " .. name .. " must be a function", 2)
     end
   end
-  for _, name in ipairs({"ambiguous_is_wide", "unicode"}) do
+  for _, name in ipairs({"ambiguous_is_wide", "unicode", "ascii_unit_width"}) do
     if options[name] ~= nil and type(options[name]) ~= "boolean" then
       error("grid " .. name .. " must be a boolean", 2)
     end
@@ -60,6 +60,7 @@ function Grid.new(width, height, options)
       console_cells = options.console_cells,
       ambiguous_is_wide = options.ambiguous_is_wide,
       unicode = options.unicode,
+      ascii_unit_width = options.ascii_unit_width,
     },
     default_style = options.default_style,
     cells = {},
@@ -170,6 +171,21 @@ function Grid:write(x, y, text, style, max_width)
   local origin = x
   local limit = max_width and math.max(0, math.floor(max_width)) or math.huge
   local used = 0
+  -- Numeric columns, paths, and most status text are printable ASCII. Their
+  -- cells all have width one under the native width function, so skip Unicode
+  -- segmentation for the visible prefix. A following non-ASCII byte could be
+  -- a combining mark belonging to the last cell, so use the full path then.
+  local ascii_cells = math.max(0, math.min(#text, limit, self.width - x + 1))
+  local next_byte = text:byte(ascii_cells + 1)
+  if ascii_cells > 0
+      and (not self.width_options.width_fn or self.width_options.ascii_unit_width)
+      and not text:sub(1, ascii_cells):find("[^ -~]")
+      and (not next_byte or (next_byte >= 32 and next_byte <= 126)) then
+    for index = 1, ascii_cells do
+      self:set(x + index - 1, y, text:sub(index, index), style, 1)
+    end
+    return x + ascii_cells, ascii_cells
+  end
   for source_grapheme, source_width in Width.graphemes(text, self.width_options) do
     local grapheme, width = source_grapheme, source_width
     local codepoint = Width.decode_at(grapheme, 1)

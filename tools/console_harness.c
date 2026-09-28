@@ -12,6 +12,7 @@
  *   vk:<code>          press one virtual key (decimal), e.g. 40 for Down
  *   snap:<label>       print the visible window of the active screen buffer
  *   resize:<cols>x<rows>  resize the active buffer and its window
+ *   cpu:<ms>            measure child CPU use while waiting
  *   exit:<ms>          wait for the program to exit and print its exit code
  */
 #define WINVER 0x0501
@@ -19,6 +20,7 @@
 #define WIN32_LEAN_AND_MEAN
 
 #include <windows.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -163,6 +165,45 @@ static void resize(int columns, int rows) {
     CloseHandle(output);
 }
 
+static uint64_t filetime_ticks(FILETIME time) {
+    return ((uint64_t)time.dwHighDateTime << 32) | time.dwLowDateTime;
+}
+
+static void sample_cpu(HANDLE child, DWORD duration_ms) {
+    FILETIME created, exited, kernel_before, user_before, kernel_after, user_after;
+    DWORD started, elapsed;
+    uint64_t before, after;
+    if (duration_ms == 0 || duration_ms > 60000
+        || WaitForSingleObject(child, 0) != WAIT_TIMEOUT
+        || !GetProcessTimes(child, &created, &exited,
+            &kernel_before, &user_before)) {
+        printf("----- cpu sample unavailable (child not running or invalid interval)\n");
+        fflush(stdout);
+        return;
+    }
+    started = GetTickCount();
+    Sleep(duration_ms);
+    elapsed = GetTickCount() - started;
+    if (elapsed == 0 || WaitForSingleObject(child, 0) != WAIT_TIMEOUT
+        || !GetProcessTimes(child, &created, &exited,
+            &kernel_after, &user_after)) {
+        printf("----- cpu sample unavailable (child exited)\n");
+        fflush(stdout);
+        return;
+    }
+    before = filetime_ticks(kernel_before) + filetime_ticks(user_before);
+    after = filetime_ticks(kernel_after) + filetime_ticks(user_after);
+    if (after < before) {
+        printf("----- cpu sample unavailable (counter reset)\n");
+        fflush(stdout);
+        return;
+    }
+    printf("----- cpu over %lu ms: %.2f ms, %.2f%% of one core\n",
+        (unsigned long)elapsed, (double)(after - before) / 10000.0,
+        (double)(after - before) / ((double)elapsed * 100.0));
+    fflush(stdout);
+}
+
 int main(int argc, char **argv) {
     STARTUPINFOW start;
     PROCESS_INFORMATION process;
@@ -232,6 +273,8 @@ int main(int argc, char **argv) {
         else if (strcmp(step, "key") == 0) type_text(value);
         else if (strcmp(step, "vk") == 0) press_virtual_key(atoi(value));
         else if (strcmp(step, "snap") == 0) snapshot(value);
+        else if (strcmp(step, "cpu") == 0) sample_cpu(process.hProcess,
+            (DWORD)atoi(value));
         else if (strcmp(step, "resize") == 0) {
             int columns = 0, rows = 0;
             if (sscanf(value, "%dx%d", &columns, &rows) == 2) resize(columns, rows);

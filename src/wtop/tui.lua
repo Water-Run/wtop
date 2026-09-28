@@ -1105,6 +1105,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             alert_count = alert_count(engine.snapshot),
             status = status,
             width_fn = native.available and width_function or nil,
+            ascii_unit_width = native.available,
             console_cells = console_cells,
         })
         if overlay then
@@ -1123,6 +1124,7 @@ local function run_loop(options, backend, renderer, engine, translator)
     end
 
     local models = render_frame()
+    local last_presented_ns = native.monotonic_ns()
 
     --- Replace the draft and move the cursor.
     -- The draft deliberately keeps exactly what was typed.  Feeding the
@@ -1590,17 +1592,21 @@ local function run_loop(options, backend, renderer, engine, translator)
         if not polled then
             error(poll_error or "terminal poll failed")
         end
+        local input_activity = polled.resize == true
         if polled.events then
             for _, event in ipairs(polled.events) do
+                input_activity = true
                 process_event(event)
             end
         end
         if polled.data then
             for _, event in ipairs(decoder:feed(polled.data, false)) do
+                input_activity = true
                 process_event(event)
             end
         elseif decoder:pending() > 0 then
             for _, event in ipairs(decoder:flush()) do
+                input_activity = true
                 process_event(event)
             end
         end
@@ -1620,7 +1626,16 @@ local function run_loop(options, backend, renderer, engine, translator)
             dirty = true
         end
         if dirty and running then
-            models = render_frame()
+            -- Several collectors can finish between display updates. Merge
+            -- their changes into one frame at the selected update interval;
+            -- keyboard, mouse, resize, and forced repaints stay immediate.
+            local now = native.monotonic_ns()
+            local interval_ns = (engine.interval_ms or options.interval_ms or 1000)
+                * 1000000
+            if input_activity or force or now - last_presented_ns >= interval_ns then
+                models = render_frame()
+                last_presented_ns = native.monotonic_ns()
+            end
         end
     end
     if workspace.dirty and not Privilege.restricts_user_files(options.privilege) then

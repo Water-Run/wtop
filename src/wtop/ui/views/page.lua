@@ -63,6 +63,7 @@ function Page:render(columns, rows, state)
   local grid = Grid.new(columns, rows, {
     default_style = background,
     width_fn = state.width_fn,
+    ascii_unit_width = state.ascii_unit_width,
     console_cells = state.console_cells,
     ambiguous_is_wide = state.ambiguous_is_wide,
     unicode = capabilities.unicode,
