@@ -134,15 +134,15 @@ local function sort_value(record, key)
 end
 
 local function stable_less(left, right)
-  local left_pid = finite_number(left.process.pid) or tonumber(left.process.pid)
-  local right_pid = finite_number(right.process.pid) or tonumber(right.process.pid)
+  local left_pid = left.pid_key
+  local right_pid = right.pid_key
   if left_pid ~= right_pid then
     if left_pid == nil then return false end
     if right_pid == nil then return true end
     return left_pid < right_pid
   end
-  local left_start = finite_number(left.process.starttime_ticks) or tonumber(left.process.starttime_ticks)
-  local right_start = finite_number(right.process.starttime_ticks) or tonumber(right.process.starttime_ticks)
+  local left_start = left.start_key
+  local right_start = right.start_key
   if left_start ~= right_start then
     if left_start == nil then return false end
     if right_start == nil then return true end
@@ -154,10 +154,10 @@ local function stable_less(left, right)
   return left.input_index < right.input_index
 end
 
-local function comparator(key, descending)
+local function comparator(descending)
   return function(left, right)
-    local left_value = sort_value(left, key)
-    local right_value = sort_value(right, key)
+    local left_value = left.sort_key_value
+    local right_value = right.sort_key_value
     if left_value == nil or right_value == nil then
       if left_value == nil and right_value == nil then
         return stable_less(left, right)
@@ -175,19 +175,43 @@ local function comparator(key, descending)
   end
 end
 
-local function shallow_row(record, depth, direct_match, included_children)
-  local row = {}
-  for key, value in pairs(record.process) do
-    row[key] = value
+local function row_pairs(row)
+  local source = getmetatable(row).__index
+  local source_key, row_key
+  local source_done = false
+  return function()
+    if not source_done then
+      local key, value = next(source, source_key)
+      if key ~= nil then
+        source_key = key
+        local override = rawget(row, key)
+        if override ~= nil then value = override end
+        return key, value
+      end
+      source_done = true
+    end
+    while true do
+      local key, value = next(row, row_key)
+      row_key = key
+      if key == nil then return nil end
+      if rawget(source, key) == nil then return key, value end
+    end
   end
-  row.id = record.id
-  row.tree_depth = depth or 0
-  row.tree_has_children = included_children and included_children > 0 or false
-  row.tree_orphan = record.orphan == true
-  row.tree_cycle = record.cycle == true
-  row.filter_match = direct_match == true
-  row.filter_ancestor = direct_match ~= true
-  return row
+end
+
+local function shallow_row(record, depth, direct_match, included_children)
+  -- Share the sampled fields until a row is actually read. Thousands of
+  -- process records can be sorted while only a screenful is ever formatted.
+  local row = {
+    id = record.id,
+    tree_depth = depth or 0,
+    tree_has_children = included_children and included_children > 0 or false,
+    tree_orphan = record.orphan == true,
+    tree_cycle = record.cycle == true,
+    filter_match = direct_match == true,
+    filter_ancestor = direct_match ~= true,
+  }
+  return setmetatable(row, { __index = record.process, __pairs = row_pairs })
 end
 
 -- Query grammar.  Whitespace separates terms and every term must match, so
@@ -309,6 +333,9 @@ local function build_records(process_list)
         id = id,
         process = process,
         input_index = index,
+        pid_key = finite_number(process.pid) or tonumber(process.pid),
+        start_key = finite_number(process.starttime_ticks)
+          or tonumber(process.starttime_ticks),
       }
       records[#records + 1] = record
       by_id[id] = record
@@ -321,6 +348,14 @@ end
 -- the final ordering predicate; the heap deliberately keeps the worst retained
 -- record at its root so a better candidate can replace it in O(log limit).
 local function bounded_best(records, limit, better, matches)
+  if #records <= limit then
+    local selected = {}
+    for _, record in ipairs(records) do
+      if not matches or matches(record) then selected[#selected + 1] = record end
+    end
+    table.sort(selected, better)
+    return selected, #selected
+  end
   local heap = {}
   local matched = 0
 
@@ -369,7 +404,7 @@ local function attach_parents(records)
   local by_pid = {}
   local duplicate_pids = 0
   for _, record in ipairs(records) do
-    local pid = finite_number(record.process.pid) or tonumber(record.process.pid)
+    local pid = record.pid_key
     if pid and pid > 0 and pid % 1 == 0 then
       local existing = by_pid[pid]
       if not existing then
@@ -385,7 +420,8 @@ local function attach_parents(records)
 
   local orphans = 0
   for _, record in ipairs(records) do
-    local parent_pid = finite_number(record.process.parent_pid) or tonumber(record.process.parent_pid)
+    local parent_pid = finite_number(record.process.parent_pid)
+      or tonumber(record.process.parent_pid)
     if parent_pid and parent_pid > 0 and parent_pid % 1 == 0 then
       record.parent = by_pid[parent_pid]
       if not record.parent then
@@ -475,6 +511,9 @@ end
 
 function Controller:_rebuild(preferred_id, preferred_index)
   local records, by_id, invalid, duplicates = build_records(self._processes)
+  for _, record in ipairs(records) do
+    record.sort_key_value = sort_value(record, self._sort_key)
+  end
   local orphans, cycles, duplicate_pids = 0, 0, 0
   if self._tree then
     orphans, cycles, duplicate_pids = attach_parents(records)
@@ -482,7 +521,7 @@ function Controller:_rebuild(preferred_id, preferred_index)
   self._records = records
   self._record_by_id = by_id
 
-  local compare = comparator(self._sort_key, self._descending)
+  local compare = comparator(self._descending)
   local rows = {}
   local depth_limited = 0
   local matched, included = 0, 0
@@ -559,9 +598,13 @@ function Controller:_rebuild(preferred_id, preferred_index)
     end
   else
     local visible
-    visible, matched = bounded_best(records, self._max_rows, compare, function(record)
-      return process_matches(record.process, self._compiled_query)
-    end)
+    local matches
+    if self._compiled_query then
+      matches = function(record)
+        return process_matches(record.process, self._compiled_query)
+      end
+    end
+    visible, matched = bounded_best(records, self._max_rows, compare, matches)
     included = matched
 
     -- Keep the user's current identity visible across a sort change even when

@@ -126,6 +126,17 @@ frames before skipping other pages' models, and 20.2 ms afterward. The later
 whole-process CPU samples varied, so these measurements do not establish a
 stable 2% result or the 1,000-process target.
 
+The flat process controller now sorts directly when the collected set fits
+its row limit, caches comparison values for each rebuild, and keeps process
+fields in row views without copying every field. On Server 2008, 30 synthetic
+1,000-process updates had a 21.93 ms median before the change and 8.06 ms
+afterward; 4,096-process updates dropped from 88.51 to 38.37 ms in 15 samples.
+The host's real process page held about 78 rows. Two 10-second classic-console
+CPU runs before this controller change used 1.87% and 1.71% of one core; two
+steady-state runs afterward used 1.71% and 1.40%. These short runs show a
+controller scaling improvement, not a whole-TUI result at 1,000 real
+processes.
+
 A follow-up classic-console run on Server 2008 showed executable basenames in
 the Processes command column by default. Pressing `p` switched to image paths;
 the 80-column view shortened them from the start to keep executable names
@@ -164,7 +175,7 @@ still unverified on XP itself.
 
 ## Known Issues
 
-- On Windows the Processes page still exceeds the CPU performance goal.
+- Windows Processes-page performance is still unproven at scale.
   Before the current cache changes, the TUI on its default page used about
   15% of one core on the 10.0.26100 host. Per call, the process list took
   about 15 ms there and the socket table about 6 ms; on Server 2008 the
@@ -177,8 +188,10 @@ still unverified on XP itself.
   above. The TUI now merges automatic redraws at the selected update interval
   and uses a direct width path for printable ASCII. Process rows are formatted
   when the viewport accesses them, and the active Processes page skips other
-  pages' models. The Processes page still exceeds the 2% single-core goal in
-  some runs on that host. Periodic-refresh timing and broader hardware
+  pages' models. The process controller avoids duplicate sorting and copying
+  every sampled field into its rows. The Processes page exceeded the 2%
+  single-core goal in some earlier runs on that host. Periodic-refresh timing
+  and broader hardware
   measurements are still needed.
 - Windows has no pressure or power-zone source and shows them as
   unavailable. Its CPU frequency comes from PDH from Windows 7 / 2008 R2 on;
