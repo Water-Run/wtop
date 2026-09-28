@@ -932,6 +932,7 @@ local function run_loop(options, backend, renderer, engine, translator)
     })
     local columns, rows = assert(backend.size())
     local visible_widgets = {}
+    local overlay_collectors
     -- Overview cards for a resource this host does not expose at all.  These
     -- are the optional ones: the required CPU/memory/pressure cards always
     -- stay, because "0%" and "absent" are different facts worth showing.
@@ -969,7 +970,8 @@ local function run_loop(options, backend, renderer, engine, translator)
             dirty = true
         end
         visible_widgets = workspace:visible_widgets(columns, rows)
-        assert(engine:set_active_tab(workspace.active, visible_widgets))
+        assert(engine:set_active_tab(workspace.active, visible_widgets,
+            overlay_collectors))
         return visible_widgets
     end
     sync_engine_visibility()
@@ -1151,7 +1153,8 @@ local function run_loop(options, backend, renderer, engine, translator)
         engine.context.selected_process_ids = id and { [id] = true } or {}
     end
 
-    local function show_overlay(lines_or_builder)
+    local function show_overlay(lines_or_builder, collectors)
+        overlay_collectors = collectors
         overlay_builder = type(lines_or_builder) == "function" and lines_or_builder or nil
         if overlay_builder then
             overlay = overlay_builder()
@@ -1441,6 +1444,7 @@ local function run_loop(options, backend, renderer, engine, translator)
                 confirmation = nil
                 overlay = nil
                 overlay_builder = nil
+                overlay_collectors = nil
                 overlay_offset = 0
                 dirty = true
             end
@@ -1556,6 +1560,7 @@ local function run_loop(options, backend, renderer, engine, translator)
                     smart_selection = nil
                     overlay = nil
                     overlay_builder = nil
+                    overlay_collectors = nil
                     overlay_offset = 0
                     dirty = true
                 end
@@ -1586,6 +1591,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             then
                 overlay = nil
                 overlay_builder = nil
+                overlay_collectors = nil
                 overlay_offset = 0
                 dirty = true
             end
@@ -1815,7 +1821,7 @@ local function run_loop(options, backend, renderer, engine, translator)
         elseif key == "h" then
             show_overlay(function()
                 return sensor_detail_lines(engine.snapshot, translator, engine.clock:now_ns())
-            end)
+            end, { hwmon = true })
             dirty = true
         elseif key == "r" or (event.ctrl and key == "l") then
             sync_engine_visibility()

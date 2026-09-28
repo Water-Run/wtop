@@ -430,11 +430,14 @@ function Engine:set_interval(interval_ms)
     return true
 end
 
-function Engine:set_active_tab(tab_id, widget_ids)
+function Engine:set_active_tab(tab_id, widget_ids, extra_visible)
     if not TAB_COLLECTORS[tab_id] then
         return false, "unknown_tab"
     end
     local visible = widget_visibility(tab_id, widget_ids)
+    -- A detail overlay can keep its source at the foreground cadence even
+    -- when the responsive layout has hidden the corresponding widget.
+    local overlay_visible = type(extra_visible) == "table" and extra_visible or nil
     self.active_tab = tab_id
     self.active_widgets = widget_ids
     self.context.scan_connection_owners = tab_id == "network"
@@ -443,7 +446,8 @@ function Engine:set_active_tab(tab_id, widget_ids)
     self.context.scan_gpu_processes = tab_id == "gpu"
         and (type(widget_ids) ~= "table" or widget_ids.gpu_process_table == true)
     for _, id in ipairs(self.scheduler.order) do
-        self.scheduler:set_visible(id, visible[id] == true)
+        self.scheduler:set_visible(id, visible[id] == true
+            or (overlay_visible and overlay_visible[id] == true))
     end
     if self.context.scan_gpu_processes and not gpu_scan_was_enabled then
         local gpu_task = self.scheduler:task("gpu")

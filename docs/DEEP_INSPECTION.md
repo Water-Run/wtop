@@ -18,8 +18,10 @@ The separate `h` sensor overlay reads the latest shared snapshot on Linux,
 macOS, and Windows. It shows up to 256 channels with their last sampled value,
 quality, additional readings, and limits when the platform exposes them. It
 updates as the shared snapshot changes without starting a separate hardware
-probe. If the last sensor sample is more than 15 seconds old, the overlay
-labels it stale.
+probe. While open, it gives the shared sensor collector the foreground cadence,
+even when the sensor widget does not fit on the page. Closing it restores the
+page's collector cadence. If the last sensor sample is more than 15 seconds
+old, the overlay labels it stale.
 
 Every external helper is invoked through the shell-free argv Runner with timeout, output-size, fixed-environment, and process-cleanup constraints. `--safe-mode` disables the Runner, so the parts of these three Inspectors that depend on external commands become unavailable; ordinary procfs/sysfs collectors continue working.
 

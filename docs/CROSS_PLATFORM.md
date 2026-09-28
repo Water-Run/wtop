@@ -107,6 +107,14 @@ thermal-zone reading at 27.85 oC with fresh quality while the overlay remained
 open for six seconds. Esc and `q` again returned and restored the console.
 The reading stayed constant, so this run did not exercise a changing value.
 
+A follow-up 80×25 Overview run on both Windows hosts opened `h` before the
+sensor collector's five-second background deadline. The overlay's next frame
+showed the Server 2008 unavailable reason and the newer host's fresh ACPI
+reading, despite the sensor widget being absent from the compact page.
+Both consoles restored their screen after exit. A clock-controlled scheduler
+check confirmed that closing the overlay returns the collector to its
+background cadence.
+
 On 2026-09-28, the current x86 development bundle ran `--snapshot` on the
 Server 2008 host. C: and D: returned complete capacity. WMI reported D: as a
 removable drive. In three direct native mount samples, D: was pending on the
