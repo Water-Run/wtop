@@ -35,6 +35,8 @@
 #define MAX_SERVICE_HOSTS 1024
 #define MAX_SERVICES_PER_HOST 64
 #define PDH_MAX_BYTES (8 * 1024 * 1024)
+#define GPU_ADAPTER_CACHE_MS 15000
+#define GPU_ADAPTER_MISS_CACHE_MS 5000
 
 static void integer_field(lua_State *L, const char *name, lua_Integer value) {
     lua_pushinteger(L, value);
@@ -217,11 +219,17 @@ static struct {
     IDXGIFactory1 *factory;
     adapter_info adapters[MAX_ADAPTERS];
     int count;
+    DWORD attempted_at;
+    int attempted;
 } dxgi;
 
-static void dxgi_refresh(void) {
+/* Returns true when the adapter factory changed and cached LUIDs need a
+ * fresh SetupAPI join. Failed initial factory creation does not invalidate
+ * the cache on every sample. */
+static int dxgi_refresh(void) {
     UINT index;
     IDXGIAdapter1 *adapter = NULL;
+    int had_factory;
     if (!dxgi.loaded) {
         dxgi.loaded = 1;
         dxgi.module = LoadLibraryA("dxgi.dll");
@@ -229,18 +237,24 @@ static void dxgi_refresh(void) {
             dxgi.create = (create_factory_function)(void *)GetProcAddress(
                 dxgi.module, "CreateDXGIFactory1");
     }
-    if (!dxgi.create) return;
+    if (!dxgi.create) return 0;
+    if (!dxgi.factory && dxgi.attempted
+        && (DWORD)(GetTickCount() - dxgi.attempted_at)
+            < GPU_ADAPTER_MISS_CACHE_MS) return 0;
     /* A factory goes stale when adapters change (hot plug, driver update). */
-    if (dxgi.factory && IDXGIFactory1_IsCurrent(dxgi.factory)) return;
+    if (dxgi.factory && IDXGIFactory1_IsCurrent(dxgi.factory)) return 0;
+    had_factory = dxgi.factory != NULL;
     if (dxgi.factory) {
         IDXGIFactory1_Release(dxgi.factory);
         dxgi.factory = NULL;
     }
     dxgi.count = 0;
+    dxgi.attempted_at = GetTickCount();
+    dxgi.attempted = 1;
     if (FAILED(dxgi.create(&wtop_iid_dxgi_factory1, (void **)&dxgi.factory))
         || !dxgi.factory) {
         dxgi.factory = NULL;
-        return;
+        return had_factory;
     }
     for (index = 0; dxgi.count < MAX_ADAPTERS
         && IDXGIFactory1_EnumAdapters1(dxgi.factory, index, &adapter) == S_OK;
@@ -282,6 +296,7 @@ static void dxgi_refresh(void) {
         }
         IDXGIAdapter1_Release(adapter);
     }
+    return 1;
 }
 
 static unsigned hex_after(const WCHAR *text, const WCHAR *prefix) {
@@ -409,6 +424,33 @@ static int merged_adapters(adapter_info *adapters, int count) {
         if (!dxgi.adapters[other].matched) adapters[count++] = dxgi.adapters[other];
     }
     return count;
+}
+
+/* SetupAPI identity and driver properties are comparatively expensive and
+ * change infrequently. Keep the merged list for a short interval, but refresh
+ * immediately when DXGI reports a changed factory. Empty results get a
+ * shorter retry interval so a newly installed adapter appears promptly. */
+static int cached_adapters(adapter_info *adapters) {
+    static struct {
+        adapter_info entries[MAX_ADAPTERS];
+        DWORD refreshed_at;
+        int count;
+        int valid;
+    } cache;
+    DWORD now = GetTickCount();
+    DWORD interval = cache.count > 0
+        ? GPU_ADAPTER_CACHE_MS : GPU_ADAPTER_MISS_CACHE_MS;
+    int dxgi_changed = dxgi_refresh();
+    if (!cache.valid || dxgi_changed
+        || (DWORD)(now - cache.refreshed_at) >= interval) {
+        cache.count = merged_adapters(cache.entries,
+            setupapi_adapters(cache.entries, MAX_ADAPTERS));
+        cache.refreshed_at = now;
+        cache.valid = 1;
+    }
+    if (cache.count > 0)
+        memcpy(adapters, cache.entries, (size_t)cache.count * sizeof(adapters[0]));
+    return cache.count;
 }
 
 static const char *vendor_name(UINT vendor) {
@@ -550,8 +592,7 @@ static int l_collect_gpu(lua_State *L) {
     int names_index;
     const char *source;
 
-    dxgi_refresh();
-    adapter_count = merged_adapters(adapters, setupapi_adapters(adapters, MAX_ADAPTERS));
+    adapter_count = cached_adapters(adapters);
     source = dxgi.count > 0 ? "setupapi+dxgi" : "setupapi";
     if (adapter_count == 0) {
         lua_pushnil(L);

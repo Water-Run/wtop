@@ -684,7 +684,9 @@ local function mount_rows(snapshot, format, options)
             inodes = inode_used and percent(format, inode_used) or "—",
             source = mount.source or "—",
             kind = mount.kind or "?",
-            readonly = mount.readonly and "ro" or "rw",
+            quality = mount.quality or (mount.partial and "partial" or "fresh"),
+            readonly = mount.readonly == nil and "—"
+                or (mount.readonly and "ro" or "rw"),
         }
     end
     return rows, hidden
@@ -1771,6 +1773,11 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "available", label = translated(i18n, "metrics.available", "Available"), width = 12, min_width = 9, align = "right", priority = 85 },
                 { key = "size", label = translated(i18n, "metrics.total", "Total"), width = 12, min_width = 9, align = "right", priority = 80 },
                 { key = "inodes", label = translated(i18n, "metrics.inodes", "Inodes"), width = 9, min_width = 7, align = "right", priority = 30, full_only = true },
+                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 10, min_width = 8, priority = 28, full_only = true,
+                    token = function(_, row)
+                        return (row.quality == "partial" or row.quality == "stale")
+                            and "metric.warn" or "text.muted"
+                    end },
                 { key = "readonly", label = "RW", width = 3, min_width = 2, priority = 20, full_only = true },
                 { key = "source", label = translated(i18n, "metrics.source", "Source"), width = 22, min_width = 10, priority = 25, full_only = true },
             },

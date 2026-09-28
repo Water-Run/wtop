@@ -95,6 +95,18 @@ backend, but does not establish old CMD display quality. XP cannot receive a
 runtime-tested claim without an XP test environment. macOS deployment targets
 are 11.0 for arm64 and 10.13 for x86_64; only arm64 macOS 26.5 has been run.
 
+On 2026-09-28, the current x86 development bundle ran `--snapshot` on the
+Server 2008 host. C: and D: returned complete capacity. WMI reported D: as a
+removable drive. In three direct native mount samples, D: was pending on the
+first call and fresh one second later; C: stayed fresh. This exercises the
+background probe with working media. Empty or slow media, hotplug, and mapped
+network drives remain untested with this build.
+
+In a separate back-to-back native call sample on that host, discarding each
+collector's first call, the median of eight calls was 2.56 ms for processes,
+0.01 ms for GPU, 0.74 ms for disks, and 0.04 ms for mounts. This measures warm
+collector calls only; it does not include periodic rescans or TUI CPU usage.
+
 ## Development Builds
 
 On macOS, run `./tools/build_macos.sh`; the executable bundle is
@@ -116,16 +128,34 @@ still unverified on XP itself.
 ## Known Issues
 
 - On Windows the collectors cost more CPU than the performance goal allows.
-  With the TUI on its default page, the x86 build used about 15% of one core
-  on the 10.0.26100 host. Per call, the process list took about 15 ms there
-  and the socket table about 6 ms; on Server 2008 the display-adapter query
-  took about 18 ms, disks 11 ms and mounts 8 ms. Caching adapter identity and
-  cheaper process enumeration are the next steps.
+  Before the current cache changes, the TUI on its default page used about
+  15% of one core on the 10.0.26100 host. Per call, the process list took
+  about 15 ms there and the socket table about 6 ms; on Server 2008 the
+  display-adapter query took about 18 ms, disks 11 ms and mounts 8 ms.
+  Display-adapter identity is now cached for up to 15 seconds. Process paths
+  and owner labels are keyed by PID and creation time; owner labels are queried
+  again after 30 seconds, or after 5 seconds when lookup failed. The disk
+  collector skips absent physical-drive numbers between periodic rescans.
+  Warm collector calls were measured on Server 2008 as noted above. The new
+  build still needs a whole-TUI CPU measurement and periodic-refresh timing;
+  process enumeration remains a candidate for further work.
 - Windows has no pressure or power-zone source and shows them as
   unavailable. Its CPU frequency comes from PDH from Windows 7 / 2008 R2 on;
   older systems report the rated frequency as an estimate. An adapter without
   a WDDM driver, or one that DXGI does not list in a service session, has
   identity and memory but no utilization.
+- Windows retains a drive-letter mount row when capacity cannot be read, with
+  capacity marked partial instead of zero. Filesystem identity is cached for
+  30 seconds on fixed drives. Removable and optical capacity/identity queries
+  now use at most two background workers. Their first sample can be pending;
+  complete results are cached for 30 seconds, failed results retry after five
+  seconds, and expired results are marked stale during a refresh.
+  Two permanently blocked devices can prevent other removable probes from
+  starting; the collector does not wait for those workers. Working removable
+  media has been checked on Server 2008, but the slow and empty cases remain.
+  Mapped network drives remain in the list with capacity marked partial, since
+  querying a disconnected server can block.
+  The wide storage table shows mount quality.
 - macOS has no pressure source, no per-process GPU usage, and, without root,
   sockets and workloads only for the caller's own processes. Disk busy time is
   an estimate from summed request service time. Cluster-to-CPU numbering is

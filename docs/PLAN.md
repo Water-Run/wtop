@@ -186,6 +186,12 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
 - Add onefile PTY, clean-environment, and locale `--check` to standard CI.
 - Add crash/signal/continuous-resize, tmux, and SSH scenarios.
 - Establish repeatable performance benchmarks and calibrate CPU, RSS, first-frame, and input-latency budgets.
+- Measure Windows x86 whole-TUI CPU cost and periodic refreshes after the
+  warm-call collector baseline, then reduce remaining process overhead.
+- Validate the bounded Windows removable-media probe workers on Server 2008,
+  including empty media, hotplug, and two nonresponsive devices; working media
+  has been checked. Resolve any starvation or capacity-freshness problems
+  found there.
 - Add explicit migration tools, backup, and clearer error recovery for configuration/layout; current behavior only reads layout v1 compatibly and rewrites v2.
 - Add a privacy masking/export policy to the TUI connection table and define explicit JSON contracts for ports, local addresses, Unix socket paths, and MAC addresses.
 

@@ -1303,6 +1303,10 @@ static int l_collect_memory(lua_State *L) {
 }
 
 #define USER_CACHE_SIZE 128
+#define PROCESS_PATH_CACHE_SIZE 1024
+#define PROCESS_OWNER_CACHE_SIZE 1024
+#define PROCESS_OWNER_REFRESH_MS 30000
+#define PROCESS_OWNER_MISS_REFRESH_MS 5000
 
 typedef struct {
     BYTE sid[SECURITY_MAX_SID_SIZE];
@@ -1312,6 +1316,25 @@ typedef struct {
 
 static user_cache_entry user_cache[USER_CACHE_SIZE];
 static int user_cache_next = 0;
+
+typedef struct {
+    DWORD pid;
+    uint64_t started;
+    WCHAR path[MAX_PATH];
+    int valid;
+} process_path_cache_entry;
+
+static process_path_cache_entry process_path_cache[PROCESS_PATH_CACHE_SIZE];
+
+typedef struct {
+    DWORD pid;
+    uint64_t started;
+    DWORD checked_at;
+    char name[192];
+    int valid;
+} process_owner_cache_entry;
+
+static process_owner_cache_entry process_owner_cache[PROCESS_OWNER_CACHE_SIZE];
 
 static void utf8_copy(char *output, size_t size, const WCHAR *source) {
     int length = WideCharToMultiByte(CP_UTF8, 0, source, -1, output, (int)size,
@@ -1365,6 +1388,39 @@ static const char *process_user(HANDLE process) {
     return entry->name[0] ? entry->name : NULL;
 }
 
+/* Opening every process token on every sample is costly even when its SID
+ * name is cached. Refresh by process identity so PID reuse is never mistaken
+ * for the previous owner's token. Denied lookups retry sooner. */
+static const char *cached_process_user(HANDLE process, DWORD pid,
+    FILETIME created, int has_times, DWORD now) {
+    process_owner_cache_entry *cached;
+    const char *owner;
+    uint64_t started;
+    DWORD interval;
+    size_t slot;
+    if (!has_times) return process_user(process);
+    started = filetime_value(created);
+    slot = ((uint32_t)pid * 2654435761U ^ (uint32_t)started
+        ^ (uint32_t)(started >> 32)) & (PROCESS_OWNER_CACHE_SIZE - 1);
+    cached = &process_owner_cache[slot];
+    interval = cached->name[0] ? PROCESS_OWNER_REFRESH_MS
+        : PROCESS_OWNER_MISS_REFRESH_MS;
+    if (cached->valid && cached->pid == pid && cached->started == started
+        && (DWORD)(now - cached->checked_at) < interval)
+        return cached->name[0] ? cached->name : NULL;
+    owner = process_user(process);
+    cached->pid = pid;
+    cached->started = started;
+    cached->checked_at = now;
+    cached->name[0] = 0;
+    if (owner) {
+        strncpy(cached->name, owner, sizeof(cached->name) - 1);
+        cached->name[sizeof(cached->name) - 1] = 0;
+    }
+    cached->valid = 1;
+    return cached->name[0] ? cached->name : NULL;
+}
+
 static HANDLE open_query_process(DWORD pid, int *can_read_memory) {
     HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
         FALSE, pid);
@@ -1382,22 +1438,55 @@ static int process_path(HANDLE process, int can_read_memory, WCHAR *path,
     typedef BOOL (WINAPI *image_name_function)(HANDLE, DWORD, LPWSTR, PDWORD);
     static image_name_function image_name = NULL;
     DWORD length = characters;
+    if (characters == 0) return 0;
     if (!resolved) {
         HMODULE kernel = GetModuleHandleA("kernel32.dll");
         image_name = kernel ? (image_name_function)(void *)GetProcAddress(kernel,
             "QueryFullProcessImageNameW") : NULL;
         resolved = 1;
     }
-    if (image_name && image_name(process, 0, path, &length) && length > 0)
+    if (image_name && image_name(process, 0, path, &length) && length > 0) {
+        path[characters - 1] = 0;
         return 1;
-    if (can_read_memory && GetModuleFileNameExW(process, NULL, path, characters) > 0)
+    }
+    if (can_read_memory && GetModuleFileNameExW(process, NULL, path, characters) > 0) {
+        path[characters - 1] = 0;
         return 1;
+    }
     return 0;
+}
+
+/* The path is fixed for a process lifetime. Key the bounded cache by both PID
+ * and creation time so reuse cannot display the previous process's image. */
+static int cached_process_path(HANDLE process, int can_read_memory, DWORD pid,
+    FILETIME created, int has_times, WCHAR path[MAX_PATH]) {
+    process_path_cache_entry *cached = NULL;
+    uint64_t started = 0;
+    if (has_times) {
+        size_t slot;
+        started = filetime_value(created);
+        slot = ((uint32_t)pid * 2654435761U ^ (uint32_t)started
+            ^ (uint32_t)(started >> 32)) & (PROCESS_PATH_CACHE_SIZE - 1);
+        cached = &process_path_cache[slot];
+        if (cached->valid && cached->pid == pid && cached->started == started) {
+            wcscpy(path, cached->path);
+            return 1;
+        }
+    }
+    if (!process_path(process, can_read_memory, path, MAX_PATH)) return 0;
+    if (cached) {
+        cached->pid = pid;
+        cached->started = started;
+        wcscpy(cached->path, path);
+        cached->valid = 1;
+    }
+    return 1;
 }
 
 static int l_collect_process(lua_State *L) {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     PROCESSENTRY32W entry;
+    DWORD sampled_at = GetTickCount();
     DWORD count = 0, denied = 0;
     int output_index = 1, truncated = 0;
     if (snapshot == INVALID_HANDLE_VALUE)
@@ -1426,8 +1515,10 @@ static int l_collect_process(lua_State *L) {
             if (process) {
                 has_times = GetProcessTimes(process, &created, &exited, &kernel, &user);
                 has_memory = wtop_process_memory(process, &memory);
-                has_path = process_path(process, can_read_memory, path, MAX_PATH);
-                owner = process_user(process);
+                has_path = cached_process_path(process, can_read_memory, pid,
+                    created, has_times, path);
+                owner = cached_process_user(process, pid, created, has_times,
+                    sampled_at);
                 (void)CloseHandle(process);
             } else {
                 ++denied;
@@ -1481,54 +1572,285 @@ static int l_collect_process(lua_State *L) {
     return 1;
 }
 
+#define VOLUME_IDENTITY_REFRESH_MS 30000
+#define VOLUME_IDENTITY_MISS_REFRESH_MS 5000
+
+typedef struct {
+    WCHAR filesystem[MAX_PATH];
+    DWORD flags;
+    DWORD checked_at;
+    int valid;
+    int attempted;
+} volume_identity;
+
+static volume_identity volume_identities[26];
+
+static int drive_letter_index(const WCHAR *path) {
+    WCHAR letter = path[0];
+    if (letter >= L'a' && letter <= L'z') letter -= L'a' - L'A';
+    if (letter < L'A' || letter > L'Z' || path[1] != L':'
+        || path[2] != L'\\' || path[3] != 0) return -1;
+    return (int)(letter - L'A');
+}
+
+static volume_identity *volume_identity_for(const WCHAR *path) {
+    int index = drive_letter_index(path);
+    return index >= 0 ? &volume_identities[index] : NULL;
+}
+
+static int cached_volume_information(const WCHAR *path, DWORD now,
+    WCHAR filesystem[MAX_PATH], DWORD *flags) {
+    volume_identity *identity = volume_identity_for(path);
+    if (identity && identity->attempted) {
+        DWORD interval = identity->valid ? VOLUME_IDENTITY_REFRESH_MS
+            : VOLUME_IDENTITY_MISS_REFRESH_MS;
+        if ((DWORD)(now - identity->checked_at) < interval) {
+            if (!identity->valid) return 0;
+            wcscpy(filesystem, identity->filesystem);
+            *flags = identity->flags;
+            return 1;
+        }
+    }
+    if (!GetVolumeInformationW(path, NULL, 0, NULL, NULL,
+        flags, filesystem, MAX_PATH)) {
+        if (identity) {
+            identity->valid = 0;
+            identity->attempted = 1;
+            identity->checked_at = now;
+        }
+        return 0;
+    }
+    filesystem[MAX_PATH - 1] = 0;
+    if (identity) {
+        wcscpy(identity->filesystem, filesystem);
+        identity->flags = *flags;
+        identity->checked_at = now;
+        identity->valid = 1;
+        identity->attempted = 1;
+    }
+    return 1;
+}
+
+#define REMOVABLE_CAPACITY_REFRESH_MS 30000
+#define REMOVABLE_CAPACITY_MISS_REFRESH_MS 5000
+#define MAX_REMOVABLE_PROBES 2
+
+typedef struct {
+    ULARGE_INTEGER available;
+    ULARGE_INTEGER total;
+    ULARGE_INTEGER free_total;
+    WCHAR filesystem[MAX_PATH];
+    DWORD flags;
+    DWORD completed_at;
+    int capacity_ok;
+    int identity_ok;
+} mount_measurement;
+
+typedef struct {
+    HANDLE thread;
+    WCHAR path[4];
+    mount_measurement working;
+    mount_measurement cached;
+    UINT kind;
+    int has_cached;
+    int discard;
+} removable_probe;
+
+static removable_probe removable_probes[26];
+
+/* Neither disk nor volume queries has a timeout. Keep them off the collector
+ * thread for removable media and optical drives, with at most two outstanding
+ * workers even if a device never answers. The worker uses Win32 APIs only. */
+static DWORD WINAPI removable_probe_worker(LPVOID argument) {
+    removable_probe *probe = (removable_probe *)argument;
+    mount_measurement *result = &probe->working;
+    result->capacity_ok = GetDiskFreeSpaceExW(probe->path,
+        &result->available, &result->total, &result->free_total)
+        && result->total.QuadPart > 0;
+    if (result->capacity_ok) {
+        result->identity_ok = GetVolumeInformationW(probe->path, NULL, 0,
+            NULL, NULL, &result->flags, result->filesystem, MAX_PATH);
+        result->filesystem[MAX_PATH - 1] = 0;
+    }
+    result->completed_at = GetTickCount();
+    return 0;
+}
+
+static void collect_completed_removable_probes(void) {
+    for (int index = 0; index < 26; ++index) {
+        removable_probe *probe = &removable_probes[index];
+        if (!probe->thread || WaitForSingleObject(probe->thread, 0) != WAIT_OBJECT_0)
+            continue;
+        CloseHandle(probe->thread);
+        probe->thread = NULL;
+        if (!probe->discard) {
+            probe->cached = probe->working;
+            probe->has_cached = 1;
+        }
+        probe->discard = 0;
+    }
+}
+
+/* 1 started, 0 waiting for a worker slot, -1 could not start a worker. */
+static int start_removable_probe(removable_probe *probe, const WCHAR *path) {
+    static HMODULE pinned_module;
+    int running = 0;
+    for (int index = 0; index < 26; ++index)
+        if (removable_probes[index].thread) ++running;
+    if (running >= MAX_REMOVABLE_PROBES) return 0;
+    /* Lua may unload this DLL while a disk query is still blocked. Retain a
+     * module reference until process exit so the worker code stays mapped. */
+    if (!pinned_module && !GetModuleHandleExW(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+        (LPCWSTR)(uintptr_t)&removable_probe_worker, &pinned_module)) return -1;
+    wcsncpy(probe->path, path, 3);
+    probe->path[3] = 0;
+    memset(&probe->working, 0, sizeof(probe->working));
+    probe->discard = 0;
+    probe->thread = CreateThread(NULL, 0, removable_probe_worker, probe,
+        0, NULL);
+    return probe->thread ? 1 : -1;
+}
+
 static int push_mount_records(lua_State *L) {
     WCHAR drives[512];
     DWORD length = GetLogicalDriveStringsW(
         (DWORD)(sizeof(drives) / sizeof(drives[0])), drives);
-    int output_index = 1;
+    DWORD now;
+    uint32_t seen = 0;
+    int output_index = 1, complete = 0, failed = 0;
     const WCHAR *path;
     if (length == 0 || length >= sizeof(drives) / sizeof(drives[0]))
         return 0;
+    collect_completed_removable_probes();
+    now = GetTickCount();
     lua_createtable(L, 0, 1);
     lua_createtable(L, 16, 0);
     for (path = drives; *path; path += wcslen(path) + 1) {
-        ULARGE_INTEGER free_to_user, total, free_total;
+        mount_measurement measurement;
         WCHAR filesystem[MAX_PATH];
         DWORD flags = 0;
         UINT kind = GetDriveTypeW(path);
+        volume_identity *identity = volume_identity_for(path);
+        int letter_index = drive_letter_index(path);
+        removable_probe *probe = letter_index >= 0
+            ? &removable_probes[letter_index] : NULL;
+        int asynchronous = kind == DRIVE_REMOVABLE || kind == DRIVE_CDROM
+            || kind == DRIVE_UNKNOWN;
+        int probe_start = 0;
+        int stale = 0;
         uint64_t used;
-        if (kind == DRIVE_REMOTE || kind == DRIVE_NO_ROOT_DIR) continue;
-        if (!GetDiskFreeSpaceExW(path, &free_to_user, &total, &free_total))
-            continue;
-        if (total.QuadPart == 0) continue;
-        used = total.QuadPart >= free_total.QuadPart
-            ? total.QuadPart - free_total.QuadPart : 0;
+        if (kind == DRIVE_NO_ROOT_DIR) continue;
+        if (probe) {
+            seen |= (uint32_t)1U << letter_index;
+            if (probe->kind != kind) {
+                probe->has_cached = 0;
+                probe->discard = probe->thread != NULL;
+                probe->kind = kind;
+            }
+        }
+        memset(&measurement, 0, sizeof(measurement));
+        if (kind == DRIVE_REMOTE) {
+            /* Mapped network drives can stall on disconnected servers. Keep
+             * the mapping visible without requesting remote capacity. */
+        } else if (asynchronous && probe) {
+            DWORD refresh = probe->has_cached && probe->cached.capacity_ok
+                && probe->cached.identity_ok ? REMOVABLE_CAPACITY_REFRESH_MS
+                : REMOVABLE_CAPACITY_MISS_REFRESH_MS;
+            if (!probe->thread && (!probe->has_cached
+                || (DWORD)(now - probe->cached.completed_at) >= refresh))
+                probe_start = start_removable_probe(probe, path);
+            if (probe->has_cached) {
+                measurement = probe->cached;
+                stale = (DWORD)(now - measurement.completed_at) >= refresh;
+            }
+        } else {
+            measurement.capacity_ok = GetDiskFreeSpaceExW(path,
+                &measurement.available, &measurement.total,
+                &measurement.free_total) && measurement.total.QuadPart > 0;
+            if (measurement.capacity_ok) {
+                measurement.identity_ok = cached_volume_information(path, now,
+                    filesystem, &flags);
+                if (measurement.identity_ok) {
+                    wcscpy(measurement.filesystem, filesystem);
+                    measurement.flags = flags;
+                }
+            }
+        }
         lua_createtable(L, 0, 8);
         utf8_field(L, "id", path);
         utf8_field(L, "mount_point", path);
-        utf8_field(L, "source", path);
-        string_field(L, "kind", "local");
-        if (GetVolumeInformationW(path, NULL, 0, NULL, NULL,
-            &flags, filesystem, MAX_PATH)) {
-            utf8_field(L, "fs_type", filesystem);
-            lua_pushboolean(L, (flags & FILE_READ_ONLY_VOLUME) != 0);
-            lua_setfield(L, -2, "readonly");
+        if (kind != DRIVE_REMOTE) utf8_field(L, "source", path);
+        string_field(L, "kind", kind == DRIVE_REMOTE ? "network" : "local");
+        if (measurement.capacity_ok) {
+            used = measurement.total.QuadPart >= measurement.free_total.QuadPart
+                ? measurement.total.QuadPart - measurement.free_total.QuadPart : 0;
+            lua_createtable(L, 0, 4);
+            integer_field(L, "total_bytes", (lua_Integer)measurement.total.QuadPart);
+            integer_field(L, "available_bytes", (lua_Integer)measurement.available.QuadPart);
+            integer_field(L, "used_bytes", (lua_Integer)used);
+            number_field(L, "used_percent",
+                (lua_Number)used * 100 / (lua_Number)measurement.total.QuadPart);
+            lua_setfield(L, -2, "capacity");
+            if (measurement.identity_ok) {
+                utf8_field(L, "fs_type", measurement.filesystem);
+                lua_pushboolean(L,
+                    (measurement.flags & FILE_READ_ONLY_VOLUME) != 0);
+                lua_setfield(L, -2, "readonly");
+            }
+            if (stale || !measurement.identity_ok) {
+                lua_pushboolean(L, 1);
+                lua_setfield(L, -2, "partial");
+                string_field(L, "partial_reason", !measurement.identity_ok
+                    ? "volume_identity_unavailable" : "capacity_refresh_pending");
+                string_field(L, "quality", !measurement.identity_ok
+                    ? "partial" : "stale");
+                ++failed;
+            } else {
+                string_field(L, "quality", "fresh");
+                ++complete;
+            }
+        } else {
+            if (identity && !asynchronous) {
+                identity->valid = 0;
+                identity->attempted = 0;
+            }
+            lua_pushboolean(L, 1);
+            lua_setfield(L, -2, "partial");
+            string_field(L, "partial_reason", kind == DRIVE_REMOTE
+                ? "remote_capacity_skipped"
+                : (probe_start < 0 ? "capacity_probe_unavailable"
+                    : (asynchronous && probe && !probe->has_cached
+                        ? "capacity_query_pending" : "capacity_query_failed")));
+            string_field(L, "quality", "partial");
+            ++failed;
         }
-        lua_createtable(L, 0, 4);
-        integer_field(L, "total_bytes", (lua_Integer)total.QuadPart);
-        integer_field(L, "available_bytes", (lua_Integer)free_to_user.QuadPart);
-        integer_field(L, "used_bytes", (lua_Integer)used);
-        number_field(L, "used_percent",
-            (lua_Number)used * 100 / (lua_Number)total.QuadPart);
-        lua_setfield(L, -2, "capacity");
         lua_rawseti(L, -2, output_index++);
     }
+    for (int index = 0; index < 26; ++index) {
+        removable_probe *probe = &removable_probes[index];
+        if (!(seen & ((uint32_t)1U << index))) {
+            probe->has_cached = 0;
+            probe->discard = probe->thread != NULL;
+            probe->kind = 0;
+        }
+    }
     lua_setfield(L, -2, "mounts");
+    integer_field(L, "count", output_index - 1);
+    integer_field(L, "complete", complete);
+    integer_field(L, "failed", failed);
+    if (failed) {
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "partial");
+        string_field(L, "quality", "partial");
+    }
     return 1;
 }
 
 #define MAX_PHYSICAL_DRIVES 32
 #define DRIVE_IDENTITY_REFRESH 60
+#define DRIVE_ENUMERATION_REFRESH_MS 15000
+#define DRIVE_EMPTY_REFRESH_MS 5000
 
 typedef struct {
     int valid;
@@ -1542,6 +1864,9 @@ typedef struct {
 } drive_identity;
 
 static drive_identity drive_identities[MAX_PHYSICAL_DRIVES];
+static uint32_t known_physical_drives;
+static DWORD drives_enumerated_at;
+static int drives_enumerated;
 
 /* Windows 7 added the seek-penalty property; declare it locally so the XP
  * headers still build. Older systems answer with an error, left unknown. */
@@ -1613,6 +1938,16 @@ static const char *bus_name(int bus) {
 
 static int l_collect_disk(lua_State *L) {
     int output_index = 1;
+    DWORD now = GetTickCount();
+    DWORD refresh_interval = known_physical_drives
+        ? DRIVE_ENUMERATION_REFRESH_MS : DRIVE_EMPTY_REFRESH_MS;
+    int scan_all = !drives_enumerated
+        || (DWORD)(now - drives_enumerated_at) >= refresh_interval;
+    if (scan_all) {
+        known_physical_drives = 0;
+        drives_enumerated_at = now;
+        drives_enumerated = 1;
+    }
     lua_createtable(L, 0, 1);
     lua_createtable(L, 4, 0);
     for (int number = 0; number < MAX_PHYSICAL_DRIVES; ++number) {
@@ -1625,15 +1960,21 @@ static int l_collect_disk(lua_State *L) {
         DWORD returned = 0;
         int has_performance, has_length;
         drive_identity *identity = &drive_identities[number];
+        uint32_t drive_bit = (uint32_t)1U << number;
+        /* Most drive numbers are absent. Probe those only on the bounded
+         * rescan; live drives still get fresh counters every sample. */
+        if (!scan_all && !(known_physical_drives & drive_bit)) continue;
         swprintf(path, 40, L"\\\\.\\PhysicalDrive%d", number);
         /* No access rights are needed for the performance and property
          * queries, so an ordinary user sees the same counters as an admin. */
         drive = CreateFileW(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
             OPEN_EXISTING, 0, NULL);
         if (drive == INVALID_HANDLE_VALUE) {
+            known_physical_drives &= ~drive_bit;
             identity->valid = 0;
             continue;
         }
+        known_physical_drives |= drive_bit;
         memset(&performance, 0, sizeof(performance));
         has_performance = DeviceIoControl(drive, IOCTL_DISK_PERFORMANCE, NULL, 0,
             &performance, sizeof(performance), &returned, NULL);
