@@ -184,7 +184,7 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
 
 - Localize remaining technical provider reasons and add pseudolocale and locale-layout tests. (Done: interface reason codes are translated across all ten catalogs; a reason-coverage test and a pseudolocale layout test guard them.)
 - Add onefile PTY, clean-environment, and locale `--check` to standard CI. (Done on 2026-09-28: the `release-artifacts` CI job runs the onefile bundle through the PTY matrix, verifies generated locales against their YAML sources, and builds SBOM/checksums/baseline evidence.)
-- Add crash/signal/continuous-resize, tmux, and SSH scenarios. (Continuous resize storms and SIGTERM/SIGHUP/SIGINT clean-shutdown scenarios now run in the PTY matrix; tmux and dedicated SSH hosts remain to be covered.)
+- Add crash/signal/continuous-resize, tmux, and SSH scenarios. (Continuous resize storms, SIGTERM/SIGHUP/SIGINT clean shutdown, and a real tmux pane scenario now run in the PTY matrix — the tmux case is skipped where tmux is not installed. Dedicated remote-SSH hosts remain to be covered.)
 - Establish repeatable performance benchmarks and calibrate CPU, RSS, first-frame, and input-latency budgets. (A fixed-script benchmark now exists: `make benchmark` reports first-frame, per-page steady CPU, peak RSS, and page-switch latency p50/p95 on the current host. On the 2026-09-28 development host with 537 processes it measured ~242 ms first frame, 3.4%/7.8% CPU on Overview/Processes, ~29 MiB peak RSS, and ~107 ms p95 page-switch latency; budget calibration on the target hardware remains open.)
 - Extend the Server 2008 whole-TUI CPU measurement to periodic refreshes and
   other Windows hosts, then reduce the Processes page's remaining overhead.

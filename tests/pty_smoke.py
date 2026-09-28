@@ -9,8 +9,11 @@ import pathlib
 import pty
 import re
 import select
+import shlex
+import shutil
 import random
 import signal
+import subprocess
 import stat
 import struct
 import tempfile
@@ -563,6 +566,75 @@ def run_signal_shutdown() -> None:
         run_session(100, 30, exercise=False, script=script)
 
 
+def run_tmux_scenario() -> None:
+    """The PTY harness drives a bare pseudo-terminal; tmux sits between the
+    application and the outer terminal and rewrites what it emits. One real
+    tmux pane per run proves startup, rendering, input, and clean exit all
+    survive a multiplexer."""
+    if shutil.which("tmux") is None:
+        print("PTY tmux scenario: skipped (tmux not installed)")
+        return
+    session = "wtop-pty-tmux-%d" % os.getpid()
+    environment = os.environ.copy()
+    if EXECUTABLE:
+        command = EXECUTABLE
+        environment["LUA_PATH"] = ""
+        environment["LUA_CPATH"] = ""
+    else:
+        command = "%s %s" % (LUA, shlex.quote(str(ROOT / "src/wtop.lua")))
+        environment["LUA_PATH"] = f"{ROOT}/src/?.lua;{ROOT}/src/?/init.lua;;"
+        environment["LUA_CPATH"] = f"{ROOT}/build/native/?.so;;"
+    environment["TERM"] = "screen-256color"
+    environment.pop("COLORTERM", None)
+    arguments = ["--interval", "300", "--lang", "en-US"]
+    if EXECUTABLE:
+        command_line = "%s %s" % (command, " ".join(shlex.quote(a) for a in arguments))
+    else:
+        command_line = "%s %s" % (command, " ".join(shlex.quote(a) for a in arguments))
+    try:
+        subprocess.run(
+            ["tmux", "new-session", "-d", "-s", session, "-x", "120", "-y", "34",
+             command_line],
+            check=True, env=environment, timeout=10,
+        )
+        deadline = time.monotonic() + 12.0
+        pane_text = ""
+        while time.monotonic() < deadline:
+            capture = subprocess.run(
+                ["tmux", "capture-pane", "-p", "-t", session],
+                capture_output=True, text=True, timeout=5,
+            )
+            pane_text = capture.stdout
+            if "wtop" in pane_text:
+                break
+            time.sleep(0.2)
+        assert "wtop" in pane_text, "wtop did not render inside the tmux pane"
+        subprocess.run(["tmux", "send-keys", "-t", session, "2"],
+            check=True, timeout=5)
+        time.sleep(1.0)
+        capture = subprocess.run(
+            ["tmux", "capture-pane", "-p", "-t", session],
+            capture_output=True, text=True, timeout=5,
+        )
+        assert "PID" in capture.stdout or "进程" in capture.stdout, (
+            "page switch inside tmux did not reach the process table"
+        )
+        subprocess.run(["tmux", "send-keys", "-t", session, "q"],
+            check=True, timeout=5)
+        exited = time.monotonic() + 8.0
+        while time.monotonic() < exited:
+            probe = subprocess.run(["tmux", "has-session", "-t", session],
+                capture_output=True, timeout=5)
+            if probe.returncode != 0:
+                print("PTY tmux pane render/input/exit: ok")
+                return
+            time.sleep(0.2)
+        raise AssertionError("wtop did not exit from q inside tmux")
+    finally:
+        subprocess.run(["tmux", "kill-session", "-t", session],
+            capture_output=True, timeout=5)
+
+
 def main() -> None:
     profile = os.environ.get("WTOP_PTY_PROFILE", "full")
     if profile not in ("full", "quick"):
@@ -600,6 +672,7 @@ def main() -> None:
     print("PTY 200x45 page-switch final screen: ok")
     run_resize_storm()
     print("PTY 80x24 after 49-step resize storm: ok")
+    run_tmux_scenario()
     run_signal_shutdown()
     print("PTY SIGTERM/SIGHUP/SIGINT shutdown: ok")
     for page in range(2, 11):
