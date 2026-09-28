@@ -987,6 +987,7 @@ local function run_loop(options, backend, renderer, engine, translator)
     local paused = false
     local running = true
     local overlay
+    local overlay_builder
     local overlay_offset = 0
     local smart_selection
     local confirmation
@@ -1150,8 +1151,13 @@ local function run_loop(options, backend, renderer, engine, translator)
         engine.context.selected_process_ids = id and { [id] = true } or {}
     end
 
-    local function show_overlay(lines)
-        overlay = lines
+    local function show_overlay(lines_or_builder)
+        overlay_builder = type(lines_or_builder) == "function" and lines_or_builder or nil
+        if overlay_builder then
+            overlay = overlay_builder()
+        else
+            overlay = lines_or_builder
+        end
         overlay_offset = 0
     end
 
@@ -1377,6 +1383,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             ascii_unit_width = native.available,
             console_cells = console_cells,
         })
+        if overlay_builder then overlay = overlay_builder() end
         if overlay then
             overlay_offset = math.min(overlay_offset, overlay_max_offset(rows, columns, overlay))
             draw_overlay(grid, metadata.theme, overlay, overlay_offset, terminal_capabilities)
@@ -1433,6 +1440,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             local function close()
                 confirmation = nil
                 overlay = nil
+                overlay_builder = nil
                 overlay_offset = 0
                 dirty = true
             end
@@ -1547,6 +1555,7 @@ local function run_loop(options, backend, renderer, engine, translator)
                 elseif event.type == "key" and (event.key == "escape" or event.key == "q") then
                     smart_selection = nil
                     overlay = nil
+                    overlay_builder = nil
                     overlay_offset = 0
                     dirty = true
                 end
@@ -1576,6 +1585,7 @@ local function run_loop(options, backend, renderer, engine, translator)
                 or event.key == "q" or event.key == "?" or event.key == "f1")
             then
                 overlay = nil
+                overlay_builder = nil
                 overlay_offset = 0
                 dirty = true
             end
@@ -1803,8 +1813,9 @@ local function run_loop(options, backend, renderer, engine, translator)
             show_overlay(help_lines(translator, columns, linux_host))
             dirty = true
         elseif key == "h" then
-            show_overlay(sensor_detail_lines(engine.snapshot, translator,
-                engine.clock:now_ns()))
+            show_overlay(function()
+                return sensor_detail_lines(engine.snapshot, translator, engine.clock:now_ns())
+            end)
             dirty = true
         elseif key == "r" or (event.ctrl and key == "l") then
             sync_engine_visibility()

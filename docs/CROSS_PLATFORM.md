@@ -95,6 +95,18 @@ backend, but does not establish old CMD display quality. XP cannot receive a
 runtime-tested claim without an XP test environment. macOS deployment targets
 are 11.0 for arm64 and 10.13 for x86_64; only arm64 macOS 26.5 has been run.
 
+On 2026-09-28, an 80×25 code-page-936 console harness run on Server 2008
+opened the Chinese sensor overlay with `h`. The host had no thermal zone
+reading, so the overlay showed its unavailable reason and an empty-data
+message. Esc returned to the page, `q` exited with code 0, and the console
+screen was restored. This run validates the empty state and console behavior,
+not sensor-value updates or a physical monitor's glyph rendering.
+
+On the 10.0.26100 host, the same 80×25 code-page-936 harness showed one ACPI
+thermal-zone reading at 27.85 oC with fresh quality while the overlay remained
+open for six seconds. Esc and `q` again returned and restored the console.
+The reading stayed constant, so this run did not exercise a changing value.
+
 On 2026-09-28, the current x86 development bundle ran `--snapshot` on the
 Server 2008 host. C: and D: returned complete capacity. WMI reported D: as a
 removable drive. In three direct native mount samples, D: was pending on the
