@@ -1304,8 +1304,9 @@ static int l_collect_memory(lua_State *L) {
 }
 
 #define USER_CACHE_SIZE 128
-#define PROCESS_PATH_CACHE_SIZE 1024
-#define PROCESS_OWNER_CACHE_SIZE 1024
+#define PROCESS_CACHE_WAYS 8
+#define PROCESS_PATH_CACHE_SIZE 4096
+#define PROCESS_OWNER_CACHE_SIZE 4096
 #define PROCESS_PATH_MISS_REFRESH_MS 5000
 #define PROCESS_OWNER_REFRESH_MS 30000
 #define PROCESS_OWNER_MISS_REFRESH_MS 5000
@@ -1323,6 +1324,7 @@ typedef struct {
     DWORD pid;
     uint64_t started;
     DWORD checked_at;
+    DWORD last_used;
     WCHAR path[MAX_PATH];
     int valid;
     int has_path;
@@ -1335,6 +1337,7 @@ typedef struct {
     DWORD pid;
     uint64_t started;
     DWORD checked_at;
+    DWORD last_used;
     char name[192];
     int valid;
     int access_denied;
@@ -1395,23 +1398,88 @@ static const char *process_user(HANDLE process) {
 }
 
 static size_t process_cache_slot(DWORD pid, uint64_t started, size_t mask) {
-    return ((uint32_t)pid * 2654435761U ^ (uint32_t)started
-        ^ (uint32_t)(started >> 32)) & mask;
+    uint32_t hash = (uint32_t)pid ^ (uint32_t)started
+        ^ (uint32_t)(started >> 32);
+    /* Windows PIDs and FILETIME values often have zero low bits. Mix their
+     * higher bits before selecting a power-of-two bucket. */
+    hash ^= hash >> 16;
+    hash *= 0x7FEB352DU;
+    hash ^= hash >> 15;
+    hash *= 0x846CA68BU;
+    hash ^= hash >> 16;
+    return hash & mask;
+}
+
+/* Eight entries share each hash bucket. A busy process no longer evicts a
+ * different process merely because their first hash slot is the same. */
+static process_owner_cache_entry *process_owner_cache_entry_for(DWORD pid,
+    uint64_t started, DWORD now, int *matched) {
+    size_t first = PROCESS_CACHE_WAYS * process_cache_slot(pid, started,
+        PROCESS_OWNER_CACHE_SIZE / PROCESS_CACHE_WAYS - 1);
+    process_owner_cache_entry *vacant = NULL, *oldest = NULL;
+    DWORD oldest_age = 0;
+    for (size_t way = 0; way < PROCESS_CACHE_WAYS; ++way) {
+        process_owner_cache_entry *entry = &process_owner_cache[first + way];
+        if (entry->valid && entry->pid == pid && entry->started == started) {
+            entry->last_used = now;
+            if (matched) *matched = 1;
+            return entry;
+        }
+        if (!entry->valid) {
+            if (!vacant) vacant = entry;
+        } else {
+            DWORD age = (DWORD)(now - entry->last_used);
+            if (!oldest || age > oldest_age) {
+                oldest = entry;
+                oldest_age = age;
+            }
+        }
+    }
+    if (matched) *matched = 0;
+    return vacant ? vacant : oldest;
+}
+
+static process_path_cache_entry *process_path_cache_entry_for(DWORD pid,
+    uint64_t started, DWORD now, int *matched) {
+    size_t first = PROCESS_CACHE_WAYS * process_cache_slot(pid, started,
+        PROCESS_PATH_CACHE_SIZE / PROCESS_CACHE_WAYS - 1);
+    process_path_cache_entry *vacant = NULL, *oldest = NULL;
+    DWORD oldest_age = 0;
+    for (size_t way = 0; way < PROCESS_CACHE_WAYS; ++way) {
+        process_path_cache_entry *entry = &process_path_cache[first + way];
+        if (entry->valid && entry->pid == pid && entry->started == started) {
+            entry->last_used = now;
+            if (matched) *matched = 1;
+            return entry;
+        }
+        if (!entry->valid) {
+            if (!vacant) vacant = entry;
+        } else {
+            DWORD age = (DWORD)(now - entry->last_used);
+            if (!oldest || age > oldest_age) {
+                oldest = entry;
+                oldest_age = age;
+            }
+        }
+    }
+    if (matched) *matched = 0;
+    return vacant ? vacant : oldest;
 }
 
 static int cached_process_user_lookup(DWORD pid, uint64_t started, DWORD now,
     const char **owner, int *access_denied) {
     process_owner_cache_entry *cached;
     DWORD interval;
-    cached = &process_owner_cache[process_cache_slot(pid, started,
-        PROCESS_OWNER_CACHE_SIZE - 1)];
-    interval = cached->name[0] ? PROCESS_OWNER_REFRESH_MS
-        : PROCESS_OWNER_MISS_REFRESH_MS;
-    if (cached->valid && cached->pid == pid && cached->started == started
-        && (DWORD)(now - cached->checked_at) < interval) {
-        *owner = cached->name[0] ? cached->name : NULL;
-        *access_denied = cached->access_denied;
-        return 1;
+    int matched;
+    cached = process_owner_cache_entry_for(pid, started, now, &matched);
+    if (matched) {
+        interval = cached->name[0] ? PROCESS_OWNER_REFRESH_MS
+            : PROCESS_OWNER_MISS_REFRESH_MS;
+        if ((DWORD)(now - cached->checked_at) < interval) {
+            *owner = cached->name[0] ? cached->name : NULL;
+            *access_denied = cached->access_denied;
+            return 1;
+        }
     }
     *owner = NULL;
     *access_denied = 0;
@@ -1419,11 +1487,12 @@ static int cached_process_user_lookup(DWORD pid, uint64_t started, DWORD now,
 }
 
 static void cache_process_user_denied(DWORD pid, uint64_t started, DWORD now) {
-    process_owner_cache_entry *cached = &process_owner_cache[
-        process_cache_slot(pid, started, PROCESS_OWNER_CACHE_SIZE - 1)];
+    process_owner_cache_entry *cached = process_owner_cache_entry_for(pid,
+        started, now, NULL);
     cached->pid = pid;
     cached->started = started;
     cached->checked_at = now;
+    cached->last_used = now;
     cached->name[0] = 0;
     cached->access_denied = 1;
     cached->valid = 1;
@@ -1442,11 +1511,11 @@ static const char *cached_process_user(HANDLE process, DWORD pid,
     if (cached_process_user_lookup(pid, started, now, &owner, &access_denied))
         return owner;
     owner = process_user(process);
-    cached = &process_owner_cache[process_cache_slot(pid, started,
-        PROCESS_OWNER_CACHE_SIZE - 1)];
+    cached = process_owner_cache_entry_for(pid, started, now, NULL);
     cached->pid = pid;
     cached->started = started;
     cached->checked_at = now;
+    cached->last_used = now;
     cached->name[0] = 0;
     if (owner) {
         strncpy(cached->name, owner, sizeof(cached->name) - 1);
@@ -1496,10 +1565,10 @@ static int process_path(HANDLE process, int can_read_memory, WCHAR *path,
  * short delay, while a successful path remains tied to PID and creation time. */
 static int cached_process_path_lookup(DWORD pid, uint64_t started, DWORD now,
     WCHAR path[MAX_PATH], int *access_denied) {
-    process_path_cache_entry *cached = &process_path_cache[
-        process_cache_slot(pid, started, PROCESS_PATH_CACHE_SIZE - 1)];
-    if (cached->valid && cached->pid == pid && cached->started == started
-        && (cached->has_path
+    int matched;
+    process_path_cache_entry *cached = process_path_cache_entry_for(pid,
+        started, now, &matched);
+    if (matched && (cached->has_path
             || (DWORD)(now - cached->checked_at) < PROCESS_PATH_MISS_REFRESH_MS)) {
         *access_denied = cached->access_denied;
         if (cached->has_path) wcscpy(path, cached->path);
@@ -1510,11 +1579,12 @@ static int cached_process_path_lookup(DWORD pid, uint64_t started, DWORD now,
 }
 
 static void cache_process_path_denied(DWORD pid, uint64_t started, DWORD now) {
-    process_path_cache_entry *cached = &process_path_cache[
-        process_cache_slot(pid, started, PROCESS_PATH_CACHE_SIZE - 1)];
+    process_path_cache_entry *cached = process_path_cache_entry_for(pid,
+        started, now, NULL);
     cached->pid = pid;
     cached->started = started;
     cached->checked_at = now;
+    cached->last_used = now;
     cached->has_path = 0;
     cached->access_denied = 1;
     cached->valid = 1;
@@ -1530,14 +1600,14 @@ static int cached_process_path(HANDLE process, int can_read_memory, DWORD pid,
         int status = cached_process_path_lookup(pid, started, now, path,
             &access_denied);
         if (status >= 0) return status;
-        cached = &process_path_cache[process_cache_slot(pid, started,
-            PROCESS_PATH_CACHE_SIZE - 1)];
+        cached = process_path_cache_entry_for(pid, started, now, NULL);
     }
     int found = process_path(process, can_read_memory, path, MAX_PATH);
     if (cached) {
         cached->pid = pid;
         cached->started = started;
         cached->checked_at = now;
+        cached->last_used = now;
         cached->has_path = found;
         cached->access_denied = !found && GetLastError() == ERROR_ACCESS_DENIED;
         if (found) wcscpy(cached->path, path);

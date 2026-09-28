@@ -124,6 +124,14 @@ process query if saturated. A 10-second Processes-page classic-console run on
 Server 2008 used 1.56% of one core and exited with the console restored.
 These runs do not establish XP compatibility or 1,000-process performance.
 
+The path and owner caches now keep eight identities per hash bucket. In a
+same-host, alternating direct collector comparison, 11 warm calls on Server
+2008 with 76 rows took 0.60–0.85 ms with the previous direct-mapped caches and
+0.38–0.63 ms with the new caches. On the 10.0.26100 host, about 375-row calls
+took 3.98–5.29 ms and 1.73–2.17 ms respectively. Each run retained nearly all
+available paths and owners, with no denied or raced rows. These are short warm
+collector samples; whole-TUI use and 1,000 real processes need separate checks.
+
 The classic-console harness now measures child CPU time over a chosen window.
 On this Server 2008 host, the bundle with frame coalescing and printable-ASCII
 layout used 1.71–1.87% of one core on Overview, 3.43–4.05% on Processes,
@@ -198,7 +206,9 @@ still unverified on XP itself.
   socket table about 6 ms; on Server 2008 the
   display-adapter query took about 18 ms, disks 11 ms and mounts 8 ms.
   Display-adapter identity is now cached for up to 15 seconds. Process paths
-  and owner labels are keyed by PID and creation time; owner labels are queried
+  and owner labels are keyed by PID and creation time in bounded eight-way
+  caches with 4,096 entries each, avoiding repeated handle opens when two
+  process identities hash to the same first slot. Owner labels are queried
   again after 30 seconds, or after 5 seconds when lookup failed. The disk
   collector skips absent physical-drive numbers between periodic rescans.
   Warm collector calls and whole-TUI CPU were measured on Server 2008 as noted
