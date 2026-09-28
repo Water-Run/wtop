@@ -58,7 +58,7 @@ CFLAGS_NATIVE += -std=c17 -fPIC -Wall -Wextra -Werror
 	test-bundle-dir test-bundle-file
 
 .PHONY: all resource-check resource-check-full toolchain luainstaller native locales check test test-all test-fast \
-	test-54 test-55 test-pty test-pty-quick test-fuzz run \
+	test-54 test-55 test-pty test-pty-quick benchmark test-fuzz run \
 	diagnose snapshot bundle-dir bundle-file test-bundle-dir test-bundle-file checksums \
 	rock-build rock-install rockspec-check luarocks-bootstrap luarocks-install test-luarocks
 
@@ -121,6 +121,9 @@ test-55: resource-check native locales
 test-54: resource-check
 	@lua -e 'assert(_VERSION == "Lua 5.4", "test-54 requires Lua 5.4, got " .. _VERSION)'
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH=';;' lua tests/run.lua $(TEST_FILES)
+
+benchmark: resource-check native locales
+	@WTOP_LUA='$(LUA)' WTOP_ROOT='$(CURDIR)' python3 tools/perf_benchmark.py
 
 test-pty: resource-check-full native locales
 	@WTOP_LUA='$(LUA)' WTOP_ROOT='$(CURDIR)' python3 tests/pty_smoke.py

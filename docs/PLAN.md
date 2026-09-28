@@ -185,7 +185,7 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
 - Localize remaining technical provider reasons and add pseudolocale and locale-layout tests. (Done: interface reason codes are translated across all ten catalogs; a reason-coverage test and a pseudolocale layout test guard them.)
 - Add onefile PTY, clean-environment, and locale `--check` to standard CI.
 - Add crash/signal/continuous-resize, tmux, and SSH scenarios. (Continuous resize storms and SIGTERM/SIGHUP/SIGINT clean-shutdown scenarios now run in the PTY matrix; tmux and dedicated SSH hosts remain to be covered.)
-- Establish repeatable performance benchmarks and calibrate CPU, RSS, first-frame, and input-latency budgets.
+- Establish repeatable performance benchmarks and calibrate CPU, RSS, first-frame, and input-latency budgets. (A fixed-script benchmark now exists: `make benchmark` reports first-frame, per-page steady CPU, peak RSS, and page-switch latency p50/p95 on the current host. On the 2026-09-28 development host with 537 processes it measured ~242 ms first frame, 3.4%/7.8% CPU on Overview/Processes, ~29 MiB peak RSS, and ~107 ms p95 page-switch latency; budget calibration on the target hardware remains open.)
 - Extend the Server 2008 whole-TUI CPU measurement to periodic refreshes and
   other Windows hosts, then reduce the Processes page's remaining overhead.
 - Validate the bounded Windows removable-media probe workers on Server 2008,
@@ -239,7 +239,7 @@ These remain unmeasured and uncalibrated release goals, not current results:
 | Historical data | Fixed-size; never grows without bound over runtime |
 | Collector failure | Back off one collector without blocking others |
 
-The implementation already has fixed rings, diff output, collector durations, scheduler backoff, first-frame deferral for hidden sources, GPU fdinfo toggled by actual process-table placement, and pre-test resource health checks. In one safe-mode measurement on the current x86_64 development host, Overview probe plus initial active-page sampling took about 91 ms, and the first full fdinfo sample after switching to GPU took about 104 ms. These single-host values are not cross-machine release evidence; repeatable CPU/RSS/input-latency benchmarks are still needed.
+The implementation already has fixed rings, diff output, collector durations, scheduler backoff, first-frame deferral for hidden sources, GPU fdinfo toggled by actual process-table placement, and pre-test resource health checks. `make benchmark` (`tools/perf_benchmark.py`) provides the repeatable measurement: it drives the real TUI in a pseudo-terminal with a fixed key script and reports cold-start first frame, steady-state CPU per page, peak RSS, and page-switch latency percentiles, optionally as JSON for run-to-run comparison.
 
 ## 9. 0.1 Release Gates
 
