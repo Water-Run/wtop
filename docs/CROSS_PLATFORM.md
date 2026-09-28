@@ -211,7 +211,11 @@ of the immediately preceding bundle used 3.58–3.89%. The process exited
 normally in each run. These short single-host runs do not establish a release
 performance baseline.
 
-On 2026-09-28, the bundle with all of that day's changes was re-measured with
+On 2026-09-28 the Workloads page gained keyboard navigation on a live
+cgroup v2 host (Debian 13, 176 cgroup nodes): arrow keys move a selection
+whose detail panel follows it, and `c` collapses or expands the selected
+subtree, hiding the whole subtree rather than direct children only. Both
+were driven end-to-end over SSH on that host.
 60-second windows on the classic console at the default update rate, covering
 full periodic-refresh cycles (15-second adapter cache, 30-second path and
 owner refreshes). Server 2008 used 1.72% of one core on Overview, 2.29% on

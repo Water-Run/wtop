@@ -595,6 +595,15 @@ local HELP_SECTIONS = {
         },
     },
     {
+        id = "help.section_workloads", title = "Workloads",
+        bindings = {
+            { "↑ ↓ Home End", "help.workload_select",
+                "move the workload selection; the detail panel follows" },
+            { "c", "help.workload_collapse",
+                "collapse or expand the selected workload subtree" },
+        },
+    },
+    {
         id = "help.section_privacy", title = "Privacy",
         bindings = {
             { "m", "help.mask_remote",
@@ -1063,6 +1072,8 @@ local function run_loop(options, backend, renderer, engine, translator)
     local theme_name = options.theme or UI.Theme.DEFAULT
     local show_virtual = false
     local mask_remote = options.mask_remote_addresses == true
+    local workload_collapsed = {}
+    local workload_selected_id = nil
     local available_locales = I18n.available() or { translator:locale() }
 
     --- Rebuild the translator and every string the workspace baked in.
@@ -1126,6 +1137,32 @@ local function run_loop(options, backend, renderer, engine, translator)
             math.min(maximum, (widget_offsets[id] or 0) + delta * step))
         dirty = true
         return true
+    end
+
+    -- Declared here so move_workload_selection can capture it; assigned by
+    -- the first render below.
+    local models
+
+    local function move_workload_selection(step)
+        local table_model = models and models.workload_table
+        local ids = table_model and table_model.ids
+        if type(ids) ~= "table" or #ids == 0 then return end
+        local current = 1
+        for index, id in ipairs(ids) do
+            if id == workload_selected_id then current = index break end
+        end
+        current = math.max(1, math.min(#ids, current + step))
+        workload_selected_id = ids[current]
+        -- Keep the cursor inside the panel window through the same offset
+        -- store focused-widget scrolling uses.
+        local widget = last_metadata and last_metadata.widgets
+            and last_metadata.widgets.workload_table
+        local visible = widget and widget.visible_rows
+            and widget.visible_rows or math.max(1, rows - 6)
+        local offset = widget_offsets.workload_table or 0
+        if current < offset + 1 then offset = current - 1 end
+        if current > offset + visible then offset = current - visible end
+        widget_offsets.workload_table = math.max(0, offset)
     end
 
     --- Rows the process table actually drew last frame.
@@ -1293,6 +1330,8 @@ local function run_loop(options, backend, renderer, engine, translator)
                 show_virtual_devices = show_virtual,
                 show_pseudo_filesystems = show_virtual,
                 mask_remote_addresses = mask_remote,
+                workload_collapsed = workload_collapsed,
+                workload_selected = workload_selected_id,
             })
         local process_count = #models.process_table.rows
         local process_selected = models.process_table.status.selected_index or 0
@@ -1400,6 +1439,16 @@ local function run_loop(options, backend, renderer, engine, translator)
                 { key = "?", id = "actions.help", fallback = "Help", command = "help" },
                 { key = "q", id = "actions.quit", fallback = "Quit", command = "quit" },
             }
+        elseif workspace.active == "workloads" then
+            status.hints = {
+                { key = "1–0", id = "actions.tabs", fallback = "Tabs", command = "tabs" },
+                { key = "↑↓", id = "actions.workload_select", fallback = "Select",
+                  command = "workload_select" },
+                { key = "c", id = "actions.toggle_collapse", fallback = "Collapse",
+                  command = "collapse" },
+                { key = "?", id = "actions.help", fallback = "Help", command = "help" },
+                { key = "q", id = "actions.quit", fallback = "Quit", command = "quit" },
+            }
         elseif workspace.active == "insights" then
             status.hints = {
                 { key = "1–0", id = "actions.tabs", fallback = "Tabs", command = "tabs" },
@@ -1471,7 +1520,7 @@ local function run_loop(options, backend, renderer, engine, translator)
         return models
     end
 
-    local models = render_frame()
+    models = render_frame()
     local last_presented_ns = native.monotonic_ns()
 
     --- Replace the draft and move the cursor.
@@ -1803,6 +1852,46 @@ local function run_loop(options, backend, renderer, engine, translator)
         elseif (key == "u" or key == "U") and workspace.edit_mode then
             if key == "U" or event.shift then workspace:redo() else workspace:undo() end
             dirty = true
+        elseif (key == "up" or key == "down" or key == "pageup"
+                or key == "pagedown" or key == "home" or key == "end")
+            and workspace.active == "workloads" then
+            local table_model = models and models.workload_table
+            local count = table_model and table_model.ids and #table_model.ids or 0
+            if count > 0 then
+                if key == "home" then
+                    move_workload_selection(-count)
+                elseif key == "end" then
+                    move_workload_selection(count)
+                else
+                    local widget = last_metadata and last_metadata.widgets
+                        and last_metadata.widgets.workload_table
+                    local visible = widget and widget.visible_rows
+                        and widget.visible_rows or math.max(1, rows - 6)
+                    local step = (key == "pageup" or key == "pagedown")
+                        and math.max(1, visible - 1) or 1
+                    if key == "up" or key == "pageup" then step = -step end
+                    move_workload_selection(step)
+                end
+                dirty = true
+            end
+        elseif key == "c" and workspace.active == "workloads" then
+            if workload_selected_id == nil then
+                -- The cursor conceptually starts at the top row; the first
+                -- collapse press targets it instead of doing nothing.
+                local ids = models and models.workload_table
+                    and models.workload_table.ids
+                if type(ids) == "table" and ids[1] then
+                    workload_selected_id = ids[1]
+                end
+            end
+            if workload_selected_id ~= nil then
+                if workload_collapsed[workload_selected_id] then
+                    workload_collapsed[workload_selected_id] = nil
+                else
+                    workload_collapsed[workload_selected_id] = true
+                end
+                dirty = true
+            end
         elseif (key == "up" or key == "down" or key == "pageup" or key == "pagedown")
             and workspace.active ~= "processes"
             and scroll_focused_widget(

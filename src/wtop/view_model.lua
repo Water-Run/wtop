@@ -731,27 +731,67 @@ local function mount_rows(snapshot, format, options)
     return rows, hidden
 end
 
-local function workload_rows(snapshot, format)
-    local rows = {}
-    for _, workload in ipairs(snapshot.workloads and snapshot.workloads.workloads or {}) do
-        if #rows >= TABLE_ROW_LIMIT then break end
-        local io_rates = workload.io and workload.io.totals and workload.io.totals.rates or {}
-        local pressure = workload.pressure and workload.pressure.cpu
-        local cpu_pressure = pressure and pressure.some and pressure.some.avg10
-        rows[#rows + 1] = {
-            workload = string.rep("  ", math.min(workload.depth or 0, 6)) .. (workload.name or workload.id),
-            cpu = percent(format, workload.cpu and workload.cpu.utilization_percent),
-            memory = bytes(format, workload.memory and workload.memory.current_bytes),
-            read = rate(format, io_rates.rbytes_per_second),
-            write = rate(format, io_rates.wbytes_per_second),
-            processes = tostring(workload.processes and workload.processes.count or 0),
-            pressure = percent(format, cpu_pressure),
-            quality = workload.quality or "—",
-            raw_cpu = workload.cpu and workload.cpu.utilization_percent or -1,
-            workload_ref = workload,
-        }
+local function workload_by_id(snapshot)
+    local lookup = {}
+    for _, workload in ipairs(snapshot.workloads
+        and snapshot.workloads.workloads or {}) do
+        lookup[workload.id] = workload
     end
-    return rows
+    return lookup
+end
+
+local function workload_rows(snapshot, format, collapsed, selected_id)
+    local source = snapshot.workloads and snapshot.workloads.workloads or {}
+    local by_id = {}
+    for _, workload in ipairs(source) do by_id[workload.id] = workload end
+    local has_children = {}
+    for _, workload in ipairs(source) do
+        if workload.parent_id and by_id[workload.parent_id] then
+            has_children[workload.parent_id] = true
+        end
+    end
+    -- A collapsed node hides its whole subtree, not just direct children.
+    -- The walk is bounded so a malformed parent graph cannot loop.
+    local function hidden(workload)
+        local parent = workload.parent_id
+        local hops = 0
+        while parent ~= nil and by_id[parent] ~= nil and hops < 128 do
+            if collapsed and collapsed[parent] then return true end
+            parent = by_id[parent].parent_id
+            hops = hops + 1
+        end
+        return false
+    end
+    local rows, ids, selected_index = {}, {}, nil
+    for _, workload in ipairs(source) do
+        if #rows >= TABLE_ROW_LIMIT then break end
+        if not hidden(workload) then
+            local io_rates = workload.io and workload.io.totals and workload.io.totals.rates or {}
+            local pressure = workload.pressure and workload.pressure.cpu
+            local cpu_pressure = pressure and pressure.some and pressure.some.avg10
+            local children = has_children[workload.id]
+            local marker = children and (collapsed and collapsed[workload.id]
+                and "▸ " or "▾ ") or "· "
+            rows[#rows + 1] = {
+                workload = string.rep("  ", math.min(workload.depth or 0, 6))
+                    .. marker .. (workload.name or workload.id),
+                cpu = percent(format, workload.cpu and workload.cpu.utilization_percent),
+                memory = bytes(format, workload.memory and workload.memory.current_bytes),
+                read = rate(format, io_rates.rbytes_per_second),
+                write = rate(format, io_rates.wbytes_per_second),
+                processes = tostring(workload.processes and workload.processes.count or 0),
+                pressure = percent(format, cpu_pressure),
+                quality = workload.quality or "—",
+                raw_cpu = workload.cpu and workload.cpu.utilization_percent or -1,
+                workload_ref = workload,
+            }
+            ids[#ids + 1] = workload.id
+            if selected_id ~= nil and workload.id == selected_id then
+                selected_index = #rows
+            end
+        end
+    end
+    return rows, ids, selected_index
 end
 
 local function power_rows(snapshot, format)
@@ -1406,7 +1446,33 @@ local WORKLOAD_KINDS = {
     },
 }
 
-local function workload_detail_entries(snapshot, format, i18n)
+local function workload_selected_entries(selected, format, i18n)
+    local io_rates = selected.io and selected.io.totals
+        and selected.io.totals.rates or {}
+    local cpu_pressure = selected.pressure and selected.pressure.cpu
+    local entries = {
+        section("workloads.selection_section", "Selection"),
+        entry("workloads.selection_name", "Workload",
+            selected.name or selected.id, { emphasis = true }),
+        entry("workloads.selection_path", "Path", selected.path or selected.id),
+        entry("metrics.cpu", "CPU",
+            percent(format, selected.cpu and selected.cpu.utilization_percent)),
+        entry("metrics.memory", "Memory",
+            bytes(format, selected.memory and selected.memory.current_bytes)),
+        entry("metrics.read", "Read", rate(format, io_rates.rbytes_per_second)),
+        entry("metrics.write", "Write", rate(format, io_rates.wbytes_per_second)),
+        entry("metrics.processes", "Processes",
+            tostring(selected.processes and selected.processes.count or 0)),
+        entry("metrics.pressure", "Pressure",
+            percent(format, cpu_pressure and cpu_pressure.some
+                and cpu_pressure.some.avg10)),
+        entry("inspector.quality", "Quality", Technical.state(i18n, selected.quality)),
+    }
+    return entries
+end
+
+local function workload_detail_entries(snapshot, format, i18n, selected)
+    if selected ~= nil then return workload_selected_entries(selected, format, i18n) end
     local summary = snapshot.workloads and snapshot.workloads.summary
     if not summary then return {} end
     local root = summary.root or {}
@@ -1627,7 +1693,16 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         mount_table_rows, mounts_hidden = mount_rows(snapshot, format,
             { show_pseudo = options.show_pseudo_filesystems })
     end
-    local workload_table_rows = on("workloads", "workload_table") and workload_rows(snapshot, format) or {}
+    local workload_table_rows, workload_row_ids, workload_selected_index = {}, {}, nil
+    if on("workloads", "workload_table") then
+        workload_table_rows, workload_row_ids, workload_selected_index =
+            workload_rows(snapshot, format,
+                type(options.workload_collapsed) == "table"
+                    and options.workload_collapsed or nil,
+                options.workload_selected)
+    end
+    local workload_selected = options.workload_selected ~= nil
+        and workload_by_id(snapshot)[options.workload_selected] or nil
 
     local average_frequency = Engine.average_cpu_frequency(snapshot.cpu_frequency)
     local maximum_temperature = Engine.maximum_temperature(snapshot.sensors)
@@ -2028,11 +2103,14 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                     format = function(value) return Technical.state(i18n, value) end },
             },
             rows = workload_table_rows,
+            ids = workload_row_ids,
+            selected = workload_selected_index,
             panel_title = snapshot.workloads and WORKLOAD_KINDS[snapshot.workloads.kind]
                 and translated(i18n, WORKLOAD_KINDS[snapshot.workloads.kind].title[1],
                     WORKLOAD_KINDS[snapshot.workloads.kind].title[2]) or nil,
         },
-        workload_detail = { entries = workload_detail_entries(snapshot, format, i18n) },
+        workload_detail = { entries = workload_detail_entries(snapshot, format,
+            i18n, workload_selected) },
 
         -- System ---------------------------------------------------------
         system_identity = { entries = system_identity_entries(snapshot, format, i18n) },
