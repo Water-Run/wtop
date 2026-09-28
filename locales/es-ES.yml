@@ -301,6 +301,8 @@ messages:
   reason.no_hwmon_devices: "No se encontraron dispositivos hwmon"
   reason.no_sensors: "No se informaron sensores de hardware"
   reason.no_thermal_zones: "No se informaron zonas térmicas"
+  reason.process_identity_changed: "La identidad del proceso cambió; se reutilizó el PID"
+  reason.process_io_unavailable: "Contadores de E/S del proceso no disponibles"
   reason.thermal_zone_counters_unavailable: "Contadores de zonas térmicas de Windows no disponibles"
   reason.unsupported_on_this_platform: "Esta plataforma no admite esta fuente de datos"
   sampling.frequency.high: "Alta"

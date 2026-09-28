@@ -293,6 +293,8 @@ messages:
   reason.no_hwmon_devices: "No hwmon devices found"
   reason.no_sensors: "No hardware sensors reported"
   reason.no_thermal_zones: "No thermal zones reported"
+  reason.process_identity_changed: "Process identity changed; PID was reused"
+  reason.process_io_unavailable: "Process I/O counters unavailable"
   reason.thermal_zone_counters_unavailable: "Windows thermal-zone counters unavailable"
   reason.unsupported_on_this_platform: "This source is unsupported on this platform"
   sampling.frequency.high: "High"

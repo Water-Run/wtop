@@ -360,7 +360,8 @@ local function export_processes(processes, limit)
         result.top[index] = copy_fields(candidates[index], {
             "id", "pid", "name", "command", "state", "parent_pid", "threads",
             "uid", "user", "priority", "nice", "processor", "cpu_percent",
-            "resident_bytes", "virtual_bytes", "quality", "partial", "partial_reason",
+            "resident_bytes", "virtual_bytes", "io_read_bytes", "io_write_bytes",
+            "quality", "partial", "partial_reason",
         })
     end
     return result
@@ -957,7 +958,8 @@ function M.agent(snapshot, options)
     for index, process in ipairs(full.processes and full.processes.top or {}) do
         top_processes[index] = copy_fields(process, {
             "id", "pid", "name", "state", "user", "cpu_percent",
-            "resident_bytes", "threads", "quality", "partial",
+            "resident_bytes", "threads", "io_read_bytes", "io_write_bytes",
+            "quality", "partial",
         })
     end
 

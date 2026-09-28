@@ -287,6 +287,8 @@ messages:
   reason.no_hwmon_devices: "未發現 hwmon 裝置"
   reason.no_sensors: "未回報硬體感測器"
   reason.no_thermal_zones: "未回報溫度區域"
+  reason.process_identity_changed: "程序身分已變更，PID 已被重用"
+  reason.process_io_unavailable: "程序 I/O 計數器無法使用"
   reason.thermal_zone_counters_unavailable: "Windows 溫度區域計數器無法使用"
   reason.unsupported_on_this_platform: "此平台不支援此資料來源"
   sampling.frequency.high: "高"

@@ -294,6 +294,8 @@ messages:
   reason.no_hwmon_devices: "Keine hwmon-Geräte gefunden"
   reason.no_sensors: "Keine Hardwaresensoren gemeldet"
   reason.no_thermal_zones: "Keine thermischen Zonen gemeldet"
+  reason.process_identity_changed: "Prozessidentität geändert; PID wurde wiederverwendet"
+  reason.process_io_unavailable: "Prozess-E/A-Zähler nicht verfügbar"
   reason.thermal_zone_counters_unavailable: "Windows-Thermalzonenzähler nicht verfügbar"
   reason.unsupported_on_this_platform: "Diese Plattform unterstützt diese Datenquelle nicht"
   sampling.frequency.high: "Hoch"

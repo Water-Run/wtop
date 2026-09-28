@@ -97,7 +97,8 @@ end
 
 local function io_value(process, direction)
   local nested = type(process.io) == "table" and process.io or nil
-  return finite_number(process["io_" .. direction])
+  return finite_number(process["io_" .. direction .. "_bytes"])
+    or finite_number(process["io_" .. direction])
     or finite_number(process[direction .. "_bytes"])
     or (nested and finite_number(nested[direction .. "_bytes"]))
     or (nested and finite_number(nested[direction .. "_bytes_per_second"]))

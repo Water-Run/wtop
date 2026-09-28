@@ -308,6 +308,8 @@ messages:
   reason.no_hwmon_devices: "Устройства hwmon не найдены"
   reason.no_sensors: "Аппаратные датчики не обнаружены"
   reason.no_thermal_zones: "Тепловые зоны не обнаружены"
+  reason.process_identity_changed: "Идентификатор процесса изменился; PID был повторно использован"
+  reason.process_io_unavailable: "Счётчики ввода-вывода процесса недоступны"
   reason.thermal_zone_counters_unavailable: "Счётчики тепловых зон Windows недоступны"
   reason.unsupported_on_this_platform: "Эта платформа не поддерживает данный источник"
   sampling.frequency.high: "Высокая"

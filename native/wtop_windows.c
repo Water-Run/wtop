@@ -67,6 +67,13 @@ static void number_field(lua_State *L, const char *name, lua_Number value) {
     lua_setfield(L, -2, name);
 }
 
+static void uint64_field(lua_State *L, const char *name, uint64_t value) {
+    if (value <= (uint64_t)LUA_MAXINTEGER)
+        integer_field(L, name, (lua_Integer)value);
+    else
+        number_field(L, name, (lua_Number)value);
+}
+
 static void string_field(lua_State *L, const char *name, const char *value) {
     lua_pushstring(L, value);
     lua_setfield(L, -2, name);
@@ -1537,6 +1544,52 @@ static HANDLE open_query_process(DWORD pid, int *can_read_memory) {
     return process;
 }
 
+/* A selected row only: the regular process scan must not open another handle
+ * for every process just to populate a detail overlay. XP requires the full
+ * PROCESS_QUERY_INFORMATION right for GetProcessIoCounters. */
+static int l_collect_process_io(lua_State *L) {
+    lua_Integer pid_value = luaL_checkinteger(L, 1);
+    lua_Integer expected_start = luaL_checkinteger(L, 2);
+    HANDLE process;
+    FILETIME created, exited, kernel, user;
+    IO_COUNTERS counters;
+    DWORD code;
+    luaL_argcheck(L, pid_value > 0 && pid_value <= 2147483647, 1,
+        "invalid process ID");
+    luaL_argcheck(L, expected_start > 0, 2, "invalid process start time");
+    process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, (DWORD)pid_value);
+    if (!process) process = OpenProcess(0x1000, FALSE, (DWORD)pid_value);
+    if (!process) return push_windows_error(L, "OpenProcess");
+    if (!GetProcessTimes(process, &created, &exited, &kernel, &user)) {
+        code = GetLastError();
+        CloseHandle(process);
+        SetLastError(code);
+        return push_windows_error(L, "GetProcessTimes");
+    }
+    if ((lua_Integer)filetime_value(created) != expected_start) {
+        CloseHandle(process);
+        lua_pushnil(L);
+        lua_pushliteral(L, "process_identity_changed");
+        return 2;
+    }
+    if (!GetProcessIoCounters(process, &counters)) {
+        code = GetLastError();
+        CloseHandle(process);
+        SetLastError(code);
+        return push_windows_error(L, "GetProcessIoCounters");
+    }
+    CloseHandle(process);
+    lua_createtable(L, 0, 7);
+    uint64_field(L, "read_bytes", counters.ReadTransferCount);
+    uint64_field(L, "write_bytes", counters.WriteTransferCount);
+    uint64_field(L, "other_bytes", counters.OtherTransferCount);
+    uint64_field(L, "read_operations", counters.ReadOperationCount);
+    uint64_field(L, "write_operations", counters.WriteOperationCount);
+    uint64_field(L, "other_operations", counters.OtherOperationCount);
+    string_field(L, "source", "GetProcessIoCounters");
+    return 1;
+}
+
 static int process_path(HANDLE process, int can_read_memory, WCHAR *path,
     DWORD characters) {
     static int resolved = 0;
@@ -1722,8 +1775,10 @@ static int bulk_process_layout(ULONG bytes, DWORD *count) {
     int verify_self = !bulk_process_layout_checked;
     int self_found = 0;
     FILETIME self_created, self_exited, self_kernel, self_user;
+    IO_COUNTERS self_io;
     if (verify_self && !GetProcessTimes(GetCurrentProcess(), &self_created,
             &self_exited, &self_kernel, &self_user)) return 0;
+    if (verify_self && !GetProcessIoCounters(GetCurrentProcess(), &self_io)) return 0;
     for (;;) {
         SYSTEM_PROCESS_INFORMATION *entry;
         ULONG next;
@@ -1739,6 +1794,9 @@ static int bulk_process_layout(ULONG bytes, DWORD *count) {
         if (verify_self
             && (DWORD)(uintptr_t)entry->UniqueProcessId == GetCurrentProcessId()) {
             if ((uint64_t)entry->CreateTime.QuadPart != filetime_value(self_created))
+                return 0;
+            if (entry->IoCounters.ReadTransferCount > self_io.ReadTransferCount
+                || entry->IoCounters.WriteTransferCount > self_io.WriteTransferCount)
                 return 0;
             self_found = 1;
         }
@@ -1870,7 +1928,7 @@ static int l_collect_process(lua_State *L) {
             }
             if (path_denied || owner_denied) row_denied = 1;
             if (row_denied) ++denied;
-            lua_createtable(L, 0, 13);
+            lua_createtable(L, 0, 15);
             integer_field(L, "pid", (lua_Integer)pid);
             integer_field(L, "parent_pid",
                 (lua_Integer)(DWORD)(uintptr_t)entry->InheritedFromUniqueProcessId);
@@ -1904,6 +1962,8 @@ static int l_collect_process(lua_State *L) {
             }
             if (has_working) integer_field(L, "resident_bytes", (lua_Integer)working);
             if (has_commit) integer_field(L, "virtual_bytes", (lua_Integer)commit);
+            uint64_field(L, "io_read_bytes", entry->IoCounters.ReadTransferCount);
+            uint64_field(L, "io_write_bytes", entry->IoCounters.WriteTransferCount);
             if (!has_times || !has_working || !has_commit || row_denied
                 || (needs_handle && process && !identity_matches)) {
                 lua_pushboolean(L, 1);
@@ -2537,6 +2597,7 @@ static const luaL_Reg functions[] = {
     {"collect_cpu_info", l_collect_cpu_info},
     {"collect_memory", l_collect_memory},
     {"collect_process", l_collect_process},
+    {"collect_process_io", l_collect_process_io},
     {"collect_disk", l_collect_disk},
     {"collect_mounts", l_collect_mounts},
     {"collect_network", l_collect_network},

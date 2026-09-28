@@ -409,6 +409,35 @@ local function detail_formatted(call, fallback)
     return ok and value or fallback or "—"
 end
 
+local function process_with_io_detail(process)
+    if type(process.io_read_bytes) == "number"
+        or type(process.io_write_bytes) == "number" then
+        return setmetatable({
+            io = {
+                read_bytes = process.io_read_bytes,
+                write_bytes = process.io_write_bytes,
+                source = "SystemProcessInformation",
+            },
+        }, { __index = process })
+    end
+    if type(native.collect_process_io) ~= "function"
+        or type(process.pid) ~= "number"
+        or type(process.starttime_ticks) ~= "number" then
+        return process
+    end
+    local ok, io, reason = pcall(native.collect_process_io,
+        process.pid, process.starttime_ticks)
+    if ok and type(io) == "table" then
+        return setmetatable({ io = io }, { __index = process })
+    end
+    local failure = ok and reason or io
+    if type(failure) ~= "string" or failure == "" then
+        failure = "process_io_unavailable"
+    end
+    return setmetatable({ io_reason = failure },
+        { __index = process })
+end
+
 local function process_detail_lines(process, i18n)
     if not process then
         return {
@@ -470,6 +499,13 @@ local function process_detail_lines(process, i18n)
         { translated(i18n, "process.details_involuntary_switches", "Involuntary switches"),
           switches.involuntary },
     }
+    if io.source then
+        rows[#rows + 1] = { translated(i18n, "metrics.source", "Source"), io.source }
+    end
+    if process.io_reason then
+        rows[#rows + 1] = { translated(i18n, "inspector.reason", "Reason"),
+            inspector_text(Technical.reason(i18n, process.io_reason), INSPECTOR_ROW_WIDTH) }
+    end
     for index, row in ipairs(rows) do
         if row[2] ~= nil and type(row[2]) ~= "string" then rows[index][2] = format_value(row[2], i18n) end
     end
@@ -1848,7 +1884,7 @@ local function run_loop(options, backend, renderer, engine, translator)
         elseif key == "enter" and workspace.active == "processes" then
             local process = selected_process()
             if process then
-                show_overlay(process_detail_lines(process, translator))
+                show_overlay(process_detail_lines(process_with_io_detail(process), translator))
             else
                 status_message = translated(translator, "process.no_selection", "No process selected")
             end

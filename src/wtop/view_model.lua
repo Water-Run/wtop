@@ -258,11 +258,13 @@ local function top_processes(snapshot, format, controller, i18n, platform)
             time = cpu_seconds and duration(format, cpu_seconds) or "—",
             state = process.state or "—",
             user = process.user or "—",
-            -- /proc/<pid>/io counters are cumulative since exec.  Presenting
-            -- them as a per-second rate would be a fabrication: the collector
-            -- samples them on demand for the selected process only.
-            read = bytes(format, process.io and process.io.read_bytes),
-            write = bytes(format, process.io and process.io.write_bytes),
+            -- Process I/O byte counters are cumulative, not a per-second rate.
+            -- Linux samples them for the selection; Windows bulk collection
+            -- supplies them for every row without opening each process.
+            read = bytes(format, process.io and process.io.read_bytes
+                or process.io_read_bytes),
+            write = bytes(format, process.io and process.io.write_bytes
+                or process.io_write_bytes),
             process = process,
         }
     end

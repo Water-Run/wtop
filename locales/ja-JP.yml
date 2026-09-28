@@ -287,6 +287,8 @@ messages:
   reason.no_hwmon_devices: "hwmon デバイスが見つかりません"
   reason.no_sensors: "ハードウェアセンサーが報告されていません"
   reason.no_thermal_zones: "温度ゾーンが報告されていません"
+  reason.process_identity_changed: "プロセスの識別情報が変わり、PID が再利用されました"
+  reason.process_io_unavailable: "プロセスの I/O カウンターを利用できません"
   reason.thermal_zone_counters_unavailable: "Windows の温度ゾーンカウンターを利用できません"
   reason.unsupported_on_this_platform: "このプラットフォームはこのデータソースに対応していません"
   sampling.frequency.high: "高い"

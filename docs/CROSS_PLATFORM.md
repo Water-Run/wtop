@@ -86,6 +86,20 @@ smoke evidence below; they have not been shipped as a cross-platform release.
 | Server 2008 classic CMD | Legacy console with code page 936, driven by `tools/console_harness.c` | Screen-buffer drawing, Chinese text in double-byte cells, key events, page switching, the terminate menu, buffer resize, `q` and Ctrl+C exit with the console restored |
 | Windows with WSL | Linux runtime in WSL | Linux compatibility; this does not establish native Windows support |
 
+On 2026-09-28, the x86 development bundle reported cumulative read and write
+transfer bytes for all 50 exported top processes on both Windows hosts. On
+Server 2008, an 80×25 code-page-936 classic-console run opened a process
+detail with nonzero I/O counters and exited cleanly. The same view worked on
+the newer Windows host. For each host, the bulk counter for the current
+process did not exceed a subsequent direct `GetProcessIoCounters` reading, and
+the direct query rejected a deliberately mismatched creation time. One newer
+host process had more than 144 billion read bytes, exercising the 64-bit
+counter path in the x86 build. These are cumulative process I/O transfers, not
+disk throughput. Microsoft's
+[`GetProcessIoCounters` reference](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getprocessiocounters)
+lists Windows XP as its minimum client version; this is API evidence, not an
+XP runtime result.
+
 The Server 2008 SSH session runs through a Cygwin pipe. To exercise the
 legacy console itself, `tools/console_harness.c` allocates a real console on
 that host, starts wtop on it, then reads the screen buffer and injects key

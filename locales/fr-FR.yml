@@ -301,6 +301,8 @@ messages:
   reason.no_hwmon_devices: "Aucun périphérique hwmon trouvé"
   reason.no_sensors: "Aucun capteur matériel signalé"
   reason.no_thermal_zones: "Aucune zone thermique signalée"
+  reason.process_identity_changed: "L'identité du processus a changé ; le PID a été réutilisé"
+  reason.process_io_unavailable: "Compteurs d'E/S du processus indisponibles"
   reason.thermal_zone_counters_unavailable: "Compteurs de zone thermique Windows indisponibles"
   reason.unsupported_on_this_platform: "Cette plateforme ne prend pas en charge cette source"
   sampling.frequency.high: "Élevée"

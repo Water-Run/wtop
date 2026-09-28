@@ -88,11 +88,13 @@ Collectors and the Snapshot model retain full remote addresses internally; maski
 
 ## 5. Process Model
 
-The unique process identity is `(pid, /proc/<pid>/stat.starttime)`. A process may disappear between any two reads. After supplemental status/cmdline/io/cgroup fields are collected, `stat` is read again to validate the generation; samples that combine data from a reused PID are discarded.
+On Linux, the unique process identity is `(pid, /proc/<pid>/stat.starttime)`. A process may disappear between any two reads. After supplemental status/cmdline/io/cgroup fields are collected, `stat` is read again to validate the generation; samples that combine data from a reused PID are discarded.
 
-The base scan reads `stat` and `status` for each process. cmdline, I/O, and cgroups are read on demand only for the selected process. There is no smaps/PSS/USS, thread row, namespace, environment, or fd detail. Environment variables are not read by default to avoid exposing secrets accidentally.
+The Linux base scan reads `stat` and `status` for each process. cmdline, I/O, and cgroups are read on demand only for the selected process. There is no smaps/PSS/USS, thread row, namespace, environment, or fd detail. Environment variables are not read by default to avoid exposing secrets accidentally.
 
-Process search is a case-insensitive substring match over PID, name, command, user, and state. The tree is based only on host-visible PPID. I/O sort keys exist, but unselected processes normally lack I/O fields, so this is not a complete `iotop` replacement.
+On Windows, the bulk process scan includes cumulative read and write transfer bytes for each row. They feed the table, I/O sort keys, and `--snapshot`/`--agent` top-process fields `io_read_bytes` and `io_write_bytes`. If the bulk scan is unavailable, opening a process detail queries its counters through `GetProcessIoCounters` after checking PID and creation time. These counters cover process I/O transfers, not physical disk activity or bytes per second.
+
+Process search is a case-insensitive substring match over PID, name, command, user, and state. The tree is based only on host-visible PPID. On Linux, unselected processes normally lack I/O fields, so the I/O sort keys do not make this a complete `iotop` replacement.
 
 ## 6. Mount Capacity and Blocking Boundary
 

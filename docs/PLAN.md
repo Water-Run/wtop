@@ -209,7 +209,8 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
 ### Phase C: 0.2
 
 - Vendor semantics for multiple GPUs/MIG/tiles and richer GPU-process linkage.
-- Deeper systemd units, containers, threads, PSS/USS, and process I/O.
+- Deeper systemd units, containers, threads, PSS/USS, and richer process I/O
+  detail and rates across platforms.
 - Throttle reasons, power-limit semantics, richer sensors, and insight rules.
 - A second language wave and layout import/export.
 - Stable glibc x86_64/aarch64 release matrix.
