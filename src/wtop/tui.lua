@@ -1,6 +1,7 @@
 local Actions = require("wtop.actions")
 local Engine = require("wtop.engine")
 local I18n = require("wtop.i18n")
+local Technical = require("wtop.i18n.technical")
 local UserCatalogs = require("wtop.i18n.user_catalogs")
 local Inspectors = require("wtop.inspectors")
 local PerfBandwidth = require("wtop.inspectors.perf_bandwidth")
@@ -252,16 +253,16 @@ local function inspector_lines(title, result, i18n)
         return lines
     end
     lines[#lines + 1] = translated(i18n, "inspector.status", "Status") .. ": "
-        .. tostring(result.status or "unknown")
+        .. tostring(Technical.state(i18n, result.status or "unknown"))
     lines[#lines + 1] = translated(i18n, "inspector.quality", "Quality") .. ": "
-        .. tostring(result.quality or "unknown")
+        .. tostring(Technical.state(i18n, result.quality or "unknown"))
     if result.provider then
         lines[#lines + 1] = translated(i18n, "inspector.provider", "Provider") .. ": "
             .. tostring(result.provider)
     end
     if result.reason then
         lines[#lines + 1] = translated(i18n, "inspector.reason", "Reason") .. ": "
-            .. tostring(result.reason)
+            .. inspector_text(Technical.reason(i18n, result.reason), INSPECTOR_ROW_WIDTH)
     end
     for _, section in ipairs(result.sections or {}) do
         lines[#lines + 1] = ""
@@ -315,9 +316,10 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
     local lines = {
         title, "",
         translated(i18n, "inspector.status", "Status") .. ": "
-            .. tostring(state.status or (#devices > 0 and "ok" or "unavailable")),
+            .. tostring(Technical.state(i18n,
+                state.status or (#devices > 0 and "ok" or "unavailable"))),
         translated(i18n, "inspector.quality", "Quality") .. ": "
-            .. tostring(shown_quality),
+            .. tostring(Technical.state(i18n, shown_quality)),
     }
     if stale_sample and #devices > 0 then
         lines[#lines + 1] = translated(i18n, "collector.stale",
@@ -327,7 +329,8 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
     end
     if state.reason then
         lines[#lines + 1] = translated(i18n, "inspector.reason", "Reason")
-            .. ": " .. inspector_text(state.reason, INSPECTOR_ROW_WIDTH)
+            .. ": " .. inspector_text(Technical.reason(i18n, state.reason),
+                INSPECTOR_ROW_WIDTH)
     end
     local total = 0
     for _, device in ipairs(devices) do total = total + #(device.channels or {}) end
@@ -372,7 +375,7 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
             lines[#lines + 1] = ""
             lines[#lines + 1] = inspector_text(
                 inspector_text(device.name or device.class or "?", 80) .. "  ["
-                    .. device_quality .. "]  "
+                    .. Technical.state(i18n, device_quality) .. "]  "
                     .. inspector_text(device.source or "", 64), INSPECTOR_ROW_WIDTH)
         end
         for _, channel in ipairs(device.channels or {}) do
@@ -390,7 +393,7 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
             end
             lines[#lines + 1] = inspector_text("  " .. inspector_text(name, 80) .. ": "
                 .. format_value(channel.input, i18n, channel.unit) .. "  ["
-                .. status .. "]", INSPECTOR_ROW_WIDTH)
+                .. Technical.state(i18n, status) .. "]", INSPECTOR_ROW_WIDTH)
             add_values(channel.readings, channel.unit, true)
             add_values(channel.thresholds, channel.unit, false)
         end

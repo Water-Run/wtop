@@ -31,7 +31,7 @@ The current version is `0.1.0`, the first tagged release. The first vertical sli
 | Different window aspect ratios | tiny, narrow-tall, wide-short, wide-tall, and multiple PTY dimensions are covered | Continuous resize, tmux/SSH, more extreme dimensions |
 | Customizable layout | Fixed widgets can move in four directions, adjust split ratios, undo/redo, and persist through schema v2 | Add/remove/replace widgets, drag-and-drop, import/export, recovery/backup |
 | Multiple tabs | Ten fixed tabs—Overview, Processes, Compute, Memory, Storage & I/O, Network, GPU, Workloads, System, Insights—work | Add/remove/rename/reorder tabs and multiple workspaces |
-| i18n | Safe YAML, built-in plural rules, formatter, generated registry, per-key fallback, bounded XDG user-catalog loading, and display-width alignment throughout are implemented. All ten shipped catalogs translate every message and a test enforces it; the language can be switched at runtime with `L`; help layout is structured data rather than pre-padded translation strings | Technical-reason localization, pseudolocale, RTL |
+| i18n | Safe YAML, built-in plural rules, formatter, generated registry, per-key fallback, bounded XDG user-catalog loading, and display-width alignment throughout are implemented. All ten shipped catalogs translate every message and a test enforces it; the language can be switched at runtime with `L`; help layout is structured data rather than pre-padded translation strings. Common state/quality codes and sensor-source reasons have display translations | Remaining provider reasons, pseudolocale, RTL |
 | Stronger performance monitoring | CPU usage and identity/topology/cache, memory with full composition and paging counters, PSI, block devices with model/size/medium/scheduler, mounts with inode usage, network interfaces with IPv4/IPv6 addresses, sockets, processes with user names and TIME+/VIRT/NI/threads, CPUFreq, hwmon, powercap, cgroup v2, DRM/sysfs GPU, host/kernel/firmware identity, and power supplies are implemented | NUMA, full route tables, systemd/container semantics, threads/PSS, cross-resource links |
 | Deep inspection | Selectable SMART/NVMe, experimental `perf stat` RAM PMU sampling, and sshd Inspectors work on Linux; the sensor reading/limit overlay uses the shared snapshot on all three platforms | Unified resource navigation, complete session/event providers, PMU platform mapping and validation |
 | GPU | DRM devices, PCI IDs/link metadata, AMD sysfs/DPM, Intel i915/xe frequencies, DRM fdinfo utilization/process tables, hwmon temperature/power joins, and a dynamically loaded NVML provider (validated on NVIDIA GB10) are implemented; Windows uses SetupAPI/DXGI identity with PDH GPU counters and macOS uses IOAccelerator statistics with IOReport clock residency | Client/region drill-down, AMD SMI, Level Zero, MIG/tile, per-process GPU usage on macOS |
@@ -146,7 +146,7 @@ The following marks describe completion relative to a releasable 0.1:
 - [~] Layout editing: directional tree moves, ratio adjustment, undo/redo exist; add/remove/replace widgets, drag-and-drop, import/export, and backup/recovery remain unfinished.
 - [~] Inspectors: three prototypes work; navigation, providers, and real-host coverage are insufficient.
 - [~] GPU: DRM/sysfs/fdinfo, PCI naming/link metadata, a process-summary table, fdinfo utilization fallback, and hwmon temperature/power fill-in work; three vendor APIs, fan display, and client/frequency-domain/memory-region drill-down are not implemented.
-- [~] Complete i18n: main TUI, headers, help, and Inspector labels are connected; raw provider field IDs/reasons, preview completeness, pseudolocale, and RTL remain unfinished.
+- [~] Complete i18n: main TUI, headers, help, Inspector labels, common state/quality codes, and sensor-source reasons are connected; other provider field IDs/reasons, pseudolocale, and RTL remain unfinished.
 - [x] Workloads/cgroup v2 page and collector base path.
 - [x] CPUFreq, generic hwmon, powercap, and mount-capacity base paths.
 - [~] GPU class/device_target sensor joins are implemented; broader device-topology joins, systemd/container semantics, and richer process data remain unfinished.
@@ -182,7 +182,7 @@ Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, se
 
 ### Phase A: Stabilize the Development Preview
 
-- Localize technical provider reasons and add pseudolocale and locale-layout tests.
+- Localize remaining technical provider reasons and add pseudolocale and locale-layout tests.
 - Add onefile PTY, clean-environment, and locale `--check` to standard CI.
 - Add crash/signal/continuous-resize, tmux, and SSH scenarios.
 - Establish repeatable performance benchmarks and calibrate CPU, RSS, first-frame, and input-latency budgets.

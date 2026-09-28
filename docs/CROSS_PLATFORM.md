@@ -115,6 +115,13 @@ Both consoles restored their screen after exit. A clock-controlled scheduler
 check confirmed that closing the overlay returns the collector to its
 background cadence.
 
+The 2026-09-28 code-page-936 console follow-up also checked translated
+collector labels. In Chinese, Server 2008 displayed an unavailable sensor
+status and a readable Windows thermal-zone reason; the newer host displayed
+normal/fresh status around its ACPI reading. Both 80×25 overlays fit and both
+consoles restored their screen after exit. Server 2008 `--snapshot` still
+exported the original `thermal_zone_counters_unavailable` reason code.
+
 On 2026-09-28, the current x86 development bundle ran `--snapshot` on the
 Server 2008 host. C: and D: returned complete capacity. WMI reported D: as a
 removable drive. In three direct native mount samples, D: was pending on the

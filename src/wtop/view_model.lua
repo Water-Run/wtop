@@ -1,4 +1,5 @@
 local Engine = require("wtop.engine")
+local Technical = require("wtop.i18n.technical")
 local ProcessTable = require("wtop.model.process_table")
 
 local M = {}
@@ -1728,7 +1729,8 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "sensor", label = translated(i18n, "metrics.sensor", "Sensor"), width = 22, min_width = 12, priority = 90 },
                 { key = "value", label = translated(i18n, "metrics.value", "Value"), width = 14, min_width = 9, align = "right", priority = 95 },
                 { key = "status", label = translated(i18n, "metrics.state", "State"), width = 12, min_width = 8, priority = 60,
-                    token = function(value) return value == "ALARM" or value == "FAULT"
+                    format = function(value) return Technical.state(i18n, value) end,
+                    token = function(value) return (value == "ALARM" or value == "FAULT")
                         and "metric.critical" or nil end },
             },
             rows = sensor_table_rows,
@@ -1741,7 +1743,8 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "energy", label = translated(i18n, "metrics.energy", "Energy"), width = 14, min_width = 9, align = "right", priority = 50 },
                 { key = "limit", label = translated(i18n, "metrics.maximum", "Limit"), width = 12, min_width = 9, align = "right", priority = 60 },
                 { key = "source", label = translated(i18n, "metrics.source", "Source"), width = 14, min_width = 9, priority = 20, full_only = true },
-                { key = "state", label = translated(i18n, "metrics.state", "State"), width = 11, min_width = 8, priority = 25, full_only = true },
+                { key = "state", label = translated(i18n, "metrics.state", "State"), width = 11, min_width = 8, priority = 25, full_only = true,
+                    format = function(value) return Technical.state(i18n, value) end },
             },
             rows = power_table_rows,
         },
@@ -1822,6 +1825,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "size", label = translated(i18n, "metrics.total", "Total"), width = 12, min_width = 9, align = "right", priority = 80 },
                 { key = "inodes", label = translated(i18n, "metrics.inodes", "Inodes"), width = 9, min_width = 7, align = "right", priority = 30, full_only = true },
                 { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 10, min_width = 8, priority = 28, full_only = true,
+                    format = function(value) return Technical.state(i18n, value) end,
                     token = function(_, row)
                         return (row.quality == "partial" or row.quality == "stale")
                             and "metric.warn" or "text.muted"
@@ -1874,7 +1878,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             rows = addresses,
             status_text = snapshot.network and snapshot.network.addresses_status
                 and snapshot.network.addresses_status ~= "ok"
-                and tostring(snapshot.network.addresses_status) or nil,
+                and Technical.state(i18n, snapshot.network.addresses_status) or nil,
         },
         connection_table = {
             columns = {
@@ -1895,8 +1899,8 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             status_text = translated(i18n, "network.connection_status",
                 "{count} sockets · owner mapping {quality}", {
                     count = snapshot.connections and snapshot.connections.total or #connections,
-                    quality = snapshot.connections and snapshot.connections.owner_scan
-                        and snapshot.connections.owner_scan.status or "unavailable",
+                    quality = Technical.state(i18n, snapshot.connections and snapshot.connections.owner_scan
+                        and snapshot.connections.owner_scan.status or "unavailable"),
                 }),
         },
 
@@ -1932,16 +1936,17 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "utilization", label = translated(i18n, "metrics.utilization", "Utilization"), width = 12, min_width = 8, align = "right", priority = 90 },
                 { key = "memory", label = translated(i18n, "metrics.memory", "Memory"), width = 14, min_width = 10, align = "right", priority = 85 },
                 { key = "engines", label = translated(i18n, "metrics.engines", "Engines"), width = 30, min_width = 12, priority = 25, full_only = true },
-                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 11, min_width = 8, priority = 20, full_only = true },
+                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 11, min_width = 8, priority = 20, full_only = true,
+                    format = function(value) return Technical.state(i18n, value) end },
             },
             rows = gpu_process_table_rows,
             status_text = translated(i18n, "gpu.process_status",
                 "GPU processes: {visible}/{total} · scan {quality}", {
                     visible = #gpu_process_table_rows,
                     total = gpu_process_total,
-                    quality = snapshot.gpus and snapshot.gpus.process_scan
+                    quality = Technical.state(i18n, snapshot.gpus and snapshot.gpus.process_scan
                         and (snapshot.gpus.process_scan.quality or snapshot.gpus.process_scan.status)
-                        or "unavailable",
+                        or "unavailable"),
                 }),
         },
 
@@ -1969,7 +1974,8 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "write", label = translated(i18n, "metrics.write", "Write"), width = 12, min_width = 9, align = "right", priority = 48 },
                 { key = "processes", label = translated(i18n, "metrics.processes", "Procs"), width = 7, min_width = 6, align = "right", priority = 60 },
                 { key = "pressure", label = translated(i18n, "metrics.pressure", "Pressure"), width = 9, min_width = 7, align = "right", priority = 30, full_only = true },
-                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 10, min_width = 8, priority = 22, full_only = true },
+                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 10, min_width = 8, priority = 22, full_only = true,
+                    format = function(value) return Technical.state(i18n, value) end },
             },
             rows = workload_table_rows,
             panel_title = snapshot.workloads and WORKLOAD_KINDS[snapshot.workloads.kind]
@@ -1996,14 +2002,17 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             columns = {
                 { key = "collector", label = translated(i18n, "insights.collector", "Collector"), width = 14, min_width = 10, priority = 95 },
                 { key = "status", label = translated(i18n, "metrics.state", "State"), width = 13, min_width = 9, priority = 90,
+                    format = function(value) return Technical.state(i18n, value) end,
                     token = function(_, row)
                         if not row.available then return "text.muted" end
                         if row.status == "denied" or row.status == "error" then return "metric.critical" end
                         return "metric.good"
                     end },
-                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 11, min_width = 8, priority = 70 },
+                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 11, min_width = 8, priority = 70,
+                    format = function(value) return Technical.state(i18n, value) end },
                 { key = "source", label = translated(i18n, "metrics.source", "Source"), width = 34, min_width = 12, priority = 50 },
-                { key = "reason", label = translated(i18n, "inspector.reason", "Reason"), width = 28, min_width = 10, priority = 30, full_only = true },
+                { key = "reason", label = translated(i18n, "inspector.reason", "Reason"), width = 28, min_width = 10, priority = 30, full_only = true,
+                    format = function(value) return Technical.reason(i18n, value) end },
             },
             rows = collector_rows(snapshot, capabilities, i18n),
             status_text = translated(i18n, "insights.processes", "Processes: {count}",
@@ -2016,8 +2025,10 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "key", label = translated(i18n, "insights.key", "Key"), width = 4, min_width = 3, priority = 80 },
                 { key = "inspector", label = translated(i18n, "insights.inspector", "Inspector"), width = 30, min_width = 14, priority = 95 },
                 { key = "status", label = translated(i18n, "metrics.state", "State"), width = 12, min_width = 9, priority = 90,
+                    format = function(value) return Technical.state(i18n, value) end,
                     token = function(_, row) return row.available and "metric.good" or "text.muted" end },
-                { key = "reason", label = translated(i18n, "inspector.reason", "Reason"), width = 26, min_width = 10, priority = 40, full_only = true },
+                { key = "reason", label = translated(i18n, "inspector.reason", "Reason"), width = 26, min_width = 10, priority = 40, full_only = true,
+                    format = function(value) return Technical.reason(i18n, value) end },
             },
             rows = inspector_rows(capabilities, i18n),
         },
