@@ -1,7 +1,10 @@
 -- Layout import and export as explicit commands. Export writes the layout
 -- the TUI would load right now (persisted file or built-in defaults) as
 -- schema-v2 YAML; import validates a file and installs it as the persisted
--- layout, keeping the previous file as the one-generation backup.
+-- layout, keeping the previous file as the one-generation backup; migrate
+-- rewrites the persisted file itself in the form the current encoder
+-- produces, without a session, so upgrading an old file is scriptable the
+-- way copying one already is.
 local LayoutStore = require("wtop.layout_store")
 local Workspace = require("wtop.workspace")
 local FS = require("wtop.linux.fs")
@@ -72,6 +75,56 @@ function M.import(input_path, target_path)
         return nil, "cannot install the layout: " .. tostring(save_error)
     end
     return true, LayoutStore.path()
+end
+
+-- In-place migration of the persisted layout. The TUI rewrites the file at
+-- exit whenever a session edits something, which is how an old schema gets
+-- upgraded in normal use; this command does the same rewrite without a
+-- session, for the same reason --import exists: provisioning and backup
+-- hygiene should not require driving a full-screen interface.
+--
+-- The states come from load rather than a separate read, because load is
+-- where the product already decided what each broken file means: an
+-- unreadable or unparseable file with a usable backup generation is
+-- *recovered*, and migrating it is what writes the recovery down; without a
+-- backup it is an error, and the command must leave the file exactly as it
+-- found it -- a migration that loses work while reporting success would be
+-- worse than no migration.
+function M.migrate(layout_path)
+    layout_path = layout_path or LayoutStore.path()
+    if not layout_path then
+        return true, "no layout path (HOME is not set); nothing to migrate"
+    end
+    local orders, status, trees, workspaces, active, columns = LayoutStore.load(
+        Workspace.default_orders(), layout_path)
+    if status.state == "error" then
+        return nil, "cannot migrate " .. layout_path .. ": "
+            .. tostring(status.reason)
+    end
+    if status.state ~= "loaded" and status.state ~= "recovered_backup" then
+        -- "default" (no file yet) and "unavailable" have nothing on disk to
+        -- bring forward, and saying so is the honest success.
+        return true, "no persisted layout at " .. layout_path .. "; nothing to migrate"
+    end
+    local encoded, content = pcall(LayoutStore.encode, orders, trees or {},
+        workspaces, active, columns)
+    if not encoded then return nil, tostring(content) end
+    local current = FS.default:read(layout_path, MAX_LAYOUT_BYTES)
+    if current == content then
+        -- Byte-equal is the only honest "already current": the file is in the
+        -- form this build's encoder produces. Rewriting it anyway would churn
+        -- the backup generation for no change the next reader could observe.
+        return true, layout_path .. " is already in the current form"
+    end
+    local saved, save_error = LayoutStore.save(orders, layout_path, trees,
+        workspaces, active, columns)
+    if not saved then
+        return nil, "cannot write the migrated layout: " .. tostring(save_error)
+    end
+    return true, "migrated " .. layout_path
+        .. (status.state == "recovered_backup"
+            and " (recovered from the backup generation; the broken file is kept as .bak)"
+            or " (the previous file is kept as .bak)")
 end
 
 return M

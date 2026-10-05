@@ -16,6 +16,7 @@ Options:
   -V, --version          Show version
       --export-layout F  Write the current layout to F as schema-v2 YAML
       --import-layout F  Validate F and install it as the persisted layout
+      --migrate-layout   Rewrite the persisted layout in the current schema
       --diagnose         Print capability diagnostics and exit
       --snapshot         Print one machine-readable snapshot and exit
       --unmask-remote-addresses
@@ -105,6 +106,9 @@ function M.parse(argv)
             if not ok then return nil, command_error end
             options.layout_path = value
             index = next_index
+        elseif item == "--migrate-layout" then
+            local ok, command_error = select_command("migrate_layout", item)
+            if not ok then return nil, command_error end
         elseif item == "--sudo" or item == "--elevate" then
             if elevation_option then
                 return nil, "elevation options cannot be repeated or combined: "
@@ -287,6 +291,15 @@ function M.run(argv, dependencies)
         end
         io.write("wtop: installed layout; the previous file is kept as .bak (",
             tostring(result), ")\n")
+        return 0
+    elseif options.command == "migrate_layout" then
+        local LayoutCommands = require("wtop.layout_commands")
+        local migrated, result = LayoutCommands.migrate()
+        if not migrated then
+            io.stderr:write("wtop: ", tostring(result), "\n")
+            return 1
+        end
+        io.write("wtop: ", tostring(result), "\n")
         return 0
     end
     return run_tui(options)
