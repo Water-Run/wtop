@@ -122,6 +122,18 @@ assert(empty_literal_count("-Ibuild/native " .. include) == 0,
 -- state the next test inherits.  It was checked by mutation -- compiling the
 -- header with a different revision makes the line read
 -- `(rev ...) [native module rev ...]`.
+-- The `--version` subprocess below pins the ordinary module: it is the pair a
+-- packager ships, and the ordinary module is its subject.  A run whose module
+-- lives elsewhere -- the sanitized run loads build/native-san -- has no such
+-- file, and that is the environment's statement, not a broken build; the
+-- identity comparisons above have already run against whatever module this
+-- suite loaded, and under sanitizers that is the instrumented half this file
+-- is there to exercise.
+if not Artifacts.require_file("build/native/wtop_native.so",
+        "the ordinary native module", "run `make native`") then
+    return true
+end
+
 local version_output = run("LUA_PATH='./src/?.lua;./src/?/init.lua;;' LUA_CPATH='"
     .. os.getenv("PWD") .. "/build/native/?.so;;' .tools/lua-5.5.1/bin/lua "
     .. "src/wtop.lua --version")

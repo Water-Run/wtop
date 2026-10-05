@@ -237,9 +237,16 @@ sanitize-native: $(LUA_STAMP) $(NATIVE_REVISION_HEADER) $(NATIVE_VERSION_HEADER)
 # not expand at different times.
 SAN_ASAN_RUNTIME = $(shell objdump -p $(SANITIZED_MODULE) 2>/dev/null \
 	| grep -o 'lib[a-z_.]*asan[a-z_.0-9-]*\.so[.0-9]*' | head -n 1)
+# The sanitized run also declares itself without the *ordinary* build
+# artifacts: its module lives in $(SANITIZED_DIR), so build/native/ holds
+# nothing, and the tests whose subject is the ordinary module or the documents
+# built from it state-and-skip rather than fail (tests/support/artifacts.lua).
+# What is not skipped is the point of this run: every test that loads a module
+# loads the instrumented one through LUA_CPATH below.
 SAN_RUN_ENV = ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
 	UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
 	LD_PRELOAD='$(SAN_ASAN_RUNTIME)' \
+	WTOP_TESTS_WITHOUT_ARTIFACTS=1 \
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(SANITIZED_DIR)/?.so;;'
 
 # tests/unit/test_benchmark_record.lua drives a real TUI and asserts on a

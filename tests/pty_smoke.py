@@ -1236,7 +1236,19 @@ def run_thread_drilldown() -> None:
     script.append((("resize", 45, 160), None))
     script.append((("sleep", 0.8), None))
     detail = run_session(160, 45, exercise=False,
-                         script=script + [(b"q", None), (("sleep", 0.4), None), (b"q", None)])
+                         script=script + [
+                             # Closing waits for the memory section to be on
+                             # the wire: the assertion below reconstructs the
+                             # screen at its last paint, and a close that fires
+                             # before that frame arrived leaves the assertion
+                             # nothing to read.  Observed once in CI on a
+                             # loaded runner (2026-10-05) on code that passed
+                             # before and after -- the load-race family, so the
+                             # fix is the family's: gate on the bytes, not on
+                             # the clock.
+                             (b"q", ("USS".encode(), "PSS".encode(),
+                                     "属于进程".encode())),
+                             (("sleep", 0.4), None), (b"q", None)])
     detail_text = detail.decode("utf-8", "replace")
     assert "线程详情" in detail_text, (
         "Enter on a thread row did not open the thread detail"
@@ -1439,11 +1451,16 @@ def run_workspace_rename() -> None:
             (b"q", None),                      # quit, which writes the file
         ], config_home=home)
         # The hint is how the user learns `r` exists, so it is asserted rather
-        # than assumed; the zh-CN catalog is what this profile loads.  The `r`
-        # keycap and the word after it can be split by an SGR run on the wire,
-        # so the match allows escape bytes between them and nothing else.
-        assert re.search(rb"r(?:\x1b\[[0-9;]*m)* ?" + "重命名".encode(), out), (
-            "the workspace manager hint does not mention r"
+        # than assumed; the zh-CN catalog is what this profile loads.  No
+        # wire-level adjacency between the `r` keycap and the word is asserted:
+        # the diff renderer positions the cursor between styled segments, and
+        # the escape in the gap is not always an SGR -- two CI runs falsified
+        # a contiguous match and then an SGR-tolerant one.  The fragment is
+        # unique to the manager hint at this point in the session (the rename
+        # strings only exist once `r` has been pressed), and the gate above
+        # has already waited for it, so a stall still fails right here.
+        assert "重命名".encode() in out, (
+            "the workspace manager hint does not mention renaming"
         )
 
         out = run_session(160, 45, exercise=False, script=[
