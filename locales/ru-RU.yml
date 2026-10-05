@@ -607,6 +607,8 @@ messages:
   sampling.update_frequency: "Частота обновления: {level}"
   signal.cont: "возобновить остановленный процесс"
   sensor.gpu_claim: "GPU {card} читает это устройство:"
+  sensor.disk_claim: "Диск {disk} ({detail}) считывает это устройство:"
+  sensor.mounted_at: "смонтирован в {path}"
   sensor.power_channels: "{count} каналов питания пересекаются; показан наибольший, не их сумма"
   signal.hint: "Вверх/Вниз выбирает · Enter отправляет · Esc отменяет"
   signal.kill: "заставить ядро завершить процесс"

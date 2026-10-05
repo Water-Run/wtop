@@ -65,8 +65,8 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 | 运行时主机 | 终端场景 | 验收重点 |
 | --- | --- | --- |
-| Linux x86_64 | Fedora 44 开发主机,kernel 7.2.7 | 119 个 Lua 测试文件、Lua 5.4 子集以及 PTY 矩阵;带 DRM/fdinfo GPU 数据的 Snapshot;无 NVIDIA 驱动时 NVML 报告为不可用 |
-| Linux x86_64,旧 libc | manylinux2014 容器,glibc 2.17,宿主内核 7.2.7 | 在 glibc 2.17 工具链上完成原生构建和全部 119 个 Lua 测试文件,`--version` 正常应答;合并的 glibc 下限为 2.17,而宿主构建需要 2.38。容器共享宿主内核,因此本行仅是 libc 证据,不能说明最低内核版本。 |
+| Linux x86_64 | Fedora 44 开发主机,kernel 7.2.7 | 120 个 Lua 测试文件、Lua 5.4 子集以及 PTY 矩阵;带 DRM/fdinfo GPU 数据的 Snapshot;无 NVIDIA 驱动时 NVML 报告为不可用 |
+| Linux x86_64,旧 libc | manylinux2014 容器,glibc 2.17,宿主内核 7.2.7 | 在 glibc 2.17 工具链上完成原生构建和全部 120 个 Lua 测试文件,`--version` 正常应答;合并的 glibc 下限为 2.17,而宿主构建需要 2.38。容器共享宿主内核,因此本行仅是 libc 证据,不能说明最低内核版本。 |
 | Linux aarch64 | Ubuntu 24.04,DGX Spark(Cortex-X925/A725,NVIDIA GB10,驱动 580),SSH | 原生构建和 Lua 测试套件(当时运行时为 50 个文件);NVML 关联到 DRM 节点:利用率、频率、温度、功耗、UUID、驱动版本、按进程统计的 GPU 内存 |
 | Linux | Debian 13 x86_64 SSH PTY | Snapshot、Agent、diagnose、TUI 退出(较早的一次运行) |
 | macOS | macOS 26.5 arm64(M4)SSH PTY | CPU 按核显示 user/system/nice,基于性能状态驻留的 P/E 集群频率,内存,含受保护进程标识的进程列表,带估算繁忙时间的 IOKit 磁盘 I/O,64 位接口计数器,带属主的 socket,GPU 利用率、频率和显存,HID 温度,SMC 风扇和系统功耗,IOReport CPU/GPU/ANE/DRAM 能耗,coalition 负载,平均负载;Snapshot 和 TUI |

@@ -592,6 +592,8 @@ messages:
   sampling.update_frequency: "Update rate: {level}"
   signal.cont: "resume a stopped process"
   sensor.gpu_claim: "GPU {card} reads this device:"
+  sensor.disk_claim: "Disk {disk} ({detail}) reads this device:"
+  sensor.mounted_at: "mounted at {path}"
   sensor.power_channels: "{count} power channels overlap; the largest is shown, never their sum"
   signal.hint: "Up/Down selects · Enter sends · Esc cancels"
   signal.kill: "force the kernel to kill it"

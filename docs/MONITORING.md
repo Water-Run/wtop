@@ -25,7 +25,7 @@ CLI 默认 `--interval 1000`。活动页面使用基准间隔与采集器下限�
 | 套接字 | TCP/TCP6/UDP/UDP6/Unix 的端点、状态、队列、UID、inode;可用时的 PID/fd/名称属主,`owner_count` 只在真正执行了查找的地方发布,而不是填零 | `/proc/net/*`, `/proc/<pid>/fd` | 2 s / 10 s |
 | 进程 | `(pid,starttime)`、PPID、状态、CPU、累计 CPU tick、RSS/VSZ、线程数、优先级/nice/CPU、解析为本地用户名的 UID,以及完整命令行;针对选中线程:线程组、累计及每秒自愿/非自愿上下文切换、被抢占占比、I/O、cgroup 归属、运行队列等待、时间片与调度策略;所属进程的 PSS/USS,标注为该进程自身的数据 | `/proc/<pid>/stat`, `status`, `cmdline`, `/proc/<pid>/task/<tid>/{stat,status,io,cgroup,schedstat,sched}`, `/proc/<pid>/schedstat`, `/proc/<pid>/smaps_rollup`, `/etc/passwd` | 1 s / 5 s;五个 per-thread 文件只读取选中 TID 的那一个,`/proc/<pid>/schedstat` 只读取视口正在显示的进程行 |
 | CPUFreq | 策略/CPU 集合、当前/最低/最高频率、驱动、governor、boost/EPP | cpufreq sysfs | 1 s / 5 s |
-| hwmon | 温度、风扇转速、电压、电流、功率、能耗、阈值/告警/故障;识别 `temp1_crit_alarm` 这类带限值的告警形式以及裸 `temp1_alarm` 形式;电压通道从 `in0` 起向上读取;过滤已知的无效哨兵值;恰好为零的阈值,或 u16 温度哨兵值,按“驱动未设置该属性”丢弃,而不是当作一条界限上报 | `/sys/class/hwmon` | 1 s / 5 s |
+| hwmon | 温度、风扇转速、电压、电流、功率、能耗、阈值/告警/故障;识别 `temp1_crit_alarm` 这类带限值的告警形式以及裸 `temp1_alarm` 形式;电压通道从 `in0` 起向上读取;过滤已知的无效哨兵值;恰好为零的阈值,或 u16 温度哨兵值,按“驱动未设置该属性”丢弃,而不是当作一条界限上报;设备的 `device_target` 供视图层把读数归属到 GPU 或磁盘(磁盘标注带型号与挂载点),表与浮层共用同一联接 | `/sys/class/hwmon` | 1 s / 5 s |
 | Powercap | 有界的 zone 层级、能量/直接功率、约束、防回绕/防复位的差值计算、独立的 CPU 封装与整机/`psys` 聚合;恰好为零的功率上限或界限,或驱动以 ENODATA 应答的属性,按“驱动未设置该属性”丢弃,而不是上报 | powercap sysfs | 1 s / 5 s |
 | 挂载 | 挂载标识、文件系统/来源/只读状态,以及安全时的容量和 inode 数 | `/proc/self/mountinfo`, `statvfs` | 5 s / 30 s |
 | 硬件清单 | 带厂商/设备名称的 PCI 和 USB 设备列表;显示在 System 页面并导出在 `inventory` 下。Linux 读取 sysfs 和本地 `pci.ids`;Windows 使用 SetupAPI PCI/USB 枚举器(无类代码);macOS 使用 IOKit `IOPCIDevice`/`IOUSBHostDevice`(Apple Silicon 上无 `reg` 地址) | sysfs + `pci.ids` / SetupAPI / IOKit | 30 s / 120 s |

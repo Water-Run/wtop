@@ -586,6 +586,8 @@ messages:
   sampling.update_frequency: "업데이트 빈도: {level}"
   signal.cont: "중지된 프로세스를 재개"
   sensor.gpu_claim: "GPU {card}가 이 장치를 읽습니다:"
+  sensor.disk_claim: "디스크 {disk}({detail})이(가) 이 장치를 읽습니다:"
+  sensor.mounted_at: "{path}에 마운트됨"
   sensor.power_channels: "전력 채널 {count}개가 겹칩니다. 합이 아니라 가장 큰 값을 표시합니다"
   signal.hint: "위/아래로 선택 · Enter 전송 · Esc 취소"
   signal.kill: "커널이 강제로 종료"

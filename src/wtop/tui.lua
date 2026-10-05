@@ -376,6 +376,16 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
         gpu_claims[entry.sensor] = gpu_claims[entry.sensor] or {}
         gpu_claims[entry.sensor][#gpu_claims[entry.sensor] + 1] = entry
     end
+    -- The same account for disks: the storage table's temperature column is
+    -- only a claim about which device owns the reading, and the claim is
+    -- stated here with the model and the mount point so a reader can tell
+    -- two nameless sensors apart by what they are bolted to.
+    local disk_claims = {}
+    for _, entry in ipairs(ViewModel.disk_sensor_join(snapshot)) do
+        disk_claims[entry.sensor] = disk_claims[entry.sensor] or {}
+        disk_claims[entry.sensor][#disk_claims[entry.sensor] + 1] = entry
+    end
+    local disk_mounts = ViewModel.disk_mount_join(snapshot)
     for _, device in ipairs(devices) do
         if shown >= SENSOR_DETAIL_LIMIT then break end
         if #(device.channels or {}) > 0 then
@@ -388,6 +398,33 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
                 inspector_text(device.name or device.class or "?", 80) .. "  ["
                     .. Technical.state(i18n, device_quality) .. "]  "
                     .. inspector_text(device.source or "", 64), INSPECTOR_ROW_WIDTH)
+            for _, entry in ipairs(disk_claims[device] or {}) do
+                local parts = {}
+                local identity = type(entry.disk.identity) == "table"
+                    and entry.disk.identity or {}
+                if type(identity.model) == "string" and identity.model ~= "" then
+                    parts[#parts + 1] = identity.model
+                end
+                local mount_point = disk_mounts[entry.disk.name]
+                if mount_point then
+                    parts[#parts + 1] = translated(i18n, "sensor.mounted_at",
+                        "mounted at {path}", { path = mount_point })
+                end
+                lines[#lines + 1] = inspector_text(
+                    "  " .. translated(i18n, "sensor.disk_claim",
+                        "Disk {disk} ({detail}) reads this device:",
+                        { disk = tostring(entry.disk.name or "?"),
+                          detail = #parts > 0 and table.concat(parts, " · ") or "?" }),
+                    INSPECTOR_ROW_WIDTH)
+                if entry.temperature then
+                    lines[#lines + 1] = inspector_text(
+                        "    " .. translated(i18n, "metrics.temperature", "Temp")
+                            .. " ← " .. (entry.temperature.label
+                                or (tostring(entry.temperature.type or "sensor")
+                                    .. " " .. tostring(entry.temperature.index))),
+                        INSPECTOR_ROW_WIDTH)
+                end
+            end
             for _, entry in ipairs(gpu_claims[device] or {}) do
                 lines[#lines + 1] = inspector_text(
                     "  " .. translated(i18n, "sensor.gpu_claim", "GPU {card} reads this device:",

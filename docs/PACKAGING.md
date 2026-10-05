@@ -135,9 +135,9 @@ CI/评审还可以额外验证生成输出是否为最新：
 | `make diagnose` | 输出能力诊断 |
 | `make snapshot` | 输出一份 JSON 快照 |
 | `make check` | 校验 Lua、POSIX shell 和 Python，解析 Agent JSON schema，并**将其应用到一次实时的 `--agent` 采集** |
-| `make test-fast` | 运行 119 个 Lua 文件和一个有代表性的三用例 PTY 配置 |
-| `make test-55` | 119 个 Lua 5.5 单元与夹具测试文件 |
-| `make test-54` | 用系统 Lua 5.4 运行同样的 119 个文件，验证纯 Lua 兼容子集 |
+| `make test-fast` | 运行 120 个 Lua 文件和一个有代表性的三用例 PTY 配置 |
+| `make test-55` | 120 个 Lua 5.5 单元与夹具测试文件 |
+| `make test-54` | 用系统 Lua 5.4 运行同样的 120 个文件，验证纯 Lua 兼容子集 |
 | `make test-fuzz` | 用随机按键、鼠标报告、非法转义、无效 UTF-8 和尺寸变化，针对真实终端循环测试 |
 | `make test-pty` | 场景台账，然后针对响应式尺寸、翻页切换和四种颜色/字符能力配置运行真实 PTY 冒烟测试。台账（`tests/pty_scenario_ledger.py`）是静态检查：套件运行的每个场景都必须在 `SCENARIOS` 中命名，因此矩阵中的任何失败都可以单独用 `--scenario` 重跑；它存在的原因，是一个没有自己名字、藏在 `main` 内部的步骤，正是一个失败场景变得不可诊断的方式 |
 | `make test-pty-isolation` | 18 个 PTY 场景各自独立进程单独运行——这是套件无法回答的问题，因为一个从上一个场景继承了“热”主机的场景并没有真正被测试。列表是 `SCENARIOS` 中的数据，一个没名字的步骤进不了它：八种尺寸的响应式矩阵及其翻页检查变成 `run_responsive`，正是为了这个原因 |
@@ -228,7 +228,7 @@ onefile 把同一载荷包进一个自解压可执行文件。它仍依赖目标
 
 ### 8.1 源码与 PTY
 
-先确认资源余量，然后运行这 119 个 Lua 文件：
+先确认资源余量，然后运行这 120 个 Lua 文件：
 
 ```bash
 make check
@@ -236,11 +236,11 @@ make test
 make test-54
 ```
 
-`make test-54` 用系统 Lua 5.4 运行同样的 119 个文件，验证纯 Lua 兼容子集。
+`make test-54` 用系统 Lua 5.4 运行同样的 120 个文件，验证纯 Lua 兼容子集。
 
 PTY 矩阵目前覆盖 `40×10`、`60×20`、`80×24/25`、`80×50`、`160×24`、`200×22`、`180×45` 和 `200×45` 翻页切换，检查中文帧、交互路径、备用屏幕进入/恢复、完整帧和干净退出。额外的配置断言 truecolor、256 色、16 色和无色 ASCII 输出，覆盖 Water Light、High Contrast 和 Colorblind。第 2–8 页各自作为带页面专属语义标记的最终完整帧校验。
 
-Lua 测试还覆盖 JSON 的 4 MiB/深度/100000 节点预算、线性数值解析冒烟、无效 UTF-8 值与键的 U+FFFD 替换、连接导出 ID 的默认脱敏、有界常规文件读取、异构 CPU 标识/拓扑/缓存夹具、powercap 能量差值/回绕/重置/约束、GPU PCI ID/PCIe/fdinfo 利用率、hwmon 哨兵过滤、感知 cgroup 的资源预检，以及 sudo 特权元数据。通过 119 个夹具文件并不是形式化证明——它不覆盖内核、硬件或恶意输入类别。
+Lua 测试还覆盖 JSON 的 4 MiB/深度/100000 节点预算、线性数值解析冒烟、无效 UTF-8 值与键的 U+FFFD 替换、连接导出 ID 的默认脱敏、有界常规文件读取、异构 CPU 标识/拓扑/缓存夹具、powercap 能量差值/回绕/重置/约束、GPU PCI ID/PCIe/fdinfo 利用率、hwmon 哨兵过滤、感知 cgroup 的资源预检，以及 sudo 特权元数据。通过 120 个夹具文件并不是形式化证明——它不覆盖内核、硬件或恶意输入类别。
 
 ### 8.2 打包后的 PTY
 
@@ -361,7 +361,7 @@ onefile 包无法与在它旁边构建的模块做字节比较：luainstaller �
 | Fedora 44，glibc 2.43（开发） | 2.38 | 2.34 | **2.38** |
 | manylinux2014，glibc 2.17 | 2.14 | 2.17 | **2.17** |
 
-相差二十一个版本，出自同一棵树。`libdl` 的预测精确成立：glibc 2.17 上，模块的 `DT_NEEDED` 列出 `libdl.so.2`，`dlopen`/`dlsym` 在 `GLIBC_2.2.5` 解析；glibc 2.43 上，同一条 `-ldl` 链接从 `libc.so.6` 以 `GLIBC_2.34` 解析，`libdl.so.2` 完全不出现。加上 `suite` 还会在容器里运行整个单元套件：在 glibc 2.17 上 **通过 119 个测试文件**，并且 `wtop 0.1.0 (rev v0.1.0-43-g9cebfad-dirty)` 能回答 `--version`——所以 2.17 的产物是能用，而不只是能编译。
+相差二十一个版本，出自同一棵树。`libdl` 的预测精确成立：glibc 2.17 上，模块的 `DT_NEEDED` 列出 `libdl.so.2`，`dlopen`/`dlsym` 在 `GLIBC_2.2.5` 解析；glibc 2.43 上，同一条 `-ldl` 链接从 `libc.so.6` 以 `GLIBC_2.34` 解析，`libdl.so.2` 完全不出现。加上 `suite` 还会在容器里运行整个单元套件：在 glibc 2.17 上 **通过 120 个测试文件**，并且 `wtop 0.1.0 (rev v0.1.0-43-g9cebfad-dirty)` 能回答 `--version`——所以 2.17 的产物是能用，而不只是能编译。
 
 计数随测试增加而移动，上面的数字是 2026-10-02 那次运行报告的，而且是容器的，不是宿主机的。跑通这次运行不是走过场：这段话上次写 90 时它不是 89，有一阵它还错向另一头。那次运行曾在四个文件上失败了两个 increment 而无人重跑，原因不是 libc：manylinux2014 带 `python2` 不带 `python3`，四个失败里的三个，是 shell 出去调 `tools/elf_floors.py` 和 `tools/make_sbom.py` 的测试报 `python3: command not found`；第四个是 `tools/cross_libc_build.sh` 在容器里编译模块时没有 `build/native/build_revision.h`，模块没有构建身份，`test_build_identity.lua` 正确地拒绝在一个无法与之比较任何东西的模块上通过。两者都已处理——脚本安装 `python3`、暂存宿主机生成的头文件——并且暴露了第三件事：它失败所*穿过*的那道门。`record_baseline.sh` 正确地非零退出，但它已经写出的报告说 `status: within the promised floor`。那就是上一小节。
 

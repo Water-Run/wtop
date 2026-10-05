@@ -586,6 +586,8 @@ messages:
   sampling.update_frequency: "更新频率：{level}"
   signal.cont: "恢复已暂停的进程"
   sensor.gpu_claim: "GPU {card} 正在读取该设备："
+  sensor.disk_claim: "盘 {disk}（{detail}）读取该设备："
+  sensor.mounted_at: "挂载于 {path}"
   sensor.power_channels: "{count} 个功耗通道相互重叠；显示其中最大者，绝不显示其总和"
   signal.hint: "上下键选择 · Enter 发送 · Esc 取消"
   signal.kill: "由内核强制杀死"

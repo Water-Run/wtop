@@ -490,6 +490,18 @@ local function disk_rows(snapshot, format, options)
     options = options or {}
     local rows = {}
     local hidden = 0
+    -- The temperature column states where its figure came from, for the same
+    -- reason the GPU table's does: a bare number next to a device is read as
+    -- the device's own reading, and only the join's owner rule decides that.
+    local temperature_by_disk = {}
+    for _, entry in ipairs(M.disk_sensor_join(snapshot)) do
+        local current = temperature_by_disk[entry.disk.name]
+        if not current or (entry.temperature and current.temperature
+            and entry.temperature.input > current.temperature.input)
+            or (entry.temperature and not current) then
+            temperature_by_disk[entry.disk.name] = entry
+        end
+    end
     for _, device in ipairs(snapshot.disks and snapshot.disks.devices or {}) do
         local identity = device.identity or {}
         local uninteresting = identity.virtual == true
@@ -499,12 +511,18 @@ local function disk_rows(snapshot, format, options)
         if uninteresting and not options.show_virtual then
             hidden = hidden + 1
         elseif #rows < TABLE_ROW_LIMIT then
+            local temperature_entry = temperature_by_disk[device.name]
+            local temperature_channel = temperature_entry
+                and temperature_entry.temperature or nil
             rows[#rows + 1] = {
                 device = device.name,
                 model = identity.model or identity.vendor or "—",
                 size = bytes(format, identity.size_bytes),
                 medium = identity.rotational == 1 and "HDD"
                     or (identity.rotational == 0 and "SSD" or "—"),
+                temperature = temperature_channel
+                    and temperature(format, temperature_channel.input) or "—",
+                temperature_source = temperature_channel,
                 scheduler = identity.scheduler or "—",
                 read = rate(format, device.read_bytes_per_second),
                 write = rate(format, device.write_bytes_per_second),
@@ -680,6 +698,120 @@ function M.gpu_sensor_join(snapshot)
         end
     end
     return entries
+end
+
+-- Disk figures come from the same hwmon snapshot, joined on what the sensor
+-- device's `device_target` names.  The GPU join keys on `class` because amdgpu
+-- publishes one; disks have no such attribute, and the target's basename is
+-- the honest key that is left: "../../nvme0" names the nvme controller,
+-- "../sda" would name a SATA disk outright.  A disk claims a sensor device
+-- when the basename is its own name, or the controller a namespace hangs
+-- from -- the kernel names a controller nvme0 and its namespaces nvme0n1,
+-- nvme0n2, so nvme0n1 belongs to nvme0 while nvme10n1 does not belong to
+-- nvme1, and the "n" is what keeps those apart.  A partition (nvme0n1p3) is
+-- never a match: sensors live on the controller or the whole disk, and the
+-- mount join below is what carries the partition the rest of the way.
+--
+-- Like the GPU join this is one function with two consumers -- the storage
+-- table's temperature column and the sensor overlay's account of which disk
+-- read which device -- so the two cannot disagree.  Temperature is the only
+-- figure: disks publish temperature channels, and no defensible rule turns
+-- their sparse other channels into a board figure.  The hottest channel is
+-- the one that throttles, stated as a maximum rather than averaged into
+-- something no sensor measured.
+function M.disk_sensor_join(snapshot)
+    local disks = snapshot and snapshot.disks and snapshot.disks.devices or {}
+    local by_name = {}
+    for _, disk in ipairs(disks) do
+        if type(disk.name) == "string" and disk.name ~= ""
+            and not by_name[disk.name] then
+            by_name[disk.name] = disk
+        end
+    end
+    local function owner_disk(target)
+        if type(target) ~= "string" then return nil end
+        local basename = target:match("([^/]+)%s*$")
+        if not basename or basename == "" then return nil end
+        local exact = by_name[basename]
+        if exact then return exact end
+        local controller = basename:match("^nvme%d+$")
+        if not controller then return nil end
+        local prefix = controller .. "n"
+        local best_name
+        for name in pairs(by_name) do
+            if name:sub(1, #prefix) == prefix
+                and name:sub(#prefix + 1):match("^%d+$") then
+                if not best_name or #name < #best_name then best_name = name end
+            end
+        end
+        return best_name and by_name[best_name] or nil
+    end
+
+    local entries = {}
+    for _, sensor in ipairs(snapshot and snapshot.sensors
+        and snapshot.sensors.devices or {}) do
+        local disk = owner_disk(sensor.device_target)
+        if disk then
+            local temperature
+            for _, channel_entry in ipairs(sensor.channels or {}) do
+                if channel_entry.type == "temperature"
+                    and type(channel_entry.input) == "number" then
+                    temperature = temperature
+                        and (channel_entry.input > temperature.input
+                            and channel_entry or temperature)
+                        or channel_entry
+                end
+            end
+            entries[#entries + 1] = {
+                disk = disk,
+                sensor = sensor,
+                temperature = temperature,
+            }
+        end
+    end
+    return entries
+end
+
+-- The mount side of the same topology: which disk a mount reads, carried by
+-- the device name in the mount's source.  Partitions extend their disk's name
+-- by digits or by "p" plus digits (sda1, nvme0n1p3), so the longest disk name
+-- that a source basename extends is its owner; stacked devices (dm, md) have
+-- slaves of their own in the disk collector's topology and are left to it
+-- rather than guessed at here.  The shortest mount point wins, because a
+-- reader asking "which disk is / on" wants the filesystem root, not the
+-- deepest bind mount that happens to sit on the same partition.
+function M.disk_mount_join(snapshot)
+    local disks = snapshot and snapshot.disks and snapshot.disks.devices or {}
+    local names = {}
+    for _, disk in ipairs(disks) do
+        -- Only whole disks own mounts: a partition is where the filesystem
+        -- lives, but the reader's question is which disk it reads, and the
+        -- partition's own entry in the device list would otherwise shadow its
+        -- parent for exact source-name matches.
+        if type(disk.name) == "string" and disk.name ~= ""
+            and disk.is_partition ~= true then
+            names[#names + 1] = disk.name
+        end
+    end
+    table.sort(names, function(left, right) return #left > #right end)
+    local by_disk = {}
+    for _, mount in ipairs(snapshot and snapshot.mounts
+        and snapshot.mounts.mounts or {}) do
+        local basename = type(mount.source) == "string"
+            and mount.source:match("([^/]+)%s*$") or nil
+        if basename then
+            for _, name in ipairs(names) do
+                if basename == name or (basename:sub(1, #name) == name
+                    and basename:sub(#name + 1):match("^p?%d+$")) then
+                    local point = tostring(mount.mount_point or "")
+                    local current = by_disk[name]
+                    if not current or #point < #current then by_disk[name] = point end
+                    break
+                end
+            end
+        end
+    end
+    return by_disk
 end
 
 local function gpu_rows(snapshot, format)
@@ -2289,6 +2421,11 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "model", label = translated(i18n, "metrics.model", "Model"), width = 20, min_width = 10, priority = 40, full_only = true },
                 { key = "size", label = translated(i18n, "metrics.capacity", "Size"), width = 10, min_width = 8, align = "right", priority = 55 },
                 { key = "medium", label = translated(i18n, "metrics.medium", "Type"), width = 5, min_width = 4, priority = 30, full_only = true },
+                { key = "temperature", label = translated(i18n, "metrics.temperature", "Temp"), width = 9, min_width = 7, align = "right", priority = 60,
+                    token = function(_, row)
+                        return row.temperature_source and severity_token(
+                            row.temperature_source.input, 55, 65) or nil
+                    end },
                 { key = "read", label = translated(i18n, "metrics.read", "Read"), width = 12, min_width = 10, align = "right", priority = 90 },
                 { key = "write", label = translated(i18n, "metrics.write", "Write"), width = 12, min_width = 10, align = "right", priority = 88 },
                 { key = "busy", label = translated(i18n, "metrics.busy", "Busy"), width = 9, min_width = 7, align = "right", priority = 70,

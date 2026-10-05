@@ -586,6 +586,8 @@ messages:
   sampling.update_frequency: "更新頻度：{level}"
   signal.cont: "停止中のプロセスを再開する"
   sensor.gpu_claim: "GPU {card} はこのデバイスを読み取ります:"
+  sensor.disk_claim: "ディスク {disk}（{detail}）がこのデバイスを読み取っています："
+  sensor.mounted_at: "{path} にマウント"
   sensor.power_channels: "{count} 個の電力チャネルが重複しています。最大値を表示し、合計は表示しません"
   signal.hint: "上下キーで選択 · Enter で送信 · Esc でキャンセル"
   signal.kill: "カーネルに強制終了させる"

@@ -600,6 +600,8 @@ messages:
   sampling.update_frequency: "Fréquence d’actualisation : {level}"
   signal.cont: "reprendre un processus suspendu"
   sensor.gpu_claim: "Le GPU {card} lit ce périphérique :"
+  sensor.disk_claim: "Le disque {disk} ({detail}) lit ce périphérique :"
+  sensor.mounted_at: "monté sur {path}"
   sensor.power_channels: "{count} canaux de puissance se chevauchent ; le plus élevé est affiché, jamais leur somme"
   signal.hint: "Haut/Bas sélectionne · Entrée envoie · Esc annule"
   signal.kill: "forcer le noyau à le tuer"

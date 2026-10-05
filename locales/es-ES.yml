@@ -600,6 +600,8 @@ messages:
   sampling.update_frequency: "Frecuencia de actualización: {level}"
   signal.cont: "reanudar un proceso detenido"
   sensor.gpu_claim: "La GPU {card} lee este dispositivo:"
+  sensor.disk_claim: "El disco {disk} ({detail}) lee este dispositivo:"
+  sensor.mounted_at: "montado en {path}"
   sensor.power_channels: "{count} canales de potencia se solapan; se muestra el mayor, nunca su suma"
   signal.hint: "Arriba/Abajo selecciona · Enter envía · Esc cancela"
   signal.kill: "forzar al núcleo a matarlo"

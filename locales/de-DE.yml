@@ -593,6 +593,8 @@ messages:
   sampling.update_frequency: "Aktualisierungsrate: {level}"
   signal.cont: "einen angehaltenen Prozess fortsetzen"
   sensor.gpu_claim: "GPU {card} liest dieses Gerät:"
+  sensor.disk_claim: "Datenträger {disk} ({detail}) liest dieses Gerät:"
+  sensor.mounted_at: "eingehängt unter {path}"
   sensor.power_channels: "{count} Leistungskanäle überschneiden sich; angezeigt wird der größte, nie ihre Summe"
   signal.hint: "Hoch/Runter wählt · Enter sendet · Esc bricht ab"
   signal.kill: "den Kernel zum Beenden zwingen"
