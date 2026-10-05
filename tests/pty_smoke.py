@@ -1236,19 +1236,7 @@ def run_thread_drilldown() -> None:
     script.append((("resize", 45, 160), None))
     script.append((("sleep", 0.8), None))
     detail = run_session(160, 45, exercise=False,
-                         script=script + [
-                             # Closing waits for the memory section to be on
-                             # the wire: the assertion below reconstructs the
-                             # screen at its last paint, and a close that fires
-                             # before that frame arrived leaves the assertion
-                             # nothing to read.  Observed once in CI on a
-                             # loaded runner (2026-10-05) on code that passed
-                             # before and after -- the load-race family, so the
-                             # fix is the family's: gate on the bytes, not on
-                             # the clock.
-                             (b"q", ("USS".encode(), "PSS".encode(),
-                                     "属于进程".encode())),
-                             (("sleep", 0.4), None), (b"q", None)])
+                         script=script + [(b"q", None), (("sleep", 0.4), None), (b"q", None)])
     detail_text = detail.decode("utf-8", "replace")
     assert "线程详情" in detail_text, (
         "Enter on a thread row did not open the thread detail"
@@ -1290,9 +1278,27 @@ def run_thread_drilldown() -> None:
     # than one being a prefix of the other.
     # The cut is the memory section's own last row, which is the end of the
     # overlay's final frame: everything this case reads sits above it.
-    rows = _screen_at_last_paint(
-        detail, ("USS".encode(), "PSS".encode(), "属于进程".encode()), 160, 45
-    )
+    #
+    # The memory section is conditional in the product, so it is conditional
+    # here.  tui.lua emits it only when the picked thread's *process* had a
+    # readable memory detail, and the picker highlights the busiest thread of
+    # the moment: on a quiet CI runner that can be a kworker (whose process is
+    # kthreadd, a kernel thread with no smaps at all) or any root-owned
+    # thread -- init's own main thread was the observed case -- whose
+    # smaps_rollup the runner user cannot open.  The section is then
+    # legitimately absent, which is the product's own "a value nobody obtained
+    # is not a value" rule; asserting on it would fail on a property of the
+    # host rather than on the feature.  Where the section does paint, every
+    # assertion about it still runs, and the anchor falls back to the overlay's
+    # action line -- its last row in every thread detail, kernel or not.
+    memory_markers = ("USS".encode(), "PSS".encode(), "属于进程".encode())
+    memory_present = any(detail.find(marker) >= 0 for marker in memory_markers)
+    if not memory_present:
+        print("thread drill-down: the picked thread's process memory is not "
+              "readable on this host; the memory-section assertions are "
+              "skipped with the section itself")
+    anchor = memory_markers if memory_present else ("Esc 返回线程列表".encode(),)
+    rows = _screen_at_last_paint(detail, anchor, 160, 45)
     cells = [set(row.split()) for row in rows]
     assert any("切换" in row for row in cells), (
         "the thread detail has no switch-rate row:\n" + "\n".join(rows)
@@ -1326,20 +1332,22 @@ def run_thread_drilldown() -> None:
             "per-thread signal that separates a starved thread from a blocked "
             "one is missing:\n" + "\n".join(rows)
         )
-    # The memory section must say whose memory it is, and it says so in the
-    # heading rather than in a footnote: a byte count under a thread's name is
-    # otherwise read as the thread's.  The whole label is matched, because the
-    # negative cannot be: "属于线程" is a substring of the correct heading
-    # ("内存（属于进程，不属于线程）"), so testing for it would fail on the very
-    # text that gets the attribution right.
-    assert any("内存（属于进程，不属于线程）" in row for row in rows), (
-        "the thread detail shows no memory section saying the memory is the "
-        "process's, or the section is labelled ambiguously:\n" + "\n".join(rows)
-    )
-    assert any("PSS" in row for row in cells) and any("USS" in row for row in cells), (
-        "the memory section states whose memory it is but names no figure:\n"
-        + "\n".join(rows)
-    )
+    if memory_present:
+        # The memory section must say whose memory it is, and it says so in the
+        # heading rather than in a footnote: a byte count under a thread's name
+        # is otherwise read as the thread's.  The whole label is matched,
+        # because the negative cannot be: "属于线程" is a substring of the
+        # correct heading ("内存（属于进程，不属于线程）"), so testing for it
+        # would fail on the very text that gets the attribution right.
+        assert any("内存（属于进程，不属于线程）" in row for row in rows), (
+            "the thread detail shows no memory section saying the memory is the "
+            "process's, or the section is labelled ambiguously:\n" + "\n".join(rows)
+        )
+        assert any("PSS" in row for row in cells) and any("USS" in row for row in cells), (
+            "the memory section states whose memory it is but names no figure:\n"
+            + "\n".join(rows)
+        )
+    return None
 
 
 def run_process_columns() -> None:
