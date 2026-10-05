@@ -11,7 +11,8 @@ local root = source:match("^(.*)/tests/unit/[^/]+$") or "."
 if root == "" then
   root = "."
 end
-package.path = root .. "/src/?.lua;" .. root .. "/src/?/init.lua;" .. package.path
+package.path = root .. "/src/?.lua;" .. root .. "/src/?/init.lua;"
+    .. root .. "/tests/?.lua;" .. package.path
 
 local LayoutStore = require("wtop.layout_store")
 local LayoutCommands = require("wtop.layout_commands")
@@ -246,7 +247,15 @@ local function remove_layout(path)
   os.remove(FileBackup.backup_path(path))
 end
 
-assert(native.available, "the atomic writer is required to test a save")
+-- Every save below goes through the module's atomic writer, so a tree without
+-- a built module cannot exercise persistence at all; the rest of the file
+-- (v4 inertness, encoder/loader agreement) has already run by this point and
+-- does not need it.  A stated skip in the one suite that builds nothing, a
+-- failure everywhere else.
+if not require("support.artifacts").require_condition(native.available,
+        "the native module (atomic layout writes)", "run `make native`") then
+  return true
+end
 
 -- A missing file is the first run: there is no column set, and the controller
 -- keeps its own defaults rather than being handed an empty list.

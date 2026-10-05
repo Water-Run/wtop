@@ -1,6 +1,7 @@
-package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
+package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 
 local diagnose = require("wtop.diagnose")
+local native = require("wtop.native")
 
 local report = diagnose.collect({
     safe_mode = true,
@@ -28,6 +29,15 @@ assert(report.identity.original_uid == 1000 and report.identity.requested == tru
 -- dlopens the vendor library, so on a host with the command-line tool present
 -- and the library absent the helper line reads `available` while wtop has no
 -- backend at all.  That is this machine's exact shape.
+--
+-- Both halves below interrogate the native dlopen probes: safe mode expects
+-- the probe to have been *skipped*, and the unsafe pass expects it to have
+-- reached a verdict.  Without a built module neither state can occur -- the
+-- report answers with the module's own absence -- so the section says so
+-- instead of asserting against a fallback (a stated skip in the one suite
+-- that builds nothing, a failure everywhere else).
+if require("support.artifacts").require_condition(native.available,
+        "the native module", "run `make native`") then
 assert(type(report.gpu_vendors) == "table", "the vendor section exists")
 for _, key in ipairs({ "nvml", "amdsmi", "levelzero" }) do
     local vendor = report.gpu_vendors[key]
@@ -64,6 +74,7 @@ for key, vendor in pairs(probed.gpu_vendors) do
         key .. " reports how many devices the backend then found")
     end
 end
+end -- native module present: vendor probe states
 
 -- The helper list answers "which external command can this build actually run".
 --

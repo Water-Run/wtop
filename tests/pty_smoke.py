@@ -62,6 +62,13 @@ SIGNAL_MARKERS = (b"SIGTERM", "发送信号".encode())
 WIDGET_PICKER_MARKERS = (b"Add widget", "添加组件".encode())
 WIDGET_REPLACE_MARKERS = (b"Replace widget", "替换组件".encode())
 HELP_MARKERS = (b"Navigation", "导航".encode())
+# The workspace manager's New row is rendered by the overlay alone, so seeing
+# it proves the list is on screen rather than merely open; the rename hint and
+# the post-rename status line carry the same proof for their own states.  The
+# scenarios that use these pin --lang zh-CN, so the markers are zh-CN too.
+WORKSPACE_MANAGER_MARKERS = ("新建：".encode(),)
+WORKSPACE_RENAME_MARKERS = ("确认重命名".encode(),)
+WORKSPACE_RENAMED_MARKERS = ("已重命名为".encode(),)
 LUA_BLUE_BACKGROUND = b"48;2;0;0;128"
 # Key "0" selects the tenth tab, matching the in-app binding.
 PAGE_KEYS = {1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: "9", 10: "0"}
@@ -928,7 +935,7 @@ def run_workspace_manager() -> None:
         (("sleep", 0.8), None),
         (b"\x1b[B", None),                 # down onto the new-workspace row
         (("sleep", 0.5), None),
-        (b"ptycheck", None),               # type a name
+        (b"ptycheck", WORKSPACE_MANAGER_MARKERS),  # type, once painted
         (("sleep", 0.8), None),
     ]
     # Esc is two-level here, and `q` is not the way out any more: on the
@@ -1405,7 +1412,13 @@ def run_workspace_rename() -> None:
             (("sleep", 0.8), None),
             (b"w", None),                      # no workspaces yet: the New row
             (("sleep", 0.8), None),
-            (b"alpha", None),                  # a name to rename later
+            # Gated on the manager actually being painted: this scenario's
+            # assertion reads the manager hint out of the transcript, and under
+            # load the sleeps above do not bound when (or whether) that frame
+            # reached the wire before the keys that follow close the overlay.
+            # The gate is what the marker column exists for -- the CI failure
+            # this fixes was exactly a hint that had never been painted.
+            (b"alpha", WORKSPACE_MANAGER_MARKERS),   # a name to rename later
             (("sleep", 0.6), None),
             (b"\r", None),                     # save it; the overlay closes
             (("sleep", 0.8), None),
@@ -1422,15 +1435,18 @@ def run_workspace_rename() -> None:
             (("sleep", 0.8), None),
             (b"w", None),                      # cursor on the workspace from the file
             (("sleep", 0.8), None),
-            (b"r", None),                      # rename, prefilled with "alpha"
+            (b"r", WORKSPACE_MANAGER_MARKERS),  # rename, once the list is painted
             (("sleep", 0.8), None),
             (b"\x7f" * 5, None),               # clear it
             (("sleep", 0.6), None),
-            (b"my qx", None),                  # q and x are text here, not commands
+            (b"my qx", WORKSPACE_RENAME_MARKERS),
             (("sleep", 0.8), None),
             (b"\r", None),                     # commit
             (("sleep", 0.9), None),
-            (b"q", None),                      # quit, which saves
+            # Gated on the confirmation having been painted: the status line
+            # below asserts on it, and a quit that fires before the repaint
+            # reaches the wire erases the very frame the assertion reads.
+            (b"q", WORKSPACE_RENAMED_MARKERS),  # quit, which saves
         ], config_home=home)
         # Short fragments, not whole sentences: the renderer emits a diff and
         # positions the cursor between styled segments, so a long translated

@@ -409,9 +409,17 @@ local lua_version = assert(makefile:match("LUA_VERSION%s*:=%s*([%d%.]+)"),
     "the Makefile no longer declares LUA_VERSION, so the interpreter path used "
         .. "to give the gate a real file to measure is unknown")
 local interpreter = ".tools/lua-" .. lua_version .. "/bin/lua"
-assert(exists("build/native/wtop_native.so") and exists(interpreter),
-    "the gate needs a built module and the packaged interpreter to have a "
-        .. "complete input; run `make native toolchain` first")
+-- Section 4 feeds the gate real ELF images; sections 5 and 6 below read text
+-- and do not need them, but they run in every artifact-rich suite, and the
+-- one suite that builds nothing takes a stated skip here rather than a
+-- failure that would say the build broke when it did not.
+local Artifacts = require("support.artifacts")
+if not Artifacts.require_file("build/native/wtop_native.so",
+        "the native module", "run `make native`")
+    or not Artifacts.require_file(interpreter,
+        "the packaged Lua interpreter", "run `make toolchain`") then
+    return true
+end
 
 local scratch = "build/native/.wtop-evidence-fixture"
 os.execute("rm -rf " .. scratch .. " && mkdir -p " .. scratch)

@@ -1,4 +1,4 @@
-package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
+package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 
 -- The native module has to *compile* everywhere wtop claims to run, not only
 -- where the developer happens to be.
@@ -33,6 +33,16 @@ end
 local makefile = read_file("Makefile")
 local lua_version = assert(makefile:match("LUA_VERSION%s*:=%s*([%d%.]+)"))
 local include = "-I.tools/lua-" .. lua_version .. "/include"
+
+-- The variants are compiled against the packaged interpreter's headers.  A
+-- tree without them cannot compile anything, which is the environment's
+-- statement rather than the module's (a stated skip in the one suite that
+-- builds nothing, a failure everywhere else).
+if not require("support.artifacts").require_file(
+        ".tools/lua-" .. lua_version .. "/include/lua.h",
+        "the packaged Lua headers", "run `make toolchain`") then
+    return true
+end
 
 -- The project's own warning flags, so a variant that would break `make native`
 -- breaks this too.  They are written out rather than parsed out of the

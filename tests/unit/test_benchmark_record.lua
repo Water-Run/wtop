@@ -137,6 +137,21 @@ assert(missing_output:find("no first frame", 1, true) == nil,
         .. "about wtop rather than about the path that was passed:\n"
         .. missing_output)
 
+-- The live run below drives the real TUI on the packaged interpreter with the
+-- native module, and both are artifacts this tree may not have built.  A run
+-- without them does not measure the program this gate is about (a stated skip
+-- in the one suite that builds nothing, a failure everywhere else).  The path
+-- is declared once because the invocation below spells it out too, and two
+-- literals would be two copies of the same fact.
+local interpreter = ".tools/lua-5.5.1/bin/lua"
+if not require("support.artifacts").require_file(interpreter,
+        "the packaged Lua interpreter", "run `make toolchain`")
+    or not require("support.artifacts").require_file(
+        "build/native/wtop_native.so",
+        "the native module", "run `make native`") then
+    return true
+end
+
 -- ---------------------------------------------------------------------------
 -- The record itself, from one short end-to-end run.  This is the clause that
 -- matters most: describe_subject() being correct says nothing about whether
@@ -162,7 +177,7 @@ os.execute("mkdir -p build/native")
 local live, live_code = run(
     "python3 tools/perf_benchmark.py --pages 1 --window-seconds 0.2 "
         .. "--latency-samples 2 --json " .. output_path,
-    { "WTOP_LUA=.tools/lua-5.5.1/bin/lua", "WTOP_ROOT=." })
+    { "WTOP_LUA=" .. interpreter, "WTOP_ROOT=." })
 assert(live_code == 0,
     "the benchmark could not complete a --pages 1 run.  That combination is "
         .. "offered by the tool's own help text, and it used to abort on every "

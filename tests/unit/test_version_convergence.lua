@@ -1,4 +1,4 @@
-package.path = "./src/?.lua;./src/?/init.lua;;"
+package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;;"
 
 -- The version of the program is written down once.
 --
@@ -106,6 +106,16 @@ os.execute("rm -rf " .. fixture_root)
 
 local native = require("wtop.native")
 local version = require("wtop.version")
+
+-- Section 2's second half compares the module's compiled version with the
+-- tree's; without a built module the comparison has no subject, and the run
+-- says so instead of comparing the fallback word "unavailable" against the
+-- declared version (a stated skip in the one suite that builds nothing, a
+-- failure everywhere else).
+if not require("support.artifacts").require_condition(native.available,
+        "the native module", "run `make native`") then
+    return true
+end
 
 assert(version.version == declared,
     "the Lua tree reports version " .. tostring(version.version) ..

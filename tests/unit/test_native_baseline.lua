@@ -1,4 +1,4 @@
-package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
+package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 
 -- The glibc floor of a wtop release is a property of the machine that built it,
 -- so it has to be measured off the shipped files and compared against a single
@@ -82,11 +82,17 @@ local makefile = read_file("Makefile")
 local lua_version = assert(makefile:match("LUA_VERSION%s*:=%s*([%d%.]+)"),
     "the Makefile no longer declares LUA_VERSION, so the interpreter path is unknown")
 local interpreter = ".tools/lua-" .. lua_version .. "/bin/lua"
-local interpreter_handle = io.open(interpreter, "rb")
-assert(interpreter_handle,
-    "the packaged Lua interpreter " .. interpreter .. " is missing; run `make toolchain`")
-interpreter_handle:close()
+-- The gate measures real ELF images from a real build; without them there is
+-- nothing to record a baseline over (a stated skip in the one suite that
+-- builds nothing, a failure everywhere else).
 local native_module = "build/native/wtop_native.so"
+local Artifacts = require("support.artifacts")
+if not Artifacts.require_file(interpreter,
+        "the packaged Lua interpreter", "run `make toolchain`")
+    or not Artifacts.require_file(native_module,
+        "the native module", "run `make native`") then
+    return true
+end
 
 local report, status = run(
     "sh tools/record_baseline.sh " .. native_module .. " " .. interpreter)

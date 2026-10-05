@@ -210,8 +210,29 @@ sanitize-native: $(LUA_STAMP) $(NATIVE_REVISION_HEADER) $(NATIVE_VERSION_HEADER)
 # module -- a full snapshot, the agent export, and the diagnostic report -- and
 # the unit suite reaches only some of what they touch.  They were in the
 # workflow and they stayed when the rest of the step moved here.
+#
+# The interpreter this env runs on is the bootstrapped PUC Lua, built by
+# `make toolchain` with no sanitizer flags, and ASan needs its runtime in the
+# initial library list of the *process*, not of the dlopen() that loads the
+# module.  Without the preload the first sanitized invocation aborts before a
+# single test runs ("ASan runtime does not come first in initial library
+# list"), which is how this gate spent 2026-09-28 onward failing in its first
+# second while passing nowhere that could fix it -- the development host had
+# no sanitizer runtime at the time the target was written.
+#
+# The runtime to preload is read out of the module's own DT_NEEDED rather than
+# out of the compiler: `-print-file-name=libasan.so` answers the *linker
+# script* gcc uses for linking (preloading it fails with "file too short"),
+# clang links a differently-named runtime entirely, and the DSO the module
+# actually carries as a dependency is loadable by that very name through the
+# loader's normal search -- which is also how the dlopen finds it at all.  The
+# variable is lazy (`=`, not `:=`) so the query runs against the module this
+# target just built, not whatever a previous run left behind.
+SAN_ASAN_RUNTIME = $(shell objdump -p $(SANITIZED_MODULE) 2>/dev/null \
+	| grep -o 'lib[a-z_.]*asan[a-z_.0-9-]*\.so[.0-9]*' | head -n 1)
 SAN_RUN_ENV := ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
 	UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+	LD_PRELOAD='$(SAN_ASAN_RUNTIME)' \
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(SANITIZED_DIR)/?.so;;'
 
 # tests/unit/test_benchmark_record.lua drives a real TUI and asserts on a
@@ -228,6 +249,7 @@ SANITIZER_EXCLUDED := tests/unit/test_benchmark_record.lua
 
 test-sanitized: resource-check $(LUA_STAMP) $(NATIVE_REVISION_HEADER) \
 		$(NATIVE_VERSION_HEADER) sanitize-native
+	@if [ -z '$(SAN_ASAN_RUNTIME)' ]; then echo "wtop: the sanitized module names no ASan runtime to preload, so the suite cannot run on the uninstrumented interpreter"; exit 1; fi
 	@for mode in --snapshot --agent --diagnose; do \
 		echo "wtop: sanitized $$mode"; \
 		$(SAN_RUN_ENV) $(LUA) src/wtop.lua $$mode > /dev/null || exit 1; \
@@ -278,9 +300,16 @@ test-fast: resource-check test-55 test-pty-quick
 test-55: resource-check native locales
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUA) tests/run.lua $(TEST_FILES)
 
+# The 5.4 subset run builds nothing: no native module, no packaged
+# interpreter, no bundles.  Its question is whether the Lua tree still parses
+# and runs on the system interpreter, and tests whose subject is one of those
+# artifacts refuse to run without them (tests/support/artifacts.lua) so that a
+# broken build cannot pass test-55 or test-all.  This run declares the absence
+# up front -- the one environment where it is the environment and not a
+# broken build -- and those tests print a stated skip instead of failing.
 test-54: resource-check
 	@lua -e 'assert(_VERSION == "Lua 5.4", "test-54 requires Lua 5.4, got " .. _VERSION)'
-	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH=';;' lua tests/run.lua $(TEST_FILES)
+	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH=';;' WTOP_TESTS_WITHOUT_ARTIFACTS=1 lua tests/run.lua $(TEST_FILES)
 
 # The benchmark drives the development tree unless it is told which artifact to
 # measure, and those are not the same program: on one host the bundle started

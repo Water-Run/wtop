@@ -1,4 +1,4 @@
-package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
+package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 
 -- What a release artifact requires is the highest glibc version among every
 -- ELF image that will actually execute on the target -- not just the one at
@@ -40,9 +40,15 @@ local lua_version = assert(makefile:match("LUA_VERSION%s*:=%s*([%d%.]+)"))
 local module_path = "build/native/wtop_native.so"
 local interpreter_path = ".tools/lua-" .. lua_version .. "/bin/lua"
 
-assert(io.open(module_path, "rb"), "the native module is missing; run `make native`")
-assert(io.open(interpreter_path, "rb"),
-    "the packaged Lua interpreter is missing; run `make toolchain`")
+-- The subject is real ELF images from a real build; without them there is
+-- nothing to measure floors over (a stated skip in the one suite that builds
+-- nothing, a failure everywhere else).
+local Artifacts = require("support.artifacts")
+if not Artifacts.require_file(module_path, "the native module", "run `make native`")
+    or not Artifacts.require_file(interpreter_path,
+        "the packaged Lua interpreter", "run `make toolchain`") then
+    return true
+end
 
 -- The two inputs must differ, or the property below has nothing to find: a
 -- combined file of two images that agree cannot distinguish "reports the

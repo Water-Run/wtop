@@ -1,4 +1,4 @@
-package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
+package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 
 -- The Lua tree and the native module must be able to state the same source
 -- revision, because the version string a user sees comes from only one of them.
@@ -32,6 +32,19 @@ local function run(command)
 end
 
 local native = require("wtop.native")
+
+-- The whole subject of this file is the identity the *module* was compiled
+-- with and its generated Lua-side twin; without either there is nothing to
+-- compare and the run says so instead of failing a require (a stated skip in
+-- the one suite that builds nothing, a failure everywhere else).
+local Artifacts = require("support.artifacts")
+if not Artifacts.require_condition(native.available,
+        "the native module", "run `make native`")
+    or not Artifacts.require_file("src/wtop/build_id.lua",
+        "the generated build identity", "run `make build-id`") then
+    return true
+end
+
 local build_id = require("wtop.build_id")
 
 local constants = assert(native.system_constants())
