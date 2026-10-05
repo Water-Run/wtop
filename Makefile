@@ -225,12 +225,19 @@ sanitize-native: $(LUA_STAMP) $(NATIVE_REVISION_HEADER) $(NATIVE_VERSION_HEADER)
 # script* gcc uses for linking (preloading it fails with "file too short"),
 # clang links a differently-named runtime entirely, and the DSO the module
 # actually carries as a dependency is loadable by that very name through the
-# loader's normal search -- which is also how the dlopen finds it at all.  The
-# variable is lazy (`=`, not `:=`) so the query runs against the module this
-# target just built, not whatever a previous run left behind.
+# loader's normal search -- which is also how the dlopen finds it at all.
+#
+# Both variables below are lazy (`=`, not `:=`) so the query runs against the
+# module this target just built, not whatever a previous run left behind.  The
+# distinction was measured in CI, not reasoned about: with SAN_RUN_ENV as `:=`
+# its whole value froze at parse time, when no module exists, so LD_PRELOAD
+# ran empty while the validation line below -- a direct reference, expanded
+# per use -- saw the real soname and passed, and the first sanitized command
+# still died on the library-order check.  A guard and the thing it guards must
+# not expand at different times.
 SAN_ASAN_RUNTIME = $(shell objdump -p $(SANITIZED_MODULE) 2>/dev/null \
 	| grep -o 'lib[a-z_.]*asan[a-z_.0-9-]*\.so[.0-9]*' | head -n 1)
-SAN_RUN_ENV := ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
+SAN_RUN_ENV = ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
 	UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
 	LD_PRELOAD='$(SAN_ASAN_RUNTIME)' \
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(SANITIZED_DIR)/?.so;;'

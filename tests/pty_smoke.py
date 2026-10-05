@@ -67,6 +67,13 @@ HELP_MARKERS = (b"Navigation", "导航".encode())
 # the post-rename status line carry the same proof for their own states.  The
 # scenarios that use these pin --lang zh-CN, so the markers are zh-CN too.
 WORKSPACE_MANAGER_MARKERS = ("新建：".encode(),)
+# The hint row itself.  Gating on the New row proved the list was painted but
+# not that the row an assertion reads had reached the wire: under load the
+# overlay's rows can straddle frames, and a quit that fires before the hint's
+# frame erases exactly the bytes the assertion was going to look for.  Before
+# the rename flow types anything, the manager hint is the only string on the
+# wire carrying this fragment.
+WORKSPACE_MANAGER_HINT_MARKERS = ("重命名".encode(),)
 WORKSPACE_RENAME_MARKERS = ("确认重命名".encode(),)
 WORKSPACE_RENAMED_MARKERS = ("已重命名为".encode(),)
 LUA_BLUE_BACKGROUND = b"48;2;0;0;128"
@@ -873,9 +880,12 @@ def run_workspace_unicode_name() -> None:
             (("sleep", 0.9), None),
             (b"\x1b[B", None),                         # down onto the new row
             (("sleep", 0.5), None),
-            (name.encode(), None),                     # type it
+            (name.encode(), WORKSPACE_MANAGER_MARKERS),  # type, once painted
             (("sleep", 0.9), None),
-            (b"\r", None),                             # commit
+            # Committing waits for the typed echo: the assertion below reads
+            # it out of the transcript, and this save is the step after which
+            # a slow frame can still be lost to the quit.
+            (b"\r", (name.encode(),)),                 # commit
             (("sleep", 0.9), None),
             (b"\x1b", None), (("sleep", 0.4), None),    # leave edit mode
             (b"q", None),                              # quit, writing the layout
@@ -943,7 +953,11 @@ def run_workspace_manager() -> None:
     # the name rather than closing anything.  One Esc clears the typed name, the
     # next closes the list, and only then does `q` reach the main view.
     out = run_session(160, 45, exercise=False, script=script + [
-        (b"\x1b", None), (("sleep", 0.5), None),   # clear the typed name
+        # Clearing waits for the typed echo to be on the wire: the assertion
+        # below reads it out of the transcript, and this Esc is what erases it
+        # from the screen, so firing before its frame arrived would delete the
+        # very bytes being asserted.
+        (b"\x1b", (b"ptycheck",)), (("sleep", 0.5), None),   # clear the typed name
         (b"\x1b", None), (("sleep", 0.5), None),   # close the list
         (b"q", None),                               # quit
     ])
@@ -1412,21 +1426,23 @@ def run_workspace_rename() -> None:
             (("sleep", 0.8), None),
             (b"w", None),                      # no workspaces yet: the New row
             (("sleep", 0.8), None),
-            # Gated on the manager actually being painted: this scenario's
-            # assertion reads the manager hint out of the transcript, and under
-            # load the sleeps above do not bound when (or whether) that frame
-            # reached the wire before the keys that follow close the overlay.
-            # The gate is what the marker column exists for -- the CI failure
-            # this fixes was exactly a hint that had never been painted.
-            (b"alpha", WORKSPACE_MANAGER_MARKERS),   # a name to rename later
+            # Gated on the hint's own bytes, not just on the overlay having
+            # opened: the assertion below reads this row out of the transcript,
+            # and under load the overlay's rows can straddle frames -- a gate
+            # on the New row released typing while the hint's frame was still
+            # in flight, and the quit erased it.  This is the CI failure of
+            # 2026-10-05's first attempt at fixing this scenario.
+            (b"alpha", WORKSPACE_MANAGER_HINT_MARKERS),   # a name to rename later
             (("sleep", 0.6), None),
             (b"\r", None),                     # save it; the overlay closes
             (("sleep", 0.8), None),
             (b"q", None),                      # quit, which writes the file
         ], config_home=home)
         # The hint is how the user learns `r` exists, so it is asserted rather
-        # than assumed; the zh-CN catalog is what this profile loads.
-        assert "r 重命名".encode() in out, (
+        # than assumed; the zh-CN catalog is what this profile loads.  The `r`
+        # keycap and the word after it can be split by an SGR run on the wire,
+        # so the match allows escape bytes between them and nothing else.
+        assert re.search(rb"r(?:\x1b\[[0-9;]*m)* ?" + "重命名".encode(), out), (
             "the workspace manager hint does not mention r"
         )
 
@@ -1435,7 +1451,7 @@ def run_workspace_rename() -> None:
             (("sleep", 0.8), None),
             (b"w", None),                      # cursor on the workspace from the file
             (("sleep", 0.8), None),
-            (b"r", WORKSPACE_MANAGER_MARKERS),  # rename, once the list is painted
+            (b"r", (b"alpha",)),               # rename, once the saved row is listed
             (("sleep", 0.8), None),
             (b"\x7f" * 5, None),               # clear it
             (("sleep", 0.6), None),
