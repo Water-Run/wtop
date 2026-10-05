@@ -1,6 +1,20 @@
-package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
+package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 
 local GPU = require("wtop.collectors.gpu")
+
+-- The reason column.  Both reasons are categories, and the samples below are
+-- what decide them: instrumenting the collector's two quality locals across
+-- this whole suite showed `partial` reached by ten distinct causes and
+-- `estimated` by two, and eight of the ten were reads that failed or never
+-- happened while two were reads that *succeeded* and still produced nothing
+-- usable.  Each sample isolates one of the two, and each is asserted for the
+-- absence of the facts that would make the other sentence true -- which is
+-- what a mutation that swapped the two codes would change.
+local GPU_REASON = { partial = "gpu_data_incomplete",
+  estimated = "gpu_identity_inferred", fresh = false }
+local gpu_reason_is = function(result, label)
+  return require("support.collector_reason").assert_reason(result, GPU_REASON, label)
+end
 
 local function fixture(path)
   local file = assert(io.open("tests/fixtures/" .. path, "rb"))
@@ -295,6 +309,14 @@ assert(bounded_dpm.current_hz == nil)
 
 local first = collector:sample(context)
 assert(first.status == "ok" and first.quality == "partial")
+-- A second, unrelated `partial`: a denied `/proc/<pid>/fdinfo` and a process
+-- that exited mid-scan, against the same inventory.  The orphan sample below
+-- reaches `partial` with every counter at zero, so between them the two
+-- samples are `partial` for opposite reasons -- one where reads failed, one
+-- where a read succeeded and the association could not be made -- and both
+-- must carry the same category, because one sentence has to cover both.
+assert(first.data.process_scan.denied > 0 and first.data.process_scan.unmatched_clients == 0)
+gpu_reason_is(first, "the gpu sample with a denied and a raced descriptor")
 assert(not pcall(GPU.new, "invalid"))
 assert(not pcall(GPU.new, { max_fdinfo_bytes = 64 * 1024 * 1024 + 1 }))
 assert(first.data.schema == "dev.waterrun.wtop.gpu/v2")
@@ -327,7 +349,16 @@ assert(amd.metrics.memory_total_bytes == 17179869184 and amd.metrics.memory_used
 assert(amd.metrics.visible_memory_total_bytes == 8589934592 and amd.metrics.gtt_used_bytes == 1073741824)
 assert(amd.metrics.frequency_graphics_hz == 1800000000)
 assert(amd.metrics.frequency_memory_hz == 1000000000)
+-- The promoted scalar is one clock of the set, so it names itself.  Without
+-- the id a consumer reading only `frequency_current_hz` cannot tell a
+-- graphics clock from a memory clock, and on this card the two are different
+-- quantities 800 MHz apart.
+assert(amd.metrics.frequency_domain == "graphics")
+assert(amd.frequencies.domains[1].id == "graphics"
+  and amd.metrics.frequency_current_hz == amd.frequencies.domains[1].current_hz,
+  "the promoted clock is the first sorted domain, and the id says so")
 assert(intel.metrics.frequency_current_hz == 450000000)
+assert(intel.metrics.frequency_domain == "gt0")
 assert(intel.frequencies.by_id.gt0.maximum_hz == 1500000000)
 
 -- GPU collection only links the global hwmon identity.  Sensor values are
@@ -499,6 +530,80 @@ files["/drm/card0/device/gpu_busy_percent"] = saved_busy
 files["/drm/card0/device/mem_info_vram_total"] = saved_memory
 files["/drm/card1/gt/gt0/rps_act_freq_mhz"] = saved_frequency
 
+-- A clock that is powered down reports 0, and 0 is not a frequency.  This is
+-- not hypothetical: on the development host `rps_act_freq_mhz` reads 0 for
+-- most of every second, because the GT sits in RC6 whenever nothing is
+-- drawing, while `rps_cur_freq_mhz` keeps reporting the clock the hardware is
+-- set to.  Lua's `or` treats 0 as a present value, so preferring the actual
+-- reading published the zero and the GPU table read 0 Hz on a GPU running at
+-- 300 MHz.  The set has to prefer a reading that is actually a reading.
+local saved_current = files["/drm/card1/gt/gt0/rps_cur_freq_mhz"]
+files["/drm/card1/gt/gt0/rps_act_freq_mhz"] = "0\n"
+files["/drm/card1/gt/gt0/rps_cur_freq_mhz"] = "300\n"
+local asleep = GPU.new({
+  drm_path = "/drm", proc_path = "/proc", scan_processes = false,
+}):sample(context)
+local asleep_intel = assert(asleep.data.by_id["0000:00:02.0"])
+assert(asleep_intel.metrics.frequency_current_hz == 300000000,
+  "a powered-down actual reading must not be promoted over the real one: "
+    .. tostring(asleep_intel.metrics.frequency_current_hz))
+-- The kernel's own zero is kept on the domain, because it is what the kernel
+-- said, and the clock is still reported as one of the device's clocks.
+assert(asleep_intel.frequencies.by_id.gt0.actual_hz == 0,
+  "the raw reading stays visible rather than being rewritten")
+assert(asleep_intel.frequencies.by_id.gt0.current_hz == 300000000)
+assert(asleep_intel.frequencies.by_id.gt0.quality == nil,
+  "a clock with a current reading is available, and says nothing about its absence")
+assert(asleep_intel.metrics.frequency_domain == "gt0",
+  "the promoted figure is still attributed to a clock")
+
+-- With nothing running and nothing set, there is no figure to promote and the
+-- document must say the clock is unavailable rather than report 0 Hz.  A zero
+-- here is the claim "this clock runs at zero", which is a different statement
+-- from "this clock is not running", and only one of them is true.
+files["/drm/card1/gt/gt0/rps_cur_freq_mhz"] = "0\n"
+local powered_down = GPU.new({
+  drm_path = "/drm", proc_path = "/proc", scan_processes = false,
+}):sample(context)
+local down_intel = assert(powered_down.data.by_id["0000:00:02.0"])
+assert(down_intel.metrics.frequency_current_hz == nil,
+  "a clock with no running reading promotes no frequency, not a zero: "
+    .. tostring(down_intel.metrics.frequency_current_hz))
+assert(down_intel.frequencies.by_id.gt0.quality == "unavailable",
+  "and the domain states that it is unavailable rather than reading zero")
+-- Minimum and maximum survive: they describe the clock's range, which is a
+-- property of the hardware and does not stop being true when the clock is off.
+assert(down_intel.metrics.frequency_maximum_hz == 1500000000,
+  "a powered-down clock still has a ceiling")
+assert(down_intel.metrics.frequency_domain == "gt0",
+  "and the promoted range is attributed to the clock it describes")
+files["/drm/card1/gt/gt0/rps_act_freq_mhz"] = saved_frequency
+files["/drm/card1/gt/gt0/rps_cur_freq_mhz"] = saved_current
+
+-- The same rule on the other promotion path.  An amdgpu DPM table may mark a
+-- 0 MHz level as the active one -- the memory clock drops to a powered-down
+-- level on its own -- and that zero is a state, not a rate.  Publishing it
+-- would also collide with a card that reports no memory clock at all, which is
+-- the one distinction a reader of this figure most needs.
+local saved_mclk = files["/drm/card0/device/pp_dpm_mclk"]
+files["/drm/card0/device/pp_dpm_mclk"] = "0: 0Mhz *\n1: 1000Mhz\n"
+local idle_memory = GPU.new({
+  drm_path = "/drm", proc_path = "/proc", scan_processes = false,
+}):sample(context)
+local idle_amd = assert(idle_memory.data.by_id["0000:03:00.0"])
+assert(idle_amd.metrics.frequency_memory_hz == nil,
+  "a memory clock parked at 0 MHz is not a memory clock reading: "
+    .. tostring(idle_amd.metrics.frequency_memory_hz))
+assert(idle_amd.metrics.frequency_graphics_hz == 1800000000,
+  "and the clock that is running is still reported")
+assert(idle_amd.frequencies.by_id.memory.quality == "unavailable",
+  "the parked clock states that it is unavailable")
+assert(idle_amd.frequencies.by_id.memory.states[1].frequency_hz == 0,
+  "while its DPM table still lists the 0 MHz level, which is the real state")
+assert(idle_amd.frequencies.by_id.memory.maximum_hz == 1000000000,
+  "and the clock's ceiling is a property of the hardware, not of its state")
+files["/drm/card0/device/pp_dpm_mclk"] = saved_mclk
+
 -- Denied and malformed optional PCI attributes must remain absent without
 -- manufacturing plausible values; permission failures stay visible in the
 -- bounded issue list and degrade only the affected device.
@@ -527,6 +632,12 @@ local degraded_issues = {}
 for _, issue in ipairs(degraded_intel.issues) do degraded_issues[issue.field] = issue end
 assert(degraded_issues["identity.class"].status == "denied")
 assert(degraded_issues["pci.boot_vga"].reason == "number_out_of_range")
+-- A third `partial` family: the inventory itself, with no process scan and no
+-- unattributable node.  One code for all three, because the sentence has to
+-- cover a denied read, a raced read and an unusable attribute alike.
+assert(degraded_static.data.process_scan.enabled == false)
+assert(degraded_static.data.drm_scan.unattached_render_nodes == 0)
+gpu_reason_is(degraded_static, "the gpu sample with unusable device attributes")
 assert(degraded_issues["power.runtime_status"].status == "denied")
 files["/drm/card1/device/vendor"] = saved_vendor
 files["/drm/card1/device/class"] = saved_class
@@ -650,5 +761,147 @@ assert(not pcall(GPU.new, { max_processes = 0 }))
 assert(not pcall(GPU.new, { max_fdinfo_bytes = -1 }))
 assert(not pcall(GPU.new, { max_clients = 2147483648 }))
 assert(not pcall(GPU.new, { max_cards = 0 / 0 }))
+
+-- A render node that publishes neither a bus address nor a device symlink, on
+-- a host with exactly one device of its driver.  The collector attaches it by
+-- driver-uniqueness, which is a guess about which GPU it belongs to, and that
+-- is the entire cause of the `estimated` here: the device's own identity is
+-- complete and every read succeeded.
+local link_guess_fs = fake_fs({
+  ["/link/card0/device/uevent"] = "DRIVER=example\nPCI_SLOT_NAME=0000:06:00.0\n",
+  ["/link/card0/device/vendor"] = "0x10de\n",
+  ["/link/card0/device/device"] = "0x2684\n",
+  ["/link/card0/dev"] = "226:6\n",
+  ["/link/renderD128/device/uevent"] = "DRIVER=example\n",
+  ["/link/renderD128/dev"] = "226:128\n",
+}, { ["/link"] = { "renderD128", "card0" } }, {
+  ["/link/card0/device"] = "../../../0000:06:00.0",
+  ["/link/card0/device/driver"] = "../../../../bus/pci/drivers/example",
+  ["/link/renderD128/device/driver"] = "../../../../bus/pci/drivers/example",
+}, {}, {}, {})
+local link_guess = GPU.new({
+  drm_path = "/link", proc_path = "/link-proc", scan_processes = false,
+}):sample({ fs = link_guess_fs, now_ns = function() return 1 end })
+assert(link_guess.quality == "estimated",
+  "a render node attached by driver-uniqueness is estimated, not fresh")
+assert(link_guess.data.drm_scan.estimated_render_links == 1)
+local linked_device = assert(link_guess.data.devices[1])
+assert(linked_device.identity_quality == "fresh",
+  "the guess is in the node's attachment, not in the device's identity")
+assert(not linked_device.partial and next(linked_device.errors or {}) == nil,
+  "every read on this tree succeeded; the cause is the inferred attachment")
+assert(#linked_device.render_nodes == 1)
+gpu_reason_is(link_guess, "a gpu sample whose render node was attached by inference")
+
+-- The other of the two.  A DRM client naming a bus address that is not in the
+-- device list, on a host whose only device is driven by something else.  Every
+-- byte of the client was read successfully and the parse succeeded; what could
+-- not be produced is which GPU the process belongs to.  This is the sample
+-- that decides the `partial` sentence, because "part of the data could not be
+-- read" is false of it and a user told that goes looking for a permissions
+-- problem that does not exist.
+local orphan_fdinfo = table.concat({
+  "drm-driver: nvidia",
+  "drm-client-id: 4",
+  "drm-client-name: stranger",
+  "drm-pdev: 0000:0b:00.0",
+  "drm-engine-render: 50000000 ns",
+  "drm-cycles-render: 100",
+  "drm-total-cycles-render: 1000",
+  "drm-maxfreq-render: 1500 MHz",
+}, "\n") .. "\n"
+local orphan_fs = fake_fs({
+  ["/orphan/card0/device/uevent"] = "DRIVER=i915\nPCI_SLOT_NAME=0000:00:02.0\n",
+  ["/orphan/card0/device/vendor"] = "0x8086\n",
+  ["/orphan/card0/device/device"] = "0x46a6\n",
+  ["/orphan/card0/dev"] = "226:0\n",
+  ["/orphan-proc/200/stat"] = stat_for(200, "stranger", 2000),
+  ["/orphan-proc/200/status"] = "Name:\tstranger\nUid:\t2000\t2000\t2000\t2000\n",
+  ["/orphan-proc/200/fdinfo/3"] = orphan_fdinfo,
+}, {
+  ["/orphan"] = { "card0" },
+  ["/orphan-proc"] = { "200" },
+  ["/orphan-proc/200/fdinfo"] = { "3" },
+}, {
+  ["/orphan/card0/device"] = "../../../0000:00:02.0",
+  ["/orphan/card0/device/driver"] = "../../../../bus/pci/drivers/i915",
+}, {}, {}, {})
+local orphan = GPU.new({
+  drm_path = "/orphan", proc_path = "/orphan-proc",
+  max_processes = 8, max_fds_per_process = 8,
+  max_fdinfo_files = 8, max_clients = 8,
+}):sample({ fs = orphan_fs, now_ns = function() return 1 end })
+assert(orphan.quality == "partial", "a client that matched no device degrades the sample")
+assert(orphan.data.process_scan.unmatched_clients == 1)
+assert(orphan.data.process_scan.drm_fdinfo_files == 1)
+assert(orphan.data.process_scan.denied == 0 and orphan.data.process_scan.races == 0
+  and orphan.data.process_scan.parse_errors == 0,
+  "the client's bytes were read and parsed; nothing failed to be read")
+assert(orphan.data.process_scan.status == "ok")
+assert(orphan.data.drm_scan.unattached_render_nodes == 0)
+-- The device's own reads are not what degraded here.  `device.partial` is set
+-- because the device *inherits* the process scan's quality, not because an
+-- attribute of it failed: `issues` is empty and the identity is complete, so
+-- the only thing missing anywhere in this sample is the client-to-GPU link.
+assert(next(orphan.data.devices[1].issues) == nil,
+  "no attribute of the device itself failed to be read")
+assert(orphan.data.devices[1].partial
+  and orphan.data.devices[1].processes.quality == "partial",
+  "a device inherits the process scan's degradation rather than staying whole")
+assert(orphan.data.devices[1].identity_quality == "fresh")
+gpu_reason_is(orphan, "a gpu sample whose client could not be attributed to a device")
+
+-- And the `fresh` half of the invariant: a whole tree, read without a guess
+-- and without a loss, names no cause.  A reason table listing only the two
+-- degraded qualities has no row to disagree with it, so without this the
+-- whole `fresh` direction is untested.
+local whole_fs = fake_fs({
+  ["/whole/card0/device/uevent"] = "DRIVER=i915\nPCI_SLOT_NAME=0000:00:02.0\n",
+  ["/whole/card0/device/vendor"] = "0x8086\n",
+  ["/whole/card0/device/device"] = "0x46a6\n",
+  ["/whole/card0/dev"] = "226:0\n",
+  ["/whole/renderD128/device/uevent"] = "DRIVER=i915\nPCI_SLOT_NAME=0000:00:02.0\n",
+  ["/whole/renderD128/dev"] = "226:128\n",
+}, { ["/whole"] = { "renderD128", "card0" } }, {
+  ["/whole/card0/device"] = "../../../0000:00:02.0",
+  ["/whole/card0/device/driver"] = "../../../../bus/pci/drivers/i915",
+  ["/whole/renderD128/device"] = "../../../0000:00:02.0",
+}, {}, {}, {})
+local whole = GPU.new({
+  drm_path = "/whole", proc_path = "/whole-proc", scan_processes = false,
+}):sample({ fs = whole_fs, now_ns = function() return 1 end })
+assert(whole.status == "ok" and whole.quality == "fresh")
+assert(#whole.data.devices == 1 and not whole.data.devices[1].partial)
+assert(whole.data.devices[1].identity_quality == "fresh")
+assert(whole.data.drm_scan.estimated_render_links == 0
+  and whole.data.drm_scan.unattached_render_nodes == 0)
+gpu_reason_is(whole, "a gpu sample with nothing wrong")
+
+-- The other `estimated` branch, so the pairing table's `estimated` row is not
+-- decided by one cause: a card that publishes no `vendor`, so its identity is
+-- composed from the bus address and driver alone.  A missing file is an
+-- optional absence rather than a failed read, so the device carries no issue
+-- and the sample is `estimated` on this alone -- with no render node in the
+-- tree for the other branch to fire on.
+local nameless_fs = fake_fs({
+  ["/nameless/card0/device/uevent"] = "DRIVER=example\nPCI_SLOT_NAME=0000:07:00.0\n",
+  ["/nameless/card0/device/device"] = "0x2684\n",
+  ["/nameless/card0/dev"] = "226:7\n",
+}, { ["/nameless"] = { "card0" } }, {
+  ["/nameless/card0/device"] = "../../../0000:07:00.0",
+  ["/nameless/card0/device/driver"] = "../../../../bus/pci/drivers/example",
+}, {}, {}, {})
+local nameless = GPU.new({
+  drm_path = "/nameless", proc_path = "/nameless-proc", scan_processes = false,
+}):sample({ fs = nameless_fs, now_ns = function() return 1 end })
+assert(nameless.quality == "estimated")
+assert(nameless.data.drm_scan.estimated_render_links == 0
+  and nameless.data.drm_scan.unattached_render_nodes == 0,
+  "the cause here is the identity, not a node attachment")
+local nameless_device = nameless.data.devices[1]
+assert(nameless_device.identity_quality == "estimated" and nameless_device.vendor_id == nil)
+assert(not nameless_device.partial and next(nameless_device.issues) == nil,
+  "an absent optional attribute is not a read that failed")
+gpu_reason_is(nameless, "a gpu sample whose device identity was composed")
 
 return true

@@ -88,10 +88,19 @@ function Pressure:sample(context)
     })
   end
   data.errors = errors
+  local partial = success < #self.resources
   return Common.result("ok", finished, data, {
     -- Readable PSI values remain exact even when another resource is absent;
     -- per-resource errors carry the partial capability information.
-    quality = success < #self.resources and "partial" or "fresh",
+    quality = partial and "partial" or "fresh",
+    -- A reading that is `partial` but running has to be able to say why, and
+    -- the cause is measured rather than assumed: the count of resources that
+    -- came back against the count that was asked for.  The per-resource reason
+    -- for each one that did not is already in `data.errors` -- this is the
+    -- aggregate, and it is deliberately the one cause, because the only
+    -- condition that degrades the sample is a resource that could not be read.
+    -- The all-failed case has its own reason and its own status, set above.
+    reason = partial and "not_all_pressure_resources_readable" or nil,
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = self.base_path,
   })

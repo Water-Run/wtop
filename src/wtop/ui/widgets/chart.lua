@@ -11,6 +11,11 @@ local M = {}
 local MAX_WIDTH = 4096
 local MAX_HEIGHT = 256
 
+-- A column is the highest reading in its interval.  `Sparkline.buckets` does the
+-- reduction; the name travels in the scale so a guard can ask what a column means
+-- instead of assuming it.
+local REDUCTION = "window-max"
+
 local PARTIAL = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
 local ASCII_PARTIAL = { ".", ".", ":", ":", "|", "|", "#", "#" }
 
@@ -22,13 +27,6 @@ end
 local function bounded(value, fallback, minimum, maximum)
   if not finite(value) then return fallback end
   return math.max(minimum, math.min(maximum, math.floor(value)))
-end
-
--- Reuse the sparkline's bucketing so a chart and a sparkline built from the
--- same history always agree on which sample belongs to which column.
-local function columns_for(values, width, options)
-  local buckets = Sparkline.buckets(values, width, options)
-  return buckets
 end
 
 --- Render `values` as `height` rows of `width` cells.
@@ -50,18 +48,18 @@ function M.render(values, width, height, options)
   local gap = options.gap or (ascii and " " or "·")
   local full = partial[8]
 
-  local buckets = columns_for(values, width, options)
+  local buckets, window = Sparkline.buckets(values, width, options)
   local minimum, maximum = options.min, options.max
   local flat = false
   if not finite(minimum) or not finite(maximum) or maximum <= minimum then
-    local low, high
-    for index = 1, width do
-      local value = buckets[index]
-      if finite(value) then
-        low = low and math.min(low, value) or value
-        high = high and math.max(high, value) or value
-      end
-    end
+    -- The scale comes from the readings the window held, not from the columns
+    -- that were drawn from them.  It used to come from the columns, which is the
+    -- same number only when the columns and the readings agree -- and a column
+    -- that reduces several readings to one cannot carry the reading the panel
+    -- prints as its top label.  `Sparkline.window` is the one implementation of
+    -- "which readings are in the window", so the scale and the columns cannot
+    -- drift apart.
+    local low, high = window.minimum, window.maximum
     flat = low ~= nil and high ~= nil and high == low
     if not low then
       low, high = 0, 1
@@ -115,6 +113,13 @@ function M.render(values, width, height, options)
     -- A series whose samples are all identical has no real vertical extent.
     -- Labelling a synthesised span as if it were measured invents a scale.
     flat = flat == true,
+    -- How a column was reduced, and what the window held, so a caller that
+    -- prints this scale and a guard that checks it both read the widget's own
+    -- numbers rather than re-deriving the window.
+    reduction = REDUCTION,
+    samples = window.samples or 0,
+    window_minimum = window.minimum,
+    window_maximum = window.maximum,
   }
 end
 

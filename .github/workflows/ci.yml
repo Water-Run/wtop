@@ -53,14 +53,17 @@ jobs:
         env:
           CC: ${{ matrix.cc }}
         run: make native
+      # Through the Makefile, which is where the module's source list lives.
+      # This step used to name native/wtop_native.c and native/wtop_nvml.c
+      # itself, which is two of the four files in NATIVE_SOURCES: the AMD SMI
+      # and Level Zero backends were never checked under the stricter dialect,
+      # and nothing said they were not.  They compile clean under it, so
+      # nothing was being worked around -- the gate was simply narrower than its
+      # name.  A new .c file is covered now by being added to NATIVE_SOURCES.
       - name: Reject new warnings under a stricter dialect
         env:
           CC: ${{ matrix.cc }}
-        run: |
-          "$CC" -std=c17 -fPIC -Wall -Wextra -Werror \
-            -Wshadow -Wconversion -Wsign-conversion -Wpointer-arith \
-            -O2 -shared -I.tools/lua-5.5.1/include \
-            -o /dev/null native/wtop_native.c native/wtop_nvml.c -ldl
+        run: make check-native-warnings
 
   # Syntax, schema and the full unit suite on the release ABI.
   test:
@@ -126,8 +129,37 @@ jobs:
       - run: make test-pty
       - name: aarch64 baseline evidence
         run: |
-          make native
-          ./tools/record_baseline.sh > dist/BASELINE-arm64.txt
+          # Through the Makefile, not by calling tools/record_baseline.sh
+          # directly.  That script has required the list of ELFs to measure
+          # since the floor stopped being a single file, and calling it with no
+          # arguments has been a usage error ever since -- while the shell
+          # redirect still created the document, so the step left a zero-byte
+          # file behind instead of no file at all.  Naming the output goes
+          # through RELEASE_BASELINE_OUTPUT so this job does not re-derive which
+          # files to measure, which is the one thing the target exists to hold.
+          # The target depends on the bundle rules itself, so this one line
+          # builds what it measures.
+          #
+          # `release-baseline` rather than `baseline`, for the same reason the
+          # x86_64 job changed: `baseline` measures the native module in
+          # build/ and the bootstrapped interpreter in .tools/, neither of which
+          # ships.  A floor statement about those two files is not a statement
+          # about this job's release artifacts, however green it comes out.  The
+          # cost is a bundle build this job did not previously do.
+          make release-baseline RELEASE_BASELINE_OUTPUT=dist/BASELINE-arm64.txt
+      # The document this job exists to produce left the runner in nobody's
+      # hands: nothing below uploads it, so the only record that the release was
+      # ever measured on aarch64 was a file on a machine that was deleted an
+      # hour later.  The x86_64 baseline is published by the release job, the
+      # package job publishes the bundle, and this evidence -- the one piece that
+      # says what the binaries do on the architecture the README calls the
+      # release target -- was produced and dropped.  A measurement that is not
+      # received is not evidence; it is a build byproduct with a verdict in it.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aarch64-baseline
+          path: |
+            dist/BASELINE-arm64.txt
 
   # Release-artifact evidence: the onefile bundle must pass the same PTY
   # matrix from its packaged executable, locale sources must match the
@@ -141,17 +173,66 @@ jobs:
         run: make test-bundle-file
       - name: Generated locales match their YAML sources
         run: ./.tools/lua-5.5.1/bin/lua tools/compile_locales.lua --check
+      # The gate, not just the generators.  Every question this job asks of the
+      # bundle was being asked only by whoever happened to run `make test-all`
+      # locally: whether every file the release ships is in SHA256SUMS, and
+      # whether the SBOM and the manifest still agree about the same bytes.  A
+      # release gate that exists on one machine is a gate that reports where
+      # somebody remembered, which is the same shape as the sanitizers job that
+      # rebuilt half the native module -- a CI gate that is not in the workflow.
+      # The prerequisites are already built two steps down.
+      # `baseline` is deliberately not run here either, though it used to be
+      # in `make test-all`: it measures the build host rather than the shipped
+      # forms, and two clauses in tests/unit/test_release_evidence.lua -- one
+      # saying a CI job must not produce evidence nobody receives, the other
+      # saying the build-host floor must never be published as release
+      # evidence -- agree that it is not part of the release story.
+      - name: The release artifacts pass their own gate
+        run: make test-release-notices
       - name: SBOM, checksums, and baseline evidence
         run: |
           make sbom checksums
-          ./tools/record_baseline.sh > dist/BASELINE.txt
+          # The release baseline, not the build one.  `make baseline` measures
+          # $(NATIVE_MODULE) and the bootstrapped interpreter in .tools/ -- two
+          # files that exist on this runner and ship in no release -- and this
+          # job was publishing that document as the glibc floor of the release,
+          # which is the claim docs/PACKAGING.md §9.1 makes about
+          # `make release-baseline` existing in the first place: "because the
+          # build outputs are not what ships".  The two documents happened to
+          # report the same highest requirement, which is why it survived: a
+          # coincidence that looks like agreement.
+          make release-baseline
       - uses: actions/upload-artifact@v4
         with:
           name: release-artifacts
+          # The notices are here rather than downloaded from anywhere: they live
+          # in the onedir bundle, which `make sbom` builds as a prerequisite of
+          # this step.  This explanation used to sit *inside* the path block
+          # below, where it looked like a comment and was not one: everything
+          # after a `|` is literal text, so those eight lines were eight paths
+          # for GitHub to go looking for on every release run, and the finding
+          # that they were bogus came from a YAML parser rather than from CI.
+          #
+          # SHA256SUMS is not in this list any more, and that is the other half
+          # of the same finding.  A manifest whose entries the recipient cannot
+          # open is not evidence, it is a list of claims about files they were
+          # never given: downloaded beside these three notice files it covered
+          # five of seven entries and `sha256sum -c` exited 1 on the two it could
+          # not.  The manifest travels with the files it describes, in the
+          # wtop-bundles artifact, which now carries the whole onedir bundle.
+          #
+          # dist/BASELINE.release.txt rather than dist/BASELINE.txt, for the same
+          # kind of reason: the build baseline measures $(NATIVE_MODULE) and the
+          # bootstrapped interpreter under .tools/, two files that exist on the
+          # runner and ship in no release, so publishing it beside the manifest
+          # made this artifact describe a build host rather than a release.  The
+          # step above runs `make release-baseline` to produce the other one.
           path: |
             dist/SBOM.cyclonedx.json
-            dist/SHA256SUMS
-            dist/BASELINE.txt
+            dist/BASELINE.release.txt
+            dist/wtop/LICENSE
+            dist/wtop/THIRD_PARTY_NOTICES.md
+            dist/wtop/.luai/licenses/
 
   # Memory safety for the C layer, over the real collection paths.
   sanitizers:
@@ -160,24 +241,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: make toolchain locales
-      - name: Build the native module with sanitizers
-        run: |
-          mkdir -p build/native
-          cc -std=c17 -fPIC -Wall -Wextra -Werror -O1 -g \
-            -fsanitize=address,undefined -fno-omit-frame-pointer \
-            -shared -I.tools/lua-5.5.1/include \
-            -o build/native/wtop_native.so native/wtop_native.c native/wtop_nvml.c -ldl
-      - name: Exercise collection and the unit suite
-        env:
-          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
-          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-          LUA_PATH: ${{ github.workspace }}/src/?.lua;${{ github.workspace }}/src/?/init.lua;;
-          LUA_CPATH: ${{ github.workspace }}/build/native/?.so;;
-        run: |
-          .tools/lua-5.5.1/bin/lua src/wtop.lua --snapshot > /dev/null
-          .tools/lua-5.5.1/bin/lua src/wtop.lua --agent > /dev/null
-          .tools/lua-5.5.1/bin/lua src/wtop.lua --diagnose > /dev/null
-          .tools/lua-5.5.1/bin/lua tests/run.lua tests/unit/test_*.lua
+      # The build, the sanitizer policy and the module path all live in the
+      # target now.  This job used to compile the module itself from
+      # native/wtop_native.c and native/wtop_nvml.c and then point LUA_CPATH at
+      # the result, which meant the only job in this workflow that checks for
+      # memory errors never loaded the AMD SMI or Level Zero backends -- the two
+      # files that reach a vendor library through dlopen and dlsym rather than
+      # at link time, and so the two most able to get a pointer wrong.  Both
+      # instrument cleanly, so this was never a build problem, only a coverage
+      # one.  The instrumented module is written beside the ordinary one rather
+      # than over it, so a later `make native` still rebuilds what it owes.
+      - name: Build the native module with sanitizers and run the unit suite
+        run: make test-sanitized
 
   # Random input against the real terminal loop.  Catches crashes that a
   # scripted PTY case would never reach.
@@ -207,7 +282,15 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: wtop-bundles
+          # Both luainstaller artifacts, which is what this job's comment above
+          # has claimed since it was written: the onedir bundle was built and
+          # smoke-tested here and then left behind, so SHA256SUMS named
+          # `wtop/wtop` and every notice in a download that contained neither,
+          # and `sha256sum -c` in the unpacked artifact failed on six of its
+          # seven lines.  The manifest is worth nothing next to a subset of what
+          # it covers, so it travels here with all of it.
           path: |
+            dist/wtop/
             dist/wtop-onefile
             dist/SHA256SUMS
           retention-days: 7

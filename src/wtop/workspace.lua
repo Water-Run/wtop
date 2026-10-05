@@ -4,6 +4,22 @@ local LayoutModel = require("wtop.model.layout")
 local Workspace = {}
 Workspace.__index = Workspace
 
+-- Sixteen arrangements is far more than anyone keeps, and the bound stops
+-- a generated or hand-edited file from becoming unbounded session state.
+local MAX_WORKSPACES = 16
+
+local function clone_trees(trees, orders)
+    local copy = {}
+    for page, order in pairs(orders) do
+        local tree = trees and trees[page]
+        copy[page] = tree and assert(LayoutModel.clone(tree, { allowed_widgets = order }))
+            or assert(LayoutModel.from_order(order, {
+                allowed_widgets = order, axis = "horizontal", alternate_axes = true,
+            }))
+    end
+    return copy
+end
+
 local function translated(i18n, id, fallback, variables)
     local value = i18n and i18n:t(id, variables)
     if value and value ~= id then return value end
@@ -312,6 +328,31 @@ function Workspace.new(options)
         layout_trees[page_id] = tree
         current_page.layout = page_layout(tree, widgets[page_id], page_id, nil, default_order)
     end
+    -- A layout file may carry several named workspaces.  The trees the caller
+    -- handed over are the live workspace; the rest are kept aside and become
+    -- live only when the user switches to them.
+    local workspaces = {}
+    if type(options.workspaces) == "table" then
+        for name, stored in pairs(options.workspaces) do
+            if type(name) == "string" and type(stored) == "table" then
+                workspaces[name] = clone_trees(stored, widget_orders)
+            end
+        end
+    end
+    local workspace_name = options.workspace
+    if type(workspace_name) ~= "string" or not workspaces[workspace_name] then
+        local names = {}
+        for name in pairs(workspaces) do names[#names + 1] = name end
+        table.sort(names)
+        workspace_name = names[1]
+    end
+    if workspace_name then
+        -- The store already validated the active workspace, so its trees are
+        -- the ones the pages were built from; re-cloning here would be wasted
+        -- work and could only disagree with them.
+        workspaces[workspace_name] = clone_trees(workspaces[workspace_name], widget_orders)
+    end
+
     local active = options.active_tab and pages[options.active_tab] and options.active_tab or "overview"
     local self = setmetatable({
         tabs = tabs,
@@ -327,6 +368,8 @@ function Workspace.new(options)
         undo_stack = {},
         redo_stack = {},
         undo_limit = 50,
+        workspaces = workspaces,
+        workspace = workspace_name,
     }, Workspace)
     for id, tree in pairs(layout_trees) do
         local order = assert(LayoutModel.to_order(tree, tree_options(self, id)))
@@ -334,6 +377,153 @@ function Workspace.new(options)
         self.undo_stack[id], self.redo_stack[id] = {}, {}
     end
     return self
+end
+
+--- The workspaces this session knows about, plus which one is live.
+-- A workspace is a name and a complete set of per-page trees.  `layout.yml`
+-- may carry several; the live one is what the pages render from, and saving
+-- captures the current trees under a name rather than overwriting the only
+-- arrangement the user has.
+function Workspace:workspace_names()
+    local names = {}
+    for name in pairs(self.workspaces or {}) do names[#names + 1] = name end
+    table.sort(names)
+    return names
+end
+
+--- A workspace name is trimmed and then checked, and the two ways it can fail
+-- stay separate: text that is not text, and text that is not a usable name.
+-- Saving and renaming go through the same check, because a name the manager
+-- would refuse to create must also be one it will not set -- otherwise the
+-- refusal would only be discoverable after the rename had half-applied.
+--- A workspace name is a label the user types, not an identifier, so the rule
+--- is stated as what has to stay out rather than as what has to be in -- and it
+--- is stated once, in the layout model, because this module validates a name on
+--- the way into a session and the layout store validates the same name on the
+--- way back out of a file.  Two copies of that rule would eventually disagree,
+--- and the disagreement would cost a user their whole arrangement.  See
+--- `LayoutModel.workspace_name_ok` for why a well-formed UTF-8 sequence is a name
+--- character and a bare 0x9b is not.
+local function checked_workspace_name(name)
+    if type(name) ~= "string" then return nil, "workspace_name_must_be_text" end
+    name = name:gsub("^%s+", ""):gsub("%s+$", "")
+    if #name < 1 or #name > LayoutModel.MAX_WORKSPACE_NAME_BYTES then
+        return nil, "workspace_name_length"
+    end
+    if not LayoutModel.workspace_name_ok(name) then
+        return nil, "invalid_workspace_name"
+    end
+    return name
+end
+
+--- Capture the current trees under a name and make that name live.
+-- Overwriting an existing name is a rename of that workspace, not a second
+-- copy of it: two entries with the same name would make "which one is active"
+-- unanswerable.
+function Workspace:save_workspace(name)
+    local checked, name_error = checked_workspace_name(name)
+    if checked == nil then return false, name_error end
+    name = checked
+    self.workspaces = self.workspaces or {}
+    if self.workspaces[name] == nil and self:workspace_count() >= MAX_WORKSPACES then
+        return false, "workspace_limit_reached"
+    end
+    self.workspaces[name] = clone_trees(self.layout_trees, self.widget_orders)
+    return self:_activate_workspace(name)
+end
+
+--- Give a saved workspace a different name.
+--
+-- A rename moves the stored trees from one key to another and does nothing
+-- else: it does not re-save the live trees over the target, and it does not
+-- switch to the workspace it renamed.  The layout saved under the old name is
+-- the layout the new name now holds, which is the entire point -- and the
+-- reason it cannot be expressed as "save under the new name, then delete the
+-- old one", since that pair would discard every edit made since the workspace
+-- was last saved.
+--
+-- A name already in use is refused rather than merged.  Two arrangements under
+-- one name make "which one is live" unanswerable, and whichever lost would be
+-- gone with no way back.
+function Workspace:rename_workspace(from, to)
+    if not (self.workspaces and self.workspaces[from]) then
+        return false, "unknown_workspace"
+    end
+    local checked, name_error = checked_workspace_name(to)
+    if checked == nil then return false, name_error end
+    -- Renaming to the name it already carries has nothing to do, and the move
+    -- below would write the key and then delete it.  Reported as the success it
+    -- is: the workspace the caller asked for does exist under that name.  No
+    -- dirty flag, because nothing about the file would differ.
+    if checked == from then return true end
+    if self.workspaces[checked] ~= nil then return false, "workspace_name_taken" end
+    self.workspaces[checked] = self.workspaces[from]
+    self.workspaces[from] = nil
+    if self.workspace == from then self.workspace = checked end
+    self.dirty = true
+    return true
+end
+
+function Workspace:workspace_count()
+    local count = 0
+    for _ in pairs(self.workspaces or {}) do count = count + 1 end
+    return count
+end
+
+--- Make a saved workspace the live one.
+-- A workspace that does not exist is not created here: switching is a
+-- navigation, and silently inventing a layout under a typed name would make
+-- the list grow on every mistyped Enter.
+function Workspace:switch_workspace(name)
+    local stored = self.workspaces and self.workspaces[name]
+    if not stored then return false, "unknown_workspace" end
+    return self:_activate_workspace(name)
+end
+
+function Workspace:_activate_workspace(name)
+    local stored = self.workspaces[name]
+    for page, order in pairs(self.widget_orders) do
+        local tree = stored[page]
+        if tree then
+            tree = assert(LayoutModel.clone(tree, { allowed_widgets = order }))
+        else
+            tree = assert(LayoutModel.from_order(order, {
+                allowed_widgets = order, axis = "horizontal", alternate_axes = true,
+            }))
+        end
+        self.layout_trees[page] = tree
+        self.pages[page].layout = page_layout(tree, self.widgets[page], page,
+            self.suppressed, order)
+        -- Focus followed the old tree; the same widget may not exist here.
+        local placed = assert(LayoutModel.to_order(tree, tree_options(self, page)))
+        local found = false
+        for _, id in ipairs(placed) do
+            if id == self.focus[page] then found = true break end
+        end
+        if not found then self.focus[page] = placed[1] end
+        -- The undo history describes edits to the tree that was live, so it
+        -- would otherwise undo a workspace switch into a layout that is gone.
+        self.undo_stack[page], self.redo_stack[page] = {}, {}
+    end
+    self.workspace = name
+    self.dirty = true
+    return true
+end
+
+--- Remove a saved workspace.  The last one is kept, because a workspace
+-- manager with nothing in it cannot show what the file would load as.
+function Workspace:delete_workspace(name)
+    if not (self.workspaces and self.workspaces[name]) then
+        return false, "unknown_workspace"
+    end
+    if self:workspace_count() <= 1 then return false, "last_workspace" end
+    self.workspaces[name] = nil
+    if self.workspace == name then
+        local replacement = self:workspace_names()[1]
+        self:_activate_workspace(replacement)
+    end
+    self.dirty = true
+    return true
 end
 
 function Workspace:active_index()
@@ -402,6 +592,18 @@ function Workspace:_set_tree(page_id, tree, record_undo)
     self.layout_trees[page_id] = validated
     self.pages[page_id].layout = page_layout(validated, self.widgets[page_id], page_id,
         self.suppressed, self.widget_orders[page_id])
+    -- Widgets can enter and leave the tree, so focus can be left pointing at a
+    -- widget that is no longer there -- undoing a removal is the obvious way
+    -- to get there, and every later edit key would then fail on a widget the
+    -- user cannot see.  Re-anchor on the first surviving widget instead.
+    local placed = LayoutModel.to_order(validated, options)
+    if placed then
+        local focused = false
+        for _, id in ipairs(placed) do
+            if id == self.focus[page_id] then focused = true break end
+        end
+        if not focused then self.focus[page_id] = placed[1] end
+    end
     self.dirty = true
     return true
 end
@@ -446,6 +648,132 @@ function Workspace:adjust_focused_ratio(delta)
     return self:_set_tree(page_id, updated)
 end
 
+--- The widgets a page can still place.
+-- Every widget a page defines is placeable and the default layout places all
+-- of them, so the palette is the page's own widget list minus what the current
+-- tree already holds.  Working from the page palette -- rather than a global
+-- widget list -- is what keeps the view model and collector visibility in step
+-- with what the page can actually render.
+function Workspace:palette()
+    local page_id = self.active
+    local placed = LayoutModel.to_order(self.layout_trees[page_id], tree_options(self, page_id))
+    if not placed then return {} end
+    local present = {}
+    for _, id in ipairs(placed) do present[id] = true end
+    local available = {}
+    for _, id in ipairs(self.widget_orders[page_id]) do
+        if not present[id] then
+            local spec = self.widgets[page_id][id]
+            available[#available + 1] = {
+                id = id,
+                title = (spec and spec.panel_title) or id,
+                kind = (spec and spec.kind) or "panel",
+            }
+        end
+    end
+    return available
+end
+
+-- Layout refusals are collapsed into a small, stable set here.  The model
+-- reports codes like "widget_not_found:memory_total" that embed the widget id;
+-- those cannot be catalogued per widget, and the interface only ever needs to
+-- say why the edit did not happen.
+local function layout_refusal(code)
+    if type(code) ~= "string" then return "layout_rejected" end
+    if code == "cannot_remove_last_widget" then return code end
+    if code:match("^focused_widget_not_found")
+        or code:match("^widget_not_found")
+        or code:match("^invalid_widget_id")
+        or code:match("^invalid_target_widget")
+    then
+        return "widget_not_in_page"
+    end
+    if code:match("^duplicate_widget") then return "widget_already_placed" end
+    if code:match("^unknown_widget") then return "widget_not_in_page" end
+    return "layout_rejected"
+end
+
+local function focus_index(order, widget_id)
+    for index, id in ipairs(order) do
+        if id == widget_id then return index end
+    end
+end
+
+--- Place a palette widget next to the focused one.
+-- Position is "after" by default; the caller chooses the side so a picker can
+-- offer both without the model inventing a direction.
+function Workspace:add_focused_widget(widget_id, position)
+    local page_id = self.active
+    local updated, update_error = LayoutModel.insert(self.layout_trees[page_id],
+        self.focus[page_id], widget_id, {
+            position = position == "before" and "before" or "after",
+            allowed_widgets = self.widget_orders[page_id],
+        })
+    if not updated then return false, layout_refusal(update_error) end
+    local applied, apply_error = self:_set_tree(page_id, updated)
+    if not applied then return false, layout_refusal(apply_error) end
+    -- Focus the widget that was just placed, so add-then-resize is one flow
+    -- instead of a hunt through the page.
+    self.focus[page_id] = widget_id
+    return true
+end
+
+--- Take the focused widget out of the layout, leaving it in the page palette.
+function Workspace:remove_focused_widget()
+    local page_id = self.active
+    local options = tree_options(self, page_id)
+    local order = LayoutModel.to_order(self.layout_trees[page_id], options)
+    if not order then return false, "layout_rejected" end
+    local focus = self.focus[page_id]
+    local index = focus_index(order, focus)
+    if not index then return false, "widget_not_in_page" end
+    local updated, update_error = LayoutModel.remove(self.layout_trees[page_id], focus, {
+        allowed_widgets = self.widget_orders[page_id],
+    })
+    if not updated then return false, layout_refusal(update_error) end
+    local applied, apply_error = self:_set_tree(page_id, updated)
+    if not applied then return false, layout_refusal(apply_error) end
+    -- Focus follows the neighbour that inherited the removed widget's place.
+    local remaining = LayoutModel.to_order(self.layout_trees[page_id], options)
+    if remaining then
+        self.focus[page_id] = remaining[index] or remaining[index - 1] or remaining[1]
+    end
+    return true
+end
+
+--- Swap the focused widget for a palette widget, keeping its position.
+-- Removing first and re-inserting at the old index keeps the replacement in
+-- the same visual slot; appending it to the end would silently reorder a page
+-- the user just arranged.
+function Workspace:replace_focused_widget(widget_id)
+    local page_id = self.active
+    local options = tree_options(self, page_id)
+    local focus = self.focus[page_id]
+    if widget_id == focus then return false, "widget_already_placed" end
+    local order = LayoutModel.to_order(self.layout_trees[page_id], options)
+    if not order then return false, "layout_rejected" end
+    local index = focus_index(order, focus)
+    if not index then return false, "widget_not_in_page" end
+    local reduced, remove_error = LayoutModel.remove(self.layout_trees[page_id], focus, {
+        allowed_widgets = self.widget_orders[page_id],
+    })
+    if not reduced then return false, layout_refusal(remove_error) end
+    local reduced_order = LayoutModel.to_order(reduced, options)
+    local neighbour = reduced_order and (reduced_order[index] or reduced_order[index - 1])
+    if not neighbour then return false, "layout_rejected" end
+    local updated, update_error = LayoutModel.insert(reduced, neighbour, widget_id, {
+        -- The removed widget's slot collapses into its successor, so the
+        -- replacement goes back in front of it to hold the original position.
+        position = index > 1 and "before" or "after",
+        allowed_widgets = self.widget_orders[page_id],
+    })
+    if not updated then return false, layout_refusal(update_error) end
+    local applied, apply_error = self:_set_tree(page_id, updated)
+    if not applied then return false, layout_refusal(apply_error) end
+    self.focus[page_id] = widget_id
+    return true
+end
+
 function Workspace:undo()
     local page_id = self.active
     local stack = self.undo_stack[page_id]
@@ -465,7 +793,6 @@ function Workspace:redo()
     self.undo_stack[page_id][#self.undo_stack[page_id] + 1] = current
     return self:_set_tree(page_id, next_tree, false)
 end
-
 function Workspace:toggle_edit()
     self.edit_mode = not self.edit_mode
     return self.edit_mode
@@ -477,10 +804,28 @@ function Workspace:render(columns, rows, state)
     state.active_tab = self.active
     state.focus_id = self.focus[self.active]
     if self.edit_mode then
+        -- The edit banner is the footer's resting state, but the banner owns
+        -- only that.  A transient message outranks it, because the workspace
+        -- manager is reachable *only* in edit mode and used to swallow every
+        -- confirmation it produced -- a deleted, switched or renamed workspace
+        -- all happened with nothing on screen to say so.  Everything else the
+        -- caller put in the status (a persisted-layout error, the privilege
+        -- marker, the process filter) is carried through rather than dropped.
+        --
+        -- The banner returns when a message is no longer set, which is what
+        -- happens when edit mode ends: the footer goes back to the page's own
+        -- hints and the transient message leaves with it.
+        local incoming = state.status or {}
         state.status = {
-            message = translated(self.i18n, "layout.edit_message",
+            message = incoming.message or translated(self.i18n, "layout.edit_message",
                 "LAYOUT · Tab select · arrows split/move · [/] resize · u/U undo/redo · e finish"),
-            warning = true,
+            error = incoming.error,
+            privilege = incoming.privilege,
+            filter = incoming.filter,
+            data_age = incoming.data_age,
+            -- The banner is styled as a warning because it is a mode, not a
+            -- problem; a message that replaced it is neither.
+            warning = incoming.message == nil,
             hints = {
                 { key = "Tab", id = "actions.select", fallback = "Select" },
                 { key = "Arrows", id = "actions.move", fallback = "Split/move" },
@@ -546,6 +891,73 @@ function Workspace:visible_widgets(columns, rows)
         visible[placement.id] = true
     end
     return visible
+end
+
+--- The full workspace set, for persistence.  Exposed as a copy so a caller
+-- cannot hand the store a table it will keep mutating.  Not named
+-- `workspaces()`: that would be shadowed by the instance field of the same
+-- name, which holds the set itself.
+function Workspace:saved_workspaces()
+    local copy = {}
+    for name, trees in pairs(self.workspaces or {}) do
+        copy[name] = clone_trees(trees, self.widget_orders)
+    end
+    return copy
+end
+
+--- The widgets a focused widget can be dropped onto.
+-- The widget itself is excluded: dropping a widget onto itself is what the
+-- model already answers with an unchanged tree, and offering it in a list
+-- would spend a row to do nothing.
+function Workspace:move_targets()
+    local placed = LayoutModel.to_order(self.layout_trees[self.active],
+        tree_options(self, self.active))
+    if not placed then return {} end
+    local targets = {}
+    for _, id in ipairs(placed) do
+        if id ~= self.focus[self.active] then targets[#targets + 1] = id end
+    end
+    return targets
+end
+
+--- Drop the focused widget onto a target, before or after it.
+-- This is the same model call the arrow keys make, with the target and the side
+-- chosen instead of implied by the neighbour: the arrows can only step one
+-- place, which is not a drop.
+function Workspace:move_focused_to(target, position)
+    if type(target) ~= "string" or target == "" then
+        return false, "invalid_target_widget"
+    end
+    if position ~= "before" and position ~= "after" then
+        return false, "invalid_position"
+    end
+    local page_id = self.active
+    local updated, update_error = LayoutModel.move(
+        self.layout_trees[page_id], self.focus[page_id], target, {
+            position = position,
+            allowed_widgets = self.widget_orders[page_id],
+        })
+    -- The refusal mapping is not optional here.  `add`, `remove` and `replace`
+    -- all pass their inner error through `layout_refusal`, and this one did not:
+    -- it returned the layout model's own string.  Measured, that string is
+    -- sometimes built by concatenation -- `Layout.move` answers a target that is
+    -- not on the page with `"widget_not_found:" .. target_widget` -- and this
+    -- method's error is what `tui.lua` formats into the message id
+    -- `"reason." .. tostring(move_error)`, so a user who dropped a widget on a
+    -- stale target was shown `widget_not_found:not_a_widget_on_this_page` in
+    -- their status line, in every language, because no catalogue can hold a key
+    -- with a colon in it.  That is what `layout_refusal` exists to prevent: it
+    -- collapses `^widget_not_found` and its siblings into `widget_not_in_page`,
+    -- and it had been applied to three of the four operations that can produce
+    -- one.
+    if not updated then return false, layout_refusal(update_error) end
+    local applied, apply_error = self:_set_tree(page_id, updated)
+    if not applied then return false, layout_refusal(apply_error) end
+    -- Focus needs no help here: the widget was moved, not removed, so it is
+    -- still in the new order and _set_tree keeps pointing at it.  Following the
+    -- drop target instead would silently switch the user to editing a panel
+    -- they did not pick up.
+    return true
 end
 
 function Workspace:orders()

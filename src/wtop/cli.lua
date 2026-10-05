@@ -18,6 +18,8 @@ Options:
       --import-layout F  Validate F and install it as the persisted layout
       --diagnose         Print capability diagnostics and exit
       --snapshot         Print one machine-readable snapshot and exit
+      --unmask-remote-addresses
+                         With --snapshot: export full remote socket addresses
       --agent            Print compact LLM/agent context JSON and exit
       --sudo             Restart through sudo on Linux
       --elevate          Alias for --sudo
@@ -84,6 +86,11 @@ function M.parse(argv)
         elseif item == "--snapshot" then
             local ok, command_error = select_command("snapshot", item)
             if not ok then return nil, command_error end
+        elseif item == "--unmask-remote-addresses" then
+            if options.include_remote_addresses then
+                return nil, "--unmask-remote-addresses cannot be repeated"
+            end
+            options.include_remote_addresses = true
         elseif item == "--agent" then
             local ok, command_error = select_command("agent", item)
             if not ok then return nil, command_error end
@@ -145,6 +152,9 @@ function M.parse(argv)
             return nil, "unknown option: " .. tostring(item)
         end
         index = index + 1
+    end
+    if options.include_remote_addresses and options.command ~= "snapshot" then
+        return nil, "--unmask-remote-addresses requires --snapshot"
     end
     return options
 end
@@ -221,6 +231,36 @@ function M.run(argv, dependencies)
     elseif options.command == "version" then
         io.write(version.name, " ", version.version)
         if version.revision then io.write(" (rev ", version.revision, ")") end
+        -- The native module carries its own source revision and its own version,
+        -- both compiled in from the same generator that produces the Lua tree's.
+        -- Printing both every time would be noise; printing neither would leave a
+        -- version line that reads normally while the binary and the Lua tree
+        -- inside it came from different trees.  So only a disagreement is
+        -- reported, and the version command is the one place a packager is
+        -- guaranteed to look.
+        --
+        -- The version half of this used to be missing, and the two answers were
+        -- printed by two different commands: `--version` took the Lua tree's and
+        -- `--diagnose` took the module's, so a release that bumped one and not
+        -- the other stated two different versions and neither said so.  Both now
+        -- come out of one VERSION file, so a disagreement should be impossible --
+        -- and a guard that cannot fire is a guard nobody has tested, which is why
+        -- this reports one rather than assuming there is none.
+        local native = require("wtop.native")
+        if type(native.system_constants) == "function" then
+            local called, constants = pcall(native.system_constants)
+            local compiled = called and type(constants) == "table"
+                and constants.build_revision or nil
+            if type(compiled) == "string" and compiled ~= ""
+                and compiled ~= version.revision then
+                io.write(" [native module rev ", compiled, "]")
+            end
+        end
+        local compiled_version = type(native.VERSION) == "string" and native.VERSION or nil
+        if type(compiled_version) == "string" and compiled_version ~= ""
+            and compiled_version ~= version.version then
+            io.write(" [native module version ", compiled_version, "]")
+        end
         io.write("\n")
         return 0
     elseif options.command == "diagnose" then

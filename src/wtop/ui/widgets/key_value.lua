@@ -23,7 +23,23 @@ local function measure(grid, text)
   return Width.display_width(text, grid.width_options)
 end
 
---- Lay entries into `columns` balanced column groups.
+--- A section heading spends a row of its own plus a blank row before it, so a
+-- group of N entries does not need N rows.  Every budget below counts rows
+-- through here; counting entries instead is what silently dropped the last row
+-- of any list whose heading did not fit -- the overflow test said "it fits",
+-- the drawing said otherwise, and the extra row went nowhere.
+local function group_rows(entries, first_index)
+  local rows, first = 0, true
+  for index = first_index, #entries do
+    local entry = entries[index]
+    rows = rows + 1
+    if entry.section and not first then rows = rows + 1 end
+    first = false
+  end
+  return rows
+end
+
+-- Lay entries into `columns` balanced column groups.
 -- Sections are kept whole where possible so a heading never ends up in one
 -- column with its rows in another.
 local function paginate(entries, rows, columns)
@@ -62,10 +78,14 @@ local function render_group(grid, area, entries, context, offset)
       label_width = math.max(label_width, measure(grid, entry_label(entry, context)))
     end
   end
-  label_width = math.min(label_width, math.max(6, area.width - MIN_VALUE_WIDTH))
+  -- The value column gets whatever the label column leaves, less the one cell
+  -- of gap between them, so a label budget of `area.width - MIN_VALUE_WIDTH`
+  -- left the value one cell under the floor the widget declares for it.
+  label_width = math.min(label_width, math.max(6, area.width - MIN_VALUE_WIDTH - 1))
 
   local y = area.y
   local bottom = area.y + area.height - 1
+  local last = offset
   for index = offset + 1, #entries do
     if y > bottom then break end
     local entry = entries[index]
@@ -79,8 +99,10 @@ local function render_group(grid, area, entries, context, offset)
         if y > bottom then break end
       end
       grid:write(area.x, y, Util.truncate(grid, heading, area.width), section_style, area.width)
+      last = index
     elseif entry.blank then
       grid:write(area.x, y, "", label_style, area.width)
+      last = index
     else
       local label = entry_label(entry, context)
       local value = entry.value == nil and "—" or tostring(entry.value)
@@ -100,10 +122,11 @@ local function render_group(grid, area, entries, context, offset)
         grid:write(area.x + used, y, string.rep(" ", label_width - used),
           label_style, label_width - used)
       end
+      last = index
     end
     y = y + 1
   end
-  return y - area.y
+  return y - area.y, last - offset
 end
 
 function M.render(grid, area, model, context, variant)
@@ -143,20 +166,16 @@ function M.render(grid, area, model, context, variant)
     end
   end
 
-  if columns <= 1 then
-    -- Reserve the last row for an overflow marker when content will not fit.
+  local function render_single()
+    -- Reserve the last row for an overflow marker when the rows do not fit.
+    -- "The rows" and not "the entries": a heading spends two of them.
     local body = { x = area.x, y = area.y, width = area.width, height = area.height }
-    local overflow = #entries - offset > area.height
+    local overflow = group_rows(entries, offset + 1) > area.height
     if overflow and area.height > 1 then body.height = area.height - 1 end
-    local drawn = render_group(grid, body, entries, context, offset)
-    local shown = 0
-    for index = offset + 1, #entries do
-      if shown >= body.height then break end
-      shown = shown + 1
-    end
+    local _, shown = render_group(grid, body, entries, context, offset)
     if overflow and area.height > 1 then
       local unicode = not (context.capabilities and context.capabilities.unicode == false)
-      local remaining = #entries - offset - body.height
+      local remaining = #entries - offset - shown
       local marker = string.format("%s %d %s", unicode and "▾" or "v", math.max(0, remaining),
         Util.t(context, "ui.more_rows", "more"))
       if offset > 0 then
@@ -167,13 +186,22 @@ function M.render(grid, area, model, context, variant)
         area.width)
     end
     return {
-      visible = body.height, total = #entries, columns = 1,
-      offset = offset, scrollable = #entries > body.height,
+      visible = shown, total = #entries, columns = 1,
+      offset = offset, scrollable = shown < #entries,
     }
   end
 
+  if columns <= 1 then return render_single() end
+
   local groups = paginate(entries, area.height, columns)
   columns = #groups
+  -- `paginate` splits by entry count, so a group can still overrun the panel
+  -- once its headings are counted, and unlike this path's sibling above there
+  -- is no overflow marker down here to name what falls off the bottom.  The
+  -- single column is quieter and does name it.
+  for _, group in ipairs(groups) do
+    if group_rows(group, 1) > area.height then return render_single() end
+  end
   local gap = 2
   local each = math.floor((area.width - gap * (columns - 1)) / columns)
   local drawn = 0
@@ -189,5 +217,11 @@ function M.render(grid, area, model, context, variant)
 end
 
 M.paginate = paginate
+
+-- Published so the guard can ask about the widget's own declared floor instead
+-- of a copy of the number, which is how a floor stops being a floor: the code
+-- changes and the test keeps asserting the old value.
+M.MIN_VALUE_WIDTH = MIN_VALUE_WIDTH
+M.MAX_ENTRIES = MAX_ENTRIES
 
 return M

@@ -1,6 +1,7 @@
 local Capability = require("wtop.core.capability")
 local FS = require("wtop.linux.fs")
 local Common = require("wtop.collectors.common")
+local Semantics = require("wtop.collectors.cgroup_semantics")
 
 local Cgroup = {}
 Cgroup.__index = Cgroup
@@ -217,12 +218,21 @@ local function parse_io_stat(content)
   local by_id = {}
   local totals = {}
   for line in tostring(content):gmatch("[^\r\n]+") do
-    local id, fields = line:match("^%s*(%d+:%d+)%s+(.+)%s*$")
+    -- The device id, and whatever counters follow it -- which may be nothing
+    -- at all.  The kernel emits a bare `251:0` with no key=value pairs for a
+    -- device it does not account, which is the normal case for the overlay and
+    -- fuse filesystems inside a container, so requiring at least one field
+    -- flagged every container cgroup on the host as partially read: measured
+    -- here, one of 190 nodes, with the issue `parse/invalid_io_stat_line`, and
+    -- the Workloads page opening a "why is this partial" section for a tree
+    -- that has nothing unreadable in it.  A line that parses as a device and
+    -- carries no counters is not malformed, it is a device whose I/O is not
+    -- accounted for.
+    local id, fields = line:match("^%s*(%d+:%d+)%s*(.-)%s*$")
     if not id or by_id[id] then
       return nil, id and ("duplicate_device_" .. id) or "invalid_io_stat_line"
     end
     local counters = {}
-    local field_count = 0
     for token in fields:gmatch("%S+") do
       local key, raw = token:match("^([%w_.-]+)=(%d+)$")
       if not key or counters[key] ~= nil then
@@ -237,11 +247,13 @@ local function parse_io_stat(content)
         return nil, "io_stat_total_out_of_range"
       end
       totals[key] = (totals[key] or 0) + value
-      field_count = field_count + 1
     end
-    if field_count == 0 then
-      return nil, "empty_io_stat_device"
-    end
+    -- No counters is a state, not an error: the device stays in the list with
+    -- an empty counter table, `derive_map_rates` iterates the keys it finds and
+    -- invents no zeros, and `io.total` covers only what was accounted.  The
+    -- `field_count == 0` rejection this replaces could only ever fire on that
+    -- same input, because any token that is not a well-formed `key=value` pair
+    -- has already returned `invalid_io_stat_field` above.
     local major, minor = id:match("^(%d+):(%d+)$")
     local device = {
       id = id,
@@ -337,13 +349,14 @@ local function add_issue(node, scan, field, error_or_kind, reason, path)
   end
 end
 
-local function empty_workload(item)
+local function empty_workload(item, semantics)
   return {
     id = item.id,
     name = basename(item.id),
     parent_id = item.parent_id,
     depth = item.depth,
     path = item.path,
+    semantics = semantics,
     accessible = not item.inaccessible,
     partial = false,
     issue_count = 0,
@@ -366,7 +379,33 @@ local function empty_seqfile_read(error_value)
     and error_value.message == "read_failed"
 end
 
-local function read_metric(fs, node, scan, filename, field, parser, limit, allow_empty)
+-- A control file exists in a cgroup only when its controller is delegated to
+-- that subtree, and the real root additionally gets no cpu/memory/pids limit
+-- files because nothing above it accounts for usage.  Both are decisions the
+-- kernel already made, not reads that failed, so the directory listing is
+-- consulted to tell "never created" from "could not be opened".  A truncated
+-- listing cannot prove a name is absent, so it is not used as an oracle.
+local function listed_metric_files(entries, entries_truncated)
+  if entries_truncated then
+    return nil
+  end
+  local present = {}
+  for _, entry in ipairs(entries or {}) do
+    if METRIC_FILES[entry] then
+      present[entry] = true
+    end
+  end
+  return present
+end
+
+local function absent_by_design(filename, present, error_value)
+  return present ~= nil
+    and present[filename] == nil
+    and type(error_value) == "table"
+    and error_value.kind == "missing"
+end
+
+local function read_metric(fs, node, scan, present, filename, field, parser, limit, allow_empty)
   local path = node.path .. "/" .. filename
   local content, read_error = fs:read(path, limit or MAX_FILE_BYTES)
   -- Lua's fixed-size file:read() returns nil (without a distinct errno) for
@@ -376,7 +415,9 @@ local function read_metric(fs, node, scan, filename, field, parser, limit, allow
     content = ""
   end
   if not content then
-    add_issue(node, scan, field, read_error, "read_failed", path)
+    if not absent_by_design(filename, present, read_error) then
+      add_issue(node, scan, field, read_error, "read_failed", path)
+    end
     return nil
   end
   local value, parse_error = parser(content)
@@ -437,58 +478,58 @@ local function derive_pressure_rates(node, kind, current, previous, elapsed_ns)
   end
 end
 
-local function populate_metrics(fs, node, scan, previous_node, elapsed_ns)
-  local procs = read_metric(fs, node, scan, "cgroup.procs", "processes", parse_procs, nil, true)
+local function populate_metrics(fs, node, scan, present, previous_node, elapsed_ns)
+  local procs = read_metric(fs, node, scan, present, "cgroup.procs", "processes", parse_procs, nil, true)
   if procs then
     node.processes = { count = #procs, pids = procs }
   end
 
-  local cpu_counters = read_metric(fs, node, scan, "cpu.stat", "cpu.counters", parse_key_values)
+  local cpu_counters = read_metric(fs, node, scan, present, "cpu.stat", "cpu.counters", parse_key_values)
   if cpu_counters then
     node.cpu.counters = cpu_counters
   end
-  node.cpu.max = read_metric(fs, node, scan, "cpu.max", "cpu.max", parse_cpu_max, 4096)
-  node.cpu.weight = read_metric(fs, node, scan, "cpu.weight", "cpu.weight", parse_uint, 4096)
+  node.cpu.max = read_metric(fs, node, scan, present, "cpu.max", "cpu.max", parse_cpu_max, 4096)
+  node.cpu.weight = read_metric(fs, node, scan, present, "cpu.weight", "cpu.weight", parse_uint, 4096)
 
-  node.memory.current_bytes = read_metric(fs, node, scan, "memory.current", "memory.current", parse_uint, 4096)
-  node.memory.peak_bytes = read_metric(fs, node, scan, "memory.peak", "memory.peak", parse_uint, 4096)
-  node.memory.low_bytes = read_metric(fs, node, scan, "memory.low", "memory.low", parse_limit, 4096)
-  node.memory.high_bytes = read_metric(fs, node, scan, "memory.high", "memory.high", parse_limit, 4096)
-  node.memory.max_bytes = read_metric(fs, node, scan, "memory.max", "memory.max", parse_limit, 4096)
+  node.memory.current_bytes = read_metric(fs, node, scan, present, "memory.current", "memory.current", parse_uint, 4096)
+  node.memory.peak_bytes = read_metric(fs, node, scan, present, "memory.peak", "memory.peak", parse_uint, 4096)
+  node.memory.low_bytes = read_metric(fs, node, scan, present, "memory.low", "memory.low", parse_limit, 4096)
+  node.memory.high_bytes = read_metric(fs, node, scan, present, "memory.high", "memory.high", parse_limit, 4096)
+  node.memory.max_bytes = read_metric(fs, node, scan, present, "memory.max", "memory.max", parse_limit, 4096)
   node.memory.swap_current_bytes = read_metric(
-    fs, node, scan, "memory.swap.current", "memory.swap_current", parse_uint, 4096
+    fs, node, scan, present, "memory.swap.current", "memory.swap_current", parse_uint, 4096
   )
-  local memory_events = read_metric(fs, node, scan, "memory.events", "memory.events", parse_key_values)
+  local memory_events = read_metric(fs, node, scan, present, "memory.events", "memory.events", parse_key_values)
   if memory_events then
     node.memory.events = memory_events
   end
 
-  local io = read_metric(fs, node, scan, "io.stat", "io", parse_io_stat, nil, true)
+  local io = read_metric(fs, node, scan, present, "io.stat", "io", parse_io_stat, nil, true)
   if io then
     node.io = io
   end
 
-  node.pids.current = read_metric(fs, node, scan, "pids.current", "pids.current", parse_uint, 4096)
-  node.pids.max = read_metric(fs, node, scan, "pids.max", "pids.max", parse_limit, 4096)
-  local pids_events = read_metric(fs, node, scan, "pids.events", "pids.events", parse_key_values)
+  node.pids.current = read_metric(fs, node, scan, present, "pids.current", "pids.current", parse_uint, 4096)
+  node.pids.max = read_metric(fs, node, scan, present, "pids.max", "pids.max", parse_limit, 4096)
+  local pids_events = read_metric(fs, node, scan, present, "pids.events", "pids.events", parse_key_values)
   if pids_events then
     node.pids.events = pids_events
   end
 
   for _, kind in ipairs({ "cpu", "memory", "io" }) do
     local pressure = read_metric(
-      fs, node, scan, kind .. ".pressure", "pressure." .. kind, parse_pressure, 65536
+      fs, node, scan, present, kind .. ".pressure", "pressure." .. kind, parse_pressure, 65536
     )
     if pressure then
       node.pressure[kind] = pressure
     end
   end
 
-  local cpus = read_metric(fs, node, scan, "cpuset.cpus.effective", "cpuset.cpus_effective", trim, 65536)
+  local cpus = read_metric(fs, node, scan, present, "cpuset.cpus.effective", "cpuset.cpus_effective", trim, 65536)
   if cpus ~= nil then
     node.cpuset.cpus_effective = cpus
   end
-  local mems = read_metric(fs, node, scan, "cpuset.mems.effective", "cpuset.mems_effective", trim, 65536)
+  local mems = read_metric(fs, node, scan, present, "cpuset.mems.effective", "cpuset.mems_effective", trim, 65536)
   if mems ~= nil then
     node.cpuset.mems_effective = mems
   end
@@ -625,11 +666,9 @@ local function discover_children(fs, item, node, queue, scan, max_depth, max_nod
           add_issue(node, scan, "scan." .. entry, link_error or "error", "symlink_check_failed", candidate)
         end
       else
-        local candidate_kind = "directory"
-        local kind_error
-        if type(fs.kind) == "function" then
-          candidate_kind, kind_error = fs:kind(candidate)
-        end
+        -- No fallback here, and deliberately: see `checked_fs`.  An entry whose
+        -- kind cannot be read is not a directory.
+        local candidate_kind, kind_error = fs:kind(candidate)
         if candidate_kind == "symlink" then
           scan.skipped_symlinks = scan.skipped_symlinks + 1
         elseif candidate_kind == nil then
@@ -690,23 +729,74 @@ local function root_summary(root)
   }
 end
 
+-- The four questions this scan asks of a filesystem.  `kind` is the one that
+-- needs saying out loud: before descending into an entry the scan has to know
+-- whether it is a directory or a symlink, because a symlink in a cgroup tree
+-- can lead back into it and the scan is a bounded walk, not a traversal.  The
+-- answer used to have a fallback -- an object without `kind` was read as "every
+-- entry is a directory" -- which is the one answer that silently turns the
+-- symlink avoidance off, and in production it could never happen anyway, because
+-- `FS.default` always answers.  So it existed for incomplete test doubles, and
+-- an incomplete double is not a reason for the product to carry a branch that
+-- answers a safety question with a constant.  An object that cannot say what a
+-- path is is refused here, by name, instead.
+local FS_METHODS = { "read", "list", "readlink", "kind" }
+
+local function checked_fs(candidate)
+  if type(candidate) ~= "table" then return nil, "a table" end
+  for _, method in ipairs(FS_METHODS) do
+    if type(candidate[method]) ~= "function" then
+      return nil, "a filesystem answering `:" .. method .. "()`"
+    end
+  end
+  return candidate
+end
+
 function Cgroup.new(options)
   options = options or {}
   if type(options) ~= "table" then error("Cgroup options must be a table", 2) end
   local root_relative, root_id = normalize_root(options.root)
   local mount_path = normalize_mount_path(options.mount_path)
+  local fs, fs_problem = checked_fs(options.fs or FS.default)
+  if not fs then
+    error("Cgroup fs must be " .. fs_problem, 2)
+  end
   return setmetatable({
     id = "cgroup",
     default_interval_ms = Common.positive_integer("interval_ms", options.interval_ms, 1000),
-    fs = options.fs or FS.default,
+    fs = fs,
     mount_path = mount_path,
     root = root_relative,
     root_id = root_id,
     root_path = join_path(mount_path, root_relative),
     max_depth = option_integer("max_depth", options.max_depth, DEFAULT_MAX_DEPTH, 0, 64),
     max_nodes = option_integer("max_nodes", options.max_nodes, DEFAULT_MAX_NODES, 1, 65536),
+    _semantics_cache = {},
+    _semantics_count = 0,
     _method_style = true,
   }, Cgroup)
+end
+
+-- A cgroup id never changes meaning, so its unit and container identity are
+-- classified once and reused.  The result is copied per node because the node
+-- is handed to the view model, the exporter and the tests, and a shared table
+-- would let one of them write into every later sample.  The cache is dropped
+-- whole once it outgrows the node budget: a node id is not a handle a process
+-- can recycle cheaply, and an unbounded table would outlive its entries.
+function Cgroup:semantics_for(id)
+  local cached = self._semantics_cache[id]
+  if cached == nil then
+    cached = Semantics.classify(id)
+    if self._semantics_count >= self.max_nodes then
+      self._semantics_cache = {}
+      self._semantics_count = 0
+    end
+    self._semantics_cache[id] = cached
+    self._semantics_count = self._semantics_count + 1
+  end
+  local copy = {}
+  for key, value in pairs(cached) do copy[key] = value end
+  return copy
 end
 
 function Cgroup:probe(context)
@@ -815,12 +905,15 @@ function Cgroup:sample(context, previous)
     end
 
     if include_node then
-      local node = empty_workload(item)
+      local node = empty_workload(item, self:semantics_for(item.id))
       if not item.entries then
         add_issue(node, scan, "subtree", list_error,
           "subtree_enumeration_denied", item.path)
       else
-        populate_metrics(fs, node, scan, previous_by_id[item.id], elapsed_ns)
+        populate_metrics(
+          fs, node, scan, listed_metric_files(item.entries, item.entries_truncated),
+          previous_by_id[item.id], elapsed_ns
+        )
         discover_children(fs, item, node, queue, scan, self.max_depth, self.max_nodes)
         -- Processed queue entries remain in the array to preserve O(1) FIFO
         -- indexing, so explicitly release their potentially large listing.
@@ -865,6 +958,8 @@ function Cgroup:sample(context, previous)
     node_limited = scan.node_limited,
     truncated = scan.depth_limited or scan.node_limited,
   }
+  local pods = {}
+  local service_count, container_count, user_session_count, pod_count = 0, 0, 0, 0
   for _, node in ipairs(workloads) do
     summary.visible_process_count = summary.visible_process_count + node.processes.count
     if node.partial then
@@ -877,11 +972,48 @@ function Cgroup:sample(context, previous)
     else
       summary.gap_node_count = summary.gap_node_count + 1
     end
+    -- Only a node that *is* the thing is counted, so a container's own
+    -- subdirectories do not inflate the totals above them.
+    local semantics = node.semantics
+    if semantics then
+      if semantics.unit_type == "service" then
+        service_count = service_count + 1
+      end
+      if semantics.container_scope and semantics.container_id then
+        container_count = container_count + 1
+      end
+      if semantics.user_slice then
+        user_session_count = user_session_count + 1
+      end
+      if semantics.pod_scope and semantics.pod and not pods[semantics.pod] then
+        pods[semantics.pod] = true
+        pod_count = pod_count + 1
+      end
+    end
   end
+  summary.service_count = service_count
+  summary.container_count = container_count
+  summary.pod_count = pod_count
+  summary.user_session_count = user_session_count
   summary.root = root_summary(by_id[self.root_id])
 
   local finished = Common.now_ns(context)
   local quality = result_quality(summary)
+  -- The reason is read off the same value that chose the quality, and this is
+  -- the cleanest mapping in the tree: `result_quality` reads one counter per
+  -- quality and nothing else, so each of the four has exactly one cause -- at
+  -- least one node could only be read in part, at least one node's counters
+  -- were reset, or at least one node has no rate.  Which node, and which of its
+  -- files or counters, stays where it already is: every node carries its own
+  -- `issues`, and `summary.partial_node_count` and its siblings are already in
+  -- the payload.
+  --
+  -- A cgroup scan is the one collector whose aggregate quality could be wrong
+  -- about its own cause rather than merely silent about it.  Increment 70
+  -- measured this one publishing `partial` with `summary.partial_reason` nil
+  -- while a single node's `io.stat` line was rejected -- the Workloads page had
+  -- nothing to render in the "why is this partial" section, which is the same
+  -- gap this fills and which that increment's fix had made visible.
   return Common.result("ok", finished, {
     schema = SCHEMA,
     mount_path = self.mount_path,
@@ -891,6 +1023,9 @@ function Cgroup:sample(context, previous)
     summary = summary,
   }, {
     quality = quality,
+    reason = quality == "partial" and "cgroup_node_partially_read"
+      or (quality == "reset" and "cgroup_counter_reset"
+        or (quality == "gap" and "cgroup_rate_unavailable" or nil)),
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = self.root_path,
   })

@@ -10,6 +10,16 @@ local ERRNO_KIND = {
   [5] = "denied",       -- Win32 ERROR_ACCESS_DENIED
   [13] = "denied",      -- EACCES
   [20] = "missing",     -- ENOTDIR
+  -- ENODATA is the attribute existing and holding no value, which is the
+  -- kernel declining to state a figure rather than a read going wrong.  The
+  -- development host produces two of them on every Intel RAPL zone: a
+  -- `peak_power` constraint has no time window to publish, and a core or
+  -- uncore sub-zone has no maximum power.  Both are answered with this word
+  -- because it is the one the readers of an optional attribute already treat as
+  -- "not published" rather than as a fault, and calling them read errors left
+  -- half of every powercap zone's issue list describing a file the driver
+  -- opened successfully and had nothing to say about.
+  [61] = "unavailable",  -- ENODATA
 }
 
 local function classify_error(message, errno)
@@ -137,6 +147,29 @@ function FS.new(options)
       or options.root:find("\0", 1, true)
       or (options.root ~= "" and options.root:sub(1, 1) ~= "/")) then
     error("root must be an absolute NUL-free path", 2)
+  end
+  -- An option this constructor does not know is refused rather than ignored.
+  -- Measured: two test files spelled the readlink implementation `readlink`,
+  -- which is not one of the four names below, so the key was accepted, stored
+  -- in the options table, and never read -- and the filesystem quietly fell back
+  -- to the real one for that accessor.  A test that believes it is hermetic and
+  -- is not is worse than one that knows it is not, because the host it runs on
+  -- decides the answer, and the two doubles that made the mistake were testing
+  -- collectors that never ask for a symlink, so the substitution stayed invisible
+  -- in one case and produced a real `readlink(2)` on this host in the other.
+  -- The four names are also the only ones `FS.new` will ever substitute a real
+  -- implementation for, so an unknown key can only ever be a misspelling or dead
+  -- weight.
+  local FS_OPTION_KEYS = { "root", "read_file", "list_dir", "read_link", "path_type" }
+  for key in pairs(options) do
+    local known = false
+    for _, accepted in ipairs(FS_OPTION_KEYS) do
+      if key == accepted then known = true break end
+    end
+    if not known then
+      error("unknown FS option `" .. tostring(key) .. "`; accepted options are "
+        .. table.concat(FS_OPTION_KEYS, ", "), 2)
+    end
   end
   for _, key in ipairs({ "read_file", "list_dir", "read_link", "path_type" }) do
     if options[key] ~= nil and type(options[key]) ~= "function" then

@@ -4,6 +4,8 @@ local Parsers = require("wtop.linux.parsers")
 local Sysfs = require("wtop.linux.sysfs")
 local Common = require("wtop.collectors.common")
 local NVML = require("wtop.collectors.nvml")
+local AMDSMI = require("wtop.collectors.amdsmi")
+local LEVELZERO = require("wtop.collectors.levelzero")
 
 local GPU = {}
 GPU.__index = GPU
@@ -469,6 +471,27 @@ local function read_dpm_domain(fs, path, id, issues)
   return domain
 end
 
+-- A frequency reading of zero is not a frequency.
+--
+-- The kernel publishes 0 for a clock that is powered down, and it does so on
+-- this class of hardware routinely: this host's i915 reports
+-- `rps_act_freq_mhz` as 0 whenever the GT sits in RC6, which is most of the
+-- time on an idle desktop, while `rps_cur_freq_mhz` reports the clock the
+-- hardware is set to run at.  Lua's `or` treats 0 as present, so preferring
+-- `actual_hz` with `actual_hz or current_hz` promoted the zero and the GPU
+-- table read 0 Hz on a GPU set to 300 MHz -- a claim about a clock that is not
+-- running, presented as a measurement of one.
+--
+-- Only a positive reading counts as a measurement.  A zero becomes "nothing to
+-- report", which is what it is, and the caller is free to say so rather than
+-- inventing a rate or a zero to fill the gap.
+local function running_hz(value)
+  if type(value) ~= "number" or value <= 0 then
+    return nil
+  end
+  return value
+end
+
 local function mhz_value(fs, path, issues, field)
   local value = optional_number(fs, path, issues, field, 0)
   if value == nil then
@@ -513,8 +536,12 @@ local function intel_gt_domain(fs, base, id, issues, xe)
       source = base,
     }
   end
-  if domain.actual_hz or domain.current_hz or domain.minimum_hz or domain.maximum_hz
-    or domain.hardware_minimum_hz or domain.hardware_maximum_hz
+  -- A clock that reports only zeros is not a clock this view can describe: the
+  -- zeros mean powered down, and keeping the domain would publish them as
+  -- figures.  Anything positive makes it worth reporting.
+  if running_hz(domain.actual_hz) or running_hz(domain.current_hz)
+    or running_hz(domain.minimum_hz) or running_hz(domain.maximum_hz)
+    or running_hz(domain.hardware_minimum_hz) or running_hz(domain.hardware_maximum_hz)
   then
     return domain
   end
@@ -594,7 +621,11 @@ local function read_frequencies(self, fs, device, issues)
           source_kind = "i915_legacy",
           source = device.class_path,
         }
-        return (domain.actual_hz or domain.current_hz) and domain or nil
+        -- Same rule as the multi-tile path: a legacy GT that is asleep reports
+        -- an actual frequency of zero, and that is the absence of a figure
+        -- rather than one, so the domain is kept only if something is running.
+        return (running_hz(domain.actual_hz) or running_hz(domain.current_hz))
+          and domain or nil
       end)
     end
   elseif device.driver == "xe" then
@@ -891,6 +922,52 @@ local function derive_client(parsed, id, previous, observed_at_ns)
     end
     client.engines[name] = engine
   end
+  -- A client's frequency domains are its own, not the engines'.  The kernel
+  -- names the two independently -- `drm-maxfreq-sclk` against
+  -- `drm-engine-gfx` on amdgpu, `drm-maxfreq-rcs0` against
+  -- `drm-engine-render` on i915 -- so walking only the engine names and looking
+  -- each one up in the frequency map silently dropped every domain whose name
+  -- did not happen to match.  A dropped domain is a clock nobody can report,
+  -- which is why the two collections are kept apart and joined by name
+  -- explicitly below.
+  local domain_names = {}
+  for name in pairs(parsed.maximum_frequency_hz) do domain_names[name] = true end
+  for name in pairs(parsed.current_frequency_hz) do domain_names[name] = true end
+  client.frequency_domains = {}
+  for _, name in ipairs(sorted_keys(domain_names)) do
+    local domain = {
+      id = name,
+      -- The same rule as the device clocks above, for the same reason: a
+      -- frequency in hertz that reads zero describes a clock that is not
+      -- running, and a client with no context on a clock is in exactly that
+      -- state.  Printing 0 Hz in a client's clock list, one level below a
+      -- device view that refuses to, would be the same figure contradicting
+      -- itself a keystroke apart.  The device-side behaviour is verified on
+      -- this host; this side shares the rule rather than a separate
+      -- observation, because this host's i915 publishes no `drm-maxfreq-*` at
+      -- all and so cannot show a client clock either way.
+      current_hz = running_hz(parsed.current_frequency_hz[name]),
+      maximum_hz = running_hz(parsed.maximum_frequency_hz[name]),
+    }
+    -- A name match is all the kernel gives: there is no field saying which
+    -- clock an engine runs on.  An engine that shares a domain's name is
+    -- reported as such and nothing stronger is claimed.
+    local engine = client.engines[name]
+    if engine then
+      domain.engine = name
+      engine.frequency_domain = name
+    end
+    -- A clock at its maximum is a pinned clock, not a busy engine, so this is
+    -- labelled as a share of the ceiling and never as a utilization.  It needs
+    -- no interval: both ends are absolute readings.
+    if domain.current_hz and domain.maximum_hz and domain.maximum_hz > 0 then
+      domain.of_maximum_percent = math.max(0, math.min(100,
+        domain.current_hz * 100 / domain.maximum_hz
+      ))
+    end
+    if domain.current_hz == nil then domain.quality = "unavailable" end
+    client.frequency_domains[#client.frequency_domains + 1] = domain
+  end
   client.memory_summary = memory_summary(client.memory)
   if any_gap then client.quality = "gap"
   elseif any_held then client.quality = "estimated" end
@@ -953,6 +1030,7 @@ local function client_view(client, observation)
     fd_count = #observation.fds,
     fds = observation.fds,
     engines = client.engines,
+    frequency_domains = client.frequency_domains,
     memory = client.memory,
     memory_summary = client.memory_summary,
     observed_at_ns = client.observed_at_ns,
@@ -1390,16 +1468,53 @@ local function build_device(self, fs, drm_path, card_name, used_ids)
   )
 
   device.frequencies = read_frequencies(self, fs, device, issues)
+  -- A clock that is powered down still has a place in the set -- it is a real
+  -- clock, and the reader needs to know the device has one -- but it has no
+  -- current figure.  The zero the kernel printed stays in the domain, because
+  -- it is what the kernel said, and the quality says what it means: the
+  -- document reports "this clock is not running" rather than "this clock runs
+  -- at 0 Hz", which are different statements about different states.
+  for _, domain in ipairs(device.frequencies.domains) do
+    if running_hz(domain.actual_hz) == nil and running_hz(domain.current_hz) == nil then
+      domain.quality = "unavailable"
+    end
+  end
   local first_frequency = device.frequencies.domains[1]
   if first_frequency then
-    device.metrics.frequency_current_hz = first_frequency.actual_hz or first_frequency.current_hz
-    device.metrics.frequency_minimum_hz = first_frequency.minimum_hz or first_frequency.hardware_minimum_hz
-    device.metrics.frequency_maximum_hz = first_frequency.maximum_hz or first_frequency.hardware_maximum_hz
+    -- Only a clock that is actually running has a current frequency, so a
+    -- zero "actual" reading falls through to the clock the hardware is set
+    -- for.  Each figure is left absent rather than zero when neither source
+    -- has one, because a zero here would be a claim the collector cannot back.
+    local current = running_hz(first_frequency.actual_hz)
+      or running_hz(first_frequency.current_hz)
+    local minimum = running_hz(first_frequency.minimum_hz)
+      or running_hz(first_frequency.hardware_minimum_hz)
+    local maximum = running_hz(first_frequency.maximum_hz)
+      or running_hz(first_frequency.hardware_maximum_hz)
+    if current then device.metrics.frequency_current_hz = current end
+    if minimum then device.metrics.frequency_minimum_hz = minimum end
+    if maximum then device.metrics.frequency_maximum_hz = maximum end
+    -- The promoted scalar is one clock out of the set, so it carries that
+    -- clock's id.  Without it a consumer reading only `frequency_current_hz`
+    -- cannot tell a graphics clock from a memory clock, and on a card with
+    -- both the two are different quantities that must not be compared.  The
+    -- enumeration is sorted, so which domain is promoted is stable across
+    -- boots; naming it is what makes that stable choice legible.  It is named
+    -- only when a figure was actually promoted: an id with no figure beside it
+    -- would attribute nothing.
+    if current or minimum or maximum then
+      device.metrics.frequency_domain = first_frequency.id
+    end
   end
   local graphics = device.frequencies.by_id.graphics
   local memory = device.frequencies.by_id.memory
-  if graphics then device.metrics.frequency_graphics_hz = graphics.current_hz end
-  if memory then device.metrics.frequency_memory_hz = memory.current_hz end
+  -- The same zero rule applies to the two named clocks.  A discrete card's
+  -- memory clock in particular drops into a low-power state on its own, and a
+  -- published 0 for it would be indistinguishable from a card with no memory.
+  local graphics_hz = graphics and running_hz(graphics.current_hz) or nil
+  local memory_hz = memory and running_hz(memory.current_hz) or nil
+  if graphics_hz then device.metrics.frequency_graphics_hz = graphics_hz end
+  if memory_hz then device.metrics.frequency_memory_hz = memory_hz end
 
   device.hwmon_refs, device.hwmon_truncated = hwmon_references(self, fs, device, issues)
   device.capabilities.utilization = device.metrics.utilization_percent ~= nil
@@ -1496,6 +1611,10 @@ function GPU.new(options)
     pci_ids_paths = pci_ids_paths,
     nvml = type(options.nvml) == "function" and options.nvml or nil,
     nvml_default = options.nvml == nil,
+    amdsmi = type(options.amdsmi) == "function" and options.amdsmi or nil,
+    amdsmi_default = options.amdsmi == nil,
+    levelzero = type(options.levelzero) == "function" and options.levelzero or nil,
+    levelzero_default = options.levelzero == nil,
     _pci_name_cache = {},
     _method_style = true,
   }, GPU)
@@ -1510,6 +1629,24 @@ function GPU:_nvml_provider(fs)
   return self._nvml_host or nil
 end
 
+-- amdsmi follows the same rule as NVML: the host's vendor library describes
+-- the host, and a fixture filesystem gets none unless a test injects one.
+function GPU:_amdsmi_provider(fs)
+  if self.amdsmi then return self.amdsmi end
+  if not self.amdsmi_default or fs ~= FS.default then return nil end
+  if self._amdsmi_host == nil then self._amdsmi_host = AMDSMI.default_provider() or false end
+  return self._amdsmi_host or nil
+end
+
+function GPU:_levelzero_provider(fs)
+  if self.levelzero then return self.levelzero end
+  if not self.levelzero_default or fs ~= FS.default then return nil end
+  if self._levelzero_host == nil then
+    self._levelzero_host = LEVELZERO.default_provider() or false
+  end
+  return self._levelzero_host or nil
+end
+
 function GPU:probe(context)
   local fs = Common.fs(context, self.fs)
   local found, err = inventory(fs, self.drm_path, self.max_class_entries, self.max_cards, self.max_render_nodes)
@@ -1521,10 +1658,17 @@ function GPU:probe(context)
     return Capability.unavailable(err and err.message or "drm_unavailable", { source = self.drm_path })
   end
   if #found.cards == 0 then
+    -- No DRM card can still mean a working vendor-managed GPU, so ask both
+    -- providers before declaring the page unavailable.
     local nvml_data = not (context and context.safe_mode)
       and NVML.query(self:_nvml_provider(fs), false)
     if nvml_data and #nvml_data.devices > 0 then
       return Capability.available({ source = "nvml", details = { devices = #nvml_data.devices } })
+    end
+    local amdsmi_data = not (context and context.safe_mode)
+      and AMDSMI.query(self:_amdsmi_provider(fs), false)
+    if amdsmi_data and #amdsmi_data.devices > 0 then
+      return Capability.available({ source = "amdsmi", details = { devices = #amdsmi_data.devices } })
     end
     return Capability.unavailable("no_drm_card_devices", { source = self.drm_path })
   end
@@ -1549,15 +1693,22 @@ function GPU:sample(context, previous)
   if not found then
     return Common.error_result(list_error, Common.now_ns(context), self.drm_path)
   end
-  -- Loading NVML is an optional vendor provider, which safe mode excludes.
+  -- Loading a vendor library is an optional provider, which safe mode excludes.
   local nvml_data, nvml_reason
+  local amdsmi_data, amdsmi_reason
+  local levelzero_data, levelzero_reason
   if context and context.safe_mode then
     nvml_reason = "safe_mode"
+    amdsmi_reason = "safe_mode"
+    levelzero_reason = "safe_mode"
   else
     nvml_data, nvml_reason = NVML.query(self:_nvml_provider(fs),
       not context or context.scan_gpu_processes ~= false)
+    amdsmi_data, amdsmi_reason = AMDSMI.query(self:_amdsmi_provider(fs), false)
+    levelzero_data, levelzero_reason = LEVELZERO.query(self:_levelzero_provider(fs))
   end
-  if #found.cards == 0 and not (nvml_data and #nvml_data.devices > 0) then
+  if #found.cards == 0 and not (nvml_data and #nvml_data.devices > 0)
+    and not (amdsmi_data and #amdsmi_data.devices > 0) then
     local finished = Common.now_ns(context)
     return Common.result("unavailable", finished, nil, {
       quality = "unavailable",
@@ -1605,7 +1756,11 @@ function GPU:sample(context, previous)
   for _, device in ipairs(devices) do
     finalize_processes(device, process_scan)
   end
-  local providers = { nvml = { status = "unavailable", reason = nvml_reason } }
+  local providers = {
+    nvml = { status = "unavailable", reason = nvml_reason },
+    amdsmi = { status = "unavailable", reason = amdsmi_reason },
+    levelzero = { status = "unavailable", reason = levelzero_reason },
+  }
   if nvml_data then
     providers.nvml = NVML.merge(devices, lookup, nvml_data, {
       used_ids = used_ids,
@@ -1615,6 +1770,21 @@ function GPU:sample(context, previous)
         return type(comm) == "string" and Common.safe_text(Common.trim(comm), 64) or nil
       end,
     })
+    for _, device in ipairs(devices) do by_id[device.id] = device end
+  end
+  if amdsmi_data then
+    providers.amdsmi = AMDSMI.merge(devices, lookup, amdsmi_data, { used_ids = used_ids })
+    for _, device in ipairs(devices) do by_id[device.id] = device end
+  end
+  if levelzero_data then
+    -- Level Zero carries no bus address wtop can read, so its devices are
+    -- matched to the DRM cards by enumeration order.
+    local drm_order = {}
+    for _, device in ipairs(devices) do
+      if device.driver == "i915" then drm_order[#drm_order + 1] = device end
+    end
+    providers.levelzero = LEVELZERO.merge(devices, levelzero_data, drm_order,
+      { used_ids = used_ids })
     for _, device in ipairs(devices) do by_id[device.id] = device end
   end
   for _, device in ipairs(devices) do
@@ -1638,6 +1808,31 @@ function GPU:sample(context, previous)
     truncated = truncated,
   }, {
     quality = partial and "partial" or (estimated and "estimated" or "fresh"),
+    -- Two categories, and the measurement that chose them is in the tests
+    -- rather than here: instrumenting the two locals above across the whole
+    -- GPU suite showed ten distinct causes reaching `partial`, and they are not
+    -- one condition.  Eight are a read that did not happen or did not
+    -- succeed -- a denied `/proc/<pid>/fdinfo`, a process that exited mid-scan,
+    -- a device attribute that came back unusable, a failed inventory read --
+    -- and two are a read that *succeeded* and still produced nothing usable: a
+    -- render node that belongs to no enumerated card, and a DRM client whose
+    -- `drm-pdev` names no card we know.  Those two are why the sentence is
+    -- "could not be collected" and not "could not be read": in both, every
+    -- byte was read and the association simply could not be made, so telling
+    -- the user a read failed would send them after a permissions problem that
+    -- does not exist.  The two counters that separate them
+    -- (`drm_scan.unattached_render_nodes`, `process_scan.unmatched_clients`)
+    -- are both in the payload, so the reason is deliberately the category and
+    -- not one code per cause: a single slot that picked between them would
+    -- assert a priority the quality expression never expresses.
+    -- `estimated` is set when a device's identity was composed from whatever
+    -- could be read, or when a render node was attached to a device by
+    -- driver-uniqueness rather than by its bus address.  Both are a
+    -- relationship shown on screen that was inferred, and the two things
+    -- inferred are exactly an identity and a link -- which is what the sentence
+    -- names, so a user told it looks in the right place.
+    reason = partial and "gpu_data_incomplete"
+      or (estimated and "gpu_identity_inferred" or nil),
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = { self.drm_path, self.proc_path },
   })

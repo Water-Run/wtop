@@ -125,7 +125,28 @@ local function render_chart(grid, area, model, context, token, surface)
   local label_width = 0
   local scale_preview
   if area.width >= 22 then
-    _, scale_preview = Chart.render(model.history, 1, 1,
+    -- The gutter is sized from the labels that are going to be drawn, so the
+    -- scale it measures has to be the scale the plot uses.  Measuring that scale
+    -- with a one-cell render cannot work: `Sparkline.buckets` drops a spike that
+    -- falls between samples, so a series whose peak is 1.89 GHz measured as the
+    -- range [0, 1] -- `buckets(series, 1)` returned a single zero for a peak in
+    -- the middle of five samples -- the two labels came back four cells wide, and
+    -- the label actually drawn, eight cells of "1.89 GHz", was cut by the grid to
+    -- "1.89" with no ellipsis at all.  A reader is then looking at a bare number
+    -- that does not say which scale it is on, and a temperature is
+    -- indistinguishable from a frequency.  Measuring at the plot's own width
+    -- asks the question the gutter is actually asking.
+    --
+    -- There is deliberately no second line here that fits the label to the box
+    -- before writing it.  One was written, measured, and removed: across 640
+    -- rendered pages, 104,192 bounded writes, eight geometries and all ten
+    -- catalogues, no label inside a metric widget was ever cut once the gutter
+    -- was measured this way, so the guard it needed was a guard against nothing
+    -- -- and removing it changed no observable behaviour, which is the test that
+    -- was run to find out.  A safety net that no measurement can justify, whose
+    -- only argument is a comment saying it is needed, hides the fact that the
+    -- estimate above is the thing doing the work.
+    _, scale_preview = Chart.render(model.history, area.width, 1,
       { min = model.min, max = model.max, mode = chart_mode })
     local top = axis_label(model, scale_preview.maximum)
     local bottom = axis_label(model, scale_preview.minimum)

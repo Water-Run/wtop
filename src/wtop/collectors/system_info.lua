@@ -456,8 +456,26 @@ function SystemInfo:sample(context)
   local finished = Common.now_ns(context)
   local quality = #data.quality_notes > 0 and "partial" or "fresh"
   if #data.quality_notes == 0 then data.quality_notes = nil end
+  -- The reason is deliberately coarser here than anywhere else, and the reason
+  -- for that is measured rather than stylistic.  `quality_notes` is a *list*
+  -- of three possible members drawn from two independent sources --
+  -- `os_release_unreadable`, and `dmi_denied` or `dmi_unavailable` -- so no
+  -- sentence names one cause, and picking the first note would be a priority
+  -- the quality field does not express.  "Part of the system identity could not
+  -- be read" is the one sentence that is true of every case, which is the test
+  -- this file now applies to a reason slot.
+  --
+  -- What makes it coarse is that the list has no reader.  Measured across the
+  -- whole tree, `quality_notes` is read by exactly one thing, an assertion in
+  -- `tests/unit/test_system_collectors.lua`: no view model, no TUI and no
+  -- export mentions it, so it is dead data that a test fixture keeps alive --
+  -- the same shape as the two input-decoder translations increment 67 removed
+  -- and the dropped error event increment 70 proved was dropped.  So today this
+  -- coarse category is *all* a user gets, and whether the notes should be
+  -- rendered or deleted is the next decision here rather than part of this one.
   return Common.result("ok", finished, data, {
     quality = quality,
+    reason = quality == "partial" and "system_identity_incomplete" or nil,
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = self.proc_path,
   })

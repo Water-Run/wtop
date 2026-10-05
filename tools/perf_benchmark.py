@@ -8,10 +8,27 @@ script and intervals are fixed so two runs on the same host compare directly;
 absolute values still depend on the host's process count and hardware, so
 cross-host comparisons are indicative only.
 
+Every result records *what was measured* and *on what*, because without that a
+number is not a measurement of anything in particular.  This tool can drive two
+different subjects -- the development tree, or a release bundle named by
+WTOP_BENCH_EXECUTABLE -- and they are not the same program: measured on the same
+host minutes apart, the bundle started 15% slower and held 25% more resident
+memory than the source tree.  The two records had byte-identical key sets, so
+nothing downstream could tell which one it was holding.  The subject and the
+host are therefore part of the record, not decoration on it, and the banner's
+"compare same host only" is only actionable if the host is written down.
+
 Usage: tools/perf_benchmark.py [--json PATH] [--pages N] [--window-seconds N]
 """
 
-from __future__ import annotations
+# The annotations are spelled with typing.Optional/Tuple/Dict/List rather than
+# `X | None` and `list[...]`.  The other two Python tools in this tree are
+# written the same way, and for the same reason: the oldest image this project
+# measures on -- manylinux2014, whose interpreter is 3.6 -- parses neither PEP
+# 604 unions nor builtin generics, and a `from __future__ import annotations`
+# header there is a SyntaxError.  This file's guard lives in the unit suite,
+# which the cross-libc container runs, so a tool that cannot be imported there
+# takes a test with it.
 
 import argparse
 import fcntl
@@ -24,11 +41,63 @@ import signal
 import struct
 import termios
 import time
+import typing
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 LUA = os.environ.get("WTOP_LUA") or str(ROOT / ".tools/lua-5.5.1/bin/lua")
 EXECUTABLE = os.environ.get("WTOP_BENCH_EXECUTABLE", "")
 COLUMNS, ROWS = 120, 34
+
+
+def describe_subject() -> typing.Dict[str, object]:
+    """What this run actually measured.
+
+    Two subjects are supported and they are not interchangeable.  A bundle is
+    the artifact a release ships: a self-extracting image with every module
+    already inside it.  The development tree is the same sources loaded from
+    disk by the project's own interpreter with the freshly built native module
+    on LUA_CPATH.  Measured on one host, the two differ well beyond noise, so a
+    number without this field cannot be attributed to either.
+    """
+    if EXECUTABLE:
+        path = pathlib.Path(EXECUTABLE)
+        return {
+            "kind": "bundle",
+            "path": str(path),
+            "resolved": str(path.resolve()) if path.exists() else "",
+            "present": path.is_file() and os.access(str(path), os.X_OK),
+        }
+    return {
+        "kind": "source-tree",
+        "path": str(ROOT / "src/wtop.lua"),
+        "resolved": "",
+        "present": (ROOT / "src/wtop.lua").is_file(),
+    }
+
+
+def describe_host() -> typing.Dict[str, object]:
+    """Which machine the numbers belong to.
+
+    The banner tells the reader to compare runs only on the same host, and the
+    process count alone does not identify one: two hosts with the same load
+    average and the same number of processes can differ in core count and in
+    kernel, and those change every number here.  Each field is read
+    independently and any that cannot be read is reported as such rather than
+    defaulted, so a partial record is visibly partial.
+    """
+    def uname(field: str) -> str:
+        try:
+            with open("/proc/sys/kernel/%s" % field, "rb") as handle:
+                return handle.read().decode("utf-8", "replace").strip()
+        except OSError:
+            return "unavailable"
+
+    return {
+        "kernel": uname("osrelease"),
+        "machine": os.uname().machine,
+        "cpus": os.cpu_count() or 0,
+    }
+
 
 
 def _clock_ticks() -> int:
@@ -42,7 +111,7 @@ def _cpu_seconds(pid: int) -> float:
     return (utime + stime) / _clock_ticks()
 
 
-def _rss_kib(pid: int) -> tuple[int, int]:
+def _rss_kib(pid: int) -> typing.Tuple[int, int]:
     peak, current = -1, -1
     try:
         with open(f"/proc/{pid}/status", "rb") as handle:
@@ -100,7 +169,7 @@ class Session:
     def send(self, data: bytes) -> None:
         os.write(self.master, data)
 
-    def wait_for(self, marker: bytes, timeout: float) -> float | None:
+    def wait_for(self, marker: bytes, timeout: float) -> typing.Optional[float]:
         """Time until marker appears after this call; None on timeout."""
         started = time.monotonic()
         deadline = started + timeout
@@ -117,7 +186,7 @@ class Session:
                         return time.monotonic() - started
         return None
 
-    def exit(self) -> tuple[int, int, int]:
+    def exit(self) -> typing.Tuple[int, int, int]:
         # /proc disappears once the child is reaped, so sample memory first.
         peak, current = _rss_kib(self.pid)
         self.send(b"q")
@@ -133,7 +202,7 @@ class Session:
         return -1, peak, current
 
 
-def _percentile(values: list[float], fraction: float) -> float:
+def _percentile(values: typing.List[float], fraction: float) -> float:
     ordered = sorted(values)
     if not ordered:
         return float("nan")
@@ -157,13 +226,29 @@ def main() -> None:
     page_markers = {1: b"Overview", 2: b"Processes", 6: b"Network", 7: b"GPU"}
     selected = list(page_keys)[: max(1, arguments.pages)]
 
+    # A named subject that is not there is a refusal, not a measurement.  The
+    # alternative is execve failing inside the forked child, which surfaces as
+    # "no first frame within 3 seconds" -- a statement about the application
+    # that is really a statement about a typo in a path, and the kind of wrong
+    # answer this project keeps refusing to file.
+    subject = describe_subject()
+    if not subject["present"]:
+        raise SystemExit(
+            "benchmark: refusing to measure %s: %s (%s)"
+            % (subject["kind"], subject["path"],
+               "not an executable file" if subject["kind"] == "bundle"
+               else "not a file")
+        )
+
     session = Session(interval_ms=1000)
     session.pump(3.0)
     if session.first_frame is None:
         session.exit()
         raise SystemExit("benchmark: no first frame within 3 seconds")
 
-    results: dict[str, object] = {
+    results: typing.Dict[str, object] = {
+        "subject": subject,
+        "host": describe_host(),
         "host_processes": None,
         "first_frame_ms": round(session.first_frame * 1000, 1),
         "steady_cpu_percent": {},
@@ -192,8 +277,22 @@ def main() -> None:
         )
 
     latencies = []
+    # A latency sample only measures something if the keypress changes the page.
+    # Re-selecting the page already on screen redraws nothing, so the marker
+    # never arrives and the run aborts -- which is why `--pages 1`, a value the
+    # help text offers, could never complete a run at all: every sample asked
+    # the application to stay where it already was.  The rotation is therefore
+    # built to start on a page that is not the one currently displayed.
+    displayed = selected[-1]
+    if len(selected) > 1:
+        rotation = selected
+    else:
+        elsewhere = [page for page in page_keys if page != displayed]
+        if not elsewhere:
+            raise SystemExit("benchmark: no second page to measure a switch into")
+        rotation = [elsewhere[0], displayed]
     for index in range(arguments.latency_samples):
-        target = selected[index % len(selected)]
+        target = rotation[index % len(rotation)]
         session.output.clear()
         session.send(page_keys[target])
         observed = session.wait_for(page_markers[target], timeout=2.0)
@@ -217,7 +316,14 @@ def main() -> None:
     results["rss_steady_kib"] = rss_current
 
     print("wtop performance benchmark (fixed script; compare same host only)")
+    print(f"  subject.kind: {subject['kind']}")
+    print(f"  subject.path: {subject['path']}")
+    host = results["host"]
+    for key, value in host.items():
+        print(f"  host.{key}: {value}")
     for key, value in results.items():
+        if key in ("subject", "host"):
+            continue
         if isinstance(value, dict):
             for nested_key, nested in value.items():
                 print(f"  {key}.{nested_key}: {nested}")

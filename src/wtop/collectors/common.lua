@@ -152,6 +152,33 @@ function Common.delta(current, previous)
   return current - previous
 end
 
+-- A limit or threshold of exactly zero is not a limit.
+--
+-- No device expresses a bound as zero, and several kernel drivers publish the
+-- attribute with zero when they never set it.  Both are observable on the
+-- development host: the `spd5118` DIMM sensor registers `temp1_min` and
+-- `temp1_lcrit` and leaves them at 0 beside a real 55 C maximum and 85 C
+-- critical, and `intel-rapl` writes `constraint_0_power_limit_uw` as 0 for every
+-- zone it has disabled.  Publishing those zeros states something untrue -- a
+-- DIMM does not warn below 0 C, and a switched-off zone is not capped at 0 W --
+-- and a consumer cannot tell them from a real bound, because a real bound of
+-- zero is exactly the value that would mean one.
+--
+-- The powercap case carries its own proof inside a single snapshot: the same
+-- constraint reports a maximum of 0 W beside a limit of 26 W, and a maximum
+-- below the limit it bounds is not a specification.
+--
+-- This applies to bounds only.  A *reading* of zero is a measurement and stays:
+-- a 0 V rail, a stalled 0 RPM fan and an unwritten 0 J energy counter are all
+-- real facts about the machine, and a fan at 0 RPM is a fault rather than an
+-- absence of one.
+function Common.bound_value(value)
+  if not finite_number(value) or value == 0 then
+    return nil
+  end
+  return value
+end
+
 function Common.rate(current, previous, elapsed_ns)
   if not finite_number(elapsed_ns) or elapsed_ns <= 0 then
     return nil, "invalid_interval"

@@ -64,6 +64,26 @@ assert(Parsers.psi("some avg10=1 avg60=2 total=3\n") == nil)
 
 local status = assert(Parsers.process_status(fixture("proc/100.status")))
 assert(status.uid == 1000 and status.rss_bytes == 4096 * 1024)
+-- The fixture process is a container init: one entry would mean it shares the
+-- namespace of whoever read it.
+assert(#status.nspid == 2 and status.nspid[1] == 1 and status.nspid[2] == 100,
+  "the pid chain is read innermost first")
+assert(#status.nstgid == 2 and status.nstgid[1] == 1)
+
+-- A single-value chain is an ordinary host process, not an error.
+local host = assert(Parsers.process_status("Name:\tx\nNSpid:\t569150\nNStgid:\t569150\n"))
+assert(#host.nspid == 1 and host.nspid[1] == 569150 and host.namespaced == nil)
+-- A kernel without the field leaves it absent rather than failing the parse.
+local without = assert(Parsers.process_status("Name:\tx\nUid:\t0\t0\t0\t0\n"))
+assert(without.nspid == nil and without.nstgid == nil)
+-- A malformed chain is rejected rather than turned into a plausible list.
+assert(Parsers.process_status("Name:\tx\nNSpid:\t\n") == nil, "an empty chain is rejected")
+assert(Parsers.process_status("Name:\tx\nNSpid:\tabc\n") == nil,
+  "a non-numeric chain is rejected")
+assert(Parsers.process_status("Name:\tx\nNSpid:\t1\t2\t3\t4\t5\t6\n") == nil,
+  "a chain deeper than any real nesting is rejected, not truncated")
+assert(Parsers.process_status("Name:\tx\nNStgid:\tzz\n") == nil,
+  "the thread group chain is validated the same way")
 local io = assert(Parsers.process_io(fixture("proc/100.io")))
 assert(io.read_bytes == 4096 and io.write_bytes == 8192)
 assert(Parsers.process_status("Uid: nope\n") == nil)
@@ -71,6 +91,22 @@ assert(Parsers.process_io("read_bytes: 1 trailing\n") == nil)
 assert(Parsers.cgroup("broken") == nil)
 local cgroups = Parsers.cgroup(fixture("proc/100.cgroup"))
 assert(cgroups[1].path == "/user.slice/user-1000.slice/session-2.scope")
+
+-- smaps_rollup: the "[rollup]" mapping header is not a field, and every kB
+-- value is converted to bytes so callers never see the kernel's unit.
+local rollup = assert(Parsers.process_smaps_rollup(fixture("proc/smaps_rollup")))
+assert(rollup.Rss == 2012 * 1024 and rollup.Pss == 118 * 1024)
+assert(rollup.Private_Clean == 0 and rollup.Private_Dirty == 104 * 1024)
+assert(rollup["[rollup]"] == nil, "the mapping header is not parsed as a field")
+assert(Parsers.process_smaps_rollup(nil) == nil)
+assert(Parsers.process_smaps_rollup("55a4-7ffd ---p 00000000 00:00 0 [rollup]\n") == nil,
+  "a rollup with no fields is rejected")
+assert(Parsers.process_smaps_rollup("Rss: 1 kB\nRss: 2 kB\n") == nil,
+  "duplicate rollup keys are rejected")
+assert(Parsers.process_smaps_rollup("Rss: 4 MB\n") == nil,
+  "a field with a non-kB unit is rejected")
+assert(Parsers.process_smaps_rollup("Rss 4 kB\n") == nil,
+  "a line without a colon is rejected")
 
 local fdinfo = assert(Parsers.drm_fdinfo([[
 drm-driver: amdgpu

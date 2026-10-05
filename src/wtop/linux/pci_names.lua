@@ -82,5 +82,9 @@ function M:names(vendor_id, device_id)
 end
 
 M._parse = parse
+-- Published so the diagnostic can name the file it is looking for instead of
+-- guessing a location of its own.  Two lists of PCI database paths that drift
+-- apart would produce a report that disagrees with the program it describes.
+M.DEFAULT_PATHS = DEFAULT_PATHS
 
 return M

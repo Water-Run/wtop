@@ -1,30 +1,30 @@
-# UI and Interaction
+# 界面与交互
 
-> This document reflects current `0.1.0` behavior. Items labeled “future” or “goal” are not delivered features.
+> 本文描述的是当前 `0.1.0` 版本的行为。标注“future”或“goal”的条目并非已交付的功能。
 
-## 1. Current Visual Baseline
+## 1. 当前视觉基准
 
-wtop's visual language is called **Waterline**: compact monospace typography, semantic color, short sparklines, and limited borders. Five themes are built in—Lua Blue, Water Dark, Water Light, High Contrast, and Colorblind—with fallback to truecolor, 256-color, 16-color, or colorless modes. Lua Blue is the default and anchors its background to the official Lua logo blue, `#000080`, while using lighter related accents for legibility.
+wtop 的视觉语言称为 **Waterline**：紧凑的等宽字体排版、语义化颜色、短促的迷你趋势图（sparkline）以及克制的边框。内置五个主题——Lua Blue、Water Dark、Water Light、High Contrast 和 Colorblind——并可在 truecolor、256 色、16 色或无彩色模式之间回退。Lua Blue 是默认主题，其背景取自 Lua 官方徽标的蓝色 `#000080`，并辅以更亮的同系强调色以保证可读性。
 
-Widgets use semantic tokens and never make color the sole status signal. Data quality is also represented by `+`, `!`, `~`, `×`, `-`, or `·`.
+控件（widget）使用语义化令牌，从不把颜色作为唯一的状态信号。数据质量同样用 `+`、`!`、`~`、`×`、`-` 或 `·` 表示。
 
-| Token | Lua Blue | Purpose |
+| 令牌 | Lua Blue | 用途 |
 | --- | --- | --- |
-| `surface.base` | `#000080` | Main background and space between panels |
-| `surface.raised` | `#070743` | Panels and overlays |
-| `surface.header` | `#0B1252` | Header hierarchy |
-| `surface.row_alt` | `#090948` | Low-contrast alternating table rows |
-| `surface.selected` | `#173C99` | Selected table row |
-| `text.primary` | `#F3F6FF` | Primary text |
-| `text.muted` | `#ABB7D8` | Secondary labels and unavailable values |
-| `accent.primary` | `#80AFFF` | Focus, active tabs, and selected content |
-| `metric.good` | `#4CD8B1` | fresh/ok |
-| `metric.warn` | `#FFD166` | stale/estimated/confirmation state |
-| `metric.critical` | `#FF6B88` | denied/error |
+| `surface.base` | `#000080` | 主背景及面板之间的空隙 |
+| `surface.raised` | `#070743` | 面板与浮层 |
+| `surface.header` | `#0B1252` | 标题层级 |
+| `surface.row_alt` | `#090948` | 低对比度的表格隔行底色 |
+| `surface.selected` | `#173C99` | 选中的表格行 |
+| `text.primary` | `#F3F6FF` | 主要文字 |
+| `text.muted` | `#ABB7D8` | 次要标签与不可用的值 |
+| `accent.primary` | `#80AFFF` | 焦点、活动标签页和选中的内容 |
+| `metric.good` | `#4CD8B1` | 新鲜/正常 |
+| `metric.warn` | `#FFD166` | 过期/估算/待确认状态 |
+| `metric.critical` | `#FF6B88` | 拒绝/错误 |
 
-Focus strengthens only a panel's border and title instead of tinting the whole panel. Active tabs use a low-luminance background with accent foreground rather than a high-contrast inverse block. Headers, alternating rows, and selected rows use three independent surfaces, avoiding large black/blue stripes while retaining redundant bold, border, and textual cues in 256/16-color modes.
+焦点只会强化面板的边框和标题，而不会给整个面板染色。活动标签页使用低亮度背景加强调色前景，而不是高对比度的反色块。标题、隔行和选中行使用三种相互独立的表面色，避免大块的蓝黑条纹，同时在 256/16 色模式下保留加粗、边框和文字等冗余提示。
 
-## 2. Global Frame
+## 2. 全局框架
 
 ```text
 ┌ wtop ubuntu-jp  [Overview]  Processes  Compute  Memory  Storage & I/O  › Update rate: High
@@ -33,53 +33,63 @@ Focus strengthens only a panel's border and title instead of tinting the whole p
 └ 1–0 Tabs · Space Pause · f Update rate · e Layout · T Theme · ? Help · q Quit   ▦ 8/11 · 10:33:35
 ```
 
-The frame has only three layers:
+框架只有三层：
 
-1. One top row shows the brand with the host name, every tab that fits, and a clickable update-rate control. A PAUSED state is appended while paused, an alert count appears when a collector is denied or a resource crosses its critical threshold, and an elevated invocation is visibly marked. Narrow screens retain the current tab and rate control first, hiding distant tabs with `‹`/`›` indicators; the host name is the first thing to yield.
-2. The center contains the active tab's layout tree.
-3. One bottom row shows contextual shortcuts — each of which is clickable — plus responsive hiding as `visible/total`, the active search filter, persistence errors, short messages, and a clock.
+1. 顶部一行显示品牌与主机名、放得下的所有标签页，以及一个可点击的更新速率控件。暂停时会追加 PAUSED 状态；当有采集器被拒绝、或某项资源越过其临界阈值时，会出现告警计数；提权运行会有明显标记。屏幕较窄时优先保留当前标签页和速率控件，用 `‹`/`›` 指示符隐藏较远的标签页；主机名是第一个让位的元素。
+2. 中间是活动标签页的布局树。
+3. 底部一行显示与上下文相关的快捷键——每个都可点击——以及以 `visible/total` 形式表达的响应式隐藏、当前搜索过滤器、持久化错误、短消息和时钟。
 
-There is currently one overlay at a time, with no overlay stack, toast center,
-or command palette. The overlay dims the page behind it, wraps long lines, and
-shows a scrollbar and a `shown/total` counter when its content does not fit.
+同一时刻只有一个浮层，没有浮层栈、toast 通知中心或命令面板。浮层会将其背后的页面调暗，对长行换行，并在内容放不下时显示滚动条和 `shown/total` 计数。
 
-## 3. Ten Fixed Tabs
+线程 drill-down 是该位置上唯一拥有多个视图的入口：选择器（picker）和线程详情是同一个选择状态的两个阶段，而不是一摞浮层，因此 `Esc` 逐级返回，`q` 一次性退出整个链条。
 
-| Number / ID | Current content | Current limitations |
+## 3. 十个固定标签页
+
+| 编号 / ID | 当前内容 | 当前限制 |
 | --- | --- | --- |
-| `1` `overview` | CPU, memory, per-core bars, host identity (hostname, OS, kernel, uptime, load, virtualization), PSI, disk, network, GPU, CPU frequency, maximum hwmon temperature, and CPU power | Not a clickable resource drill-down page |
-| `2` `processes` | Process table with PID, user name, PRI/NI, virtual and resident memory, state, CPU, TIME+, thread count and full command; text search, eleven sort columns in both directions, PPID tree, full-path toggle, selected-item detail, and a confirmed signal menu | No thread rows, user-configurable column set, PSS/USS, namespace, or combined filters |
-| `3` `compute` | CPU identity/heterogeneous core types/topology/cache as an aligned key/value list, aggregate CPU, a per-core bar array, per-core table, load and kernel-wide counters, CPUFreq policies, powercap zones, and the sensor table with a scrollable reading/limit overlay | No NUMA distance or full vendor firmware inventory |
-| `4` `memory` | Utilization with history, a stacked composition bar (used/shared/buffers/cache/free), full meminfo detail with per-field share, swap totals and devices, memory PSI, and paging/fault counters | No per-process PSS/USS attribution or NUMA node breakdown |
-| `5` `storage` | Block-device rate/latency/queue with model, size, medium and scheduler; mountinfo/statvfs capacity with inode usage; I/O pressure; SMART entry | Network/autofs/FUSE/fuseblk/virtiofs skip statvfs by default; other calls share a 50 ms admission budget but individual calls cannot be preempted |
-| `6` `network` | Interface rate/link/MTU/MAC/error summary, IPv4 and IPv6 addresses with netmask and default-route marking, and the TCP/TCP6/UDP/UDP6/Unix socket table | No route table detail, connection filters, or endpoint-masking switch |
-| `7` `gpu` | DRM device, PCI vendor/model/link metadata, driver/busy/VRAM, hwmon temperature/power, frequency, and fdinfo-mapped processes, engines, utilization, and memory; `↑ ↓` select a GPU process and `Enter` opens its host-process detail | No client/frequency-domain/memory-region drill-down or vendor API; unmatched sensors remain `—` |
-| `8` `workloads` | cgroup v2 path-tree summaries for CPU, memory, I/O, process count, PSI, and quality; `↑ ↓` move a selection whose detail panel follows it, `c` collapses or expands the selected subtree | No systemd-unit or container semantics |
-| `9` `system` | Host name/domain/architecture/time zone, distribution, kernel release and build, boot time and busy-since-boot, virtualization and container detection, SELinux/AppArmor/lockdown, DMI machine/board/firmware, descriptor and PID/thread limits, entropy, kernel-wide counters, and power supplies | DMI is frequently root-only; serial numbers, asset tags and the product UUID are deliberately never read, and secret or machine-identifying kernel parameters are redacted |
-| `0` `insights` | Per-collector availability, status, quality, source and reason; deep-inspector readiness with its key binding; and actionable findings for denied or absent sources | Does not foreground-sample process/GPU at 1 Hz for counts; no automatic inference |
+| `1` `overview` | CPU、内存、每核条形图、主机身份信息（主机名、操作系统、内核、运行时间、负载、虚拟化）、PSI、磁盘、网络、GPU、CPU 频率、最高的 hwmon 温度以及 CPU 功率 | 不是可点击的资源下钻页面 |
+| `2` `processes` | 进程表，含 PID、用户名、PRI/NI、虚拟内存与常驻内存、状态、CPU、TIME+、线程数和完整命令行；支持文本搜索、十一个排序列双向排序、PPID 树、完整路径开关、选中项详情，以及需要确认的信号菜单 | 没有线程行、用户可配置的列集合、PSS/USS、命名空间或组合过滤器 |
+| `3` `compute` | CPU 标识/异构核心类型/拓扑/缓存，以对齐的键值列表呈现；CPU 汇总、每核条形图阵列、每核表格、负载与内核级计数器、CPUFreq 策略、powercap 分区，以及带可滚动读数/上限浮层的传感器表 | 没有 NUMA 距离或完整的厂商固件清单 |
+| `4` `memory` | 带历史的利用率、堆叠组成条（已用/共享/缓冲/缓存/空闲）、含每字段占比的完整 meminfo 详情、交换分区总量与设备、内存 PSI，以及换页/缺页计数器 | 没有按进程的 PSS/USS 归因或 NUMA 节点拆分 |
+| `5` `storage` | 块设备的速率/延迟/队列及型号、容量、介质和调度器；mountinfo/statvfs 容量与 inode 占用；I/O 压力；SMART 条目 | 网络/autofs/FUSE/fuseblk/virtiofs 默认跳过 statvfs；其他调用共享 50 ms 的准入预算，但单次调用不可被抢占 |
+| `6` `network` | 接口速率/链路/MTU/MAC/错误摘要，带掩码和默认路由标记的 IPv4 与 IPv6 地址，以及 TCP/TCP6/UDP/UDP6/Unix 套接字表 | 没有路由表详情、连接过滤器或端点脱敏开关 |
+| `7` `gpu` | DRM 设备、PCI 厂商/型号/链路元数据、驱动/忙碌度/显存、hwmon 温度/功率、频率——提升展示的时钟，标注设备公布的其余时钟数量，且绝不显示为 0 Hz，因为断电的时钟是一种状态而非频率——以及经 fdinfo 映射的进程、引擎、利用率和内存；`↑ ↓` 选择 GPU 进程，`Enter` 打开其宿主进程详情，`i` 打开该行背后的 DRM 客户端——其 id、驱动、PCI 地址、描述符编号、每引擎利用率/容量、自身的频率域以及每内存区域字节数。只有一个客户端时直接进入其详情；有多个时先给出列表，因为表格已把它们汇总成了一行。达到上限的时钟按该上限的占比报告，绝不作为利用率。`k` 打开设备自身的时钟域——每一项的读数、范围、占其上限的比例、amdgpu 公布的性能级别（活动项带标记）、读数来源，以及表格当前展示的时钟；只有一块 GPU 时直接进入，有多块时先给出列表，与客户端一致 | 单元格本身只能承载表格未展示的时钟数量的设备级*计数*；完整的并列列表是 `k` 浮层，设备公布的时钟域超过采集器每设备上限时，会在那里注明已截断，而不是悄悄截短 |
+| `8` `workloads` | cgroup v2 路径树摘要，涵盖 CPU、内存、I/O、进程数、PSI 和质量；`↑ ↓` 移动选择，详情面板随之移动，`c` 折叠或展开选中的子树。partial-cgroup 计数指的是内核创建的文件无法读取，而不是父级从未委托的控制器，因此原生 systemd 树报告为零，且不给出解释段落 | 没有 systemd 单元或容器语义 |
+| `9` `system` | 主机名/域名/架构/时区、发行版、内核版本与构建、启动时间与自启动以来的忙碌时间、虚拟化与容器检测、SELinux/AppArmor/lockdown、DMI 机器/主板/固件、描述符和 PID/线程上限、熵、内核级计数器，以及电源 | DMI 通常仅 root 可读；序列号、资产标签和产品 UUID 被刻意永不读取，涉密或可用于识别机器的内核参数会被脱敏 |
+| `0` `insights` | 每个采集器的可用性、状态、质量、来源与原因；深 inspector 的就绪状态及其按键绑定；以及针对被拒绝或缺失来源的可执行发现 | 不会以前台 1 Hz 采样进程/GPU 计数；不做自动推断 |
 
-Tabs cannot currently be added, removed, renamed, or reordered. `1`–`9` select
-the first nine; `0` selects the tenth, following the familiar browser ordering.
+目前标签页不能增删、重命名或重排。`1`–`9` 直接选择前九个；`0` 选择第十个，遵循大家熟悉的浏览器排序。
 
-### 3.1 Widget Vocabulary
+### 3.1 控件词汇表
 
-| Kind | Used for |
+| 种类 | 用途 |
 | --- | --- |
-| `metric` | A scalar with history. Renders a value, a gauge, and — when the panel is at least three rows tall — a multi-row column chart with min/max axis labels. Colour encodes severity against configurable thresholds; the leading symbol independently encodes data quality. |
-| `table` | Rows with per-column priority, per-cell colour, and optional in-cell proportional bars. Reports the columns it had to drop and the geometry it drew, which is what the event loop uses for hit-testing and scrolling. |
-| `key_value` | Label/value pairs with section headings, aligned by measured display width. Scrolls while focused and announces the remainder it could not fit. |
-| `bars` | A labelled bar array: per-core CPU, power supplies. Spends panel height before width so bars stay long. |
-| `segments` | One stacked bar plus a legend for a quantity that partitions exactly, such as memory composition. |
-| `text` | Plain preformatted blocks. Retained for fixed content only; anything tabular should use `key_value`. |
+| `metric` | 带历史的标量。渲染一个数值、一个仪表盘，以及——当面板高度至少为三行时——一个带 min/max 轴标签的多行柱状图。颜色按可配置阈值编码严重程度；行首符号独立编码数据质量。 |
+| `table` | 行，支持每列优先级、每格颜色以及可选的格内比例条。会报告它不得不丢弃的列和实际绘制的几何信息，事件循环据此做命中测试和滚动。 |
+| `key_value` | 带小节标题的标签/值对，按实测显示宽度对齐。聚焦时可滚动，并播报放不下的剩余条目。 |
+| `bars` | 带标签的条形阵列：每核 CPU、电源。优先消耗面板高度再消耗宽度，以保持条形足够长。 |
+| `segments` | 一条堆叠条形加图例，用于恰好可完全划分的量，如内存组成。 |
+| `text` | 纯预格式化文本块。仅保留给固定内容；任何表格化内容都应使用 `key_value`。 |
 
-## 4. Layout Tree and Schema v2
+## 4. 布局树与布局 schema
 
-Primary configuration at `$XDG_CONFIG_HOME/wtop/config.yml` uses configuration schema v1. The separate `$XDG_CONFIG_HOME/wtop/layout.yml` is written as layout schema v2 in the current release. Do not conflate the two `schema_version` values.
+主配置文件 `$XDG_CONFIG_HOME/wtop/config.yml` 使用配置 schema v1。独立的 `$XDG_CONFIG_HOME/wtop/layout.yml` 是单独的文件，有自己的版本，当前发布写入 layout schema v4。
 
-`wtop --export-layout FILE` writes the layout that would load right now as schema-v2 YAML (the built-in defaults when the persisted file is broken, with the reason printed). `wtop --import-layout FILE` validates a file and installs it as the persisted layout; the previous file is kept as `layout.yml.bak`. Use the pair to copy an arrangement between machines or recover from an unreadable layout.
+| 版本 | 主体 | 何时仍会写入 |
+| --- | --- | --- |
+| v1 | `pages:` 为每页一个扁平的控件 id 列表 | 没有树，也没有列集合 |
+| v2 | `pages:` 为每页一棵拆分树 | 有树，无工作区集合，无列集合 |
+| v3 | `workspaces:` 为一组完整的每页树，外加 `active` | 存在工作区集合，无列集合 |
+| v4 | 以上任意一种，外加顶层 `process_columns` 列表 | 使用过列编辑器 |
+
+四种都读取。v1、v2 或 v3 文件照旧加载，并报告没有列集合，进程表从默认列开始；文件保持自身版本，直到实际发生变更。只移动过控件的一次会话会把 v2 文件留在 v2——版本说明的是文件能装什么，而不是会话如何走到这一步。不要把布局版本与配置版本混为一谈。
+
+`process_columns` 是进程表可见列的有序列表，它属于会话而非工作区：整个布局共用一个列表，因此切换工作区不会把隐藏的列带回来。它与文件的其余部分一样被严格读取——必须是一串紧凑的已知列键，且必须包含 `pid` 和 `name`，因为这两列标识一行。未知的键、重复、空洞，或缺少任一标识列，都会拒绝整个文件并在状态栏中指出问题；不做任何静默修复，所以一个打字错误不会悄悄恢复用户关掉的列。在内存中损坏的列列表反而会在写出时归一化，因为保存绝不能因为一个装饰性的视图设置而失败。
+
+`wtop --export-layout FILE` 写出当前会加载的布局，使用该文件所用的版本，包含所有已保存的工作区和列集合（当持久化文件损坏时为内置默认值，并打印原因）。`wtop --import-layout FILE` 校验文件并将其安装为持久化布局，含列集合；原文件保留为 `layout.yml.bak`。用这一对命令在机器之间复制布局，或从不可读的布局中恢复。
 
 ```yaml
-schema_version: 2
+schema_version: 4
 pages:
   gpu:
     type: split
@@ -98,201 +108,237 @@ pages:
             widget_id: "gpu_table"
       - type: leaf
         widget_id: "gpu_process_table"
+process_columns:
+  - "pid"
+  - "user"
+  - "priority"
+  - "nice"
+  - "virtual_memory"
+  - "memory"
+  - "state"
+  - "cpu"
+  - "threads"
+  - "name"
 ```
 
-Schema v2 rules:
+树规则，对 v2、v3 和 v4 主体一视同仁：
 
-- A node is either a `leaf` or binary `split`; `split.children` must contain exactly two entries.
-- `axis` is either `horizontal` or `vertical`.
-- `ratio_micros` is an integer from `1..999999`; `gap` is an integer from `0..16`.
-- Maximum depth is 32, maximum node count 511, and maximum file size 1 MiB.
-- Each page accepts only its fixed widget IDs; duplicate widgets and unknown pages/keys are rejected.
-- New default widgets missing from a saved page are appended. A wholly missing page uses its default tree.
-- The reader still accepts the schema v1 ordered widget list. A layout is atomically rewritten as v2 with mode `0600` only after the user edits it and the event loop exits cleanly through `q`, `Ctrl+C`, or a captured exit signal.
+- 节点要么是 `leaf`，要么是二叉 `split`；`split.children` 必须恰好包含两个条目。
+- `axis` 要么是 `horizontal`，要么是 `vertical`。
+- `ratio_micros` 是 `1..999999` 的整数；`gap` 是 `0..16` 的整数。
+- 最大深度 32，最大节点数 511，最大文件大小 1 MiB。
+- 每页只接受其固定控件 ID；重复控件和未知的页/键会被拒绝。
+- 保存的页面中缺失的新默认控件会被追加。整个缺失的页面使用其默认树。
+- 页主体要么是一棵拆分树，要么是 v1 的扁平控件列表；页面为树的 v4 文件按树读取，页面为 id 的按 id 读取。
+- 读取器仍接受 schema v1 的有序控件列表。布局只在用户编辑过、且事件循环通过 `q`、`Ctrl+C` 或捕获的退出信号干净退出之后，才以 `0600` 模式原子写入。
 
-The current editor operates only on existing leaves:
+当前编辑器只操作已有的叶子：
 
-- `Tab`/`Shift+Tab` selects a widget.
-- Arrow keys move the focused leaf before/after its neighbor in the current leaf order and rebuild the corresponding split according to direction; this does not search for the geometrically closest on-screen widget.
-- `[`/`]` adjusts the nearest parent split of the focused leaf in steps of 0.05, constrained interactively to 0.10..0.90.
-- `u`/`U` undo/redo up to 50 in-memory steps per page. Nothing is persisted until the event loop exits; a crash or `SIGKILL` loses edits from the current session.
+- `Tab`/`Shift+Tab` 选择控件。
+- 方向键把聚焦的叶子移到当前叶子顺序中相邻项的前/后，并按方向重建相应的拆分；这不是在屏幕上搜索几何最近的控件。
+- `[`/`]` 以 0.05 为步长调整聚焦叶子的最近父拆分，交互中限制在 0.10..0.90。
+- `u`/`U` 每页撤销/重做最多 50 步内存操作。事件循环退出前不做任何持久化；崩溃或 `SIGKILL` 会丢失当前会话的编辑。
 
-Adding/removing/replacing widgets, independent split tools, dragging, named layouts, import/export, cross-page moves, and post-crash recovery are not implemented.
+命名工作区，在编辑模式下按 `w` 打开：
 
-## 5. Responsive Modes
+- 工作区是“一个名称加一组完整的每页树”，因此切换会一次性恢复每个页面，并丢弃描述已失效之树的撤销历史。最多十六个，名称长 1–64 **字节**：ASCII 范围内为字母、数字、空格、点、短横线和下划线，且首尾不能是空格、点或短横线；超出 ASCII 则接受任何格式良好的 UTF-8 序列。名称是标签而非标识符，所以规则规定的是必须排除什么——控制字符，以及名称可能被混淆为的结构性 ASCII——zh-CN 或 ja-JP 用户可以把工作区命名为 `工作区`。上限用字节表述是因为它就是字节：21 个 CJK 字符是 63 字节，22 个就已超限，这就是十份目录（catalogue）都说字节而非字符的原因。要求序列*格式良好*正是放宽条件安全的前提：单独的 `0x9b` 对遵循它的终端是一个裸 CSI，携带它的名称会作用于屏幕，而同一个字节位于多字节字符内部时就不是控制字符。写入器与读取器共用同一条规则，因为会话接受而布局文件拒绝的名称会让整个文件失败，而不是只失败那一个条目。
+- 在已保存的行上按 `Enter` 切换到它。不会覆盖它——该行是一个已存在的工作区，把活动树保存到它上面会破坏正要切换过去的布局。
+- `New:` 行把当前树保存在正在输入的名称下。那里出现已有名称是错误，而不是复制第二份，因为同一名称下两条目会让“哪个是活动的”无法回答。
+- `r` 重命名选中的工作区，从当前名称开始。重命名移动名称并带走存储的树；它不会把活动树重新保存到目标上，也不会切换到目标，因此工作区即使在活动布局已继续演进之后，仍保留捕获时的布局。已被占用的名称会被拒绝，而不是合并。
+- `x` 删除。最后一个会保留，因为空的管理器无法展示文件会加载成什么样。
+- 在 `New:` 行以外的任何位置输入都会先把光标移到那里，因此字母键永远不会是死键。输入名称期间——无论是在 `New:` 还是重命名中途——每个可打印键都是文本，包括 `q` 和 `x`；这就是工作区可以叫 `queue` 或 `next` 的原因。
+- `Esc` 逐级撤销：先取消重命名，再清除已输入的名称，只有当编辑器再无可撤销时才关闭。
 
-Layout uses `(columns, rows)`, widget minimum sizes, priority, and focus:
+增删替换控件、独立的拆分工具、拖拽、编辑器内导入/导出、跨页移动，以及崩溃后恢复，均未实现。
 
-| Condition | Mode | Current behavior |
+## 5. 响应式模式
+
+布局使用 `(columns, rows)`、控件最小尺寸、优先级和焦点：
+
+| 条件 | 模式 | 当前行为 |
 | --- | --- | --- |
-| columns `>=120` and rows `<30` | `wide-short` | Up to four columns; low, ultrawide terminals prefer this mode instead of incorrectly collapsing to tiny |
-| not wide-short, and columns `<70`, rows `<=12`, or `<=80×<=24` | `tiny` | Switch axes/reflow by minimum size; hide by focus and priority only if space is still insufficient |
-| columns `<120` (and not tiny) | `narrow-tall` | Prefer a single vertical column |
-| columns `>=180` and rows `>=45` | `wide-tall` | Up to three columns, preferring full forms |
-| otherwise | `standard` | Up to two columns, preferring full forms |
+| 列数 `>=120` 且行数 `<30` | `wide-short` | 最多四列；矮的宽屏终端优先选择此模式，而不是错误地塌缩成 tiny |
+| 非 wide-short，且列数 `<70`、行数 `<=12`，或 `<=80×<=24` | `tiny` | 按最小尺寸切换轴/重排；空间仍不足时仅按焦点和优先级隐藏 |
+| 列数 `<120`（且非 tiny） | `narrow-tall` | 优先单列竖排 |
+| 列数 `>=180` 且行数 `>=45` | `wide-tall` | 最多三列，优先完整形态 |
+| 其他 | `standard` | 最多两列，优先完整形态 |
 
-A split first checks whether both children fit on its authored axis. It then
-checks something stronger: whether each child reaches the size at which it
-renders its *full* form. When the authored axis satisfies the minimum but not
-the full form, and the other axis would satisfy more children, the split
-reflows. This is what stops a 120-column terminal from cutting four tables down
-to three visible columns each merely because the mode's nominal column count is
-four; the column count is driven by what the content needs, and the mode now
-only sets an upper bound. If neither axis fits, the solver retains the
-focused/higher-priority side and hides the other. Hidden widgets remain in the layout tree and reappear as the window grows. Flow compares the richness of forms retained by candidate column counts, preventing unconditional single/multi-column jumps at adjacent sizes solely because of a mode threshold. Panel minimum sizes include borders. Tables first assign minimum widths to every visible essential column, then share remaining space. The footer reports responsive hiding as `visible/total`.
+拆分首先检查两个子节点是否都能放进其设定轴。然后检查更强的条件：每个子节点是否达到渲染*完整*形态所需的尺寸。当设定轴满足最小尺寸但不满足完整形态、而另一轴能满足更多子节点时，拆分重排。这正是阻止 120 列终端仅仅因为模式名义列数为四、就把四张表各砍到三列可见的原因；列数由内容的需要决定，模式只设上限。两轴都不满足时，求解器保留聚焦/高优先级一侧并隐藏另一侧。被隐藏的控件仍在布局树中，窗口变大时重新出现。流式布局比较各候选列数所保留形态的丰富程度，避免仅因模式阈值而在相邻尺寸间无条件地单/多列跳变。面板最小尺寸含边框。表格先为每个可见的必要列分配最小宽度，再分配剩余空间。底栏把响应式隐藏报告为 `visible/total`。
 
-The TUI solves actual placements first, then passes the visible-widget set to the scheduler and ViewModel. Hidden high-cardinality tables do not build row models. A collector unneeded by any placement uses its background interval rather than continuing at the active tab's foreground interval. Shared collectors may remain foreground for another visible component: for example, a GPU summary can continue device updates, but `/proc/<pid>/fdinfo` is scanned only when `gpu_process_table` is actually visible. The single Insights summary widget does not promote process or GPU collection to 1 Hz foreground sampling.
+TUI 先求解实际的放置，再把可见控件集合交给调度器和 ViewModel。被隐藏的高基数表格不构建行模型。任何放置都不需要的采集器使用其后台间隔，而不是继续以活动标签页的前台间隔运行。共享采集器可能因另一个可见组件而保持前台：例如 GPU 摘要可以继续设备更新，但只有 `gpu_process_table` 实际可见时才扫描 `/proc/<pid>/fdinfo`。单个 Insights 摘要控件不会把进程或 GPU 采集提升为 1 Hz 前台采样。
 
-### 5.1 High-Cardinality Table Limits
+### 5.1 高基数表格上限
 
-- The process collector enumerates at most 8192 PIDs by default. The process page searches/sorts the collected set, the ViewModel retains at most 2048 rows, and collection-limit and display truncation are reported separately.
-- Connection, mount, workload, and GPU-process tables each build at most 512 rows. Connections, mounts, and GPU processes use bounded priority sets; workloads use the first 512 rows in collector order. Connection status shows the collector's total socket count and GPU-process status shows visible/total. Mount and workload tables currently have no separate ViewModel-cap truncation indicator.
-- A missing table row is not proof that the object does not exist. Collectors that hit their scan budget use `partial`/`truncated`; a ViewModel-only row limit does not fabricate collector quality. This is especially important for mount/workload tables, which currently lack a visible display-cap indicator.
+- 进程采集器默认最多枚举 8192 个 PID。进程页在采集到的集合内搜索/排序，ViewModel 最多保留 2048 行，采集上限与显示截断分别报告。
+- 连接、挂载、工作负载和 GPU 进程表各最多构建 512 行。连接、挂载和 GPU 进程使用有界优先级集合；工作负载取采集顺序的前 512 行。连接状态显示采集器的套接字总数，GPU 进程状态显示 visible/total。挂载表和工作负载表目前没有单独的 ViewModel 上限截断指示。
+- 表格缺一行不是该对象不存在的证明。触及扫描预算的采集器使用 `partial`/`truncated`；仅由 ViewModel 造成的行上限不会伪造采集器质量。这对挂载/工作负载表尤其重要，因为它们目前没有可见的显示上限指示。
 
-## 6. Key Bindings
+### 5.2 列装不下一个值时可以怎么处理
 
-### 6.1 Global
+列的 `min_width` 是保证，`width` 是偏好。选择按优先级顺序进行，只有最小宽度放得下的列才会被选中，且只有在这之后才向偏好宽度增长——因此调高 `min_width` 绝不会把列压到它以下，它会让一个无法诚实显示的列干脆离开屏幕。单元格按簇（cluster）截断，并加省略号。
 
-| Key | Current behavior |
+这对句子和对路径都是正确的规则，但对“缩短形式*本身就是同类的有效值*”的值是错误规则。被截断的句子一眼可见是被截断的句子。被截断的 MAC 是一个不再是合法 MAC 的前缀。被截断的 PID 是另一个 PID，而且在长寿命主机上它极可能是一个存活进程——因此本产品恪守的规则是：
+
+> 被截断的单元格绝不能显示一个不是该列所持数字的数字。
+
+只在其可判定时适用：被保留的文本与值都是纯数字时——整数，或小数点后带数字的整数。把数字与单位、符号或分组分隔符混排的单元格是另一种形态，不在覆盖范围内——`1.2 G…` 丢了单位，`45.…` 不是数字，两种情况下省略号说的都是真话。
+
+因此进程表的 PID 列声明 `min_width = 7`，因为 `pid_max` 不会超过 2^22，而 `4194304` 在每个内核上都是七位。调高它不是没有代价的，这一点经过测量而非臆断：画最宽 pid 的最窄单元格从 5 格变为 7 格，在 40 到 200 列之间 PID 列从未被丢弃，96 列及以上渲染出的表头完全一致，因此在测试套件演练的 100 列尺寸下，屏幕上的任何东西都没有变化。低于 96 列时，多出的格数取自最低优先级的列，这正是期望的方向。这与散文列的取舍相反——短单元格是美观损失，消失的列更糟——区别在于被缩短的值*是什么*。
+
+**GPU 进程表声明了第二个 `pid` 列，它曾是 6。** `4194304` 和 `4194303` 只差一位，却都被画成 `41943…`，那是一个与被命名进程不同的进程。这个缺陷并非由什么新规则发现：上面的规则已有八个增量（increment）的历史，并且在该 fixture 被赋予一块要画的 GPU 的那一刻就报告了它，因为在那之前这张表从未被渲染过——缺的不是规则，是数据。两列现在都是 `min_width = 7`。
+
+`tests/unit/test_exact_value_widths.lua` 承载这条规则，并且它被写成可以失败：清扫（sweep）在一份目录中跑遍 40 到 200 的每个宽度、在全部十份目录中跑遍套件的全部宽度，谓词被交给它为其而存在的用例，fixture 对照内核的上限而非口味校验——因为被悄悄缩减为四位 pid 的 fixture 能让每个条款常绿，同时什么也测不到。
+
+### 5.2.1 两行不再不同
+
+上面的规则关乎单元格持有了错误的值。截断还能造成第二种它自己看不见的后果，这需要自己的规则，因为两者从不同时触发：
+
+> 两行绝不能变成同一个字符串。
+
+`enp0s31f1` 和 `enp0s31f2` 截断成 `enp0s31…` 并不是错误的值。它们都是真实接口，每个单元格持有的正是它该持有的，省略号说的也是真话——但表格现在显示了两行完全相同的内容，读表的人无法区分渲染故障和两块确实同名的网卡。这种损失没有任何标记，这正是宽度规则要禁止的性质。
+
+这条规则关乎**行**，而不是某一列。这一区分就是它的全部，而且是从昂贵的教训中学来的：这条规则的第一版点名了“行的标识”列，而这是人读表时做出的判断，它列出的恰好就是那个人一直在看的那一列。改为问*任何*一列是否把一行与另一行区分开，是更弱的条件——大小和使用列就能把行区分开的表，无论设备名列发生什么都可以，这就是 `disk_table` 和 `mount_table` 在设备名八格时仍能通过的原因——也是更宽的条件，因为它适用于 fixture 能填充的每张表，而不是某个人记得的那些。
+
+它发现的第二个问题正是这个区分值得的原因。`core_table` 的 CPU 列在 `interface` 完全相同的意义上就是行的标识，它从未在名单上，且被声明为 `min_width = 5`：`cpu0`–`cpu31` 放得下，`cpu32` 恰好五格，而从 `cpu100` 起，五格列会画成 `cpu1…`——在一台空闲的 128 核主机上，二十八行在每一列上都完全相同。这不是什么异型机器；32 核服务器就已经过了名字放不下的点。它现在是 `min_width = 7`，因为 `CONFIG_NR_CPUS` 上限是 8192，所以 `cpu8191` 是七个字符——与 PID 列同样的算术，出于同样的原因。偏好宽度保持 8，因此在狭窄的带宽之上屏幕没有任何变化。
+
+把 fixture 加宽到产品能填充的每张表，发现了第三个问题，而这个不是宽度问题。**`gpu_table` 原本没有任何一列能区分两块完全相同的显卡。** 它绘制型号名——`NVIDIA GeForce RTX 4090`，21 个字符，画进 12 格——旁边是厂商、驱动、利用率、显存、时钟和 PCIe 链路，而在四 GPU 的机器上，这后八项全是同一个数。给型号名四十格，四行仍然是同一行。区分它们的是显卡自己的名字，而产品本来就有：GPU*进程*表的 `gpu` 列一直显示 `card0`，这意味着两张表无法关联——在进程表里看到 `card0` 的读者，在设备表上没有可匹配的东西。设备表现在带有同样的 `card` 列，guard 自己的 fixture 检查直白地说明了这一点：删掉它，四行在任何截断发生*之前*就被报告为完全相同。
+
+在规则*确实*只关乎一列的地方，那一列就是行的**标识**：网络表和地址表的 `interface` 列，它是唯一说明一行*是哪块*网卡的列。状态、速率、MTU、错误和掩码描述了网卡却没有点名它，而 MAC 列是 `full_only`、优先级 25，所以剩下的就是名字。两列都声明 `width = 15, min_width = 15`，而这个数字不是偏好——`IFNAMSIZ` 含终止符是 16，因此内核保证接口名最多 15 个字符，15 是让*每一对*合法名称都保持不同的唯一宽度，而不是只让 fixture 碰巧想到的那些不同。用 `Width.truncate` 测量：
+
+| 格数 | 什么会碰撞 |
+|---|---|
+| 8（原为 `min_width`） | `enp0s31f1`、`enp0s31f2`、`enp0s31f3`、`enp0s31f4` 以及它们上面的 VLAN 全部读作 `enp0s31…` |
+| 12（原为 `width`） | 同一块网卡上的两个 VLAN，`.100` 和 `.101`，都读作 `enp0s31f1.1…` |
+| 14 | 同一块网卡上两个 15 字符的合法名称，`.4093` 和 `.4094`，都读作 `enp0s31f10.40…` |
+| 15 | 无——内核自己的上限 |
+
+另两个同形态的问题，都靠算术而非判断修复：PCI 地址是 `%04x:%02x:%02x.%d`，对每个设备永远是十二个字符，而 `system_devices` 声明的是八——它把一块板载网卡的管理口和数据口 `0000:00:1f.6` 与 `0000:00:1f.7`，画成了同一型号名下的 `0000:00:…`。它现在是 `min_width = 12`。
+
+第四个是一列在**任何**语言中都装不下它要装的东西，值得单独区分。Reason 列是 28 格，装 156 个代码。156 个机器代码中 134 个装得下，22 个装不下，最长 36 格。156 个英文标签中 **119** 个装不下，最差 69 格；西班牙语和德语 138 个装不下，最差 86 和 81；法语 134 个，最差 84。因此被截断的是短句——每份目录里都是如此，频率远高于机器代码——而为此付出的代价是 1 560 条目录条目。那些句子不属于这一列：inspector 浮层以 160 的行宽完整读出全部 156 条。**28 格的列在任何语言中都装不下一个原因，装得下的是一个类别**——即对该读数成立的每一个代码都为真的那一句——代码本身保持完整，放在它原本所在的地方。`system_identity_incomplete` 正是这样一个类别，这就是为什么关于那一列的开放问题与关于不可读系统字段的开放问题是同一个问题，而不是两个。
+
+156 个代码从 **35 个站点**发布，而一张表需要装的远少于全部：该列出现在采集器表和 inspector 表中，各一行，承载*当前活动的*原因——一次 21 个代码。词汇表的其余部分在有人打开 inspector 时才被唤起，画在浮层里，那里行宽 160 格，对照最宽标签 86 格，所以每个代码在每种语言下都装得下。有了这组测量，各选项就有了价格：
+
+| | 目录条目 | 装进 28 格列 | 破坏已发布的快照 |
+|---|---|---|---|
+| 机器代码（现状） | 0 | 134 / 156 | 否 |
+| 重命名 22 个长代码 | 0 | 156 / 156 | **是**——`reason` 是文档化字段 |
+| 每个代码一个短语 | 1 560 | 英文 37 / 156 | 否 |
+| 每个站点一句话 | 350 | 35 / 35 | 否 |
+
+最后一个就是数字所推荐的那个，而不是因为类别读起来更好：其他三个要么付一千五百条仍然失败，要么分文不付却改动了一个被告知要让消费者读取的字段里的值，要么分文不付却让不懂英文的人读不懂这一列。
+
+第三种情形是单元格而不是行，这就是它需要单独条款的原因。网络表的 **Link** 列读作 `tostring(mbps) .. " Mbit/s"`，而 `100000 Mbit/s` 是十三个字符画进十二格——因此从 100 Gbit/s 起，无论该列被给到多宽，读者只能看到 `100000 Mbit…`，一个没有单位的量。它现在与旁边的收发列一样走 `format:bits_per_second`，一块真实网卡报告的所有速率中最长的输出是 `400 Gbit/s`，十格。速率*不*像接口名或 PCI 地址那样有界——sysfs 报告的是驱动写入的任何整数——所以十格是一组实测集合的最坏情况，而不是内核上限。
+
+代价经过测量而非臆断：把保证从 8 提高到 15 的代价是表里的一列 `mac`，且只在最窄的尺寸下；在套件演练的每个宽度上，列集合都不变。
+
+guard 从产品三个层面约束这条规则，因为它们各自都曾是这条规则因错误理由被满足过一次的方式。它构建**每页一个视图模型**——`ViewModel` 只为页面放置的控件填充行，所以一次构建为四张表作答，对其余十五张什么也不说。它拒绝在任何截断发生*之前*行就完全相同的 fixture，因为那里的碰撞是 fixture 自己的。它检查自己的 fixture 仍包含一个用例：把核心数缩减到 64——在每个看起来像是改进的方面都更小——`cpu0` 到 `cpu63` 都在五个字符以内，没有任何碰撞，文件就会对一组永远不可能相同的名称报告“无两者相同”。
+
+有一张表被允许碰撞，条目完整说明了原因：`connection_table` 把源端口的末几位画在两个端点列都被截掉的末尾。
+
+面板的标题是第四个，而且是每个控件都坐在里面的那一个。它画在顶部边框里，被截断到比框架短六格，它是面板上唯一说明你在看哪个控件的东西——因此问题是与表格行相同的问题，并且被刻意以弱方式回答：同一页上没有两个标题可以画得相同，没有标题的面板绝不能什么都不画。在十份目录、十个页面和九种终端尺寸上测量：58 个不同标题，分布在产品实际产出的 21 种框架宽度上，从 19 到 240 格，1 218 次渲染，其中 42 次被截断，而每次截断仍然点明了它的面板——`CPU utilization` 在 19 格框架上变成 `CPU utilizat…`——无碰撞，无空标题。产品中最长的标题是 27 格，法语的 `Processus · CPU décroissant`，这一点值得知道，因为进程表的标题携带着它的**排序状态**：标题不是固定字符串，所以这条规则读的是产品渲染出的标题，而不是旁边写下的一份清单。这条规则唯一拒绝说的是标题是*完整*的；这里的截断是被声明且有辨识度的，而一条要求完整性的规则，会是在要求一个布局求解器不会去构建的框架。
+
+底栏右侧是第三个，而且是另外两条规则看不见的那一个，因为它们任何一次渲染传给它的都是空状态——所以消息出现的那一行，从未在有消息的情况下被画过。底栏为消息预留了空间：有消息时它占这一行的 58%，窄行上占 72%，没有消息时占 38%。然后它构建的字符串形如 `▦ 3/5 · Filter: node · root · Show the column before moving it`——而它从前端截断，所以各部件的顺序就是优先级，而这个顺序恰好与底栏为自己声明的顺序相反。消息是额外空间存在的原因，也是额外空间首先花掉的东西：当过滤器、权限标记、布局计数和数据年龄同时存在时，从 40 到 70 列，法语里消息从这一行完全消失；西班牙语和葡萄牙语 40 到 68 列，繁体中文 40 到 54 列；而一条*错误*在四种目录中，一出现过滤器就在 40 列消失了。现在消息排在最前，权限标记在它之前，布局计数和过滤器跟在后面并被截掉——分别为 2 708 和 2 815 次渲染，这就是代价，且经过测量而非臆定；过滤器是较便宜的那一半，因为进程表已经在自己的面板里打印了它。两条条款稳住这个取舍：行上没有消息时，状态标记完全不移动；错误永不丢失标记它的 `!`——这是一条变异测试发现缺失、而非阅读发现的规则——去掉标记能省两格，所以上面的消息规则不会反对，错误就变成了一行看起来和其他行一样的内容。
+
+它背后还有第二块渲染表面，直到最近都没有规则覆盖。上面每条不变量都经由页面渲染驱动，但浮层打开时你读的不是它背后的页面：浮层由 `draw_overlay` 用十四个导出的行构建器绘制，它是另一条代码路径，有自己丢失内容的方式。它换行而不截断——能按空格换就按空格，不能就把不间断的记号拆到两行——省略号为空，所以它的形态上没有任何东西报告过损失。现在有两条规则约束它，按浮层画进自己底边框的滚动指示划分：**不可滚动的行被完整画出**，以及**可滚动的行在某个偏移处可达**。在十份目录中每个构建器的最宽行、从 20 起的每个宽度上测量：8 002 次渲染无一丢失，4 973 次偏移走查每行可达。第二条规则才是对读者重要的那条，因为只显示第一页就停下的浮层，和没有更多内容的浮层看起来一模一样——这就是产品在边框里画 `n/m` 的原因，也是规则问可达性而不是问内容的原因。帮助浮层是 `tui.lua` 唯一不导出的构建器，所以它是这些规则够不到的那个浮层；它由按下 `?` 的 PTY 场景覆盖，并且如果它将来被导出而这条说明没有同步更新，一个守卫条款会令其失败。
+
+第四个覆盖计数犯了同样的错误，而它是其中最宽的一个。两个宽度 guard 都传了一张没有采集器条目的 `capabilities` 表，于是读取它的两个行构建器——`collector_table` 和 `inspector_table`，也就是仅有的两张带 Reason 单元格的表——完全没有行，什么也无法失败。另一份 fixture 中又有五张表是空的（没有核心、没有 GPU、没有地址、没有设备清单），而宽度清扫和行规则构建自两个不同的快照，所以报告“没有错误数字”的那一行，只是关于十六张表中五张的陈述。两份 fixture 现在构建自产品自己的清单，每个 guard 的两半构建相同的极端情况，并且各自点名产品声明为未提供数据的表——因为十二张的下限，能通过一棵已悄悄停止检查 Reason 列的树，两张表恰好就是它写出时的余量。干净通过的表连同原因一起记录在案：七张新覆盖的表上无错误数字、无未记录的碰撞。它们真正给出的，是上面 Reason 决策正在等待的那项测量，取自产品现状：在 1 560 个（代码、目录）对中，**7 个装进该列保证的十格**，409 个装进 inspector 表的 26 格，493 个装进采集器表的 28 格；把两张表的截断归因到各列、跨 161 个宽度和十份目录，`collector_table.reason` 为 30 330、`inspector_table.reason` 为 4 830、`collector_table.source` 为 4 300——**两个 Reason 列占所有带它们的表中每一个被截单元格的 97%。** 完整显示它们需要 21 格装一个 IPv4 端点、47 格装 IPv6——`socket_tables.lua` 以 RFC 5952 形式格式化地址，最长未压缩地址是八组。用四十七格区分到同一服务的四条连接是一个代价，值不值得付，是关于这张表*是干什么用的*的问题。**期望的走向与规则相反**：记录在案的 fork 必须*仍然*碰撞，因此将来某天有人加宽这些列时，本文件会变红并要求重写该条目，而不是在一个已不再有该条目所述缺陷的产品上悄悄通过。
+
+## 6. 按键绑定
+
+### 6.1 全局
+
+| 按键 | 当前行为 |
 | --- | --- |
-| `1`–`9`, `0` | Select one of the ten tabs directly (`0` is the tenth) |
-| `←` / `→` | Cycle to the previous/next tab; move widgets in layout edit mode |
-| `Tab` / `Shift+Tab` | Move widget focus forward/backward across **visible** widgets only |
-| `↑` / `↓` / `PgUp` / `PgDn` | Scroll the focused panel when its content exceeds its rectangle |
-| `Space` | Pause/resume collector scheduling |
-| `f` | Cycle through nine refresh rates |
-| `T` | Cycle the colour theme at runtime |
-| `L` | Cycle the interface language at runtime |
-| `v` | Show/hide virtual block devices and pseudo filesystems |
-| `e` | Enter/leave layout edit mode (`Esc` also leaves) |
-| `r` / `Ctrl+L` | Make collectors required by actual placements immediately due, and force one complete renderer redraw |
-| `?` / `F1` | Open the help overlay |
-| `h` | Show the latest sensor readings and limits on Linux, macOS, or Windows |
-| `s` | Open the SMART/NVMe device selector on Linux |
-| `b` | Run the RAM-bandwidth Inspector on Linux |
-| `d` | Run the sshd Inspector on Linux |
-| `q` | Quit the main UI; close the current overlay/selector |
-| `Ctrl+C` | Always quit from the main UI, search, signal menu, or any overlay |
+| `1`–`9`, `0` | 直接选择十个标签页之一（`0` 是第十个） |
+| `←` / `→` | 循环切换到前一个/后一个标签页；在布局编辑模式下移动控件 |
+| `Tab` / `Shift+Tab` | 仅在**可见**控件之间向前/向后移动控件焦点 |
+| `↑` / `↓` / `PgUp` / `PgDn` | 当聚焦面板的内容超出其矩形区域时滚动该面板 |
+| `Space` | 暂停/恢复采集器调度 |
+| `f` | 在九档更新速率之间循环 |
+| `T` | 运行时循环切换颜色主题 |
+| `L` | 运行时循环切换界面语言 |
+| `v` | 显示/隐藏虚拟块设备与伪文件系统 |
+| `e` | 进入/离开布局编辑模式（`Esc` 也可离开） |
+| `m` | 在布局编辑模式下：打开放置目标列表——指明聚焦的控件放到哪里、放在哪一侧 |
+| `w` | 在布局编辑模式下：打开工作区列表——用 `Enter` 切换到已保存的布局，把当前布局以输入的名称保存，`r` 重命名选中的工作区，`x` 删除 |
+| `r` / `Ctrl+L` | 让实际放置所需的采集器立即到期，并强制渲染器完整重绘一次 |
+| `?` / `F1` | 打开帮助浮层 |
+| `h` | 在 Linux、macOS 或 Windows 上显示最新的传感器读数与上限 |
+| `s` | 在 Linux 上打开 SMART/NVMe 设备选择器 |
+| `b` | 在 Linux 上运行 RAM 带宽 inspector |
+| `d` | 在 Linux 上运行 sshd inspector |
+| `q` | 退出主界面；关闭当前浮层/选择器 |
+| `Ctrl+C` | 无论位于主界面、搜索、信号菜单还是任何浮层，一律退出 |
 
-### 6.2 Processes Page
+### 6.2 进程页
 
-| Key | Current behavior |
+| 按键 | 当前行为 |
 | --- | --- |
-| `↑` / `↓` | Move process selection |
-| `PgUp` / `PgDn` | Move selection one visible page |
-| `Home` / `End` | Jump to the first or last row |
-| `/` | Edit a case-insensitive search over PID, name, command, user, and state |
-| `←` `→` `Home` `End` | Move the cursor inside the query while editing |
-| `Ctrl+W` / `Ctrl+U` / `Ctrl+K` | Delete the previous word / to the start / to the end |
-| `Enter` / `Esc` | Confirm/cancel active search editing; `Esc` clears an already confirmed search |
-| `o` | Cycle the sort column: CPU, memory, PID, name, CPU time, threads, virtual memory, state, user, I/O read, I/O write |
-| `O` | Reverse the current sort direction |
-| `t` | Toggle the PPID tree; search retains ancestors of direct matches |
-| `p` | Toggle full executable paths against bare command names |
-| `Enter` | Open the selected-process detail overlay when not editing search |
-| `k` | Open the signal menu for the selected process: `SIGTERM`, `SIGKILL`, `SIGSTOP`, `SIGCONT`. `Enter` sends, any other key cancels |
+| `↑` / `↓` | 移动进程选择 |
+| `PgUp` / `PgDn` | 将选择移动一个可见页面 |
+| `Home` / `End` | 跳到第一行或最后一行 |
+| `/` | 编辑对 PID、名称、命令、用户和状态的不区分大小写搜索 |
+| `←` `→` `Home` `End` | 编辑时在查询串内移动光标 |
+| `Ctrl+W` / `Ctrl+U` / `Ctrl+K` | 删除前一个词 / 删除到开头 / 删除到结尾 |
+| `Enter` / `Esc` | 确认/取消进行中的搜索编辑；对已确认的搜索再按 `Esc` 会将其清除 |
+| `o` | 循环切换排序列：CPU、内存、PID、名称、CPU 时间、线程数、虚拟内存、状态、用户、I/O 读取、I/O 写入 |
+| `O` | 反转当前排序方向 |
+| `t` | 切换 PPID 树；搜索保留直接命中项的祖先 |
+| `p` | 在完整可执行路径与裸命令名之间切换 |
+| `C` | 打开列编辑器：`Space` 显示或隐藏选中的列，`←`/`→` 将其移动一位。PID 和 Command 列不能隐藏。该选择随布局保存，并在下次启动时生效 |
+| `Queued` 列 | 默认关闭；用 `C` 打开。每秒显示每个可见进程为等待 CPU 花了多长时间——正是这个数字把饥饿的进程与忙碌的进程区分开，仅凭 CPU 份额做不到这一点 |
+| `Enter` | 不在编辑搜索时，打开选中进程的详情浮层 |
+| `k` | 打开选中进程的信号菜单：`SIGTERM`、`SIGKILL`、`SIGSTOP`、`SIGCONT`。`Enter` 发送，其他任意键取消 |
+| `i` | 在进程详情浮层内打开线程选择器。这是一次下钻而非快捷键：在选中的线程上按 `Enter`，打开该线程自己的视图 |
 
-### 6.2.1 Search Syntax
+### 6.2.1 搜索语法
 
-Whitespace separates terms and every term must match, so adding a word can only
-narrow the result.
+空白分隔词条，且每个词条都必须匹配，因此多加一个词只会让结果更窄。
 
-| Term | Meaning |
+| 词条 | 含义 |
 | --- | --- |
-| `root` | Substring, matched against PID, name, command, user and state |
-| `user:root` | Restrict the term to one field: `pid`, `ppid`, `user`, `state`, `name`, `cmd` |
-| `!kernel` | Negate the term |
-| `/^systemd%-/` | A **Lua pattern**, not a PCRE regular expression: `%` escapes, not `\` |
-| `user:root state:D` | Several terms, all of which must match |
+| `root` | 子串，与 PID、名称、命令、用户和状态匹配 |
+| `user:root` | 把词条限定到单个字段：`pid`、`ppid`、`user`、`state`、`name`、`cmd` |
+| `!kernel` | 对词条取反 |
+| `/^systemd%-/` | 是 **Lua pattern** 而非 PCRE 正则表达式：转义用 `%` 而不是 `\` |
+| `user:root state:D` | 多个词条，全部都必须匹配 |
 
-At most sixteen terms are honoured. A malformed pattern is demoted to a literal
-substring rather than raised, so a half-typed expression narrows the table
-instead of interrupting the render loop. Matching literal substrings are
-highlighted in the PID, user and command columns; negated and pattern terms are
-not highlighted because they have no single literal to point at.
+最多接受十六个词条。格式错误的 pattern 会被降级为字面子串而不是抛出错误，因此打到一半的表达式只会让表格变窄，而不会打断渲染循环。命中的字面子串会在 PID、用户和命令列中高亮；取反与 pattern 词条不高亮，因为它们没有一个可以指认的字面量。
 
-Process names come from `/proc/<pid>/cmdline`, so they are not limited to the
-fifteen characters the kernel keeps in `comm`. `/proc/<pid>/io` counters are
-cumulative since exec and are labelled as totals, not rates, because the
-collector samples them on demand rather than continuously.
+进程名来自 `/proc/<pid>/cmdline`，因此不受内核在 `comm` 中保留的十五个字符的限制。`/proc/<pid>/io` 计数器自 exec 起累计，并标注为总量而非速率，因为采集器按需对其采样，而不是持续采样。
 
-The signal menu re-verifies the target's start time while holding a pidfd, so a
-recycled PID is never signalled.
+信号菜单在持有 pidfd 期间重新校验目标进程的启动时间，因此被回收复用的 PID 不会收到信号。
 
-### 6.3 Overlays and Mouse
+### 6.3 浮层与鼠标
 
-- Ordinary overlay: scroll with `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End`, or the
-  wheel; close with `Esc`, `Enter`, `q`, `?`, or `F1`. The page behind an
-  overlay is dimmed, long lines wrap to the overlay width, and a scrollbar plus
-  a `shown/total` counter appear whenever the content does not fit.
-- SMART selector: the same navigation keys change devices; `Enter` inspects,
-  and `Esc`/`q` closes.
-- Mouse: click visible top tabs, the top-right refresh control, any footer
-  shortcut, a process table row to select it, or a process column header to
-  sort by it (clicking the active column reverses it). The wheel scrolls the
-  process viewport three rows at a time and scrolls focused panels and
-  overlays. Split dragging and widget drag-and-drop are unsupported.
+- 普通浮层：用 `↑`/`↓`、`PgUp`/`PgDn`、`Home`/`End` 或滚轮滚动；用 `Esc`、`Enter`、`q`、`?` 或 `F1` 关闭。浮层背后的页面会被调暗，长行换行到浮层宽度，内容放不下时会出现滚动条和 `shown/total` 计数。
+- SMART 选择器：同样的导航键切换设备；`Enter` 查看，`Esc`/`q` 关闭。
+- 线程下钻：在进程详情浮层内按 `i` 打开的选择器覆盖该进程全部已扫描的线程，而不只是浮层表格显示的最忙的十六个。`↑`/`↓`、`PgUp`/`PgDn`、`Home`/`End` 移动一个按 TID 而不是按行持有的光标，因此改变了名次的线程不会让光标查看到另一个线程。`Enter` 打开该线程自己的 `status`、`cgroup`、`io`、`schedstat` 和 `sched` 文件；该视图给出线程组名称，显示按线程的上下文切换和 I/O，说明线程位于进程的控制组还是另一个控制组（两者不同时打印两个路径），并报告调度策略、该线程排队等待 CPU 的时长以及收到的时间片数量——两者都是自该线程上次被读取以来的区间上的速率。第一次读数不画速率，因为没有可作除数的区间，而一个零会与“从未排队”无从区分。同一区间还承载上下文切换速率，拆分为自愿与非自愿两半，旁边给出全部切换中被抢占的占比，因为一个不断被内核夺走 CPU 的线程和一个阻塞在互斥锁上的线程，以同样可见的方式让出 CPU，需要的修复却相反。区间内一次也没有切换的线程显示零速率而不显示占比，因为对空无一物取比例，等于声称什么都没有被抢占。浮层最后以所属进程的 PSS 和 USS 收尾，标题把它们说明为进程的内存而不是线程的：线程没有自己的地址空间，`/proc/<pid>/task/<tid>/smaps` 只是进程自身 `smaps` 的第二个名字，读它只会以错误的名义重印这些数字。`Esc` 返回选择器，再返回进程浮层；`q` 一次关闭整条链路。按线程的读取发生在选中之后的下一个 tick，浮层在此之前会如实说明，而不是画出一页破折号。
+- 运行队列等待：只对视口正在显示的行加上选中的进程读取，因此开销跟随人能看到的范围，而不是机器上有多少进程。刚滚动进视野的行、或第一次读数没有可作除数区间的行，画空白而不是零：那里的零是在声称该进程从未等待过 CPU，而这正是这个数字在没有实测时不能说出口的一件事。
+- 列编辑器：`↑`/`↓` 把光标移过每一列，无论是否正在绘制——不在屏幕上的列，恰是用户无法重新打开的列。`Space` 显示或隐藏，`←`/`→` 把列左移或右移一位，不允许隐藏的列会在自己的行上说明这一点，而不是给出一个注定被拒绝的开关。被隐藏的列回到它在目录（catalogue）中的位置，且不会打乱用户围绕它建立的顺序。该选择随布局保存，编辑器也会说明这一点；进程视图的其余部分——排序键、查询、路径开关——仍是会话状态，因为它们属于当下正在问的问题，而列集合是表格本身的形状。
+- 鼠标：点击可见的顶部标签页、右上角的更新速率控件、任意底栏快捷键、进程表某行以选中它，或进程列表头以按该列排序（点击活动列会反转方向）。滚轮每次滚动进程视口三行，滚动聚焦的面板和浮层，并在选择器打开时移动线程光标。不支持拆分拖拽与控件拖放。
 
-Vim-style movement with `h j k l`, `:`, `Ctrl+K`, a command palette, global
-search, and key rebinding are not implemented.
+`h j k l` 的 Vim 式移动、`:`、`Ctrl+K`、命令面板、全局搜索和按键重绑定均未实现。
 
-## 7. Data Representation and Accessibility
+## 7. 数据表示与可访问性
 
-- Metric widgets use timestamped history. A panel of three rows or more renders a multi-row block column chart with min/max axis labels; shorter panels keep the familiar one-line sparkline. Each column always represents one second and aggregates samples in that interval, up to 240 seconds. Chart and sparkline share one bucketing routine, so the two always agree column for column. ASCII is used when Unicode is unavailable. There is currently no Braille, zoomable time axis, legend, or multi-series interaction.
-- Colour and symbol carry two independent signals. Colour encodes severity against per-metric thresholds (and inverted thresholds for quantities where low is bad, such as battery charge); the leading symbol encodes data quality. A metric whose series holds no finite sample at all says so in words instead of drawing an axis over an empty plot.
-- Every label/value alignment is computed from measured display width. Nothing pads by byte length, and no translated string carries its own column layout.
-- Nonnumeric samples are gap points, never zero-filled. Collectors stop periodic sampling while paused, and the header shows PAUSED.
-- The renderer measures terminal cells rather than Lua byte length, including CJK, combining characters, emoji, and variation selectors. Differences in terminal `wcwidth` tables can still cause isolated alignment errors.
-- `NO_COLOR` and `--no-color` are supported. There is no `--no-animation`, RTL mirroring, pseudolocale, or stable-language screenshot regression matrix yet.
+- 指标控件使用带时间戳的历史。三行及以上的面板渲染带 min/max 轴标签的多行块状柱状图；更矮的面板保留熟悉的一行 sparkline。每根柱始终代表一秒，聚合该区间内的采样，最长 240 秒。柱状图与 sparkline 共用同一个分桶例程，因此两者逐柱一致。Unicode 不可用时使用 ASCII。目前没有盲文点阵、可缩放的时间轴、图例或多序列交互。
+- 颜色和符号承载两个相互独立的信号。颜色按每指标的阈值编码严重程度（对“低即坏”的量使用反转阈值，如电池电量）；行首符号编码数据质量。序列中完全没有有限样本的指标，会用文字说明这一点，而不是在空图上画一根轴。
+- 所有标签/值的对齐都按实测显示宽度计算。没有任何地方按字节长度填充，也没有任何翻译字符串自带列布局。
+- 非数值样本是缺口点，从不以零填充。暂停期间采集器停止周期采样，顶栏显示 PAUSED。
+- 渲染器按终端单元格而非 Lua 字节长度计量，覆盖 CJK、组合字符、emoji 和变体选择符。终端 `wcwidth` 表之间的差异仍可能造成个别的对齐错误。
+- 支持 `NO_COLOR` 和 `--no-color`。尚无 `--no-animation`、RTL 镜像、伪本地化（pseudolocale）或按稳定语言的截图回归矩阵。
 
-## 8. Current Validation and Future Acceptance
+## 8. 当前验证与未来验收
 
-`make test` runs 47 Lua unit/fixture test files and real PTY cases at `40×10`,
-`60×20`, `80×24/25`, `80×50`, `160×24`, `200×22`, and `180×45`. It checks
-Chinese rendering, the canonical Lua-blue default, real mouse clicks on the
-top-right refresh control, tab/process/help/pause/refresh/layout paths,
-alternate-screen restoration, layout schema v2 writes, and mode `0600`. The
-interactive case drives more than thirty bindings in one session: layout edit
-and undo/redo, a live resize, search entry and cancellation, sort cycling and
-reversal, the tree and full-path toggles, keyboard paging and Home/End, the
-detail overlay, the signal menu opened and cancelled, the theme cycle, the
-virtual-device toggle, and the help overlay. Each scripted input declares the
-markers that must already be on screen before it is sent, so the script can be
-reordered without the harness waiting on an overlay that was never opened.
+`make test` 运行 119 个 Lua 单元/夹具测试文件，以及在 `40×10`、`60×20`、`80×24/25`、`80×50`、`160×24`、`200×22` 和 `180×45` 尺寸下的真实 PTY 用例。它检查中文渲染、默认的 Lua Blue 主题、对右上角更新速率控件的真实鼠标点击、标签页/进程/帮助/暂停/刷新/布局路径、备用屏幕恢复、布局 schema 写入以及 `0600` 模式。交互用例在单个会话中驱动三十多个按键绑定：布局编辑与撤销/重做、一次实时调整大小、搜索的输入与取消、排序的循环与反转、树形和完整路径开关、键盘翻页和 Home/End、详情浮层、信号菜单的打开与取消、主题循环、虚拟设备开关和帮助浮层。每条脚本化输入都声明了发送前屏幕上必须已经出现的标记，因此脚本可以重排，测试装置不会去等待一个从未打开的浮层。
 
-Every one of the ten pages is asserted as the final frame of an individual
-`180×45` case, with cell-by-cell complete-render checks and page-specific
-titles, so a later clear screen cannot hide an intermediate stale frame. The
-final large case pauses reads to fill the PTY output queue and confirms that
-the entire bottom row is delivered. Additional PTY profiles assert truecolor,
-256-color, 16-color, and colorless ASCII output and cover Water Light, High
-Contrast, and Colorblind themes. The responsive solver, layout tree, chart,
-key/value, bar and segment widgets, table column policy, the process query
-grammar, and the system and power-supply collectors all have pure-Lua unit
-tests; the same suite also runs under Lua 5.4.
+十个页面中的每一个都作为独立 `180×45` 用例的最终帧被断言，带逐单元格的完整渲染检查和页面专属标题，因此之后的清屏无法掩盖中间的过期帧。最后一个大型用例暂停读取以填满 PTY 输出队列，并确认整个底行都被送达。额外的 PTY 配置断言 truecolor、256 色、16 色和无彩色 ASCII 输出，并覆盖 Water Light、High Contrast 和 Colorblind 主题。响应式求解器、布局树、图表、键/值、条形和分段控件、表格列策略、进程查询语法以及系统和电源采集器都有纯 Lua 单元测试；同一套件也在 Lua 5.4 下运行。
 
-One test is deliberately not hermetic. `test_live_consistency.lua` cross-checks
-the assembled collector view against procfs on the machine running the tests:
-the memory figures and the stacked composition against `/proc/meminfo`, the
-block-device set against `/proc/diskstats`, the interface set and its monotonic
-counters against `/proc/net/dev`, and uptime, hostname, boot time and descriptor
-usage against their own files. Fixtures prove the parsers; this proves the
-assembled view still corresponds to the kernel's numbers. It reads only procfs,
-needs no external command and no native module, and skips whatever a given
-kernel does not expose rather than failing.
+有一个测试刻意不做隔离。`test_live_consistency.lua` 在运行测试的机器上把组装后的采集器视图与 procfs 交叉核对：内存数字和堆叠组成对照 `/proc/meminfo`，块设备集合对照 `/proc/diskstats`，接口集合及其单调计数器对照 `/proc/net/dev`，运行时间、主机名、启动时间和描述符用量对照各自的文件。fixture 证明的是解析器；这个测试证明的是组装后的视图仍与内核的数字相符。它只读取 procfs，不需要外部命令也不需要原生模块，遇到给定内核未暴露的内容会跳过而不是失败。
 
-`make test-all` additionally builds both luainstaller artifact forms and runs
-the whole PTY matrix against the onedir and onefile executables, plus an
-isolated LuaRocks installation whose CLI output is checked against the snapshot
-and agent JSON contracts.
+`make test-all` 额外构建两种 luainstaller 产物形态，并对 onedir 和 onefile 可执行文件运行整个 PTY 矩阵，外加一个隔离的 LuaRocks 安装，其 CLI 输出会对照快照与 agent JSON 契约检查。
 
-All ten shipped catalogs now translate every message, and the i18n test asserts
-`missing_messages == 0` for each of them, so a UI string added without a
-translation fails the build rather than reaching a user as English mid-sentence.
-The fallback chain is still covered, against a deliberately partial catalog
-constructed in the test.
+全部十份随附目录（catalogue）现在翻译了每一条消息，i18n 测试对每一份都断言 `missing_messages == 0`，因此缺少翻译的 UI 字符串会让构建失败，而不是以半句英文的样子到达用户。回退链同样有覆盖，对照的是测试中刻意构造的不完整目录。
 
-Release evidence is still missing for continuous resize, tmux/SSH, more extreme
-dimensions, screenshots for each stable language, pseudolocale/RTL, broad
-terminal compatibility, layout recovery after crashes, and unified resource
-navigation on detail pages.
+以下方面仍缺少发布证据：持续调整大小、tmux/SSH、更极端的尺寸、每种稳定语言的截图、伪本地化/RTL、广泛的终端兼容性、崩溃后的布局恢复，以及详情页面上的统一资源导航。

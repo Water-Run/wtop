@@ -1,117 +1,108 @@
-# wtop Implementation Plan and Current Status
+# wtop 实现计划与当前状态
 
-## 1. Positioning
+## 1. 定位
 
-wtop (WaterRun's top) is a modern TUI performance workbench. Its goal is to put
-“what is happening now,” “why is it slow,” “which process or device is involved,”
-and “what can be done safely” into one responsive interface. Version 0.1.0 is
-Linux-only; the next product direction targets native Linux, macOS, and Windows
-monitoring. Windows requires a 32-bit x86 build targeting XP compatibility,
-with real-host validation on Windows Server 2008 and classic consoles without
-VT/ANSI support. Source-development builds for macOS and Windows x86 now run
-the shared TUI and core collectors; the tagged release and LuaRocks package
-remain Linux-only. See [Cross-Platform Product Requirements](CROSS_PLATFORM.md)
-for the implementation evidence and remaining validation limits.
+wtop(WaterRun's top)是一个现代化的 TUI 性能工作台。它的目标是把“现在正在发生什么”“为什么会慢”“涉及哪个进程或设备”以及“可以安全地做什么”放进同一个响应式界面中。0.1.0 版本仅支持 Linux;下一阶段的产品方向是面向原生 Linux、macOS 和 Windows 的监控。Windows 需要一个面向 XP 兼容的 32 位 x86 构建，并在 Windows Server 2008 以及不支持 VT/ANSI 的经典控制台上进行真机验证。macOS 和 Windows x86 的源码开发构建现在可以运行共享的 TUI 和核心采集器；带标签的正式版本和 LuaRocks 包仍然仅支持 Linux。实现证据与剩余的验证限制见 [跨平台产品需求](CROSS_PLATFORM.md)。
 
-The current version is `0.1.0`, the first tagged release. The first vertical slice—CPU/memory/PSI → Snapshot → ViewModel → responsive TUI → luainstaller—is operational. Current work focuses on features, hardware backends, and release evidence instead of presenting design documents as implemented behavior. CPU/GPU identity and telemetry are becoming substantially richer, but the project does not claim parity with CPU-Z, GPU-Z, AIDA64, or HWiNFO.
+当前版本是 `0.1.0`，即第一个带标签的版本。第一条纵向切片——CPU/内存/PSI → Snapshot → ViewModel → 响应式 TUI → luainstaller——已经可用。当前工作聚焦于功能、硬件后端和发布证据，而不是把设计文档当作已实现的行为来展示。CPU/GPU 的识别信息与遥测正在变得相当丰富，但本项目并不声称与 CPU-Z、GPU-Z、AIDA64 或 HWiNFO 达到同等水平。
 
-## 2. Status Definitions
+## 2. 状态定义
 
-- **Implemented**: runtime code and automated tests exist, and the feature executes on the current development host.
-- **Partially implemented**: the basic path works, but UI, provider, permission, or platform coverage is incomplete.
-- **Planned**: described by design, but not delivered by the current runtime.
+- **已实现(Implemented)**:运行时代码和自动化测试都存在，且该功能能在当前开发主机上运行。
+- **部分实现(Partially implemented)**:基本路径可用，但 UI、提供方、权限或平台覆盖尚不完整。
+- **已规划(Planned)**:设计中有描述，但当前运行时尚未交付。
 
-“Implemented” does not imply validation across every distribution, kernel, terminal, or physical hardware configuration.
+“已实现”并不意味着已在每一种发行版、内核、终端或物理硬件配置上完成验证。
 
-## 3. Original-Requirement Mapping
+## 3. 原始需求映射
 
-| Original requirement | Current status | Next-stage gap |
+| 原始需求 | 当前状态 | 下一阶段差距 |
 | --- | --- | --- |
-| Attractive modern TUI | Custom cell grid/diff, five runtime-switchable themes, colour fallback, responsive pages, multi-row charts, per-core bar arrays, stacked composition bars, severity colouring, per-cell table styling with in-cell bars, and dimmed scrolling overlays are implemented | Braille charts, zoomable time axis, broader terminal matrix |
-| Different window aspect ratios | tiny, narrow-tall, wide-short, wide-tall, and multiple PTY dimensions are covered | Continuous resize, tmux/SSH, more extreme dimensions |
-| Customizable layout | Fixed widgets can move in four directions, adjust split ratios, undo/redo, and persist through schema v2 | Add/remove/replace widgets, drag-and-drop, import/export, recovery/backup |
-| Multiple tabs | Ten fixed tabs—Overview, Processes, Compute, Memory, Storage & I/O, Network, GPU, Workloads, System, Insights—work | Add/remove/rename/reorder tabs and multiple workspaces |
-| i18n | Safe YAML, built-in plural rules, formatter, generated registry, per-key fallback, bounded XDG user-catalog loading, and display-width alignment throughout are implemented. All ten shipped catalogs translate every message and a test enforces it; the language can be switched at runtime with `L`; help layout is structured data rather than pre-padded translation strings. Common state/quality codes, sensor-source reasons, collector/inspector failure reasons, and user-catalog diagnostics have display translations, with a pseudolocale layout test over the shipped catalogs | RTL |
-| Stronger performance monitoring | CPU usage and identity/topology/cache, memory with full composition and paging counters, PSI, block devices with model/size/medium/scheduler, mounts with inode usage, network interfaces with IPv4/IPv6 addresses, sockets, processes with user names and TIME+/VIRT/NI/threads, CPUFreq, hwmon, powercap, cgroup v2, DRM/sysfs GPU, host/kernel/firmware identity, and power supplies are implemented | NUMA, full route tables, systemd/container semantics, threads/PSS, cross-resource links |
-| Deep inspection | Selectable SMART/NVMe, experimental `perf stat` RAM PMU sampling, and sshd Inspectors work on Linux; the sensor reading/limit overlay uses the shared snapshot on all three platforms | Unified resource navigation, complete session/event providers, PMU platform mapping and validation |
-| GPU | DRM devices, PCI IDs/link metadata, AMD sysfs/DPM, Intel i915/xe frequencies, DRM fdinfo utilization/process tables, hwmon temperature/power joins, and a dynamically loaded NVML provider (validated on NVIDIA GB10) are implemented; Windows uses SetupAPI/DXGI identity with PDH GPU counters and macOS uses IOAccelerator statistics with IOReport clock residency | Client/region drill-down, AMD SMI, Level Zero, MIG/tile, per-process GPU usage on macOS |
-| Performance release/actions | A confirmed signal menu exposes `SIGTERM`, `SIGKILL`, `SIGSTOP` and `SIGCONT`, each with pidfd + start-time revalidation | renice, cgroup limits, and tuning protocols still need a product scope |
-| Cross-platform runtime | Linux release path remains; source-development macOS arm64 and Windows x86 backends provide CPU identity, utilization and time classes, memory composition, processes, disk I/O, mounts, network, sockets, system, GPU, CPU frequency, sensors, batteries, and workloads (Windows service hosts, macOS app coalitions); macOS adds per-block energy. TUI, Snapshot, Agent, and diagnose run on tested hosts; the Server 2008 legacy console is exercised through a console harness | XP runtime, Windows Processes-page CPU cost, Windows power and pressure sources, older macOS, performance baselines |
-| Lua | Business logic, collection, UI, configuration, and i18n use PUC Lua | Retain the Lua 5.4 syntax subset and Lua 5.5 release ABI |
-| LuaRocks installation | Linux-only `scm-1` rockspec, isolated installation, and installed-CLI smoke paths exist | Versioned release rock |
-| luainstaller | onedir/onefile, explicit locale inclusion, locked payload validation, and `make checksums` exist | Multi-architecture/libc, final-candidate rebuild, SBOM/signing |
+| 美观现代的 TUI | 已实现自定义单元格网格/差异渲染、五个运行时可切换主题、颜色回退、响应式页面、多行图表、每核心条形数组、堆叠构成条、按严重度着色、带单元内条形的逐单元格表格样式，以及暗化的滚动覆盖层 | Braille 图表、可缩放时间轴、更广泛的终端矩阵 |
+| 不同的窗口宽高比 | 已覆盖 tiny、窄高、宽矮、宽高以及多种 PTY 尺寸 | 连续缩放、tmux/SSH、更极端的尺寸 |
+| 可自定义布局 | 固定控件可沿四个方向移动、调整分割比例、添加/移除/替换控件、撤销/重做，并通过布局 schema v4 持久化；命名工作区保存整套排布，可保存、切换、重命名和删除 | 从树中拖拽、更完善的恢复能力 |
+| 多标签页 | 十个固定标签页——Overview、Processes、Compute、Memory、Storage & I/O、Network、GPU、Workloads、System、Insights——可用，多个命名工作区各保存一套排布 | 添加/移除/重排标签页 |
+| i18n | 已实现安全的 YAML、内置复数规则、格式化器、生成的注册表、按键回退、有边界的 XDG 用户目录加载，以及全程按显示宽度对齐。全部十个内置目录都翻译了每一条消息，且有测试强制约束；语言可在运行时用 `L` 切换；帮助布局是结构化数据，而不是预填充的翻译字符串。常见状态/质量码、传感器来源原因、采集器/检查器失败原因以及用户目录诊断都有显示层翻译，并对内置目录做了伪语言布局测试 | RTL |
+| 更强的性能监控 | 已实现 CPU 使用率与识别/拓扑/缓存、含完整构成与分页计数器的内存、PSI、带型号/容量/介质/调度器的块设备、含 inode 使用量的挂载点、带 IPv4/IPv6 地址的网络接口、套接字、带用户名和 TIME+/VIRT/NI/线程数的进程、每线程明细行与 PSS/USS、CPUFreq、hwmon、powercap、cgroup v2、DRM/sysfs GPU、主机/内核/固件识别以及电源 | NUMA、完整路由表、systemd/容器语义、跨资源链接 |
+| 深度检查 | 可选择的 SMART/NVMe、实验性的 `perf stat` 内存 PMU 采样、sshd 检查器在 Linux 上可用；传感器读数/上限覆盖层在三个平台上都使用共享的快照 | 统一资源导航、完整的会话/事件提供方、PMU 平台映射与验证 |
+| GPU | 已实现 DRM 设备、PCI ID/链路元数据、AMD sysfs/DPM、Intel i915/xe 频率、DRM fdinfo 利用率/进程表、hwmon 温度/功率关联，以及动态加载的 NVML 提供方(已在 NVIDIA GB10 上验证);Windows 使用 SetupAPI/DXGI 识别加 PDH GPU 计数器,macOS 使用 IOAccelerator 统计加 IOReport 时钟驻留 | 客户端/区域下钻、AMD SMI、Level Zero、MIG/tile、macOS 上的每进程 GPU 使用率 |
+| 性能释放/操作 | 确认式信号菜单提供 `SIGTERM`、`SIGKILL`、`SIGSTOP` 和 `SIGCONT`，每个都带 pidfd + 启动时间重验证 | renice、cgroup 限制和调优协议仍需明确产品范围 |
+| 跨平台运行时 | Linux 发布路径保留；源码开发用的 macOS arm64 和 Windows x86 后端提供 CPU 识别、利用率和时间类别、内存构成、进程、磁盘 I/O、挂载点、网络、套接字、系统、GPU、CPU 频率、传感器、电池和工作负载(Windows 服务宿主、macOS 应用 coalition);macOS 额外提供每块能耗和 powercap 分区。TUI、Snapshot、Agent 和 diagnose 在已测主机上运行；Server 2008 传统控制台通过控制台测试装置验证 | XP 运行时、Windows 进程页 CPU 开销、Windows 电源与压力来源、macOS 压力与每进程 GPU 使用率、更早的 macOS、性能基线 |
+| Lua | 业务逻辑、采集、UI、配置和 i18n 使用 PUC Lua | 保持 Lua 5.4 语法子集和 Lua 5.5 发布 ABI |
+| LuaRocks 安装 | 已有仅 Linux 的 `scm-1` rockspec、隔离安装以及已安装 CLI 的冒烟路径 | 带版本的发布 rock |
+| luainstaller | 已有 onedir/onefile、显式地区包含、锁定的载荷校验和 `make checksums` | 多架构/libc、最终候选重构建、SBOM/签名 |
 
-## 4. Current Implementation Baseline
+## 4. 当前实现基线
 
-### 4.1 Runtime
+### 4.1 运行时
 
-- PUC Lua 5.5.1 is the release toolchain; LuaJIT is unsupported.
-- Source avoids 5.5-only syntax, and pure-Lua unit tests also run under 5.4.
-- The repository's `wtop_native.so` uses C17 and the Lua C API. It currently handles:
-  - raw terminal, poll, resize/exit signals, and restoration;
-  - monotonic/realtime clocks;
-  - absolute-argv subprocesses, minimal environment, process-group cleanup, cancellation, timeout, and output limits;
-  - Linux filesystem helpers, atomic writes, pidfd identity signaling, `wcwidth`, UID queries, and `execve`;
-  - bounded nonblocking/no-follow regular-file reading: 4 MiB by default, explicit maximum 64 MiB, with final symlinks, devices, FIFOs, and oversized input rejected while regular-file-shaped procfs/sysfs pseudo-files remain supported.
-- There are currently no runtime `luv`, third-party `terminal.lua`, or other LuaRock dependencies.
-- Native builds default to `-O2 -g0`; the Makefile is also a module-target dependency, so build-rule changes trigger recompilation.
-- The Scheduler uses single-threaded deadline scheduling. Process/CPUFreq/hwmon floors are 1000 ms, socket/cgroup floors 2000 ms, mount floors 5000 ms, and GPU floors 500 ms, with failed-task backoff. Inactive pages use slower background intervals.
-- Resource-sensitive build/test entry points run a preflight guard that evaluates available memory, swap headroom, memory PSI, and load per CPU. Guarded Make validation targets are declared nonparallel; an unhealthy host is refused rather than adding pressure after an OOM event.
+- PUC Lua 5.5.1 是发布工具链；不支持 LuaJIT。
+- 源码避免使用 5.5 独有语法，纯 Lua 单元测试也会在 5.4 下运行。
+- 仓库中的 `wtop_native.so` 使用 C17 和 Lua C API。它目前负责:
+  - 原始终端、poll、resize/退出信号以及还原;
+  - 单调/实时时钟;
+  - 绝对路径 argv 子进程、最小化环境、进程组清理、取消、超时和输出限制;
+  - Linux 文件系统辅助、原子写入、pidfd 身份信号、`wcwidth`、UID 查询和 `execve`;
+  - 有边界的非阻塞/不跟随符号链接的常规文件读取：默认 4 MiB，显式上限 64 MiB，最终符号链接、设备、FIFO 和超大输入会被拒绝，而形似常规文件的 procfs/sysfs 伪文件仍然受支持。
+- 目前没有运行时 `luv`、第三方 `terminal.lua` 或其他 LuaRock 依赖。
+- 原生构建默认 `-O2 -g0`;Makefile 本身也是模块目标的依赖，因此构建规则变更会触发重编译。
+- 调度器使用单线程的截止期限调度。进程/CPUFreq/hwmon 的下限为 1000 ms，套接字/cgroup 下限 2000 ms，挂载点下限 5000 ms,GPU 下限 500 ms，并带失败任务退避。非活动页面使用更慢的后台间隔。
+- 资源敏感的构建/测试入口会先运行预检防护，评估可用内存、swap 余量、内存 PSI 和每 CPU 负载。受防护的 Make 验证目标被声明为非并行；不健康的主机会被拒绝，而不是在 OOM 事件后继续加压。
 
 ### 4.2 UI
 
-- Tabs: Overview, Processes, Compute, Memory, Storage & I/O, Network, GPU, Workloads, System, Insights.
-- Widgets: metric (with multi-row chart), sparkline, chart, table (per-cell colour and in-cell bars), key/value, bars, segments, text, panel, tab/status bar.
-- A virtual cell grid draws by display-column width; the diff renderer emits only changed runs.
-- Keyboard, basic mouse, bracketed-paste decoding, resize, and terminal-capability fallback are supported.
-- Current layout editing moves fixed widgets in four directions, adjusts split ratios, and stores up to 50 undo/redo steps per page. Widgets cannot be added, removed, or replaced.
-- Responsive default geometry selects the richest available form for the actual rectangle. Compact windows first switch axes/reflow, then retain the focused or higher-priority branch only when space is still insufficient. Standard uses up to two columns, wide-short up to four, and wide-tall up to three. Actual placement drives both ViewModel and collector visibility: hidden tables are not modeled, and collectors unneeded by any visible widget fall back to background intervals.
-- The process page provides a search language (field terms, negation, Lua patterns, combined with AND) with full line editing and match highlighting, eleven sort columns in both directions, a PPID tree, a full-path toggle, keyboard paging, click-to-select and click-to-sort, selected-item details, and a confirmed signal menu. It is still not a complete htop-style process browser: thread rows and a user-configurable column set are absent.
-- An elevated invocation is identified in status/diagnostic output. Direct `sudo wtop` and explicit `--sudo`/`--elevate` re-execution are supported without a resident root daemon.
+- 标签页：Overview、Processes、Compute、Memory、Storage & I/O、Network、GPU、Workloads、System、Insights。
+- 控件：指标(带多行图表)、迷你曲线、图表、表格(逐单元格颜色与单元内条形)、键/值、条形、分段、文本、面板、标签/状态栏。
+- 虚拟单元格网格按显示列宽绘制；差异渲染器只输出变化的区段。
+- 支持键盘、基础鼠标、括号粘贴解码、缩放和终端能力回退。
+- 当前的布局编辑支持沿四个方向移动固定控件、调整分割比例，每页最多存储 50 步撤销/重做。控件还可以从页面自身的面板中添加、移除和替换：`a` 和 `r` 会在页面已定义但布局未放置的控件上打开选择器，`d` 移除焦点控件。替换会保留被移除控件所占的槽位；当撤销或移除操作带走焦点控件时焦点会重新锚定；每个页面始终至少保留一个控件。
+- 响应式默认几何结构为实际矩形选择最丰富的可用形态。紧凑窗口先切换轴/重排，空间仍不足时只保留焦点分支或更高优先级分支。标准布局最多两列，宽矮最多四列，宽高最多三列。实际摆放同时驱动 ViewModel 和采集器的可见性：隐藏的表格不会被建模，任何可见控件都不需要的采集器会回退到后台间隔。
+- 进程页提供搜索语言(字段项、取反、Lua 模式和用 AND 组合的数值比较)，带完整行编辑和匹配高亮；十一个排序列支持双向；PPID 树；全路径开关；键盘翻页；点击选择和点击排序；选中项详情；以及确认式信号菜单。比较表达式使用排序词汇表——`cpu`、`mem`、`virt`、`threads`、以秒计的 `time`、`ioread`、`iowrite`——配合 `>`、`>=`、`<`、`<=` 和 `=`，字节大小支持 K/M/G/T 后缀。某个字段没有读数的进程在任何方向上都满足不了比较，因此未测量的进程永远不会被误认为零。不带运算符的裸词或数字保持旧的子串含义，现有查询不受影响。详情覆盖层列出所选进程的线程及其 PSS/USS 内存构成，`i` 会在它们之上打开选择器；随后所选线程从自己的文件中读取，于是它的线程组、每线程上下文切换、每线程 I/O 以及——这是任何进程级视图都看不到的情形——与进程自身不同的控制组，全部可见。位于命名空间中的进程报告它自己熟知的 id，因此容器的 init 在宿主机 pid 旁边显示为 pid 1。`C` 打开列编辑器：`Space` 显示或隐藏一列，`←`/`→` 将其移动一位，选择会随布局保存，因此下次会话打开时表格与上次离开时的状态一致。PID 和 Command 是被拒绝而不是被隐藏，因为没有它们一行就无法被操作或识别。它仍然不是一个完整的 htop 式进程浏览器：每线程视图没有 `smaps` 或 `sched` 转储。
+- 提权调用会在状态/诊断输出中标识。支持直接 `sudo wtop` 和显式的 `--sudo`/`--elevate` 重执行，无需常驻 root 守护进程。
 
-### 4.3 Data
+### 4.3 数据
 
-- CPU usage: `/proc/stat`, `/proc/loadavg`.
-- CPU identity: `/proc/cpuinfo` plus bounded CPU topology/cache sysfs for vendor/model, architecture fields, packages, physical cores, logical threads, online/present/isolated sets, and cache inventory. Per-core implementer/part, capacity, kernel core type, maximum frequency, and SMT width form explicit heterogeneous core-type groups across x86, ARM, RISC-V, and other kernel-exposed architectures; repeated shared-cache CPU lists are parsed once.
-- Memory: `/proc/meminfo`, `/proc/vmstat`.
-- Pressure: `/proc/pressure/{cpu,memory,io}`.
-- Disk: `/proc/diskstats` and block-size sysfs.
-- Network: `/proc/net/dev` and `/sys/class/net`.
-- Connections: `/proc/net/{tcp,tcp6,udp,udp6,unix}`. Bounded `/proc/<pid>/fd` owner scanning occurs only when the Network-page connection table has an actual placement.
-- Processes: `/proc/<pid>/stat` and status; the detail interface can read cmdline/io/cgroup. The default collector limit is 8192 PIDs and the TUI-model limit 2048 rows.
-- CPU frequency: cpufreq policy sysfs.
-- Sensors: `/sys/class/hwmon`, including temperatures, fans, voltage, current, power, energy, thresholds, alarms, and faults. Known kernel/hardware sentinel values are filtered instead of being presented as plausible physical measurements.
-- Power: powercap sysfs zone hierarchy, energy counters, direct power, and constraints. Energy deltas use monotonic timestamps and handle counter wrap/reset. CPU package/socket totals select one complete backend tree while retaining same-backend multi-socket roots; platform/`psys` selects one representative, and unknown or ambiguous roots remain unaggregated. Inaccessible energy files remain denied/unavailable rather than zero.
-- Mounts: `/proc/self/mountinfo` and `statvfs`. Network filesystems, autofs, FUSE/`fuse.*`, fuseblk, and virtiofs skip potentially blocking statvfs by default, retaining mountinfo metadata and marking partial/estimated. Other native calls share a 50 ms admission budget, but a call already in progress cannot be preempted.
-- Workloads: cgroup v2 files under `/sys/fs/cgroup`, to a default depth of 16 and at most 4096 nodes.
-- GPU: `/sys/class/drm/card*`/render nodes, PCI identity and bounded local `pci.ids` names, PCIe/runtime metadata, AMD busy/VRAM/DPM, Intel i915/xe frequency, and DRM client counters in `/proc/<pid>/fdinfo`. A clearly sourced fdinfo aggregate can supply utilization where a hardware busy counter is absent. The collector records hwmon association keys but does not reread sensors; the ViewModel joins temperature/power through hwmon `class`/`device_target` and provides a GPU process table. Interactive fdinfo scanning occurs only when that table is actually placed; snapshots still force the full scan.
+- CPU 使用率：`/proc/stat`、`/proc/loadavg`。
+- CPU 识别：`/proc/cpuinfo` 加上有边界的 CPU 拓扑/缓存 sysfs，用于厂商/型号、架构字段、封装、物理核心、逻辑线程、online/present/isolated 集合和缓存清单。每核心的 implementer/part、capacity、内核核心类型、最大频率和 SMT 宽度在 x86、ARM、RISC-V 和其他内核暴露的架构上构成显式的异构核心类型分组；重复的共享缓存 CPU 列表只解析一次。
+- 内存：`/proc/meminfo`、`/proc/vmstat`。
+- 压力：`/proc/pressure/{cpu,memory,io}`。
+- 磁盘:`/proc/diskstats` 和块大小 sysfs。
+- 网络:`/proc/net/dev` 和 `/sys/class/net`。
+- 连接:`/proc/net/{tcp,tcp6,udp,udp6,unix}`。有边界的 `/proc/<pid>/fd` 属主扫描只在网络页连接表有实际摆放时才进行。
+- 进程:`/proc/<pid>/stat` 和 status；详情接口可以读取 cmdline/io/cgroup。采集器默认上限为 8192 个 PID,TUI 模型上限为 2048 行。
+- CPU 频率：cpufreq 策略 sysfs。
+- 传感器:`/sys/class/hwmon`，包括温度、风扇、电压、电流、功率、能量、阈值、报警和故障。已知的内核/硬件哨兵值会被过滤，而不是作为貌似合理的物理测量值展示。
+- 电源：powercap sysfs 分区层级、能量计数器、直接功率和约束。能量增量使用单调时间戳并处理计数器回绕/复位。CPU 封装/插槽总数选择一个完整的后端树，同时保留同后端的多插槽根；platform/`psys` 选择一个代表，未知或有歧义的根保持不聚合。不可访问的能量文件保持拒绝/不可用，而不是零。
+- 挂载点:`/proc/self/mountinfo` 和 `statvfs`。网络文件系统、autofs、FUSE/`fuse.*`、fuseblk 和 virtiofs 默认跳过可能阻塞的 statvfs，保留 mountinfo 元数据并标记为部分/估算。其他原生调用共享 50 ms 的准入预算，但已在进行中的调用不可被抢占。
+- 工作负载:`/sys/fs/cgroup` 下的 cgroup v2 文件，默认深度 16，最多 4096 个节点。
+- GPU:`/sys/class/drm/card*`/渲染节点、PCI 识别和有边界的本地 `pci.ids` 名称、PCIe/运行时元数据、AMD busy/VRAM/DPM、Intel i915/xe 频率，以及 `/proc/<pid>/fdinfo` 中的 DRM 客户端计数器。来源明确的 fdinfo 聚合可以在缺少硬件 busy 计数器的地方提供利用率。采集器记录 hwmon 关联键但不重读传感器；ViewModel 通过 hwmon `class`/`device_target` 关联温度/功率并提供 GPU 进程表。交互式 fdinfo 扫描只在该表实际摆放时进行；快照仍会强制全量扫描。
 
-Outside the process model, connection, mount, workload, and GPU-process tables each model at most 512 rows. Collector-budget exhaustion sets `partial`/`truncated`; a UI-only row limit does not rewrite collector quality. Process/GPU-process and connection status provide total-count clues, while mounts/workloads currently lack a separate 512-row display-cap indicator. Insights has no foreground collector and uses existing background snapshots rather than resampling decorative process/GPU counts at 1 Hz.
+进程模型之外，连接、挂载、工作负载和 GPU 进程表各自最多建模 512 行。采集器预算耗尽会置 `partial`/`truncated`;仅 UI 的行数限制不会改写采集器的质量位。进程/GPU 进程和连接状态提供总数线索，当 512 行模型上限丢弃行时，挂载/工作负载表的脚注报告可见/总数。Insights 没有前台采集器，使用现有的后台快照，而不是以 1 Hz 重新采样装饰性的进程/GPU 计数。
 
-Every collector returns status, quality, timestamp, duration, source, and reason. First counter samples, resets, device changes, invalid sensor sentinels, and missing values are never disguised as zero.
+每个采集器都返回状态、质量、时间戳、时长、来源和原因。首次计数器采样、复位、设备变更、无效传感器哨兵值和缺失值永远不会被伪装成零。
 
-### 4.4 Inspectors and Actions
+### 4.4 检查器与操作
 
-- SMART/NVMe enumerates at most 256 candidates under `/sys/class/block`, lets the user select one, and calls `smartctl --json=c --nocheck=standby --all` with a timeout, output limit, 60-second cache, masked serial, and validated device path. It does not currently use `smartctl --scan-open` or bridge-type detection.
-- RAM-bandwidth Inspector formula v4 discovers matching PMUs and runs one approximately 250 ms system-wide sample through external `perf stat -a -A`/`sleep` for a limited set of data/CAS events. It calculates each controller instance using its own CSV runtime, chooses one Intel free-running/CAS substitute family, and deduplicates identical descriptor aliases. Missing instances/directions, partial events, or multiplexing yield estimated quality. Plain EINVAL/event-open failure yields unavailable, adding `permission_may_be_required` only when evidence such as `perf_event_paranoid` supports it; only explicit permission diagnostics yield denied. The startup probe does not execute `perf` or validate permissions. It has no CPU family/model mapping, multiplex correction, socket/channel split, or continuous chart. The theoretical-value API returns a value only when a caller supplies trusted rate/channel/bus-width inputs, which the default TUI does not.
-- The sshd Inspector can combine systemd, process, and `/proc/net/tcp*` evidence. With no session/journal provider in the default application, those sections are explicitly unavailable.
-- The TUI process action sends only `SIGTERM`: Lua revalidates PID/starttime, then native code holds a pidfd, revalidates again, and signals, closing the PID-reuse window.
-- Privilege elevation applies to the entire invocation, not an individual Inspector. Re-execution uses a fixed system `sudo` path, the original process argv, and a sanitized environment, and occurs before raw-terminal entry.
+- SMART/NVMe 在 `/sys/class/block` 下最多枚举 256 个候选设备，让用户选择一个，并调用 `smartctl --json=c --nocheck=standby --all`，带超时、输出限制、60 秒缓存、脱敏序列号和经过校验的设备路径。目前不使用 `smartctl --scan-open` 或桥接类型检测。
+- 内存带宽检查器公式 v4 发现匹配的 PMU，并通过外部 `perf stat -a -A`/`sleep` 对一组有限的数据/CAS 事件运行一次约 250 ms 的系统级采样。它用每个控制器实例自己的 CSV 运行时间计算该实例，选择一个 Intel free-running/CAS 替代系列，并对相同的描述符别名去重。实例/方向缺失、事件部分或多路复用会产生估算质量。普通的 EINVAL/事件打开失败记为不可用，仅当有证据(如 `perf_event_paranoid`)支持时才追加 `permission_may_be_required`;只有显式的权限诊断才记为拒绝。启动探针不执行 `perf` 也不验证权限。它没有 CPU 家族/型号映射、多路复用校正、插槽/通道拆分或连续图表。理论值 API 只在调用方提供可信的速率/通道/总线宽度输入时才返回值，默认 TUI 不提供这些输入。
+- sshd 检查器可以结合 systemd、进程和 `/proc/net/tcp*` 证据。默认应用中没有会话/日志提供方，因此这些部分被明确标记为不可用。
+- TUI 进程操作是 `SIGTERM`、`SIGKILL`、`SIGSTOP` 和 `SIGCONT` 之上的确认式信号菜单:Lua 重新验证 PID/启动时间，然后原生代码持有 pidfd、再次重验证并发信号，堵上 PID 复用窗口。
+- 权限提升作用于整个调用，而不是单个检查器。重执行使用固定的系统 `sudo` 路径、原始进程 argv 和净化后的环境，并发生在进入原始终端之前。
 
-### 4.5 Configuration, i18n, and Output
+### 4.5 配置、i18n 与输出
 
-- `config.yml` uses configuration schema v1. `layout.yml` writes binary split-tree layout schema v2 and can read the linear-order v1. Both use restricted YAML profiles; layout writes are native and atomic.
-- CLI/config themes are limited strictly to five exact built-in names. Locale tags are syntactically validated and normalized; a valid unknown tag can be provided by a TUI XDG user catalog instead of having to exist in the built-in list.
-- Built-in locales are deterministically generated from YAML into Lua modules, and the registry uses literal `require`.
-- `en-US` and `zh-CN` are stable; the other eight are preview. All ten are complete: the fallback chain still exists for user-supplied catalogs, but no shipped catalog relies on it.
-- The CLI provides TUI, `--snapshot` JSON, `--agent` JSON, and `--diagnose`.
-- The TUI loads bounded XDG custom-locale files at startup. `--snapshot`/`--diagnose` do not create a translator or scan that directory.
-- JSON snapshots mask remote socket IPs by default and rebuild exported connection IDs from masked endpoints, preventing full remote addresses from leaking through internal IDs. Remote ports, local addresses, Unix socket paths, and interface MAC addresses remain unmasked. The Network-page TUI displays full endpoints by default; `m` switches the connection table to the same masked form, and `mask_remote_addresses` selects the startup state.
-- Snapshot JSON exports `configuration.state` and optional `configuration.reason` without the internal `path`, allowing scripts to distinguish loaded/default/error/unavailable.
-- Snapshot, diagnose, and agent output include bounded privilege identity metadata so callers can distinguish ordinary, direct-sudo, and explicitly elevated execution.
-- The strict JSON decoder defaults to 4 MiB, depth 64, and 100000 value nodes with linear numeric scanning. The encoder replaces invalid UTF-8 in string values and object keys with U+FFFD.
+- `config.yml` 使用配置 schema v1。`layout.yml` 写入二叉分割树布局 schema v2，可以读取线性顺序的 v1。两者都使用受限 YAML 描述文件；布局写入是原生的且原子的。
+- CLI/配置主题严格限于五个精确的内置名称。语言标签经过语法校验和规范化；一个有效的未知标签可以通过 TUI XDG 用户目录提供，而不必存在于内置列表中。
+- 内置语言环境从 YAML 确定性地生成 Lua 模块，注册表使用字面 `require`。
+- `en-US` 和 `zh-CN` 是稳定的；其他八个是预览版。全部十个都是完整的：回退链仍然为用户提供的目录存在，但任何内置目录都不依赖它。
+- CLI 提供 TUI、`--snapshot` JSON、`--agent` JSON 和 `--diagnose`。
+- TUI 在启动时加载有边界的 XDG 自定义语言文件。`--snapshot`/`--diagnose` 不创建翻译器，也不扫描该目录。
+- JSON 快照默认对远端套接字 IP 脱敏，并从脱敏后的端点重建导出的连接 ID，防止完整远端地址通过内部 ID 泄漏。远端端口、本地地址、Unix 套接字路径和接口 MAC 地址保持不脱敏。网络页 TUI 默认显示完整端点；`m` 把连接表切换为同样的脱敏形式，`mask_remote_addresses` 选择启动状态。`--snapshot --unmask-remote-addresses` 是显式选择，导出完整远端地址和原始 ID；配置键永远不会解除导出的脱敏。
+- 快照 JSON 导出 `configuration.state` 和可选的 `configuration.reason`，不包含内部 `path`，使脚本能够区分已加载/默认/错误/不可用。
+- 快照、诊断和 agent 输出包含有边界的权限身份元数据，调用方可以据此区分普通执行、直接 sudo 和显式提权执行。
+- 严格 JSON 解码器默认 4 MiB、深度 64、100000 个值节点，使用线性数字扫描。编码器把字符串值和对象键中的无效 UTF-8 替换为 U+FFFD。
 
-### 4.6 Current Validation Entry Points
+### 4.6 当前验证入口
 
 ```bash
 make check
@@ -124,166 +115,281 @@ make test-bundle-dir
 make checksums
 ```
 
-`make test` currently contains 50 Lua 5.5 unit/fixture test files plus the responsive/color-depth real-PTY matrix; `make test-54` checks the pure-Lua 5.4-compatible subset. Hardware fixtures cover heterogeneous ARM, hybrid x86, RISC-V, large shared CPU-cache lists, powercap deltas/wrap/reset/constraints and overlapping `psys`, GPU PCI/fdinfo behavior, and invalid hwmon sentinels without requiring the development host to expose each device. Privilege and preflight tests cover CLI parsing, identity metadata, sanitized re-execution construction, cgroup v2 limits, and output integration without triggering an interactive password prompt. A fixture filesystem additionally drives the hwmon, powercap, cpufreq, DRM, and power-supply collectors against recorded driver trees, replays real `smartctl --json` and `perf stat -x ;` output for the on-demand inspectors, and exercises the process-collection cap and the sudo file-access policy, none of which a development host reaches on its own. `make test-fuzz` throws randomized keys, mouse reports, malformed escape sequences, invalid UTF-8, and resizes at the real terminal loop; it is excluded from `make test` because it is slow and non-deterministic by design, and runs on every push in CI instead.
+`make test` 目前包含 119 个 Lua 5.5 单元/夹具测试文件，外加响应式/色深的真实 PTY 矩阵；`make test-54` 检查纯 Lua 5.4 兼容子集。硬件夹具覆盖异构 ARM、混合 x86、RISC-V、大共享 CPU 缓存列表、powercap 增量/回绕/复位/约束和重叠的 `psys`、GPU PCI/fdinfo 行为，以及无效 hwmon 哨兵值，而不需要开发主机真的暴露每台设备。权限和预检测试覆盖 CLI 解析、身份元数据、净化重执行的构造、cgroup v2 限制和输出集成，且不触发交互式密码提示。一套夹具文件系统还会驱动 hwmon、powercap、cpufreq、DRM 和电源采集器跑在记录下的驱动树上，为按需检查器回放真实的 `smartctl --json` 和 `perf stat -x ;` 输出，并演练进程采集上限和 sudo 文件访问策略——这些都不是开发主机自己能触达的。`make test-fuzz` 向真实终端循环抛随机按键、鼠标报告、畸形转义序列、无效 UTF-8 和缩放；因为它按设计既慢又不确定，所以被排除在 `make test` 之外，改为在 CI 中每次推送都运行。
 
-Selected build and test Make targets run a lightweight resource precheck first and are kept nonparallel at the orchestration layer. The `build`, `test`, and `full` profiles inspect the tighter host/cgroup memory and Swap headroom, host/cgroup memory PSI, and load per CPU. An explicit environment override exists for deliberate operator use, but the normal path refuses to start resource-intensive work on an unhealthy host.
+选定的构建和测试 Make 目标会先运行轻量级资源预检，并在编排层保持非并行。`build`、`test` 和 `full` 三种配置检查更严格的主机/cgroup 内存和 Swap 余量、主机/cgroup 内存 PSI 和每 CPU 负载。存在一个显式的环境变量覆盖供操作员有意使用，但正常路径会拒绝在不健康的主机上启动资源密集型工作。
 
-The default luainstaller `1.3.0-1` payload is locked by `tools/luainstaller-1.3.0.sha256`. An adjacent worktree is never selected automatically; an absolute `WTOP_LUAINSTALLER_ROCKSPEC` is the explicit development opt-in. `make checksums` covers only the two bundle executable entry points in `dist/SHA256SUMS`. Packaging evidence currently comes mainly from a Fedora glibc x86_64 development host, is not a formal release, and makes no minimum-glibc commitment.
+默认的 luainstaller `1.3.0-1` 载荷由 `tools/luainstaller-1.3.0.sha256` 锁定。相邻的 worktree 永远不会被自动选中；绝对路径的 `WTOP_LUAINSTALLER_ROCKSPEC` 是显式的开发选择。`make checksums` 覆盖 onedir 包携带的每一个文件以及 onefile，写入 `dist/SHA256SUMS`——直到 2026-10-02 它还只覆盖两个可执行入口和告知性文件，这使随附的原生模块落在接收方会运行的清单之外。打包证据目前主要来自一台 Fedora glibc x86_64 开发主机，不是正式发布，也不承诺最低 glibc 版本。
 
-## 5. 0.1 Release Goals
+## 5. 0.1 发布目标
 
-The following marks describe completion relative to a releasable 0.1:
+以下标记描述相对于可发布的 0.1 的完成状态:
 
-- [x] Linux-only Lua 5.5.1 toolchain and native terminal restoration.
-- [x] CPU usage/identity, memory, PSI, disk, mounts, network/sockets, basic processes, CPUFreq, hwmon, powercap, cgroup v2, and generic DRM collectors.
-- [x] Responsive ten-tab frame, cell diff, runtime theme switching, and mouse selection/sorting.
-- [x] Configuration, layout schema v2 tree persistence (v1-compatible), JSON snapshot, and diagnose.
-- [x] YAML i18n compilation, stable/preview catalogs, and per-key fallback.
-- [x] onedir/onefile build targets.
-- [x] Default luainstaller payload-hash validation and checksum target for both bundle entry points.
-- [x] Linux-only LuaRocks installation, isolated-tree smoke test, and EUPL-1.2 repository license.
-- [~] Processes page: text search, fixed sort cycle, PPID tree, detail overlay, and confirmed SIGTERM exist; threads, PSS/USS, combined filters, column management, and cross-resource navigation remain unfinished.
-- [~] Layout editing: directional tree moves, ratio adjustment, undo/redo exist; add/remove/replace widgets, drag-and-drop, import/export, and backup/recovery remain unfinished.
-- [~] Inspectors: three prototypes work; navigation, providers, and real-host coverage are insufficient.
-- [~] GPU: DRM/sysfs/fdinfo, PCI naming/link metadata, a process-summary table, fdinfo utilization fallback, and hwmon temperature/power fill-in work; three vendor APIs, fan display, and client/frequency-domain/memory-region drill-down are not implemented.
-- [~] Complete i18n: main TUI, headers, help, Inspector labels, common state/quality codes, and sensor-source reasons are connected; other provider field IDs/reasons, pseudolocale, and RTL remain unfinished.
-- [x] Workloads/cgroup v2 page and collector base path.
-- [x] CPUFreq, generic hwmon, powercap, and mount-capacity base paths.
-- [~] GPU class/device_target sensor joins are implemented; broader device-topology joins, systemd/container semantics, and richer process data remain unfinished.
-- [ ] Measured performance budgets and regression gates.
-- [ ] glibc aarch64, minimum glibc/kernel, and planned musl release evidence.
-- [ ] Real NVIDIA/AMD/Intel and no-GPU hardware matrix.
+- [x] 仅 Linux 的 Lua 5.5.1 工具链与原生终端恢复。
+- [x] CPU 使用率/身份、内存、PSI、磁盘、挂载、网络/套接字、基础进程、CPUFreq、hwmon、powercap、cgroup v2 与通用 DRM 采集器。
+- [x] 响应式十标签页框架、单元格差分、运行时主题切换与鼠标选择/排序。
+- [x] 配置、布局 schema v2 树持久化(兼容 v1)、JSON 快照与 diagnose。
+- [x] YAML i18n 编译、稳定/预览目录与逐键回退。
+- [x] onedir/onefile 构建目标。
+- [x] 默认 luainstaller 载荷哈希校验,以及面向两个捆绑入口点的 checksum 目标。
+- [x] 仅 Linux 的 LuaRocks 安装、隔离树冒烟测试与 EUPL-1.2 仓库许可证。
+- [~] 进程页:文本搜索、固定排序循环、PPID 树、带线程行与 PSS/USS 的详情浮层、逐线程选择(`i`,然后 `Enter`)及其专属的线程组/上下文切换/I-O/cgroup 读取、跨资源跳转到工作负载与 GPU、可配置列集(`C`,会话级)与已确认的 SIGTERM 均已存在;组合数字过滤器与持久化列集尚未完成。
+- [~] 布局编辑:方向性树移动、比例调整、从页面控件板添加/移除/替换控件与撤销/重做均已存在;拖放与备份/恢复尚未完成。
+- [~] 检查器:三个原型可用;导航、提供方与真机覆盖不足。
+- [~] GPU:DRM/sysfs/fdinfo、PCI 命名/链路元数据、进程摘要表、fdinfo 利用率回退、hwmon 温度/功率补齐,以及 NVML、AMD SMI 与 Level Zero 厂商提供方可用;厂商提供方的真机覆盖、风扇/电源轨语义与客户端/频率域/内存区域下钻尚未实现。
+- [~] 完整 i18n:主 TUI、页头、帮助、Inspector 标签、常见状态/质量码与传感器来源原因已接入;其余提供方字段 ID/原因、伪语言与 RTL 尚未完成。
+- [x] 工作负载/cgroup v2 页与采集器基路径。
+- [x] CPUFreq、通用 hwmon、powercap 与挂载容量基路径。
+- [~] GPU class/device_target 传感器联接已实现;更广的设备拓扑联接、systemd/容器语义与更丰富的进程数据尚未完成。
+- [ ] 已测量的性能预算与回归门禁。
+- [ ] glibc aarch64、最低 glibc/内核版本与计划中的 musl 发布证据。
+- [ ] 真实 NVIDIA/AMD/Intel 与无 GPU 硬件矩阵。
+- [x] 每个降级读数都有一个资源级原因。**已于 2026-10-02 关闭**,距开放共十三个增量,十四个采集器(cpu、disk、network、process、hwmon、gpu、cpufreq、powercap、cgroup、cpu_info、inventory、portable、power_supply、system_info)全部关闭;每个原因都由选择质量的同一个表达式选择并译成十种语言,`Snapshot.merge` 把 `result.reason` 拷入 `quality[resource].reason`,界面清单最终为 153。关闭标准是"有一句话在产生该质量的每一种情形下都为真":单一原因的采集器逐因给码(如 cpu 的 `loadavg_unavailable`、`cpu_counter_delta_unavailable`,cgroup 按四个质量各配一码),多原因聚合的取类别码(如 system_info 的 `system_identity_incomplete`、hwmon 的 `hwmon_data_partial`/`hwmon_value_derived`、gpu 的 `gpu_data_incomplete`/`gpu_identity_inferred`、cpu_info 的 `cpu_info_value_not_stated`、portable 的两个平台级类别),测试断言的是原因与质量的配对而非字符串存在。最后由增量 80 关闭 disk(`disk_data_partial`、`disk_rate_unavailable`),靠测量推翻了增量 71"不可关闭"的读码结论——该采集器此前没有自己的测试文件,全套件只在两处构造它、共三个样本;期间还把三份配对断言抽入 `tests/support/collector_reason.lua` 并使其自身受测,顺带修掉了 macOS/Windows 采集器把英文句子 `missing CPU counters` 发进 reason 字段的问题(改为代码 `cpu_counters_missing`)。
+- [ ] 每个界面原因码都由看守它的那次扫描清点。增量 65 关闭了 C 语言一半:`wtop_native.c` 中到达界面的五个未翻译代码(`cancelled`、`cancel_callback_failed`、`poll_failed`、`waitid_failed`、`waitpid_failed`)已译成十种语言,厂商模块里仅到达 JSON 导出的九个代码列入 `machine_only` 并写明理由。增量 66 把规则读不到的二十个 Lua 清单代码分成六个界面代码与十四个仅导出代码;增量 67 依产品先例(`budget_reason` 一直在 `machine_only`,且 `docs/AGENT.md` 规定载荷保留原始拼写)把这二十二个并入 `machine_only`,删除 240 条目录条目(24 个代码 × 10 种语言),各目录的 `reason.*` 计数由 154 降为 130。
+- [ ] 每个界面原因码都由看守它的那次扫描清点——守卫自身的簿记曾是漏洞。`input_buffer_limit` 与 `input_sequence_limit` 同时出现在 `interface_reasons` 和 `machine_only` 两张清单里,二十条翻译因此成了什么都显示不了的字符串;测量表明界面一侧是错的——两个代码以 `{type = "error"}` 事件到达,`process_event` 没有 `event.type == "error"` 的分支,`event.reason` 在 `tui.lua` 中出现零次,事件被丢弃,现已归入 `machine_only`,并新增四条子句(两清单不相交、`machine_only` 条目须带非空证据串、`machine_only` 代码不得携带 `reason.*` 键、三种失败模式各有探针)。增量 68 关闭了第六种形态——运行时拼装的消息 ID——并翻出真实缺陷:`Workspace:move_focused_to` 未过滤地返回 `widget_not_found:<目标>`,冒号使目录无法容纳该键,状态行在所有语言里显示原始拼写;修复后它回答 `widget_not_in_page`,守卫按位置声明各处词表并核对被调用方。
+- [x] 每个界面原因码都由看守它的那次扫描清点。**已于 2026-10-02 关闭**:`interface_reasons` 153、`machine_only` 37、两清单零交集,153 个代码没有一个拼不出来;按位置测试看不见的 33 个代码分为 12+11+9+1 四组,各由续行上的配对断言、拼装消息 ID 表、原生扫描与第五个扫描家族(增量 82,`Capability` 构造器的第一个位置参数)把守——该家族首跑即找出三个未入任何清单却到达渲染表面的代码(`smartctl_not_found`、`socket_tables_denied`、`socket_tables_unavailable`),界面清单增至 156,并发现全部十个目录里六个 `reason.*` 键乱序、序列中插着十一个 `sampling.*` 键,两者现在都有断言。新增的反向子句检查"在持有拼装位置被调用方的模块中拼写、却未被任何条目声明"的 `interface_reasons` 代码;其更宽版本被测量否决——那两个模块返回 52 个代码形态字面量而表只声明 13 个,其余 39 个是不可达的参数校验,按先例属 `machine_only`。`device_inventory_unavailable` 是三十三个中唯一只被分类而未被断言的,记录为下一步;乱序子句读源 YAML 而非生成的 Lua(后者是无序哈希表),跨 libc 容器因此把 `locales/` 补进暂存清单——继 `docs/`、`tools/`、`.github/` 与 `VERSION` 之后的第五个,此前该子句在那里裸 FAIL。
+- [x] 用户可见的每个值在每种语言里都有显示标签。**已于 2026-10-02 关闭**:71 个赋字面量的质量位全部使用已发布的词,但两个非字面量值——statvfs 分类器返回的 `missing` 与比较得出的 `held`——曾让全部十种语言的 I/O 页 Quality 列显示英文原词;闭合用的是运行时闭包测量:替换 `Technical.state`/`Technical.reason` 两个字段并跑完 116 个文件的套件,记录到七个不同值、一个无标签,问的不是"产品能拼出什么"而是"产品能显示什么"。同一测量还抓到漂移的副本:I/O 页把 `denied` 与 `error` 画得与健康态同样灰,而 2 000 行外同一文件里的 Insights 表早已把二者列为 critical,排序现在住在 `model/quality.lua`(`missing` 是警告而非严重,正确答案按构造静音);`unmatched` 与 `identity_quality`/`hwmon_quality` 等候选经测量判为不可达或仅机器可见,不加标签。守卫是 `tests/unit/test_state_render_closure.lua`;期间还澄清了资源门禁的真实阈值(`load1 < cpus × 1.5`,十六核即 24 而非 1.5),并修掉一个把语法错误当断言失败、报出假 7/7 CAUGHT 的变异 harness——它现在先跑未变异的文件再启动。
+- [x] 状态标签超出了渲染它的列能显示的宽度。**已于 2026-10-02 关闭**:跨十个目录测量,`gap` 最长 20 格(法语)、`denied`/`unavailable` 15、`stale` 14、`reset`/`truncated` 13,而状态列按英文词定宽,德国用户看到的是 *Nicht verf…*;受同标签页模型互相覆盖的探针影响,正确计数是八列而非九列。八处字面量合并为 `STATE_COLUMN_WIDTH = 20`;列凭 `min_width` 入选、`width` 只是偏好,PTY 矩阵八种尺寸下 64 个(列,尺寸)对里 22 个变化且没有任何表丢列,`min_width` 有意不动——抬它会让窄终端丢列,比短单元格更糟。守卫按状态列*做什么*而非名单识别它们,第九个这样的列无需任何人记得添加也被覆盖;最初两个探针一个比较了 `nil` 与 `nil`、一个漏传列键,都报出了看似干净的结果,现在都断言读回的是真实字符串,且代价探针断言至少有一列移动。
+- [x] 一条 PTY 断言读取了用户与 harness 都看不见的行。**已于 2026-10-02 关闭**:当初记录为"约半数概率失败"的抖动,单独运行实为 0/8 次失败——问题是确定性的:浮层比正文窗长时可以滚动,动作提示位于折叠线之下,按 `End`(用户会按的键)即可上屏,产品本身没有毛病。修复只是脚本里加一个键,该场景从 0/8 变为 6/6;线程选择器的动作行同样处理(放得下时最大偏移为零,按键无副作用)。最初两次加高视口的实验是空洞的——脚本随后仍会缩回 45 行;为"先缩放后浮层"理论写的标记门禁被测量推翻后删除。
+- [x] 一个只在矩阵内通过的 PTY 场景,以及提出"还有多少同样如此"这一问题的手段。**已于 2026-10-02 关闭**:套件按顺序在单进程里跑场景,继承暖机主机与前一个场景状态的场景是被"携带"而非被测试;测量得修复后全部 17 个场景在本机单独运行都通过,但这个问题现在随时可问——`make test-pty-isolation` 让每个场景在全新进程中单独运行,`python3 tests/pty_smoke.py --scenario <name>` 运行单个场景。它有意不进 `test`,因为每场景一进程是成本,而套件恰是会掩盖这个问题的形状;非空洞检查与修复互证:去掉滚动键后 `--scenario run_thread_drilldown` 退出码 1 并点名断言,恢复后退出码 0。当初按 `run_` 前缀筛选曾误把辅助函数 `run_session` 算进场景,场景清单因此改为文件里的数据而非 `main` 恰好的调用顺序。
+- [x] 被截断后留着另一个数字的单元格。**已于 2026-10-02 关闭**:跨八个页面、十个目录、40 到 200 的每个终端宽度共 5 139 次截断,有 27 个不同单元格在数字串内被切,全部是 `processes:process_table.pid`——`Width.truncate` 按字素簇截断加省略号,"3254751" 变成 "32547…" 就是另一个 pid,而 pid 正是读者会据以行动的值。更强的假设(产品会杀错进程)被测伪:`selected_process()` 返回行自身的 `pid` 字段,确认框拼的是完整值,严重度是"扫描的列里有个错数字"而非"没有数字"。修复是把 `min_width` 从 5 抬到 7——`pid_max` 不能超过 2^22,4194304 是七位,内核永远如此——代价测得:最宽 pid 的最窄单元格从 5 到 7,40 至 200 列之间 PID 列从不被丢弃,96 列起画面完全不变。规则最终为一句话:被切的单元格不得显示一个不是该列所持数字的数字;识别器头两版一个用了 Lua 5.5 中非法的模式(`%]` 不闭合集合)、一个合法但从不匹配,都报出了"零数量被切"的干净结果;M224-M227,4/4。
+- [x] 单元格丢了内容,却没有任何表示。**已于 2026-10-02 关闭**:上一增量的扫描只挂钩了 `Width.truncate`,而 `Grid:write(x, y, text, style, max_width)` 装不下的部分整体丢弃且不留标记;对整个产品重问——`workspace:render` 遍历全部标签页、40x24 到 200x50 的八种几何与十个目录——640 页、104 192 次有界写入中有 82 次被无声切掉,全部落在指标图坐标轴:`1.89 GHz` 与 `69.8 °C` 被写进四格框,显示成 `1.89` 与 `69.8`,一个没有单位也没有符号的数。根因是 `metric.lua` 以 1x1 预渲染量取轴宽,单格下 `Sparkline.buckets` 看不见样本间的尖峰——五样本、中段 1.89 GHz 峰值的序列桶计为零,预览范围 [0, 1] 而绘图范围 [0, 1.89e9];修复改为按绘图自身宽度量取轴宽。夹具的值依赖峰值在序列中的落点(同机四轮在 0 与 82 之间摆动),因此用构造夹具而非宿主数据做守卫;逐标签适配框宽的第二行经测量从不触发后删除,数"带标记标签"的子句 62 次命中全是十种语言的"无样本"状态文本,是不能失败的子句;M228-M231,4/4。
+- [x] 一道门禁因改动不可能造成的原因而失败。**已于 2026-10-02 关闭**:`make test` 绿后又连续两轮各挂一个不同场景,单独跑各 10/10 通过——根因是 harness 在前一动作后固定 0.2s 发 `q`,子进程退出时仍在途的重绘从未写入,断言回放的是产品已离开的帧;两次失败时 load 为 5.18 与 4.98,绿的时候是 1.9。修复是让退出这个唯一会改变断言所见的关键动作等待输出流静默 0.35s(上限 1.5s),之后连续五轮全绿(三次完整矩阵加两次 `make test`),首轮矩阵在 load 4.82 下通过;同一轮还把埋在 `main` 里无名、隔离模式够不着的页切换步骤立为 `run_responsive` 场景(清点 18/18),并新增 `tests/pty_scenario_ledger.py` 对照清单与 `main()` 实际调用的 `run_*`。发现缺陷的 /tmp 扫描落为 `tests/unit/test_no_silent_cell_cuts.lua`(全部八个标签页、五种几何、zh-CN 与 ru-RU 两个目录,1.1 秒、5 357 次有界写入),其间修掉了多处以"看似干净"面目出现的空洞:夹具不画轴、几何进不到 `wide-short` 模式、只扫八个标签页漏掉 `memory`/`system` 两个下钻页、页清单与渲染迭代同一个函数导致子句不可能失败——页清单现在对照 `workspace.tabs`,把页列表改回八个标签页的变异会红着点名 `memory, system`;修复后的夹具不仅复现缺陷,还发现第三个轴标签 `125W` 被写进两格框。
+- [x] 单元格里装的是模板而不是值。**已于 2026-10-02 关闭**:十个目录全跑(1.67s 变 8.44s,申报截断从 453 升到 2 155)后暴露出 140 次格式错误,根因是 `Translator:t(id)` 缺变量时把原始模板 `Update rate: {level}` 原样交还并递增 `format_errors`,标签栏随即显示字面占位符——而产品一直在 `diagnostics().format_errors` 里计数,缺的只是一条断言渲染期间计数保持为零的测试。制造全部 140 例的是本文件自己的夹具(漏传 `tui.lua` 必传的 `frequency_label`),产品的兜底分支实际不可达,现已删除该兜底并让驱动跑两遍:一遍按产品方式,一遍扣住字段遍历全部页面于最窄与最宽几何。第三条规则问产品(计数器)而非在写入流里搜花括号——模板被切到六格后不再含 `{level}`。六变异五中:未中的那个改写规则自身算术(`format_errors + diagnostics.format_errors` 变 `+ 0`),规则无法检查自己是否仍被应用,文件的零有意义因此靠外部变异 M236 支撑。
+- [x] 两张卡读起来像一张。**已于 2026-10-02 关闭**:接口名是两张网络表中唯一指明"这行是哪张卡"的列,按声明的 8 格,`enp0s31f1`、`f2`、`f3`、`f4` 及其 VLAN 共十四个名字只剩八个不同字符串;12 格时一张卡上的两个 VLAN 仍相撞,14 格时两个 15 字符合法名仍相撞,只有 15(内核 `IFNAMSIZ - 1`)能分开每一对合法名字。两表现声明 `width = 15, min_width = 15`,代价测得:仅在最紧的尺寸丢一列 `mac`,守卫的申报截断从 2 155 降到 2 003,接口名从此不再被切。新规则为一句话——命名不同事物的两个值不得画成同一个字符串;守卫此前一直用空接口列表渲染网络表,九变异八中,未中的把规则改成比较值本身,与 M242 同形:规则无法检查自己是否仍被应用。最初的碰撞表把两个 18 字符的名字当成 15 格不够的反例,而 `IFNAMSIZ` 是 16,内核发不出这种名字,守卫现在对自己的夹具断言这一上限。
+- [x] 列清单的形状错了,而且错在会藏事的方向。**已于 2026-10-02 关闭**:判断"哪些列是行的身份"的清单只装着人已在看的那一列,换用的判据更弱也更宽——一行只在没有任何列能把它与另一行分开时才算丢失,`disk_table` 与 `mount_table` 因此在 8 格设备名下干净通过。清单从未包含 `core_table`:其 CPU 列是身份列却声明 `min_width = 5`,`cpu100` 起五格画出 `cpu1…`,一台空闲的 128 核主机会画出二十八行每列都相同的表;修复是 `min_width = 7`(`CONFIG_NR_CPUS` 上限 8192,`cpu8191` 七个字符),偏好保持 8,窄带之外画面不变。规则移出宽度扫描并用独立大夹具(四张卡、四个电源区、三支同温传感器、128 核等);头三版各有空洞——只问一个页面(`ViewModel` 只填所请求页面放置的控件,漏掉九张表中的五张)、八个人手页面(无可测变化)、64 核夹具(名字全不超过五字符,规则无事可说)。六变异五中,未中的停止切行文本,是 M242、M249 之后第三次撞上同一堵墙:规则无法检查自己是否仍被应用。
+- [x] 规则从未被问及的十张表。**已于 2026-10-02 关闭**:第二条规则只覆盖产品渲染的十九张表中的九张,补齐夹具(四块相同 GPU、到同一服务的四条连接、五个空闲 cgroup slice)后 `disk_table`、`mount_table`、`workload_table`、`collector_table` 干净通过,但 `gpu_table` 露出非宽度型缺陷:型号名(如 `NVIDIA GeForce RTX 4090`,二十一个字符)写进十二格,四卡机器上八列数字全同、任何列宽下四行都一样——表里没有任何东西指明行属于哪张卡;`gpu_process_table` 一直画 `gpu = gpu.card or gpu.id`,设备表现在带上同一列。`connection_table` 记为 `RECORDED_FORKS` 而非修复:浏览器到同一服务的四条连接只差源端口,显示端口 IPv4 需要 21 格、IPv6 需要 47 格,而重复行对读连接表的人未必是缺陷;记录的分叉必须仍然相撞,修复它会让文件变红并要求改写条目。五变异五中。
+- [x] 规则是对的,缺的是数据。**已于 2026-10-02 关闭**:GPU 进程表自己的 `pid` 列宽六格,`4194304` 与 `4194303` 都画成 `41943…`,而抓住这一点的规则自增量 88 起就是绿的——因为夹具一直是 `gpus = { devices = {} }`,该表从未被渲染;填入一张卡与两个进程后,八增量前的旧规则不加一行新代码就报出了缺陷,两条 pid 列现在都是七格。同一轮还翻出 `system_devices`:其 `id` 列装 PCI 地址(`%04x:%02x:%02x.%d`,恒为十二个字符)却声明 `min_width = 8`,单板双口的 `0000:00:1f.6` 与 `0000:00:1f.7` 都读作 `0000:00:…`,型号名又相同,两行即一行;地址有界,保证值就是那个界。文件现在点名扫描画过的表并要求进程表与 GPU 进程表在列——"规则通过了"与"规则无话可说"从外面无法区分,而只有一个是结果。
+- [x] 一个从来不是分叉的分叉,和藏在它后面的缺陷。**已于 2026-10-02 关闭**:上一条曾把 Link 列记为留给用户的产品分叉,但把真实网卡报告过的每个速率(1 到 400 000 Mbit/s)都过一遍 `format.bits_per_second` 后,最长的缩放输出是 `400 Gbit/s`,十格,比今天的拼接写法(十三格)还短两格——分叉从不存在,只是没人跑过那个就在同仓库里的函数。真正的缺陷更重:`100000 Mbit/s` 十三格装进十二格,从 100 Gbit/s 起读者拿到的是没有单位的 `100000 Mbit…`,而该列可选宽度范围只有九到十二格,无一幸免;修复是走 `format:bits_per_second`,保证宽度十格——这是测得的已知集合最坏值而非内核界,sysfs 报多少取决于驱动,注释如实写明。守卫为此加了第三条规则:行内其他列能分开两条链路,所以行的规则看不见"带单位截断后剩下的数无法解释"这一缺陷;四变异三中,第四个(读偏好而非保证)在值空间上不可区分——该列所有取值都不超过十格、偏好是十二,记录在案而非当作漏洞。
+- [x] 一个单位被切掉的速率。于 2026-10-02 由关闭上一增量的同一扫描发现:Link 列把裸整数拼上单位(`.. " Mbit/s"`),列声明 `width = 12, min_width = 9`,10 Gbit/s 链路需要 12 格——测量得 `10000 Mbit/s` 在 9 格画成 `10000 Mb…`、10 格画成 `10000 Mbi…`,扫描中共 350 次调用;数对了,读数所需的单位没了。显然的修法(`i18n/format.lua` 现成的 `scaled`)能把同一条链路写成九格的 `10 Gbit/s`,与其他速率列一致,但会停止报告 sysfs 给的原数(40 Gbit/s 链路从 `40000 Mbit/s` 变 `40 Gbit/s`)。"缩短单位"与"加宽到 13 格"都说得通,这是产品分叉而非单答案缺陷,也是该家族中唯一被关闭扫描发现而有意不修的开放项。
+- [ ] 一个必须容纳句子的表格单元格。于 2026-10-02 在检查加宽状态列的增量时发现:跨全部 156 个界面原因码与十个内置目录,152 个的标签宽于 28 格的 Reason 列,各语言最宽分别为 zh-CN 43、zh-TW 47、ko-KR 65、en-US 69、ru-RU 70、ja-JP 72、de-DE 81、fr-FR 与 pt-BR 84、es-ES 86,最宽是 `gpu_identity_inferred` 的西班牙语 86 格。界线在另一半测量:每个句子在检查器浮层里十种语言全部可读(`INSPECTOR_ROW_WIDTH` 为 160,最宽 86),所以缺陷是摘要列承载了摘要列装不下的形态。三个显然答案里两个不行——机器码 156 个中 134 个装得下、22 个仍截断(`systemd_unavailable_process_fallback` 是 36 格)且把英文 snake_case 放到法语用户面前,删列则丢掉摘要;唯一完整的答案是第三种形态:每个原因一条短的译成短语、句子留给浮层,即 156 码 × 10 目录的 i18n 载荷 schema 变更,取决于"原因词汇是为一条字符串还是两条服务"的产品决定。为测这条写的探针两个曾是错的:把每个值喂给每列(状态列回查 `status.<code>` 失败把原因码原样交回,八个"最宽标签"是探针自己),以及被早前编辑弄坏的索引表达式。
+- [ ] 保留值的年龄,记在限定它的那条记录里。质量记录的 `timestamp_ns` 是最近一次*尝试*的时间而非它所标注值的时间——测得一例 99 s 旧的值刚被重试过,报告的年龄是 0 s;快照与 agent 上下文都没说值本身多老,而且推不出来。携带它是对两份已发布 v1 文档(`docs/AGENT.md` 与 `docs/MONITORING.md`)的增量字段变更,属兼容性决定而非补丁:两者目前让消费者把 `status`、`quality`、`reason` 与 `timestamp_ns` 放在一起读,而作为整体,记录说着 `stale` 却看起来是新鲜的。
+- [x] 面板本身:求解器把它藏了,页脚一声不吭。**已于 2026-10-03 关闭**:求解器自身记账健全(十页、宽 16 到 260、高 3 到 64 共 151 900 次求解无遗漏无重复),但隐藏至少一个面板的 28 620 次渲染中有 6 263 次没把 `▦ v/t` 带上行,全部低于 45 列;40x24 的概览页该行结尾是 `14:23:07 · ▦ 3…`,44 列时是 `▦ 3/…`——只有分子没有分母,而 44 列是普通的分屏宽度。根因是一行排序:`data_age` 占了 message 的槽位,而 `test_footer_message.lua` 一直用三格的 `"2s"` 做标记,比产品自己的八格时钟窄五格;修复后计数领先于上下文,放不下时取短形 `▦ +N`,`StatusBar.render` 发布 `{visible, total, missing, form, budget}`,特权标记跟在计数后。代价同扫测得:静默态 6 263 次漏报降为 0,带过滤器 1 114 次降为 0,消息之后 2 228 次降为 1 891;数据年龄完整率从 27 544/28 620 变为 22 357/28 620,根会话标记完整 24 509/28 620,计数在全部 28 620 次里都有名;M316-M326 十一比十一,其中 M319(预算不减去前导已花的)曾两次通过——决定长短形的算术从未被执行,扫描因此带上真实的 32 格目录消息并加子句"报长形的行必须真的带着计数"。
+- [x] 页面栏:丢页不说丢了几页,十八列以下还会画出一个什么都不说的页面格。**已于 2026-10-03 关闭**:产品自己的栏(品牌 `wtop build-box-01`、en-US、宽 20 到 160、十个页面轮流)测得 1 410 次渲染画了 7 693 个标签位、留下 6 407 个无标签页面位、没有一行带计数——80 列只画出十页中的四页,100 列六页。计数是十种语言里唯一说得出的陈述(区分十页的最短前缀德语要九格、西班牙语三格、英语/法语/葡语/俄语两格、三个 CJK 目录各一格),修复是四段宽度带;第一版引入过两个缺陷——预留多占一格使 116 070 行各少一格名字、前导尖角对着预留而非已选页测试——深层尾巴是低于可读宽度时画出纯截断标记的格子(十二列的 `wtop … Updat`,日语十七列的 `wtop ‹ …+9`)。177 300 次渲染的代价:117 870 行带上了计数且没有行丢计数,页面位让出 2.60%(1 013 233 → 986 900),其中计数占 12 748 行各让一格名字,6 744 行干脆不画页格;ASCII 回退中 100 个页面/目录对里有 21 对读起来与另一页完全相同(简体中文最重,十页里七页是两个问号),记为下面的开放问题而非规则;M327-M341,15/15。
+- [x] 表格的陈述行:它点名没画的列与行,但只在求解器最少选中的变体里。**已于 2026-10-03 关闭**:`▤ v/t` 与 `▾ r/n` 两条注记此前都锁在 `variant == "full"` 之后;全页、宽 20 到 240、高 3 到 40 共 4 480 次渲染携带 4 437 个表格位,3 406 个少画了列而只有 394 个说了,3 012 个沉默(`spark` 1 981、`value` 949、`compact` 82),`full` 零沉默;行方向 1 030 个少画、271 个点名、759 个没说。分母是第二个缺陷:它数的是"变体可选列",`full_only` 列同时被排除在绘制与计数外(进程表十二列中的四列),读者无法区分"表窄"与"表不是你留下的那个",分母改为模型交给表的列数。代价测得:数据行从 36 851 降到 34 067(2 784 行,7.6%),藏行的位从 1 030 升到 1 187,修复后仍有 454 个位欠陈述而无话可说——全是恰好一行的 `value` 面板,这是空间而非缺陷;守卫按 `dim` 样式找陈述行、并检查 `column_boxes` 恰好分割所画表头,读取器错过三次(按字节索引产生 2 756 个伪错、按墨迹分组把 `I/O wait` 算成两列 524 个误报、空格找错位置 3 452 个误报),清点子句按分割闭合(3 452 带陈述、454 无处可花、0 该说不说、1 098 本无话可说;行方向 1 478/0/3 526),另有 3 729 个位藏过 `full_only` 列;扫描从七分二十秒优化到十九秒(根因是每次渲染都新建 `I18n`),M342-M352,11/11,harness 先跑未变异产物并把加载错误当坏例而非命中。
+- [ ] 采样率最多可以占页面栏多少。于 2026-10-03 在关闭上一增量时发现,这是一个决定而非缺陷:`tab_bar.lua` 把行的 42% 给实时采样器,使其在窄终端上可见可点,而这个份额决定四段宽度带的落点。价格在宽度带所在的四到四十八列、三种品牌、三种行状态、十目录、十页面下测得(此表每行 40 500 次渲染):
 
-### 5.1 Safety Boundary
+  | 采样器份额 | 该区间画出的页面格 | 画出读者所在页的行 | 计数首次出现(CJK / 拉丁) | 名字与计数同现(CJK / 拉丁) |
+  |---|---|---|---|---|
+  | **42%(今天)** | 34 983 | 27 696 | 13 / 14 | 17 / 18 |
+  | 34% | 42 388 | 29 496 | 11 / 13 | 15 / 16 |
+  | 26% | 50 412 | 31 296 | 11 / 11 | 13 / 14 |
+  | 18% | 58 488 | 32 088 | 9 / 10 | 11 / 13 |
 
-0.1 remains ordinary-user and read-only by default and introduces no resident root daemon. Direct sudo and explicit whole-process elevation are optional. Any process action must:
+  反方向并不免费:每让出一格,采样器就少一格——26% 时它显示 `Upda`,而今天显示 `Update r`。增量没有动这个份额,因为选择属于在十八列终端上用产品的人,而不属于画它的文件。
+- [ ] ASCII 回退下读起来相同的两页。于 2026-10-03 由关闭上一增量的守卫在其二十个参考行上测得:网格会替换终端无法接受的每个字素,只差这种字符的页面上行后就成了一样的格子——100 个页面/目录对中 21 对如此,分布在五个目录、八组,最重的是简体中文的 `  ??  `,十页里七页共享。产品答案不能是守卫里的规则,因为三个可能答案——转写标签、给页面编号、接受无 unicode 终端无法靠阅读选页——都是产品决定,最后一个还是真实限制而非缺陷;决定之前,该模式下信息由页面栏的计数携带,键负责在其间移动。相撞的组包括日语的 `overview`/`insights`、`network`/`workloads` 与 `processes`/`compute`/`system`,韩语两组、俄语的 `processes`/`workloads`,以及简体中文七页、繁体中文六页。
+- [x] 图表刻度是最后一个印"由读数推导的数"而非读数本身的表面,而它印的是平均值。**已于 2026-10-03 关闭**:`Sparkline.buckets` 对每列区间取平均,`chart.render` 又从列取最值,短于一步的尖峰被平均进邻列——270 张图(五种形态、两条元数据路径、九种宽度、三种高度)中 33 张的顶标签低于窗口最高读数、33 张的底标签高于最低读数;六十样本、一个 100% 其余 5% 的序列在四格标 11.33、八格 18.57,一个 0% 混在 95% 里的序列被垫到 88.67 与 81.43,噪声序列实到 79.27 却标 59.16,正弦幅度最多被低报 3.7 点。修复是让每列保存区间*最高*读数、刻度取自窗口自身读数;代价测得:平滑波的列最多高出区间内波纹(86.28 到 90.00,八格),区间最低读数不再画成列但落在轴内,轴的底是发生过的读数,两端都画则是另一套视觉语法的范围条,是决定而非修复。窗口被发布(`Sparkline.window` 等)使守卫能问而非重推导;规则对称化——刻度上每个数都是窗口持有过的读数——正是 M309(退回从列推导刻度)首轮流过后补的;M308-M315 两轮共 8/8。
+- [x] 堆叠条形图的图例是项目里最后一个没有规则的控件类型,它停下来时不说丢掉了哪些条目。**已于 2026-10-03 关闭**:`segments` 画内存构成面板,图例条目是内存数字唯一出现的地方,而行遍历 `break` 时不带 `+N`、不带省略号——产品自身布局(内存页、十目录、九种尺寸、90 个面板、450 个图例条目)中有两个面板丢条目而无一物点名,都是葡萄牙语(40 与 80 列的 36x4 面板丢 `Livre`:五条目要三行图例而面板只有两行);图例还曾以自身宽度写出面板矩形(直接驱动下最多三十一格),产品布局到不了该形态(可达形状 36x4 到 76x11,最宽条目装得进 36 格),故以 1 到 36 格宽、2 到 8 行高、两种字形剖面共 5 040 个面板测之。计数放进被丢条目本要占的槽(`+N`,无需翻译);预留整行反而更贵——会为点名第一个的缺失再丢一个;第一版修复自己引入的第三个缺陷是画标记加装得下的部分(`■ B…`)并把条目计为已画,而标签碎片什么都指认不了,现在条目要么整条画要么不画,控件返回 `drawn`、`named`、`silent` 与 `in_bar`。守卫读画面而非返回值:修复前 2 265 个面板没能画出并点名全部可画条目、1 936 个把 27 651 格写出自身,修复后 5 130 个面板上两者皆零;M300-M307 八中六,另两个(M302、M304)产物与基线逐字节相同,是可证等价而非漏网。
+- [x] 条形阵列是最后一个没有规则的列表形控件,它只画宽面板的一列,把其余宽度留空。**已于 2026-10-03 关闭**:`bars` 的列算术两次向下交易列数(对 `minimum_cell` 的收窄循环与八列上限),而放置循环按列主序、第一列出底即结束——128 核主机的 75x21 面板画出 128 核中的 21 个、五列有四列全空,16 核开发机的 46x5 画 16 中的 5;产品布局上 840 次渲染、32 760 个条目里画出 8 832 个、23 928 个无物点名,分布在 348 次渲染,控件返回的 `drawn`/`total` 全程无人读。修复以 `needed` 为地板、`fitting` 为天花板,超长列表按行填充并把最后一个格花在 `+N` 上:同一扫描下画出 13 226 个条目,持有保留的全部 356 次渲染都点名确切计数;52 个(表长,面板形状)组合中 28 个改变且全部原是丢条目的形状,`test_no_silent_cell_cuts.lua` 的有界写入从 68 288 升到 75 118 而截断计数保持 4 148。变异又导出三条规则:画出的值不得被切(es-ES 的 "sin conexión" 十二格曾被十格上限切成 "sin conexió",13 254 个画出的值里 236 个被切,上限删除的代价是 28 个条目让出列)、超长列表从表头开始按行排(计数规则看不见排布,靠读取顺序规则)、单元格不得窄于控件发布的可读宽度(`Bars.minimum_cell`);M292-M299 两轮 8/8,收窄循环经 68.6 million 个算例证实为死代码后删除而非看守。
+- [x] 双列详情列表是最后一个没有规则的控件类型,其四个预算中有三个用*条目数*决定需要多少*行*。**已于 2026-10-03 关闭**:`key_value` 的小节标题自己占一行、前面还有一空行,九条目带标题要十行,而 `overflow`、`remaining`、`scrollable` 三个预算都按条目数比较,溢出的条目无声掉落且 `scrollable = false`,`remaining` 还从条目数里减行数(`▾ 6 weitere` 压着四个隐藏条目、`▾ 4 weitere` 压着五个);产品布局上 3 060 次渲染、14 900 个条目里 420 次渲染以错名持有条目(1 720 个条目),其中 90 次面板上根本没有计数,修复后持有保留的全部 570 次渲染都点名确切计数。第二个缺陷是一格算术:值列宽是 `area.width - label_width - 1`,标签预算却按 `area.width - MIN_VALUE_WIDTH` 预留,使自称的地板在 7 可达——611 个渲染行的值列窄于 8,最窄 7 格;地板现发布为 `KeyValue.MIN_VALUE_WIDTH`。规则是弱而需要的那条:交给控件的条目要么被画、要么被面板上的计数点名;多列路径产品布局到不了(14 条目进 76x5 修复前画 10 条、不点名、`scrollable = false`),直接驱动补测并以"14 条目进 116x6 必须仍三列"防矫枉过正;读取器错过五次(字节偏移当格偏移、单行读单标记、法语 `▾ 6 de plus` 两词、`[▾▴^v]` 字节集只匹配三字节字素的一个字节致 540 个溢出渲染全报"不点名"、自造元组绑死画数与给数),M285-M291 七中六,漏掉的 filler 分支按写字面留白不测。
+- [x] 面板边框是第四块界面骨架,也是最后一块没有规则的。**已于 2026-10-03 关闭**:`panel.lua` 把标题截到 `area.width - 6`、可能丢尾,而标题是面板上唯一说明"这是哪个控件"的东西;规则取弱形——没有两个标题画得相同、没有带标题的面板画成空——十目录、十页面、九种尺寸下 58 个不同标题、21 种产品实际产出的框宽(19 到 240 格)、1 218 次标题渲染,42 次被切、零相撞、零空标题,被切的全部在 19 或 27 格框上且仍指认得出面板。产品最长的标题是 27 格的法语 `Processus · CPU décroissant`,且进程表标题携带排序状态,所以规则必须读产品产出的标题而非一份写死的清单。测量头三版都曾报出结果(整页渲染量不到约束、扫了求解器从不产出的 6 到 29 格框得到 3 338 个 CPU/GPU 相撞、误入无边框分支),教训落为一句:扫描的范围是它测量的一部分,没人核对过的范围就是没人测量过的范围;M282-M284,3/3,本增量没有改产品,`panel.lua` 逐字节未变。
+- [x] 页脚右半边从未被画进过任何东西,而一旦画了,消息又不在。**已于 2026-10-03 关闭**:两个宽度守卫都以 `status = {}` 调 `workspace:render`,而 `has_priority_message` 明明为消息把右半预算从 0.38 放宽到 0.58(窄行 0.72),拼装顺序却把消息放在最后(`▦ v/t · filter · root · message`)——截断保留前缀,顺序即优先级;十目录、40 到 240 全宽、`tui.lua` 真实可传的状态下,22 110 次渲染里消息或错误有 109 次整段不在行上(法语的 40 到 70 列、繁体中文的 40 到 54 列,另有五次错误在 40 列一出现过滤器就消失——错误是行上唯一无法从别处重建的东西)。修复是把顺序反过来:消息领先、特权标记在其前、上下文殿后,109 次缺席归零、7 118 次被截的有 1 361 次不再截断;代价是过滤器在 8 040 次带消息渲染中让出 2 708 次、布局计数在 6 030 次中让出 2 815 次(过滤器是进程表面板已打印的重复,进一步删它属产品问题而非缺陷修复)。两处测量教训:用 `%S+` 计词元把中日韩整句当一个词、虚报 753 例,改成"最长可见前缀"后诚实数字是 109;修复合名 `local context` 遮蔽了携带主题与翻译器的参数、十种语言的提示全回退英文,是被静默截断扫描的有界写入数从 68 298 莫名变到 68 565 抓住的,改名 `trailing` 后计数回到 68 298;错误标记 `! ` 的缺失由漏网的 M280 翻出并补了规则(按顺序而非相邻检查),M279-M281,3/3。
+- [x] 浮层是一个渲染表面,上面却没有规则。**已于 2026-10-02 关闭**:浮层由 `draw_overlay` 从十四个导出的行构建器绘制,而项目所有渲染不变量都经 `workspace:render` 驱动页面——浮层开着时用户读的不是页面;两条规则按产品自己画的差别分开(R1:不可滚动的行完整画出;R2:可滚动的行在某个偏移可达),结果干净:每个构建器最宽的行 × 十目录 × 20 列到浮层停止生长的每一宽度共 8 002 次渲染零内容丢失(其中 290 次可滚动,属 R2 的对象),4 973 次偏移遍历每行可达。测量的前六版都曾把内容完好的产品报成丢内容(有界行、猜格子高、剥边框、认角标、按去重行取并集),第六版按位置恢复内容——这是本项目第七次 harness 测了自己又把结果当缺陷。构建器清单从产品里读出(扫描 `M.<name>` 导出)而非手写,并因此发现 `help_lines` 是 `tui.lua` 里唯一未导出的构建器,帮助浮层的覆盖只剩按 `?` 的 PTY 场景,这一点写进文件而非藏起;M274-M278,5/5;文件耗时三十四秒(共享夹具缓存后从四十六秒降下,计数逐位不变),套件当时为 110 个文件、约 94 秒。
+- [x] 十六张表中有七张在全部四条已关闭的不变量之外,而本该点破这一点的子句只是一个计数。**已于 2026-10-02 关闭**:两个夹具传的 `capabilities` 表里都没有采集器条目,唯二读 `capabilities` 而非快照的行构建器让 `collector_table`(十七行)与 `inspector_table`(三行)终生为空——而它们恰是产品里仅有的两张带 Reason 列的表;补齐(以 `Collectors.constructors` 与 `Inspectors.new_default()` 构建,原因码取测得的最宽极值)后,完整性子句又点名五个从未填过的表(`address_table`、`core_table`、`gpu_table`、`gpu_process_table`、`system_devices`),两半守卫的分歧达九张表。前后对比:错数扫描从 5 表 75 330 格变为 16 表 534 116 格,行规则从 14 表 184 行变为 16 表 204 行,静默截断扫描从 50 796 次有界写入/2 003 次申报截断/41 个轴标签变为 68 298/4 148/81,文件耗时约五秒变二十五秒(按(页面,目录)缓存模型实测毫无提速、计数逐位不变,机制已删)。测量未发现新缺陷,也算结果:新覆盖的七表零错数零未记录相撞;Reason 列的数字给悬而未决的决定定了价——1 560 个(码,目录)对中 7 个装进该列保证的十格,409 个装进检查器表的 26 格、493 个装进采集器表的 28 格,最宽是 `gpu_identity_inferred` 的西班牙语 86 格,两张表的 Reason 列占其被切格子的 97%;另有两个探针用产品产不出的输入自造缺陷后撤回,三条否定性结论留在记录里(标签页栏 24 100 次渲染结构性零相撞、提示键经 `width.ASCII_GLYPHS` 无需额外回退、状态词汇表完整——第十七次字面量扫描报了一个用户看不见的值),M270-M273,4/4。
 
-1. retain `(pid, starttime)` identity;
-2. reread `/proc/<pid>/stat` before execution;
-3. bind the original process with `pidfd_open`, revalidate starttime, and use `pidfd_send_signal`;
-4. reject PID 1, wtop itself, and changed identity;
-5. display the target and require explicit confirmation;
-6. return per-target errors instead of presenting permission failure as success.
+### 5.1 安全边界
 
-Whether 0.1 should expose SIGKILL, STOP/CONT, or renice requires separate UI, security, and test review. A low-level capability does not constitute a product promise.
+0.1 保持普通用户、默认只读,且不引入常驻 root 守护进程。直接 sudo 与显式的整进程提权是可选的。任何进程动作必须:
 
-## 6. Version 0.1 Non-Goals
+1. 保留 `(pid, starttime)` 身份;
+2. 执行前重读 `/proc/<pid>/stat`;
+3. 用 `pidfd_open` 绑定原进程,重新校验 starttime,并使用 `pidfd_send_signal`;
+4. 拒绝 PID 1、wtop 自身与身份已变的目标;
+5. 显示目标并要求显式确认;
+6. 逐目标返回错误,而不是把权限失败呈现为成功。
 
-- macOS, Windows, or BSD.
-- Clusters, remote agents, or a long-term metrics database.
-- Automatic cache clearing, automatic process termination, or “one-click acceleration.”
-- Destructive device management such as firmware updates or partition/filesystem repair.
-- A mandatory privileged helper or resident root daemon.
-- A stable third-party plugin ABI.
-- Kubernetes orchestration-level views.
-- A guarantee that every GPU/driver exposes the same metric set.
+0.1 是否应暴露 SIGKILL、STOP/CONT 或 renice,需要单独的 UI、安全与测试评审。底层能力不构成产品承诺。
 
-## 7. Roadmap
+## 6. 0.1 版非目标
 
-### Phase A: Stabilize the Development Preview
+- macOS、Windows 或 BSD。
+- 集群、远程代理或长期指标数据库。
+- 自动清理缓存、自动结束进程或"一键加速"。
+- 固件更新、分区/文件系统修复等破坏性设备管理。
+- 强制性的特权辅助进程或常驻 root 守护进程。
+- 稳定的第三方插件 ABI。
+- Kubernetes 编排层面的视图。
+- 保证每块 GPU/每个驱动暴露相同的指标集。
 
-- Localize remaining technical provider reasons and add pseudolocale and locale-layout tests. (Done: interface reason codes are translated across all ten catalogs; a reason-coverage test and a pseudolocale layout test guard them.)
-- Add onefile PTY, clean-environment, and locale `--check` to standard CI. (Done on 2026-09-28: the `release-artifacts` CI job runs the onefile bundle through the PTY matrix, verifies generated locales against their YAML sources, and builds SBOM/checksums/baseline evidence.)
-- Add crash/signal/continuous-resize, tmux, and SSH scenarios. (Continuous resize storms, SIGTERM/SIGHUP/SIGINT clean shutdown, and a real tmux pane scenario now run in the PTY matrix — the tmux case is skipped where tmux is not installed. Dedicated remote-SSH hosts remain to be covered.)
-- Establish repeatable performance benchmarks and calibrate CPU, RSS, first-frame, and input-latency budgets. (A fixed-script benchmark now exists: `make benchmark` reports first-frame, per-page steady CPU, peak RSS, and page-switch latency p50/p95 on the current host. On the 2026-09-28 development host with 537 processes it measured ~242 ms first frame, 3.4%/7.8% CPU on Overview/Processes, ~29 MiB peak RSS, and ~107 ms p95 page-switch latency; budget calibration on the target hardware remains open.)
-- Extend the Server 2008 whole-TUI CPU measurement to periodic refreshes and
-  other Windows hosts, then reduce the Processes page's remaining overhead.
-  (Measured with 60-second windows over full refresh cycles on both hosts on
-  2026-09-28. On Linux the collector overhead was cut 68→~21 ms per
-  540-process sample across three passes — identity caching, direct comm
-  scanning, a native batch `/proc` reader, and removal of a redundant
-  generation re-read — bringing the Processes page within 0.2–0.4 points of
-  Overview. The absolute 2%-at-1000 goal stays open pending calibrated
-  minimum hardware, whose rendering baseline differs from the development
-  host.)
-- Validate the bounded Windows removable-media probe workers on Server 2008,
-  including empty media, hotplug, and two nonresponsive devices; working media
-  has been checked. Resolve any starvation or capacity-freshness problems
-  found there.
-- Add explicit migration tools, backup, and clearer error recovery for configuration/layout. (Backup and recovery are done: successful loads refresh a one-generation `.bak`, saves capture the replaced file, and unreadable or unparseable `config.yml`/`layout.yml` recover from the backup with a status-bar notice. Layout v1 is still read compatibly and rewritten as v2; a standalone migration command remains open.)
-- Add a privacy masking/export policy to the TUI connection table and define explicit JSON contracts for ports, local addresses, Unix socket paths, and MAC addresses. (Done: `m` toggles table masking, `mask_remote_addresses` pins the startup state, and the field-by-field contract is documented in MONITORING.md with one shared masking implementation.)
+## 7. 路线图
 
-### Phase B: Complete 0.1 Features
+### Phase A：稳定开发预览版
 
-- Process combined filters, optional sort direction, threads/PSS/USS, namespaces, and complete detail navigation.
-- Add/remove/replace widgets, drag-and-drop, layout import/export, and tab/workspace management. (Import/export is done on 2026-09-28: `--export-layout`/`--import-layout` with validation, one-generation backup on install, and a defaults fallback when the persisted file is broken. The remaining items stay open.)
-- Add expand/collapse, details, systemd-unit, and container semantics to cgroup v2/Workloads. (Expand/collapse and selected-item detail are done on 2026-09-28, keyboard-driven and verified against a live cgroup v2 host; systemd-unit and container semantics remain.)
-- Extend the current GPU hwmon `class`/`device_target` join into broader CPUFreq, sensor, mount, and device-topology links, and define fan/rail/board-power semantics.
-- Dynamic AMD SMI and Level Zero providers with fake-library tests (NVML is done).
-- Extend GPU process summaries into client/engine/memory-region drill-down and reverse navigation to host-process detail. (Reverse navigation is done on 2026-09-28: the GPU process table takes a keyboard selection and `Enter` opens the host-process detail overlay, reusing the Processes-page detail; client/engine/memory-region drill-down remains.)
-- Establish CPU family/model event allowlists, multiplex correction, per-socket/controller aggregation, and real-hardware error gates for RAM PMU; keep it experimental until then.
-- Unify resource navigation for SMART, RAM-bandwidth, and service Inspectors.
+- 本地化剩余的技术性提供方原因，并增加伪语言与语言布局测试。（已完成：界面原因代码在全部十份目录中都有翻译；由一条原因覆盖测试和一条伪语言布局测试把守。）
+- 把 onefile PTY、干净环境和 locale `--check` 加入标准 CI。（2026-10-02 部分修正：`release-artifacts` CI 作业让 onefile 包跑过 PTY 矩阵、对照 YAML 源校验生成的 locale，并构建基线/校验和证据。它的 SBOM 步骤此前被列为产出 SBOM 证据，但 2026-09-28 时它调用的 `make sbom` 产不出可用的 SBOM——清点了零个构件后以退出码 0 结束。生成器现在会在构件缺失时失败，因此同一个 CI 步骤第一次有了意义；该步骤尚未在 CI 中观察到绿色，这与目标在本地可用是两回事。）
+- 增加崩溃/信号/持续缩放、tmux 和 SSH 场景。（持续缩放风暴、SIGTERM/SIGHUP/SIGINT 干净关闭以及一个真实 tmux 面板场景现在都在 PTY 矩阵中运行——未安装 tmux 的环境跳过 tmux 用例。专用远程 SSH 主机仍有待覆盖。）
+- 建立可重复的性能基准并校准 CPU、RSS、首帧和输入延迟预算。（固定脚本的基准已存在：`make benchmark` 报告首帧、每页稳态 CPU、峰值 RSS 和翻页延迟 p50/p95，并且自 2026-10-02 起在打印输出和 JSON 中同时记录**它测的是什么**——测量对象和宿主机。2026-09-28 在 537 进程的开发主机上测得：首帧约 242 ms，Overview/Processes 页 CPU 3.4%/7.8%，峰值 RSS 约 29 MiB，翻页延迟 p95 约 109 ms；该次运行早于"测量对象"字段，因此是开发树测量，在此也如此标注。2026-10-02 在同一主机、581 进程下重测：**开发树** 首帧 283.6 ms、CPU 4.17%/4.78%、峰值 RSS 36752 KiB、p95 112.8 ms；**发布包**（`dist/wtop/wtop`）326.4 ms、3.58%/5.55%、46016 KiB、110.5 ms。也就是说，发布产物的首帧比构建它的源树慢 15%，常驻内存多 25%——在此之前没有任何单一数字能显示这一点。**目标硬件上的预算校准仍是开放项**，这里的任何数字都不是预算：工具只报告不裁决，因此 §9 的那道门仍然没有可失败的阈值。）
+- 把 Server 2008 上的整 TUI CPU 测量扩展到周期性刷新和其他 Windows 主机，然后削减 Processes 页的剩余开销。（2026-09-28 在两台主机上以 60 秒窗口、完整刷新周期测量。Linux 上，采集器开销经三步——身份缓存、直接 comm 扫描、原生批量 `/proc` 读取和去掉一次冗余的代数重读——从每个 540 进程样本 68 ms 降到约 21 ms，使 Processes 页与 Overview 的差距进入 0.2–0.4 个百分点。1000 进程下 2% 的绝对目标仍然开放，等待校准过的最低硬件——其渲染基线与开发主机不同。）
+- 在 Server 2008 上验证有界的 Windows 可移动介质探测工作线程，包括空介质、热插拔和两个无响应设备；可用介质已检查过。在那里发现的饥饿或容量新鲜度问题需要解决。
+- 为配置/布局增加显式迁移工具、备份和更清晰的错误恢复。（备份与恢复已完成：成功的加载刷新单代 `.bak`，保存时捕获被替换的文件，无法读取或解析的 `config.yml`/`layout.yml` 从备份恢复并在状态栏提示。布局 v1 仍兼容读取并重写为 v2；独立的迁移命令仍开放。）
+- 为 TUI 连接表增加隐私遮蔽/导出策略，并为端口、本地地址、Unix 套接字路径和 MAC 地址定义显式 JSON 契约。（已完成：`m` 切换表格遮蔽，`mask_remote_addresses` 固定启动状态，逐字段契约以同一份遮蔽实现记录在 MONITORING.md。CLI 导出的显式选项 `--unmask-remote-addresses` 于 2026-10-01 加入，导出无论配置如何默认保持遮蔽。）
 
-### Phase C: 0.2
+### Phase B: 补全 0.1 功能
 
-- Vendor semantics for multiple GPUs/MIG/tiles and richer GPU-process linkage.
-- Deeper systemd units, containers, threads, PSS/USS, and richer process I/O
-  detail and rates across platforms.
-- Throttle reasons, power-limit semantics, richer sensors, and insight rules.
-- A second language wave and layout import/export.
-- Stable glibc x86_64/aarch64 release matrix.
+- 进程组合过滤、可选排序方向、命名空间与完整的详情导航。(数值过滤、PID 命名空间、线程行与 PSS/USS 均在 2026-10-01 加入:一个查询可同时组合文本词与阈值(排序方向仍按列取默认,由现有循环切换覆盖),`ns:1` 可搜索且详情浮层显示 NSpid 由内向主机的链,`/proc/<pid>/task` 只为选中进程枚举并列出 TID/状态/CPU%/nice/名称,上限 1024 个线程、硬上限 4096,PSS/USS 取自 `/proc/<pid>/smaps_rollup` 且 USS 由私有份额推导。随后 `i` 在进程浮层打开线程选择器,`Enter` 只读该 TID 的 `status`、`cgroup`、`io` 三个文件,线程组取自 `status` 而非被观察到带 0 或 -1 的 `stat` 第 5 字段,并直接说明该线程是否位于进程自身的控制组;`/proc/<pid>/task/<tid>/schedstat` 是固定三数字 ABI,故优先于键集随内核变化的 `sched`(后者只白名单解析 policy),排队时间与时间片按距上次读取的间隔折算、首读不出速率,CPU 时间改用 schedstat 的纳秒而非除以假设 100 Hz 的 stat tick。可配置列随后到来:`C` 在进程页打开覆盖 11 个渲染列的编辑器,`Space` 切换、方向键把列移动一格而非翻转,默认顺序与表一向的绘制完全一致;状态就是可见列的有序列表(即渲染顺序),随布局而非会话保存(排序键、排序方向与全路径开关仍属会话),`io_read` 与 `io_write` 仍是无列的排序键。`layout.yml` schema v4 增加顶层 `process_columns` 列表,读取时区分新旧 body,手工文件含未知键、重复、空洞或缺身份列即整体拒绝并说明原因,列未实际变更则文件停在原版本,载入时即交给控制器以免表与编辑器不一致;运行队列数字随后从线程视图提升到进程表,只为视口内的行读取——567 进程主机上 44 行视口每 tick 恰好多 44 次文件读取、约占 1702 次读取样本的 2.6%——该列在编辑器提供但默认隐藏,同一改动还移除了浮层里实际无效的 `k signal` 提示。按线程的上下文切换取自该线程本就要读的 `status` 中的 voluntary/involuntary 计数(拆分报告而非求和,间隔内零切换则不显示被抢占占比);按线程内存是否定结论:`/proc/<pid>/task/<tid>/smaps` 与进程自身的 `smaps` 逐字节相同,浮层改为在自述清楚的标题下显示进程自身的 PSS/USS,缺失 `schedstat` 时调度族改为部分读取而非整族报错,因为无 `CONFIG_SCHEDSTATS` 的内核仍有切换计数。)
+- 新增/移除/替换控件、拖放、布局导入/导出,以及标签页/工作区管理。(导入/导出**已于 2026-09-28 完成**:`--export-layout`/`--import-layout` 带校验,安装时保留一代备份,持久化文件损坏时回退默认。控件的新增/移除/替换与自由拖放于 2026-10-01 以布局编辑模式的键盘操作完成;命名工作区同日加入:layout schema v3 携带完整的按页树集合,`w` 打开兼任命名入口的列表(切换、输入名称保存、`x` 删除),v1/v2 仍可读且未命名会话仍写 v2,PTY 矩阵抓到了空集合被当作坏 v3 拒绝保存的那一例;拖放中 `m` 指定放置目标与侧边,一次拖放是一步撤销,焦点留在被移动的控件上。重命名**已于 2026-10-02 加入**:`r` 预填、`Enter` 提交、`Esc` 取消,重命名把名称连同已存的树整体移动,而不是"另存新名再删旧名"(后者会丢弃上次保存以来的全部编辑),重名被拒绝,改成现名是真正的 no-op。实现中发现三处既有缺陷:名称输入时每个可打印键都是文本(`x`/`q` 曾先被当作命令,含这两个字母的名字无法输入,`Esc` 因此改为两级);`Enter` 在已有行上曾先把当前树覆盖到目标再切换,现在该行只是切换;含空格的名称曾写成裸 YAML 键而被受限读取器拒绝,退出保存把完好的 layout.yml 换成下次启动读不了的文件、一代备份又持有同样的坏文本,整个布局因此丢失,现在写出时对名称加引号,并有测试断言两处名称规则一致。第四处藏在明处:LAYOUT 横幅曾替换编辑模式下的整个页脚状态,而工作区管理器只在编辑模式可达,它的一切确认信息都无处显示,现在横幅只占横幅、其余状态照常携带。)
+- 为 cgroup v2/Workloads 加入展开/折叠、详情、systemd 单元与容器语义。(展开/折叠与选中项详情**已于 2026-09-28 完成**,键盘驱动并在真实 cgroup v2 主机上验证;systemd 单元与容器语义、cgroup 到进程的交叉链接于 2026-10-01 加入:节点按自身路径分类出 unit、容器运行时、pod 与登录会话,零额外 I/O,Docker scope 显示为 `docker 8a1bcccc1234` 而非 64 字符 id,`Enter` 把 `cgroup.procs` 成员集作为与搜索相交、单次 `Esc` 可清除的命名过滤器带入进程表,四类容器 id 与 `docker ps` 完全一致。采集器对不可读数据的诚实性随后被修正,证据是数字而非论证:一台普通主机报告了 187 个 cgroup 上的 239 个问题,零拒绝、零解析失败,87 个标 `partial`,而全部 239 个都是内核从未创建的文件——`user-1000.slice` 子树从未被授予 `cpuset`(86 个缺 `cpuset.cpus.effective`、86 个缺 `cpuset.mems.effective`,合计 239 中的 172),其余为 37 个叶 scope 上未授予的 `io`、真根缺失的 `cpu`/`memory`/`pids` 限额文件和一个什么都没授予的 `udev` 子树。修正只动分类:名称不在未截断目录清单里的 `missing` 读取不再是问题,不再置 `partial`、不再计入 `issue_count`/`missing_issue_count`,而已列但被权限拒绝的文件、目录读取与文件读取之间消失的文件、以及什么也证明不了的截断清单各由测试钉住;实测主机现在报告 0 个问题、0 个 partial cgroup,Workloads 页显示 `部分可读 cgroup 0`,删掉的是 239 个假问题、零个真问题,规则只读遍历已持有的清单、不增每节点读取,4096 节点预算上零开销,"为什么 partial"一句也已按新事实在全部十个目录改写。对其余四个降级采集器的同类清查里三个是诚实的:GPU 设备 partial 因为 4788 个 fdinfo 文件中 390 个属于其他用户的进程,powercap 区因为四个在 uid 1000 下确实不可读,挂载因为 `statvfs` 被有意跳过。第四个不诚实:nvme 驱动为不知道限额的两个传感器发布 `temp2_min` -273.15 C 与 `temp2_max` 65261.85 C(加 273.15 恰得 0 与 65535,即 u16 编码的两个端点,同设备的 composite 却有真实的 83.85 C 上限与 -40.15 C 下限),修复只豁免这两个精确端点(-200 C 到 1000 C 之外的读数仍按不可信丢弃),夹具增加全哨兵值的 `temp6` 通道,实测主机现为无错误记录;最后 `test_native` 的 flake——打开与读取是两个系统调用、reaper 可在其间运行,约每三十次一次——改为先读正文并把空或不可读视为"未存活",120 次运行零失败。)
+- 把现有 GPU hwmon `class`/`device_target` 联接扩展到更广的 CPUFreq、传感器、挂载与设备拓扑链接,并定义风扇/供电轨/板卡功率语义。(风扇/供电轨/板卡功率语义**已于 2026-10-01 定义**:hwmon 没有"板卡总功率",功率取已发布的最大通道、绝不重叠域求和,来源通道随行携带而非显示匿名的瓦特值,电压/电流绝不读作功率;风扇以最快通道联入 GPU 表,传感器浮层标明每个 GPU 数字的来源通道。联接成为有两个消费者的一个共享函数,表与浮层不会不一致。在不发布 iGPU hwmon 的真实主机上验证:没有从其余九个 hwmon 设备借用任何数据。CPUFreq/传感器/挂载/设备拓扑链接仍开放。)
+- 带假库测试的动态 AMD SSI 与 Level Zero 提供方(NVML 已完成)。(两项**已于 2026-10-01 完成**。AMD SMI 运行时打开 `libamdsmi`,按 PCI 地址联接,每个查询独立可选(库在原位版本化),且它没有进程枚举,按进程用量仍走 amdgpu fdinfo。Level Zero 打开 `libze_loader`,补充 i915 sysfs 不发布的边缘温度、时钟与封装功率,跨 ABI 只用指针、double 与 32 位整数,因为没有 SDK 无法遍历其带版本的 struct 数组。两者的真机验证仍开放。)
+- 把 GPU 进程摘要扩展为客户端/引擎/显存区域下钻与回到宿主进程详情的反向导航。(反向导航**已于 2026-09-28 完成**:GPU 进程表接受键盘选择,`Enter` 打开复用 Processes 页详情的宿主进程浮层。客户端/引擎/显存区域下钻于 2026-10-01 加入:`i` 打开选中行背后的 DRM 客户端及其引擎利用率、容量、频率与按区域显存,每个数字保留速率质量,采集器本就读取并导出了全部内容。单客户端以下的下钻与频率域**已于 2026-10-02 加入**:持有多个 DRM 客户端的进程先得到列表(表把它们合并成一行),单个客户端直达详情;层级由设备范围的 `drm-client-id` 记住而非每样本重建的客户端表;频率域是真实缺口——内核独立命名引擎与时钟(amdgpu 上 `drm-engine-gfx` 对 `drm-maxfreq-sclk`),采集器原先只走引擎名,名字对不上的域被解析后丢弃,现在作为客户端自有集合并按名字联接;有上限无当前读数的域报告上限占比而非零,钉在上限的时钟标为上限占比而非利用率。客户端之上的设备层得到同一视图:`k` 在 GPU 页打开设备自身的域(读数、范围、上限占比、amdgpu 发布的性能等级及活动者、来源,以及表当前显示的是哪个时钟);拷贝选择器规则时暴露了原版缺陷——只持一个客户端的进程没有可退的层级,第一次 `Esc` 重绘同一详情,现在仅存在层级时后退,PTY 场景以一次 `Esc` 到达干净退出钉住。同一函数还踩了项目自身的两个老陷阱:对格式化字符串做除法(`frequency()` 返回显示串,而上限占比是算术),以及零速率不变量——为上限保留的断电域曾画出裸的 `1.5 GHz`,现在上限被标注,单元测试靠解析每个渲染出的数字而非匹配文本断言,因为 `300 MHz` 包含 `0 MHz`。)
+- 建立 CPU family/model 事件白名单、多路复用修正、按插槽/控制器的聚合,以及 RAM PMU 的真机错误门;在此之前保持实验性。
+- 统一 SMART、内存带宽与服务 Inspector 的资源导航。(**已于 2026-10-01 完成**:每个 Inspector 以同一方式到达——先枚举,再选一个实体或读出为何没有。原先被交给手工构造实体对象的两个 Inspector 现在接收各自枚举产出的对象,SMART 专属选择器成为共享实体选择器,新增列举服务或内存控制器的 Inspector 无需新 UI。单实体的 Inspector 跳过选择器,单单元服务的行为与从前完全一致。)
 
-### Phase D: 0.3 and Later
+### Phase C：0.2
 
-- Assess the scope of a HWiNFO-like TUI: hardware inventory, sensor coverage,
-  device relationships, and vendor-specific detail across supported systems.
-  (First slice delivered on 2026-09-28 across all three platforms: PCI/USB
-  device inventory with `pci.ids` names on Linux, SetupAPI enumerator names
-  on Windows, and IOKit enumerations on macOS, on the System page and in
-  `--snapshot` exports.)
-- Metric recording and replay.
-- Optional perf/eBPF backends, hot call stacks, and flame graphs.
-- Cross-resource timeline correlation and alert rules.
-- Extended EDAC/ECC, DIMM/NUMA, RAID/LVM/ZFS, and PCI/USB Inspectors.
-- Evaluate an independent least-privilege tuning helper only after a clear user need and permission model exist.
+- 多 GPU/MIG/tile 的厂商语义，以及更丰富的 GPU 进程关联。
+- 更深的 systemd 单元、容器、线程、PSS/USS，以及跨平台更丰富的进程 I/O 细节和速率。（线程与 PSS/USS 已在单元级 systemd 属性回读上完成；管理器中持久化的进程列集，以及非 systemd 的容器布局仍待做。）
+- 降频原因、功率上限语义、更丰富的传感器和洞察规则。
+- 第二波语言以及布局导入/导出。
+- 稳定的 glibc x86_64/aarch64 发布矩阵。
 
-## 8. Performance Goals
+### Phase D：0.3 及以后
 
-These remain unmeasured and uncalibrated release goals, not current results:
+- 评估类 HWiNFO 的 TUI 的范围：硬件清单、传感器覆盖、设备关系和受支持系统上的厂商特定细节。（第一片已于 2026-09-28 覆盖三个平台交付：Linux 上带 `pci.ids` 名称的 PCI/USB 设备清单、Windows 上 SetupAPI 枚举器名称、macOS 上 IOKit 枚举，呈现于 System 页和 `--snapshot` 导出。）
+- 指标记录与回放。
+- 可选的 perf/eBPF 后端、热调用栈和火焰图。
+- 跨资源的时间线关联和告警规则。
+- 扩展的 EDAC/ECC、DIMM/NUMA、RAID/LVM/ZFS 和 PCI/USB 检查器。
+- 只有在出现明确的用户需求和权限模型之后，再评估独立的最小权限调优助手。
 
-| Scenario | Goal |
+## 8. 性能目标
+
+以下仍是未经测量、未经校准的发布目标，不是当前结果：
+
+| 场景 | 目标 |
 | --- | --- |
-| 1000 processes at default 1-second sampling | Average CPU below 2% of one core |
-| Idle dashboard | RSS below 60 MiB |
-| Input to display | p95 below 50 ms |
-| First frame | Cold start below 500 ms |
-| No data change | No full-screen redraw |
-| Historical data | Fixed-size; never grows without bound over runtime |
-| Collector failure | Back off one collector without blocking others |
+| 默认 1 秒采样下 1000 个进程 | 平均 CPU 低于单核的 2% |
+| 空闲仪表盘 | RSS 低于 60 MiB |
+| 输入到显示 | p95 低于 50 ms |
+| 首帧 | 冷启动低于 500 ms |
+| 数据无变化 | 不整屏重绘 |
+| 历史数据 | 固定大小；运行期间绝不无界增长 |
+| 采集器失败 | 退避单个采集器而不阻塞其他采集器 |
 
-The implementation already has fixed rings, diff output, collector durations, scheduler backoff, first-frame deferral for hidden sources, GPU fdinfo toggled by actual process-table placement, and pre-test resource health checks. `make benchmark` (`tools/perf_benchmark.py`) provides the repeatable measurement: it drives the real TUI in a pseudo-terminal with a fixed key script and reports cold-start first frame, steady-state CPU per page, peak RSS, and page-switch latency percentiles, optionally as JSON for run-to-run comparison.
+实现已经具备固定环形缓冲、差异输出、采集器时长、调度器退避、隐藏源的首帧推迟、按进程表实际位置开关的 GPU fdinfo，以及测试前的资源健康检查。`make benchmark`（`tools/perf_benchmark.py`）提供可重复的测量：它在伪终端中以固定按键脚本驱动真实 TUI，报告冷启动首帧、每页稳态 CPU、峰值 RSS 和翻页延迟分位数，可选输出 JSON 供逐次对比。它驱动两种测量对象之一——开发树，或经 `make benchmark BENCH_EXECUTABLE=dist/wtop/wtop` 指定的发布包——每个结果都写明是哪一个、出自哪台主机，因为它们是两个不同的程序，没有这些信息，横幅里的"仅同主机对比"就无法使用。不存在的对象会被拒绝而不是被测量，且 `--pages 1` 可用：延迟扫描过去会让应用重新选择当前已显示的页面——那不会重绘任何东西——于是这个有文档的取值曾使每次运行中止。
 
-## 9. 0.1 Release Gates
+## 9. 0.1 发布门槛
 
-- Unit, fixture, PTY, clean-environment, onedir, and onefile tests pass after the resource precheck confirms sufficient headroom.
-- `/proc` races, PID disappearance, counter resets, device hotplug, and permission errors do not terminate the application.
-- Stable-locale coverage and placeholders are consistent; preview status is not misrepresented as stable translation.
-- Every core visible string is internationalized; CJK and pseudolocale text do not break layout.
-- No GPU, PSI, hwmon, systemd, or external helper still allows degraded startup.
-- TUI/exported socket, session, device-identity, and process fields complete privacy review; masking contracts and explicit full-value choices are documented and tested.
-- Experimental RAM PMU results are not presented as universally precise measurements; every claimed platform has event-formula, permission, multiplexing, and real-host comparison evidence.
-- Native-module ABI, architecture, `ldd`, and minimum glibc/kernel baseline have reproducible evidence. (Done for the packaging host: `make baseline` records the module architecture, dynamic dependencies, and minimum required glibc symbol version into `dist/BASELINE.txt`, produced in CI alongside the SBOM and checksums. The current development toolchain requires glibc `GLIBC_2.34`; a lower packaged baseline still needs an older-toolchain build host.)
-- glibc x86_64 and aarch64 targets each complete native builds and PTY smoke tests.
-- Real performance budgets pass on the minimum and typical supported hosts.
-- Release artifacts include checksums, an SBOM, third-party notices, and traceable build metadata. (Done on 2026-09-28: `make sbom` writes a CycloneDX 1.5 SBOM beside the bundle, THIRD_PARTY.md lists the bundled components and licenses, and `make build-id` embeds the git revision into `--version`, `--diagnose`, and the SBOM.)
+- 资源预检确认余量充足后，单元、夹具、PTY、干净环境、onedir 和 onefile 测试全部通过。
+- `/proc` 竞争、PID 消失、计数器复位、设备热插拔和权限错误不会终止应用。
+- 稳定语言的覆盖率和占位符一致；预览状态不被冒充为稳定翻译。
+- 每一个核心可见字符串都已国际化；CJK 和伪语言文本不破坏布局。
+- 没有 GPU、PSI、hwmon、systemd 或外部辅助程序时仍允许降级启动。
+- TUI/导出中的套接字、会话、设备身份和进程字段完成隐私审查；遮蔽契约和显式的完整值选项有文档且有测试。
+- 实验性的 RAM PMU 结果不作为普遍精确的测量呈现；每个宣称的平台都有事件公式、权限、多路复用和真机对比证据。
+- 原生模块的 ABI、架构、`ldd` 和最低 glibc/内核基线有可复现的证据。（对打包主机已完成：`make release-baseline` 把模块架构、动态依赖和最低要求的 glibc 符号版本记录进 `dist/BASELINE.release.txt`，在 CI 中与 SBOM、校验和一同产出。这句话在 2026-10-02 之前写的是 `make baseline` 和 `dist/BASELINE.txt`，写下时都对，当天结束时都不对了：CI 测量的是发布产物形态而不是构建树，因为构建树的模块和 `.tools/` 下引导的解释器不进入任何发布。`make baseline` 仍把构建主机的下限记录进 `dist/BASELINE.txt`，那是一次真实测量而非发布证据——它既不发布也不由 CI 运行，`tests/unit/test_release_evidence.lua` 的 §6a 与 §6d 在这两点上一致。）当前开发工具链要求 glibc `GLIBC_2.34`；更低的打包基线仍需要更旧工具链的构建主机。
+- glibc x86_64 与 aarch64 目标各自完成原生构建和 PTY 冒烟测试。
+- 真实性能预算在受支持的最低和典型主机上通过。**预算不存在，因此这道门既不能通过也不能失败。**`make benchmark` 测量四类数字而不裁决任何一类；整棵树里没有任何阈值，该工具也不在 `test-all` 或 CI 中，因此只有有人主动要求时才存在一次新运行。2026-10-02 修好的是无需发明目标就能修好的部分：一次测量现在会写明它测了什么、在哪测的，发布包可被选为测量对象，`tests/unit/test_benchmark_record.lua` 把这些全部钉住。仍然开放的是裁决本身——首帧、CPU、RSS 和 p95 *应当*是多少——那需要目标硬件，而不是在这里挑一个数字。
+- 发布产物包含校验和、SBOM、第三方声明和可追溯的构建元数据。声明那一半曾被记为待办而且是没人查过的那半：SBOM 在它的四个组件上声明了 EUPL-1.2、MIT 和 LGPL-3.0-or-later，而发布不带其中任何一份文本；`SHA256SUMS` 覆盖两个可执行文件而不覆盖任何声明；两个 CI 上传作业发布了证据和程序却不发布一份许可证文件。2026-10-02 已修正——见 §10 的条目和 `docs/PACKAGING.md` §6.1。（2026-10-02 部分修正。`make checksums` 可用，`make build-id` 把 git 修订嵌入 `--version` 和 `--diagnose`。`make sbom` 在此被记为 2026-09-28 完成，实际没有：它指向 `dist/bundle-dir`——一个从未有规则产出过的路径——因此找不到文件，却写出了完整的 CycloneDX 1.5 文档（三个组件、序列号、许可证、purl），没有哈希，打印 `SBOM written` 并以退出码 0 结束。生成器现在把两种产物形态当作两条独立路径，缺一即拒绝写出，对启动器、onefile 和原生模块计算哈希，把模块声明为独立组件，并把 PUC Lua 运行时记为无哈希组件——因为没有哪个文件属于我们并容纳它。onefile 是否携带模块的逐字节内容现在是测出来的而不是断言的——确实携带，因此 onefile 自身的哈希已覆盖模块——解释器则是不逐字节相同的那个，这正是两者被区别描述的原因。`tests/unit/test_sbom.lua` 把这些连同 `make sbom` 的接线全部钉住。签名和完整的构建溯源记录仍然没有任何目标可以产出。）
 
-## 10. Version 0.1 Fixed Decisions and Open Questions
+## 10. 0.1 版固定决策与待决问题
 
-Fixed:
+已固定:
+- 工作负载按 systemd unit、容器或 pod 以及会话识别,而不是仅按裸 cgroup v2 语义。问题点名的东西已全部完成并验证,而非停留在计划:2026-09-28 完成展开/折叠与选中项详情面板,2026-10-01 完成按路径推导 unit/container/pod/session 分类以及 cgroup 到进程的交叉链接,最后一项在一台实机上核对过,分类出的容器 id 与 `docker ps` 完全一致。问题据此关闭而不是留作偏好,其背后的采集器数据不需要额外 I/O:身份由扫描已经读过的一条路径推导而来。2026-10-02 从开放清单移到这里,此前它带着自己的答案在同一个句子里坐了很久。
 
-- Linux-only, PUC Lua 5.5.1 release ABI, and Lua 5.4 syntax subset.
-- Custom cell grid/diff renderer and narrow C native terminal backend.
-- Single-threaded deadline scheduler; no current `luv` introduction.
-- YAML authoritative locales → deterministic Lua modules → literal registry.
-- luainstaller builds onedir first, then onefile; each architecture/libc is built natively.
-- EUPL-1.2 licensing.
+- 仅限 Linux,PUC Lua 5.5.1 发布 ABI,Lua 5.4 语法子集。
+- 自绘单元格网格/差异渲染器,加一个窄的 C 原生终端后端。
+- 单线程截止期调度器;当前不引入 `luv`。
+- YAML 权威语言目录 → 确定性 Lua 模块 → 字面量注册表。
+- luainstaller 先构建 onedir 再构建 onefile;每种架构/libc 都原生构建。
+- EUPL-1.2 许可。
+- 工作区名称是用户输入的标签,不是标识符,因此其规则表述为必须排除什么,而不是必须包含什么:控制字符、可能与名称混淆的结构性 ASCII,以及任何不属于合法 UTF-8 序列的字节。C locale 的字符类表达不了这一点,所以在此决策之前,zh-CN 或 ja-JP 用户无法用他们平常谈论它的方式为工作区命名。决定什么是"字母"需要 Unicode 表,而这个项目没有理由为一个用户自选的标签依赖它,何况这种区分不配它的成本——用 emoji 写的名称只是怪,并无害处。要求*合式性*正是让放宽变得安全而非仅仅宽松的关键:校验整个序列,而不是接受 0x7f 以上的每个字节,才能把 8 位控制范围挡在外面,因为 0x9b 对尊重它的终端是一个裸 CSI,而手工编辑的布局文件否则可能把一个这样的字节放进绘制在屏幕上的名称。作为*接续*字节时,它只是多字节字符的内部,不构成控制字符。这条规则住在 `Layout.workspace_name_ok` 里,会话路径与布局读取器**两处**调用方都使用它,因为一条出去时被接受、回来时被拒绝的名称毁掉的是整个文件而不是一条条目;住在两处的规则最终让用户付出的是每一个工作区而不是一个。长度上限是 64 **字节**,十个目录全部如此表述:名称还是 ASCII 时字节与字符是同一个数,而允许非 ASCII 名称正是让"字符"不再成立的原因——21 个 CJK 字符是 63 字节,22 个已经超限。
+- 绝不从 `/proc/<pid>/task/<tid>/smaps` 读取每线程内存。该文件存在且是独立的 inode,但内容与进程自身的 `smaps` 逐字节相同:线程共享地址空间,没有可供归因的东西。线程浮层在如实命名的标题下显示进程的数字,未来的改动也不应为了"填补"该节而加入这次读取。
+- 内核没有创建的 cgroup 控制文件是缺失的指标,不是失败的读取。控制器的文件只有在该控制器被委派到子树时才出现在 cgroup 里,而真正的根根本不发布任何 `cpu`/`memory`/`pids` 的用量或上限文件,所以在任何普通的 systemd 主机上,大多数 cgroup 缺文件的原因与权限或故障毫无关系。因此 `partial` 指的是内核*确实*创建的文件读不到,产生它的两种情形——一次拒绝,以及在目录读取与文件读取之间消失的文件——正是计数器所数的。cgroup 自己的目录清单是判据,取自遍历已有的清单,没有额外 I/O,且只在清单未被截断时使用,因为未截断的清单是唯一能证明某个名字从未被创建的证据。读取仍会尝试:落后于已被替换 cgroup 的清单不得丢弃一个确实存在的值;改变的是 `missing` 读取的*分类*,而不是是否执行读取。这与上面零值边界的决策是同一条规则向外再走一步:没人得到的值不是值,无论它从未发布还是从未被查找。
+- 存在而不含值的属性是缺失,不是失败。`ENODATA` 被分类为 `unavailable`,这是每个可选属性的读者早已当作"未发布"的那个词。这是同一族的第四个成员,这一族现在只陈述一次:没人得到的值不是值,无论驱动把它发布为零(`spd5118` 与 `intel-rapl` 的边界)、发布为协议哨兵(u16 温度端点)、用 `ENODATA` 扣住(`peak_power` 约束没有时间窗;core 或 uncore 子区没有最大功率),还是根本没有创建文件(未被委派到 cgroup 子树的控制器)。最后一个靠数出来发现:本机每个 Intel RAPL 区都应答两次 ENODATA,于是 powercap 区的八个 issue 里有四个描述的是驱动成功打开却无内容可放的文件。两个细节值得保留:powercap 采集器早已带着关于此 ENODATA 行为的注释并答对了一半——值以缺失到达而不是零——却没发现同一读取被记为错误,而这正是让该区降级的原因;*现有的* powercap 夹具也抓不住它,因为它建模的是另一种缺失——文件不在——那经由完全不同的路径到达采集器。于是照本机真实形态写了第二个夹具,夹具文件系统也长出了声明"以给定 errno 失败的读取"的能力——经由真实的 `FS.classify_error` 分类,而不是携带手写的 kind,夹具不能把自己的结论反过来断言给采集器。这条规则是 errno 表中的一项而不是一刀切:`EACCES` 仍是 denied,`ENOENT` 仍是 missing,因真实原因失败的读取仍是 `io_error`,三者都被钉住。实机的 issue 清单从八条降到四条为止,剩下的四条是仅 root 可读的 `energy_uj`,那才是本来就该在的类型。我自己有一个假设中途错了,值得记录,因为这是本项目第三次被共享的 errno 表咬:errno 5 在 Linux 是 EIO、在 Win32 是 ERROR_ACCESS_DENIED,而这张表早在这一切之前就把 Windows 侧映射成了 `denied`。一条断言"EIO 仍是 I/O 错误"的测试断言的是关于代码的假话;"真实失败未被触碰"的诚实见证是 ENOSPC。
+- GPU 设备自身的频率域拥有独立的一屏,GPU 页上的 `k` 打开它。表格永远只能装下一个提升的时钟加其余的计数,因为一个单元格没有空间说明哪个时钟是哪个;计数足以让单元格不再暗示自己是唯一的时钟,却不足以读出任何其他时钟。DRM 客户端早已在下一层拥有这个视图,所以设备视图复制那个形态而不是发明新的:同样的 Engineless 事实布局、同样的"一个答案直达、多个答案列清单"规则、同样的 Esc 回退一级处理。它与两个既有下钻是不同的问题——`Enter` 问谁在这张卡上,`i` 问一个客户端在干什么,`k` 问硬件自身在跑什么——并且在什么都没选中时也可用,因为卡的时钟与有没有进程在用它无关。表格已经做对的两件事被直接带进来而不是重新发明:标题偏取*实际*读数而非当前值,于是浮层与单元格不会对"现在"产生分歧;因断电而读作 0 的时钟绝不画成 0 Hz——它显示带标签的上限并说 `unavailable`,因为缺失速率旁边一个裸上限,恰是读者会误认成速率的数字。证据缺口仍在多时钟*布局*的硬件:本机是只发布单个 `gt0` 域的 Intel iGPU,所以双时钟并排布局与 amdgpu 性能级别由渲染屏幕测试钉住,而不是由一张真卡钉住。
+- 驱动的"无值"哨兵是缺失,不是失败,而且只有精确的哨兵才算。零是"此上限从未被编程"的一种编码;u16 带偏移的温度编码是另一种,它让编码自身的两个区间端点成为哨兵——原始 0 读作绝对零度,原始 65535 读作 65,261.85 °C。`nvme` 驱动恰好为它不知道上限的传感器发布这一对,旁边是同一设备复合传感器的真实 83.85 °C 最大值,所以那些怪值是编码的属性而不是硬件的属性。这样的值留作缺失、不记录错误,这与零值边界已做出的决策相同;更宽的合理性区间不变,-200 °C 或 1000 °C 的读数仍报为不合理。窄正是要点:原谅物理范围之外的一切也会原谅损坏的读数,其代价是一个没人被告知的故障,换来的是移除一个从未存在的故障。
 
-Open decisions or missing evidence:
+待决问题与缺失证据:
 
-- Minimum Linux kernel, glibc, and distribution baseline.
-- Formal-release SBOM, signing, and binary-redistribution records.
-- Exact minimum GPU capability for 0.1—whether generic DRM is sufficient or a vendor API is required—and the real-hardware pool.
-- Which profiling, process-management, or tuning capabilities “performance release” ultimately includes.
-- Whether 0.1 accepts Workloads with raw cgroup v2 semantics only or first requires systemd/container identity, expand/collapse, and details.
-- Whether to retain the experimental `perf stat` RAM-bandwidth Inspector in 0.1, including platform claims and default enablement.
-- Maintainers, human review, and terminal-screenshot workflow for stable translations.
+- 一个陈述了自己未曾测量之结论的发布证据工具。**已于 2026-10-02 关闭**;该形态第四次出现,使它成为结构性问题而非又一次修补。三次更早的分别是:生成器指向没有任何规则产出的路径、一道退出非零而报告仍说 `status: within the promised floor` 的门,以及两个不带参数调用 `tools/record_baseline.sh` 的 CI 步骤——自增量 23 起 ELF 清单成为必填,这从来是用法错误——重定向还造出了 **0 字节**的 `dist/BASELINE.txt`,正是发布作业上传的那个文件。持久的答案是 `tests/unit/test_release_evidence.lua`:`tools/` 里每个脚本都必须被分类为是否发布证据、必须经 Makefile 目标触达、`test-all` 必须依赖全部,并对声明的集合断言契约本身——完整运行成功并说明,不完整运行失败且什么都不说。
+
+- 跨 libc 容器运行曾在四个文件上失败达两个增量而无人重跑,而失败与 libc 无关。**已于 2026-10-02 部分关闭**:四个失败已修复,glibc 2.17 上恢复全绿——修复落地当天 94/94,同日稍晚加入基准记录测试后 95/95,所以这个数字跟着套件走而不是常量;失败原因如今写明:无 python3 镜像里的 `python3: command not found`,以及容器构建里缺失的 `build_revision.h`,都与 libc 无关。`make cross-libc` 不在 `test-all` 里(它需要容器),所以残余风险性质未变:一道只在有人记得时才运行的门报告的是陈旧结果,两个增量的沉默就是证明;只有 CI 能关闭它,而它没有 CI 作业。
+
+- 最低 Linux 内核、glibc 与发行版基线。内核一半已经以代码性质关闭:没有最低内核——`Scheduler:probe_all` 把每个探针放在 `pcall` 下,失败的探针变成能力记录而非致命错误,`Snapshot.merge` 仅在 `ok` 结果时装载数据并总是写质量记录;原生层里 `pidfd_open`/`pidfd_send_signal`(5.1、5.3)躲在 `#if defined(SYS_pidfd_open)` 后并带回降级消息,`close_range`(5.9)只是提速,会回落到 `getdents64` 加有界 `close()` 循环;`tests/unit/test_engine.lua` 对一台没有 cgroup v2、PSI、hwmon、DRM、powercap 和 cpufreq 的模拟内核钉住了全部。glibc 一半是构建主机的性质,可测而非可选:读发布的 ELF 得原生模块 GLIBC_2.34、PUC Lua 5.5.1 解释器 GLIBC_2.38,捆绑包的底线因此是 2.38;`tools/record_baseline.sh` 此前只测一个文件并把它的底线当作*唯一*底线,少报了四个次版本,现在按参数对多文件取最大值、缺失的 ELF 是硬错误、`tools/baseline.conf` 声明承诺;`tools/cross_libc_build.sh` 在发行版容器里量出同一份源码在 manylinux2014 需要 **2.17**、本机需要 **2.38**,`libdl.so.2` 如预测般重新出现在 `DT_NEEDED`。让 2.17 构建存在花了两处修复:`_DEFAULT_SOURCE` 在 glibc 2.19 之前不存在,带来六个 `IFF_* undeclared` 报错;先用的 `_GNU_SOURCE` 又会让 2.38+ 的 glibc 把 strtol 重定向到 `__isoc23_strtol`、把模块底线抬到 GLIBC_2.38,最终把 pre-2.19 默认集写全(_DEFAULT_SOURCE、_BSD_SOURCE、_SVID_SOURCE、_POSIX_C_SOURCE、_XOPEN_SOURCE 700)。捆绑测量又把同一问题抬升一级:`make release-baseline` 现在测要发布的捆绑包,因为 onefile 外层 `objdump -T` 报 GLIBC_2.34 而内嵌解释器要 2.38,`tools/elf_floors.py` 于是测一个文件及其携带的每个 ELF,`tests/unit/test_elf_floors.lua` 钉住该性质;身份方面,模块现在把自身源码修订从生成的头文件编译进去并经 `l_system_constants` 报告,而不是让 `src/wtop/build_id.lua` 独自携带。仍未关闭的是 per-distribution 内核声明:容器共享主机内核,以上只是 libc 证据,验证矩阵现在逐主机记录内核版本;system 级 CPU PSI `full` 仅 5.13 起报告这一边界已核对——解析器接受只有 `some` 的文件、导出在缺失时省略 `full`——该子问题据此关闭。
+
+- 签名与完整构建溯源记录(面向正式发布)。SBOM 半部分已不再只是名义上开放:`make sbom` 现在拒绝描述构件不全的发布,并对其发布的三份文件做哈希。剩下的仍是签名(没有任何目标产出它)、超出 git 修订与逐构件 SHA-256(`make release-baseline` 与 SBOM 已携带)之上的溯源记录,以及二进制再分发记录本身。
+
+- 项目版本写在三处——`src/wtop/version.lua`、`tools/make_sbom.py` 里的字面量、`native/wtop_native.c` 里的字面量——而没有任何东西让它们成为一体。**已于 2026-10-02 关闭**:树顶的 `VERSION` 成为唯一人工编辑处,一次 `tools/write_build_id.sh` 生成 `src/wtop/version.lua`、`build/native/build_revision.h` 与 `build/native/build_version.h`,三个消费者都是产物而非拷贝。原因用户可见:`--version` 打印 Lua 树的版本而 `--diagnose` 打印模块的,漏改 C 侧的一次升版会让一份诊断报告说出两个版本而无人标记,`--version` 现在也像报告修订不一致那样报告版本不一致。测试断言的是出处而非相等——C 源必须完全不含版本、Lua 模块必须标记为生成——因为值检查分不清派生的数字与拷贝的数字,只有拷贝的缺席才能。
+
+- 0.1 的确切最低 GPU 能力。**已于 2026-10-02 关闭**,答案是没有什么可声明的:主机无需为 wtop 提供任何 GPU 即可工作,GPU 只需提供一个名为 `card<N>` 的目录条目才会被显示;通用 DRM 即已足够,不需要任何厂商 API,NVML、AMD SMI 和 Level Zero 只是给通用 DRM 已找到的卡加字段,它们缺席去掉的是字段而不是卡。唯一需要厂商库的地方是发现而非测量——没有 DRM 卡时探针仍会询问 NVML 与 AMD SMI,因为厂商托管的 GPU 可能没有 DRM 节点;`tests/unit/test_gpu_minimum.lua` 对三种不同的无 GPU 主机形态和最低可行卡钉住两半,而不是把声明留在散文里。仍开放的是真机池(NVIDIA、AMD、多适配器、第二时钟域、风扇曲线),由 `docs/PACKAGING.md` §10 的发布清单条目跟踪,不在这里。
+
+- "性能发布"最终包含哪些剖析、进程管理或调优能力。
+
+- 0.1 接受带 systemd/容器身份、展开/折叠与详情的 Workloads,而不是仅凭裸 cgroup v2 语义。问题点名的三件事均已完成并验证而非停留在计划:2026-09-28 的展开/折叠与选中项详情面板,2026-10-01 的按路径推导 unit/container/pod/session 分类与 cgroup 到进程的交叉链接,后者在实机上核对过,分类出的容器 id 与 `docker ps` 完全一致。问题据此关闭而不是留作偏好;采集器数据无需额外 I/O——身份由扫描已读的路径推导而来。
+
+- 是否在 0.1 中保留实验性 `perf stat` 内存带宽 Inspector,包括平台声明与默认启用。**已于 2026-10-02 关闭**:**保留,默认开启,声明收窄到它实际测量的东西。** 本机恰是有趣的情形:它发布白名单要的全部四个 PMU 名,`perf list` 也在自由运行对上宣传 `data_read`/`data_write`/`data_total`,但每一个都在 `sys_perf_event_open` 上以 `EINVAL` 失败——自由运行计数器不是计数 PMU,于是探针报 `ready`、首次测量返回 `memory_events_not_supported`;该能力现在携带说明"计数器存在但未被读取"的翻译原因,`tests/unit/test_ram_bandwidth_claim.lua` 钉住探针不开计数器、原因到达渲染行、在场的来源不被列为缺口、公式推导的理论值保持 `estimated` 标签。有意不声明任何 `perf_event_paranoid` 阈值——本机的事件在任何权限检查之前就以 `EINVAL` 失败,有无 `-a` 皆然,无法演示那条内核规则,而在能力记录里断言未测量的规则正是本项目不断移除的缺陷;剩余的诚实缺口是真机池(计数器真能打开的主机未验证),与 NVIDIA/AMD 矩阵一起留在发布清单里。
+
+- 一个声明了它并不携带之条款的发布。**已于 2026-10-02 关闭**,该形态第五次出现,且首次关于文件而非文档内的一句话。三个独立缺口叠加:SBOM 在 `wtop` 和 `wtop_native` 上声明 EUPL-1.2、在 `lua` 上声明 MIT、在 `luainstaller` 上声明 LGPL-3.0-or-later,而发布不含其中任何一份文本;`SHA256SUMS` 只覆盖两个可执行文件,`sha256sum -c` 全绿而旁边的条款可以被人替换;两个 CI 上传作业发布了 SBOM、清单、基线和 onefile,却没有一份许可文件。各缺口在其归属处关闭——生成器拒绝声明文本缺席的许可并逐组件记录 `wtop:licence-text:{path,sha256,present-in,covers}`,`make bundle-dir` 拷入 `LICENSE`,清单自己发现通知并拒绝为空,`make test-release-notices` 直接问捆绑包并进入 `test-all`,CI 上传它们;onefile 仍不带 EUPL 文本(`--include` 是打包工具唯一支持的加文件方式且会把路径当 Lua 源校验,luainstaller 还按所有权标记拒绝未拥有的内容——这也是 `bundle-dir` 现在从空重建的原因),该缺口按许可逐条记录而不是盖住;可归纳的半点是每一层各自都站得住,而失败的声明是一条无人端到端负责的合取。
+
+- 一次没有说明自己测量了什么的性能测量。**已于 2026-10-02 关闭**,该形态第七次出现:`tools/perf_benchmark.py` 驱动两个主体之一——开发树,或由 `WTOP_BENCH_EXECUTABLE` 指名的发布捆绑包——它们不是同一个程序;同机几分钟内量得首帧 283.6 ms 对 326.4 ms、峰值 RSS 36752 KiB 对 46016 KiB,而两份 JSON 记录的键集合逐字节相同,没有任何一份说明主体是谁。主体与主机现在进入打印输出和 JSON,指名而不在场的主体被拒绝而不是被测量;顺带发现 `--pages 1` 永远完不成一次运行,以及该文件的 `dict[str, object]` 在 Python 3.6 的 manylinux2014 镜像上是 SyntaxError。有意保持开放:没有预算——毫秒级首帧目标是对可接受性能的判断,在没有目标硬件的情况下选一个,正是本项目不断移除的未测量规则。
+
+- 两个点名了原生模块、却只从其一半重新构建的 CI 门。**已于 2026-10-02 关闭**,该形态第八次出现:`.github/workflows/ci.yml` 的严格方言检查与 ASan/UBSan 模块只编译 `native/wtop_native.c` 和 `native/wtop_nvml.c`,漏掉经 `dlopen`/`dlsym` 而非链接期抵达厂商库、最容易拿错指针的 `wtop_amdsmi.c` 与 `wtop_levelzero.c`——工作流里唯一检查内存错误的作业从未加载过其中任何一个。两个门现在是 Makefile 目标,新增 `.c` 文件只需加进 `NATIVE_SOURCES`,守卫用 `make -n` 检查各目标的**展开**而非配方文本;最强条款是工作流完全不得点名 C 源文件,这让拷贝无法重新引入而不是只修今天的拷贝。插桩模块放 `build/native-san/`(覆盖 `build/native/wtop_native.so` 会让模块新于自己的先决条件),`test-sanitized` 不进 `test-all`(构建主机不必然有 sanitizer 运行时)。
+
+- 一份没有任何东西应用过的已发布契约。**已于 2026-10-02 关闭**,该形态第九次,首个关于 schema:`docs/agent-v1.schema.json` 是脚本或 LLM 了解 `--agent` 形状的依据,而它唯一受到的自动检查是 `make check` 里的一次 `json.load`——那只说明 schema 是 JSON;`export.lua` 的三个采集上限与 schema 的三个 `maxItems` 是同一组数字写了两遍。`tools/agent_schema.lua` 按 schema 所用的 Draft 2020-12 子集校验,`tools/check_agent_schema.lua` 运行它,`make check` 在构建主机跑 `--agent` 并把结果套到 schema 上,报告与契约不会再无声漂移;关键设计是 checker 不实现的关键字是**失败并点名该关键字**而不是通过——对自己不懂的东西视而不见的校验器就是同一缺陷上移一层。`tests/unit/test_agent_schema.lua` 大半是给 checker 看必须拒绝的文档(一个校验器若只见过合规文档,就是一个没人运行过的校验器),首跑就发现 unknown-type 检查躲在 `SUPPORTED[key]` 之后不可达——判词对、证据错,现在断言拒绝**点名**未知类型;声明的限制是空容器同时满足 `"type": "object"` 与 `"type": "array"`(解码器对两种 JSON 类型返回同一 Lua 类型);三处重复的 `recipe_of` 也收敛进 `tests/support/makefile.lua`。
+
+- 为稳定翻译准备维护者、人工审校与终端截图工作流。
+
+- CI 产出而无人接收的证据。**已于 2026-10-02 关闭**,该形态第十次,首个关于一个从头到尾都正确的文件:`arm64` 作业运行 `make baseline BASELINE_OUTPUT=dist/BASELINE-arm64.txt`,目标存在、配方写了文件、步骤是绿的,而工作流没有任何上传步骤提到它——README.md 称为发布目标的那个架构上唯一的测量记录,是一个小时后被删除的 runner 上的文件。`tests/unit/test_release_evidence.lua` §6 现在读工作流而不是搜文本,解析每条 `make` 调用实际产出什么(命令行覆盖,或无覆盖时的 Makefile 默认)并要求每条路径出现在某个上传路径里;§6b 是更宽的网(工作流点名的每个 `dist/` 路径),§6c 用包含 ci.yml 没有的形态(内联路径、带 chomping 指示符的折叠标量、无名上传、目录条目)的夹具测那个手写 YAML 读取器,§6d 顺带收紧了 §5d。变异测试发现三条漏网(忽略命令行覆盖仍全绿;靠计数证明覆盖同样通过),已修复为具名函数加对解析*形状*的下限;夹具还发现第二个缺陷——八行说明写在 `path: |` 块内,`#` 不是注释而是文件名首字符,`release-artifacts` 一直发布八条名为 "# The gate in docs/PLAN.md §9 names third-party notices" 的路径,由真实 YAML 解析器交叉核对手写读取器时发现;顺带修好 `tests/support/makefile.lua` 的 `variable_of`(只认 `:=`、多读一行,把 `BASELINE_OUTPUT` 读成 "dist/BASELINE.txt baseline: native toolchain")与测试文件自身 1-4 节整段字节级重复的问题。
+
+- 一份没有接收方能核对的清单。**已于 2026-10-02 关闭**,该形态第十一次,并部分撤销第五次:两个 CI 上传步骤都带 `dist/SHA256SUMS`,都不带清单所描述的文件本身;解包运行 `sha256sum -c SHA256SUMS`,在 `release-artifacts` 里读七分之五、在 `wtop-bundles` 里七分之一,两者退出码均为 1——清单是对的,它描述的发布是缺的。修复是清单与它描述的文件同行——`wtop-bundles` 发布整个 `dist/wtop/`,`release-artifacts` 不再发布第二份 `SHA256SUMS`——修好后 `wtop-bundles` 里 `sha256sum -c` 7/7 通过、退出 0;§6c 向 Makefile 问哪些文件随发布(`RELEASE_ELFS`,与 `release-baseline` 所测同一清单)并要求**每个发布清单的工件自身也发布它们**,取值用新的 `expanded()` 问 make 本身而不是拿 `$(RELEASE_BUNDLE)/wtop` 当文件名比较。顺带修掉上一增量上传步骤 `path: |` 块内的整段说明(同样以 `#` 开头成为八条假路径),它不是读文件读出来的,而是用真实 YAML 解析器交叉核对手写读取器时发现的——九条真路径一致、八条分歧;读取器现在保留两份文本(上传路径不剥、`run:` 下的调用剥注释)。
+
+- 关于构建主机的证据,被当作发布发布出去。**已于 2026-10-02 关闭**,该形态第十二次,直接源于第十一次的关闭:两个 CI 作业都跑 `make baseline`,其对象是 `$(BASELINE_ELFS)`——`build/native/` 下的模块与 `.tools/` 下的引导解释器,两个都在 runner 上存在、都不随发布交付;`make release-baseline` 正是为此存在,`docs/PACKAGING.md` §9.1 用一句话说明原因,而**工作流里没有任何作业跑过它**。测得 `dist/BASELINE.txt` 点名 `build/native/wtop_native.so` 和 `.tools/lua-5.5.1/bin/lua`,`dist/BASELINE.release.txt` 点名 `dist/wtop/wtop`、`dist/wtop/.luai/native/wtop_native.so` 和 `dist/wtop-onefile`,两者都报最高要求 2.38——正是让它存活的**读起来像一致的重合**。两个作业现在跑 `make release-baseline`(aarch64 经 `RELEASE_BASELINE_OUTPUT` 命名输出,为此付出一次此前没有的捆绑构建),§6d 拒绝发布的 `dist/BASELINE.txt` 并要求 `dist/BASELINE.release.txt`、两条路径都从 Makefile 读出,并断言 `BASELINE_ELFS` 与 `RELEASE_ELFS` 仍然不同——对一致性的坚持在两份清单同名时毫无意义。
+
+- 一份把可执行文件留在外的完整性清单。**已于 2026-10-02 关闭**,该形态第十三次,并第二次重开第五次:增量 33 给 `SHA256SUMS` 加的是 `find wtop -type f` 按 `LICENSE`/`*NOTICE*`/`*/licenses/*` 过滤的列表加两个手写入口,捆绑包里其余一切都在清单之外,包括 `.luai/native/wtop_native.so`——一个可执行文件,且是整个包存在的意义所要加载的东西。在接收方拷贝上把随包模块替换后测得:`sha256sum -c SHA256SUMS` 报 **7/7 通过、退出 0**,而确实哈希该文件的 SBOM(其 `wtop_native` 组件)记录 `c9434464...` 对实际 `92e78d0b...`。修复是清单覆盖捆绑包未过滤的遍历加 onefile(13 条、全部),空遍历同样被拒绝,`make test-release-notices` 追加问"是否全都在里面",`test_release_evidence.lua` 5a 钉住配方形状;可归纳的半点很窄:**发现里的过滤器是对覆盖什么的决定,而本项目里没有人在做那个决定**——过滤器为通知引入、对通知正确,却无声变成了其余一切的覆盖策略。
+
+- 关于同一发布的两份完整性记录,没有被任何东西比较。**已于 2026-10-02 关闭**,该形态第十四次,第三次是同一事实的两份拷贝而无关系维系:`dist/SBOM.cyclonedx.json` 与 `dist/SHA256SUMS` 对部分相同的字节做哈希(测得三个文件,SBOM 的三个摘要都在清单的十三条里),由不同目标、不同工具、按不同清单写出,没有东西比较它们;`docs/PACKAGING.md` 只留了一句给人看的"随 `make checksums` 重新生成 SBOM",只刷新一边的重建会发布两份互相矛盾的完整性记录而本项目所有门全绿。`tools/check_digest_agreement.py` 在 SBOM 记录了清单没有的摘要时拒绝,`make test-release-notices` 运行它,方向是单向的(清单合理覆盖 SBOM 没有组件的文件),无摘要的 SBOM 与空清单同样被拒,且 checker 在单元套件(4c)里也被喂过文档——校验器若只见过合规文档,就是一个没人运行过的校验器。顺带修了增量 40 一小时前刚使其失真的两句文档(`docs/PLAN.md` 的"只覆盖两个捆绑入口"、`docs/PACKAGING.md` 目标表的"入口加全部通知"),执法依据是 §5a 而非散文;首个空摘要变异自己写错(断言恒真),修正版直接针对 checker。
+
+- 一条勾选了自己正文所反驳之框的清单。**已于 2026-10-02 关闭**,该形态第十五次,首次在清单而非文档里找到——清单是给人按框读的,危害也最大:`docs/PACKAGING.md` §10 同一条目先勾着"在最终候选上重跑 `make checksums` 和 `make sbom`,**并另行产出签名与完整构建溯源记录**",四句之后又承认"它没有说签名的事,没有目标产出签名";`docs/PACKAGING.md` 之外,`docs/PLAN.md` §10 一直把签名与溯源列为开放项,Makefile 与 `tools/` 里也找不到签名器。条目现已拆开:重跑两个生成器保持勾选,签名与溯源是自己的未勾行并指向计划;`tests/unit/test_release_checklist.lua` 把两个方向握在一起——计划列为开放期间,不许有任何框声称它;计划关闭后,必须有一条 Makefile 配方调用签名器,否则让声明消失的唯一办法就是编辑守卫。守卫自己的读取器第一个失败就是守卫自己:条目匹配贪婪跨行捕获了下一条(恰是已关闭的),把签名问题读成已回答;写它时还顺带抓出 `assert(cond, message)` 在条件成立时也求值消息、`==` 与 `..` 优先级两个 Lua 陷阱。
+
+- 一道只在其键入者机器上运行过的发布门。**已于 2026-10-02 关闭**,该形态第十六次,第二个关于 CI:`test-release-notices` 自增量 33 就在 `make test-all` 里,而 `make test-all` 不在 `.github/workflows/ci.yml` 中,整道门只在有人记得运行它的地方运行;用增量 37 的读取器枚举工作流测得 CI 跑 `sbom`、`checksums`、`release-baseline`——三个生产者、零个检查者,读起来像一条正常的证据流水线。`release-artifacts` 作业现在运行该门;§6f 从 Makefile 读门清单、从工作流读调用,用 §6a 已有的解析器,两份拷贝都不会陈旧。写它时立即发现第二个 CI 从未运行的门——被增量 39 孤立的 `make baseline`——而 §6a(CI 不得产出无人接收的证据)与 §6d(构建主机底线不得发布为发布证据)对它的要求只有一致答案,即把 `baseline` 移出 `test-all`;这又暴露 §3 按子串匹配的缺陷(`baseline` 是 `release-baseline` 的子串),现改为整词匹配;§6f 唯一的具名豁免是资源预检,现在拒绝任何不是资源预check的豁免并说明替代做法——加一个 CI 步骤。
+
+- 一道指向流水线已停止写入之文件的发布门。**已于 2026-10-02 关闭**,该形态第十七次,靠把文档对照构建读出来而非运行工具发现:`docs/PLAN.md` §9 以现在时说 `make baseline` 把模块架构、动态依赖和最低 glibc 符号版本记入 `dist/BASELINE.txt`、在 CI 与 SBOM 和校验和一起产出——写下时句句为真,一天内两次失真(增量 39 把 CI 移到 `release-baseline`,增量 43 把 `baseline` 移出 `test-all`),因为门清单是散文,没有东西连接它和工作流。新条款 §6g 问的是窄而可推导的问题:§9 点名的 `dist/BASELINE*.txt` 路径中至少有一条是某条 CI 调用解析出的路径;强形式(每个点名路径)是第一版,立刻误伤了那句解释两种基线差异的句子——**关于文档的门必须允许文档说明什么不是证据**。所以条款有意取弱,并把局限写在里面:一个点名了构建能产出的每个基线、并把错的那个当证据的 §9 会在这里通过,散文上的测试说不出别的;这是比计数守卫更小的保证,也是诚实的保证——能推导的检查胜过读起来更好的检查。
+
+- 一条已不再为真的成文测量。**已于 2026-10-02 关闭**,这是上方四条条目共享形态的第五次,在核对增量 32 自己的证据时发现:`docs/PACKAGING.md` §9 以现在时说 glibc 2.17 容器运行通过 **90 个测试文件**;实际通过 94,且已持续四个增量。句子是当前声明而非历史记录,却没人抓住,因为 `tests/unit/test_documented_counts.lua` 按**已知声明的枚举**钉住套件大小,那句话不在清单里——该文件自己的头注释早已点名这一失败模式;枚举现在也覆盖跨 libc 声明,相邻的历史计数用使其成历史的短语钉住("这段上次读到 90 时不是 89"),两条新条款都经变异测试(把当前数字漂回 90、剥掉历史限定词,各自被抓)。可归纳的半点:**守卫的覆盖是关于守卫的事实,不是关于世界的事实**,枚举的代价是扩展它是句子写下当天必须有人做的决定。
+
+- 一道只读了自己清单三分之一的门。**已于 2026-10-02 关闭**,该形态第十八次,靠把*守卫*对照它所读的文件发现:§6f 用只读两行的模式 `makefile:match("test%-all:[^\n]*\n?[^\n]*")` 构建门清单,而这条规则本项目写成三行——测得只返回 14 个先决条件中的 11 个,**`test-luarocks`、`test-bundle-dir` 和 `test-bundle-file` 从未被与任何东西比较过**,三者在 CI 里都跑,这正是它休眠且不可见的原因:条款每次运行都报告一个缺了三分之一的清单为全覆盖。同一信念在同文件又写了三次——§3 读两行,§5a 读一行,都*碰巧对*——`tests/support/makefile.lua` 于是新增 `prerequisites_of(target)` 直接问 make(`-p`)要规则的先决条件,三个调用点全部收敛;`.WAIT`(make 4.4 插进 `.NOTPARALLEL` 目标先决条件之间的标记)与无法构建的目标按名字处理,后者是**具名拒绝**而非空清单。§6h 用真实规则钉住读取器,§6f 额外断言自己的比较集覆盖 make 报告的每个先决条件(对照 make 的答案而非第二遍读 Makefile),七个变异七个抓住;顺带修复变异工具自身的 `APPLY-ERROR` 分支(报告失败并 `continue` 而不还原文件)。
+
+- 一道因读取器恰好错在合它意的方向而通过的门。**已于 2026-10-02 关闭**,该形态第十九次,第二次**两个缺陷互相抵消**:§5b 问的是 `make test-all` 的*先决条件*里有没有 `test-release-notices`,却去问读*配方*的 `recipe_of`,而 `test-all` 是聚合,根本没有配方;条款照样通过,因为 `recipe_of` 还有第二个缺陷——把续行的先决条件当配方返回——`test-all` 的先决条件写在三行制表符缩进上,第二三行的 118 字节被当作它的配方。两个都修好,条款改经 §6f 同款的 `prerequisites_of` 问 make;另一半是**该模块没有自己的测试**:`tests/support/makefile.lua` 被四个测试文件依赖、四个函数里两个曾错过一次,新测试 `tests/unit/test_makefile_readers.lua` 用本项目不用的形态(续行先决条件、以 shell 续行开头的配方、互为前缀的目标名、`export NAME := value`)钉住全部四个读取器——项目 Makefile 正是这些 bug 休眠的原因,取自它的夹具只能证明读取器在藏匿它们的输入上仍然工作。`expanded` 还有两个叠加才静默的缺陷——丢弃 make 退出码(畸形表达式与未定义变量同样回 `""`)、单引号 shell 词剥掉表达式内的引号——现在转义内嵌引号、拒绝畸形问题、非零退出返回 `nil, reason`,四个各写各的 `~= ""` 守卫的调用点共享一条拒绝路径。
+
+- 一次与所给夹具相矛盾的合并。**已于 2026-10-02 关闭**,该形态第二十次,连续第三条关于同一事实的第二份拷贝,且拷贝首次是*列表*:`tests/support/fixture_fs.lua` 的 `new` 读六种声明(files、dirs、denied、links、truncated、errors),`merge` 只拷贝了五种——漏掉的 `errors` 正是本项目建模驱动应答 ENODATA 的机制,而"存在却不含值的属性"与"文件不在"不是一回事。测得后果不是一张更小的表:同一声明直接读得 kind `unavailable` 且目录在场,合并后得 kind `missing` 且无目录——**与完全不声明错误的结果一模一样**,于是为"该属性存在且无值"写的测试会一直断言一个缺席的文件,而差异在测试里不可见。修复是收敛而非补丁:`KINDS` 现在是两个函数共走的一个列表,新测试断言*性质*——合并不得改变夹具声明的东西——而不是六个名字的清单,这样既抓住加进列表却只接进一个函数的种,也抓住哪儿都没接线的种;限制如实陈述:`merge` 以晚者覆盖早者,该顺序现在被钉住,因为单夹具的合并注意不到它。
+
+- 一个关于 ENODATA 的文件,自己却没有用上 ENODATA。**已于 2026-10-02 关闭**,该形态第二十一次,首次靠*删除*被测物而非读错它发现:`tests/unit/test_no_data_absence.lua` 标题就是 ENODATA,两半之间的接缝却从未被测——第 1 节查 `FS.classify_error` 把 errno 61 映射为 `unavailable`,第 2 节查 powercap 采集器,而测得采集器样本对"路径应答 ENODATA"与"路径根本不在树里"逐字节相同,清空夹具 `errors` 表、删掉全部三条声明后两半依旧全绿、结尾句照印。夹具 `powercap_intel_rapl_no_data` 的注释恰在危险成真之上一段点名了它,而唯一用它的测试断言的却是两条路径都产生的结果——**一个文件可以对失败模式完全正确,同时自己就是它的实例**。新条款放在文件系统边界(两形态唯一可区分的层)并说明:若采集器开始区分它们,条款应上移而不是删除;四条都不点名路径——每个声明的 errno 必须是文件系统真正提供的、夹具至少声明一个、至少三条路径应答 `unavailable`(下限而非清单,因三种是三种采集器形态,路径改名后下限仍成立)、清空 errno 声明必须改变报告(敏感性,即真正坏掉的性质);四个变异全抓。
+
+- 一个点名了自己并未使用之来源的时钟。**已于 2026-10-02 关闭**,该形态第二十二次,首个在产品而非发布证据机器里:每个速率都是对 `Clock:now_ns()` 的差值,而时钟保留着说明值从哪来的字段(`procfs_uptime` 或 `process_clock_fallback`),那是一条设计良好的诚实通道,**却没有任何东西读**——UI、`--diagnose`、agent 输出、测试都不读,而读取通道的存在恰是让它看起来被覆盖的原因。标签下面藏着真实行为:默认回退是 `os.clock`(进程自身 CPU 时间,与 `/proc/uptime` 是不同尺度上的不同量),`/proc/uptime` 在一次成功读取后停止应答时,后续候选都比手里的值旧,单调钳制拒绝它们,**时钟在读取持续失败期间停止前进**——测得两年 uptime 加一次模拟失败,所有从 `now_ns()` 推导的速率冻结,`os.clock` 只报 1 ms CPU。来源名现在是四值闭集(procfs 读取、回退读取、因新值更旧而持有的值、无读取),`--diagnose` 打印并写入 JSON 报告;回退路径此前**完全没有测试**,第一轮变异漏掉的两个是同一教训的两副面孔:事实可以活在结构里而不在屏幕上,`unavailable` 自身是合法名——现在文本经换掉的 `io.write` 捕获并必须携带来源,`unavailable` 被排除出该报告。
+
+- 一个说自己降级了却不说明为什么的读数。**已于 2026-10-02 关闭**,该形态第二十三次,且是一个大得多的洞的症状:快照里每个质量结构都带 `reason`(`Snapshot.merge` 把 `result.reason` 拷进 `quality[resource].reason`,UI、JSON 快照和 agent 都读它回答"为何降级"),但只有 `Common.error_result` 一条路径填它。测得读不出 `/proc/vmstat` 的内存读数给出 `{"status":"ok","quality":"partial",...}` 而**完全没有 `reason` 键**,彻底失败的读数反而有原因——还在运行的降级读数恰是无法解释自己的那种;内存采集器自己的 `vmstat_error` 携带答案而全树无读者。要紧的是旁边的数字:**十六个采集器以 `ok` 加 `partial`、`gap` 或 `estimated` 质量返回且不传原因,每一个都如此**;增量 50 修的是内存这个*被丢弃*的事实,其余十五个记为开放项而不是用推导字符串关闭(它们从不计算原因,给它们一个意味着逐采集器逐原因的测量,是能力缺口不是补丁)。守卫比较内存的两个原因(`/proc/vmstat` 不可解析与不可读)并要求不同,另钉住管道远端(`Snapshot.merge` 必须透传原因)与契约另一半(`Common.error_result` 必须继续说明原因);同场狩猎的一条阴性结果:agent 的 `captured_unix_ns`/`captured_monotonic_ns` 看似同类缺口,四次调用测得偏差仅几十微秒,是同一瞬间,那里什么都没有。
+
+- 一条被当作总量来读的成文成本上限。**已于 2026-10-02 关闭**,该形态第二十四次,首个关于*成本*而非正确性,也是最可能被调用方据以行动的:`docs/AGENT.md` 告诉每个 agent 消费者"每次调用采样两次,通常约 250 ms",而开发主机实测 `wtop --agent` 默认间隔要 **1.22-1.25 s**(约五倍),完全不等延迟的 `wtop --snapshot` 也要 1.26 s,`--agent --interval 100` 为 1.12-1.16 s——恰好只有 250→100 ms 的减少,证明 **250 ms 是两次采样间延迟的上限,不是调用成本**,句子把分量说成了总量,同段的"避免无界高频调用"也就建立在从未包含实际工作的估计上。没被抓住的原因与漂移的原因相同:250 内联写在 `min(options.interval_ms or 1000, 250)` 里,文档与代码是同一个数字的两份拷贝;它现在是 `src/wtop/application.lua` 的 `AGENT_SAMPLE_DELAY_CAP_MS`,`tests/unit/test_agent_schema.lua` 从代码读上限、从文档读数字并要求一致。条款有意不钉墙钟总量(那是主机的性质,钉秒数是穿着守卫外衣的抖动),只钉纠正的形状——文档必须继续说该数字是采样间延迟的上限而非调用成本;三个变异全抓,第三个逐字还原原句以证明钉的是那句具体假话;同一周的四个阴性测量(agent 两个时间戳是同一瞬间、`temperature_source` 在传感器详情视图有渲染面、约 700 条消息键都被 `src/` 问过、schema 把 `status`/`quality` 设为开放有界串)因花了探测而一并记录。
+
+- 一条代码里并不存在的成文截止期。**已于 2026-10-02 关闭**,该形态第二十五次,产品本身没有任何错——代码对、已有测试钉着它、文档说的却是另一回事:`docs/MONITORING.md` §9 的数据质量表写着 "`stale` | 保留值超过了它的 freshness 截止期",而**快照路径根本不查询任何截止期**——`Snapshot.merge` 只在 `ok` 且带数据时装载,否则保留前值并改标签,保留值在采样一个间隔后就已经是 `stale`;后果不是较真:相信这句话的消费者会算出值很年轻,进而断定标签错了。值得保留的测量是:**质量记录的 `timestamp_ns` 是最后一次*尝试*的时间,不是它所标值的时间**——99 秒旧的值刚被重试,旁边 `quality: "stale"` 报年龄 0 s,而文档让消费者"把 quality、这些标记和 reason 作为整体保留",合起来这份记录说着 `stale` 却看起来是新的。条款把两半互相钉住——行为带着年龄断言,文档必须说同样的话——于是给代码真加一个截止期会让断言失败并迫使措辞跟上,措辞改动也必须继续描述代码所为;第三个变异就是"在快照路径写一个能用的十五秒截止期",它按预期方向失败;为保留值自身年龄加字段是对两份已发布 v1 文档的兼容性决定,记为开放项而不是塞在测试后面。
+
+- 一个坐在已被守卫之计数下一行的计数。**已于 2026-10-02 关闭**,该形态第二十六次,也是本项目关于枚举价值最锋利的一句话:`docs/CROSS_PLATFORM.md` 验证矩阵里 glibc 2.17 容器一行写着针对 "**89 文件**" Lua 测试套件的通过,而套件是 100 个文件、容器通过 100——当天在本机实测。它*上一行*是开发主机计数,自两个增量前加进跨 libc 声明起就被 `tests/unit/test_documented_counts.lua` 钉住;*下一行*是 aarch64 运行的 50 文件,带历史限定词("该次运行时")钉在 `historical` 里;于是这张表里有三条不同的人跨几个增量写下的套件大小声明,守卫覆盖两条,第三条夹在中间、无限定词、过时十一个文件、与被守卫的句子形式相同——**漏掉的不是没人看过的文档,而是距守卫已持有的句子只有两行**。该数字不加限定词,因为运行就是当前的(`make cross-libc CROSS_LIBC_SUITE=suite` 在本机重跑通过 100),所以修的是计数,该句加入 `claims` 清单;矩阵另得一条款:表内每个套件大小声明必须是当前计数或带历史限定词,套件大小按"数字后两词之内有 file/files"识别("89-file"、"50 files"、"100 Lua test files"),以区别于同行的 "Fedora 44"、"glibc 2.17"、"6.0.6003";第一次变异让该条款错了两次且同向——先是要求数字紧贴 files 却遇到 "93 Lua test files",再是贪婪的第二捕获吞掉行剩余部分、检查了 Debian 行主机列的 13 而没到验收列的 93——按已知句子清单写的守卫扩到表格后仍像清单,直到表里加了清单没见过的东西,而它失败的两种方式都是没有看整行。
+
+- 对本项目的一次测量,更正过一次仍不可复现。**已于 2026-10-02 关闭**,该形态第二十七次,首个对象是本项目自己上一增量写下的声明:增量 51 把 `docs/AGENT.md` 的"通常约 250 ms"换成负载 0.73 下实测的"默认间隔 1.22-1.25 s、`--interval 100` 1.12-1.16 s,`wtop --snapshot` 也要 1.26 s";次日负载 1.97 重测,`--agent` 仍落在 1.22-1.25 s,`--snapshot` 得 1.30-1.33 s,`--interval 100` 得 **1.06**-1.13 s,再加两组各八次的独立运行(负载 1.72 与 1.17)得 1.16-1.27 与 1.18-1.38。十六个样本的诚实区间是 **1.16-1.38 s、中位数约 1.23 s**,文档那 30 ms 的区间排除了其中两个;实质存活——1.23 s 对 250 ms 上限仍是同一个约五倍比,而这个比值才是耐久的声明——但*精度*是共享容器上安静一分钟的属性,却被说成了程序的属性,复现出 1.16 或 1.38 的读者会以为有什么变了。文档现在写样本数、两个负载档、完整区间,以及绝对数字属于主机而非 wtop;第二个变异才是要紧的——只剥掉归属、留下区间和 `n=`,会让机器的测量读成程序的,正是原错误换了件外套;守卫有意只钉*出处*不钉数值(墙钟断言是穿着守卫外衣的抖动);顺带核对 `docs/PLAN.md` 清单与 `README.md`、`docs/UI.md` 的十标签页、九档刷新率等声明,全部为真。
+
+- 一个分不清测量与巧合的守卫。**已于 2026-10-02 关闭**,该形态第二十八次,且是在为关闭上一条而写的守卫*里面*找到的:增量 21 发布过一条零结果——"powercap 采集器样本对'路径应答 ENODATA'与'路径不在树里'逐字节相同"——但它用按字符串化键查每个值的序列化器测得,数值键回 `nil`,整个数组(区的 `constraints`、`issues`)从未进入比较;判词对、仪器盲,而经盲仪器得到的正确判词是两者中最糟的。替换仪器又带两个自己的缺陷,都让"一致"成为巧合而非结果:共享的 `seen` 集让从 `data.by_id[id]` 与 `data.zones[i]` 两处同时到达的同一张区表按 `pairs` 遍历序决定渲染——测得一份固定样本 200 轮序列化成 19 种文本,"相同"断言在 3 到 10 轮失败;样本里的 `timestamp_ns`、各区的 `observed_at_at_ns` 与 `duration_ns` 又是真实时钟读数,本机 `/proc/uptime` 最细步进 10 ms,400 轮得 39-47 种文本,断言第一次通过、后来失败——单次通过、独立探针通过、只有 200 轮重复找到这枚硬币,而四次里同意三次的守卫不是守卫。修复各是一半性质:序列化器成为**所给值的纯函数**(环防护按所走路径而非按遍历,真环仍被报告,两处可达的表两边都展开,真实环仍终止),采样经 `context.now_ns` 钉住时钟(`Common.now_ns` 已有的注入点,`src/wtop/collectors/common.lua:94`,钉时钟而不是掩字段,产品代码零改动);重测后 **500 轮一份文本、零路由差异,该文件连续 30 次运行通过**,九个对照携带它;规则是增量 21 那条的两半:零结果必须来自有人看过它**失败**的仪器,且仪器必须是它所测东西的**纯函数**——随遍历序或墙钟变化的仪器靠运气一致,而它的一致不是弱证据,是根本没有证据。
+
+- 一个与它所顶替的产品不一致的夹具文件系统。**已于 2026-10-02 关闭**,该形态第二十九次,首个对象是一个辅助模块断言*另一个辅助模块*的东西:`docs/ARCHITECTURE.md` 说 `tests/support/` 下有**两个**共享测试辅助,实际有三个——第三个 `hardware_fixtures.lua` 最大(21 KB)、三个调用方、却没有自己的测试,而它比另外两个更值得审计:另外两个造的东西可以对照性质检查,这个模块*本身就是*证据,每个需要本机没有的硬件的采集器测试都从它取一棵树并相信它。按性质审计十二个夹具,发现 `fixture_fs` 的 `path_type` 与产品有两处不一致(均对照 `native.path_type`:`lstat` 加 `S_ISREG`→`regular` 测得):先问 `directories` 再问 `links`,类设备目录回 `directory` 而产品答 `symlink`——`/sys/class` 下每个设备目录都是符号链接,12 个夹具中的 8 个里 21 条路径被告知了错误的东西;又以 `file` 应答而产品答 `regular`。前者唯一的消费者是 `collectors/cgroup.lua:664` 的环避免分支,而覆盖它的测试传的是自造的 `fake_fs`(`test_cgroup_collector.lua:22`),其 `kind` 自己答 `symlink`——分支被测过、共享文件系统于是在唯一要紧的方向上自由地错着,同一事实的两份拷贝一头对一头错而两边全绿;修复后新测试 `tests/unit/test_hardware_fixtures.lua` 不点名路径、审计模块本身(12 导出、11 覆盖,M110),六个变异全抓,其中 M109 的教训是**被错误条款抓住的变异只是抓住、不是证据**(改写成 `+ 0 * microjoules` 后才由正确的条款抓住);规则很窄:夹具文件系统的工作包括按产品应答的方式应答——替身若对答案形状自信地错,就是在对一个不存在的文件系统做断言。
+
+- 一条默认值是不安全答案、靠两个测试替身活命的安全分支。**已于 2026-10-02 关闭**,该形态第三十次,首次**测试夹具是产品决策的承重件**:`collectors/cgroup.lua` 在深度与节点预算内走 cgroup 树,下探前得知道条目是不是符号链接(符号链接可能指回树内,这是有界遍历),它防御地问 `if type(fs.kind) == "function" then candidate_kind = fs:kind(candidate) end`,方法缺席时保留已赋的 `local candidate_kind = "directory"`——**这个回退正是无声关掉符号链接规避的答案,无错误、无计数器**,而它在生产中不可达(`Cgroup.new` 除非另有指定都提供 `FS.default`,真 `FS` 总能应答),这条分支只为一个受众存在。把回退从 `directory` 翻成 `symlink` 本应什么都不变,却失败了测试——失败点名 `test_cgroup_collector.lua` 里没有 `kind` 的 `budget_fs` 与 `breadth_fs`,**该文件两条预算断言(`node_count == 2`、`readlink == 1`)经过的是硬编码常量而不是文件系统**。修复移除迁就而不是记文档:`Cgroup.new` 预先问文件系统能否应答扫描的全部四问(`read`、`list`、`readlink`、`kind`)、不能时具名拒绝(未知条目不是目录,拒绝是决定不是崩溃),两个替身补上本就该有的 `kind`;条款按性质钉住——真文件系统先通过,再从真实现函数拼出的文件系统上逐个移除方法、拒绝必须点名;方法清单留在产品里,清单进测试就是第二份拷贝;广度断言改为钉整条操作序列(原来只断言前五个操作,看不见从不问 `kind` 的扫描);第一个变异正确地漏掉——构造器已拒绝这种文件系统,恢复回退只是把死代码变成另一种死代码,没有任何守卫看得出差别。
+
+- 一个读着主机却称之为夹具的测试。**已于 2026-10-02 关闭**,该形态第三十一次,证据是**从测试之外进入样本的值**:`FS.new` 对不认识的选择键静默忽略(校验四个已知键的*类型*,其余照单全收),而树上两个替身把名字拼成 `readlink`(正确名是 `read_link`)——`test_inventory_collector.lua` 的无害是运气(它测的采集器从不要符号链接),`test_system_collectors.lua` 则不然:`collectors/system_info.lua` 解析时区最终落到 **`readlink("/etc/localtime")`**,于是该测试对运行套件的每台机器执行真实的 `readlink(2)`;本机的它是指向 `../usr/share/zoneinfo/Asia/Shanghai` 的符号链接,而 `timezone` 一词在该测试文件里出现**零次**,主机答案未经断言、无人察觉地混进样本——没有 `/etc/localtime` 的容器、把它发布成普通文件的发行版、别的时区的主机,都会让断言集相同而样本不同;两个替身还把 `path_type` 答成产品从不产生的 `"file"`。修复是拒绝而非忽略:`FS.new` 现在拒绝未知键并点名它与其接受的集合(拒绝必须*点名*键,且每个被接受的选项仍被接受,防"拒绝一切"变成停机);替身改正而不是绕过:`readlink` 改 `read_link`、`"file"` 改 `"regular"`,system-collectors 替身声明自己的符号链接;最值得保留的是时区变成了什么——从无人断言的主机状态变成声明的链接、被断言的答案和一个反向控制(没有 `/etc/localtime` 的文件系统必须报无时区而不是主机的),值的区别不在变真,而在变成了我们的。两条需要戒掉的习惯:用 shell 单行按模式改写源文件,模式失配时工具已把文件截断(靠 git 恢复,而整整三十个增量没动过它才恢复得干净——从不提交的工作树距不可恢复只差一次可恢复的错误);安静读真实文件系统的替身不是慢测试,是**戴着绿色对勾的主机相关结果**,唯一的看法是问测试到底在读什么。
+
+- 产品发出而任何目录都从未听说过的两个原因代码。**已于 2026-10-02 关闭**,该形态第三十二次,首次靠**测集合差**而非读声明发现:`test_reason_localization.lua` 持有 112 个必须有翻译显示形式的代码清单,并双向彻底(清单内每个代码在十个目录都有消息,目录内每条 `reason.*` 消息都在清单上)——彻底是关于*清单*的,没有东西把清单连到产品。测得差集:**`src/wtop` 以字面量拼出 79 个原因代码,其中 2 个不在任何清单上**——`input_buffer_limit` 与 `input_sequence_limit`,由 `ui/input/decoder.lua` 和 `input.lua` 以 `{type = "error", reason = ...}` 发出,即输入缓冲区或键序列超限时用户看到的原因;`Technical.reason` 对未知代码原样返回(守卫自己为造的代码断言过这一点),所以"未翻译代码→用户看到 snake_case"的推理普遍成立。但其中两个断言错了、增量 67 测出了为什么:没有任何界面问过这两个代码(`process_event` 没有 `event.type == "error"` 分支、`tui.lua` 里 `event.reason` 出现零次、事件在渲染前被丢弃),而且它们当时也在 `machine_only` 里——同时出现在两张清单的代码满足守卫所有条款,因为翻译检查问界面清单、拼写检查问并集。测量比修复更重要:**79 减 2 正是规则可靠的原因**——一刀切"每个字面量必须列入"会是错的(清单有意不完整,纯内部代码就该不翻译),77/79 已在,诚实形态是用产品对照清单扫描、豁免以具名 `machine_only` 集合可见而不是无人注意的缺席;扫描读整行并要求 `reason` 是整个字段名(第一次做错得出 5 而不是 2,`budget_reason`/`status_reason` 会被扫入),并断言扫描确实找到了东西(模式停止匹配会把检查变成空洞通过,本项目已四次撞上);顺带,pressure 成为第二个携带结果级原因的采集器,还剩十四个;可归纳半点:*清单只有在有东西读它所清单的东西时才被守卫*——守住了自身的两个方向,仍然看不见新条目,因为"完整的清单"与"穷尽的清单"不是同一个声明。
+
+- 一个把未知标签向上取整为 `fresh` 的封闭词表。**已于 2026-10-02 关闭**,该形态第三十三次,首次缺陷就在守卫旁边而两者各自都对别的事:`VALID_QUALITY`(十一词)与 `VALID_STATUS`(四词)被调度器、快照和检查器模型消费,却从未被任何测试读过;`Snapshot.merge` 确实规范化——对封闭词表该这么做——问题只在做哪个方向。测得:**`ok` 结果上的未知质量变成 `fresh`,status 仍是 `ok`、reason 还留在旁边**,一份记录同时发布 status ok、quality fresh 和一条说部分资源不可读的原因;拼错的 `partail` 被当作新鲜数据发布、新数字装在它下面,面板和 agent 会对一个缺了自己一部分的读数给出自信的当前值。修复是两个中较小的:一步、双向都拒绝,两者无法再漂移;被拒拼写不进任何字段是如实的限制而非疏忽(`quality[resource]` 没有那个字段,加一个就是改动已发布的 v1 文档);三条后续测量各有代价:增量 59 的集合差技术**不可迁移**(status 在本项目是资源、issue、channel、错误表四种状态,扫成一种会答 6 个缺失而真值是 0);"三个列出的质量(`measured`、`reset`、`truncated`)从未拼出"的结论半错——按位置重测,`truncated` 在 `collectors/inventory.lua` 和 `collectors/power_supply.lua` 拼写过**两次**,都在第一遍扫描读不了的 `and "truncated" or ...` 形态里,原处更正、错误方向的测量留在记录里;`Snapshot.new` 给每个资源播种 `{}`,于是首次失败样本也被标 `stale` 而背后是空表(没人装载数据、没数字可显示,是同族里小得多的谎),写进文档并钉进测试而不是修补;变异工具又错两次,修复是工具先读每个用例自己的 `# TARGETS:` 声明并与清单比对,原始拷贝取两份声明的**并集**——单一来源建的安全网只有那个来源那么好,而这里有两个;规则是增量 57 命名、58 与 60 从三个方向撞上的那条:*未知答案不是宽松答案*——无论未知的是说不出路径是什么的文件系统方法、不认识的选择键,还是不发布的质量词,安全的方向都是丢掉答案,而不是发明一个动听的。
+
+- 一份词表的三份拷贝,其中只有一份做得对。**已于 2026-10-02 关闭**,该形态第三十四次,增量自己的对象就是前一增量:增量 60 从 `Snapshot.merge` 移除对不可发布质量的宽容改写后,同一条规则还在 `core/scheduler.lua` 里逐行存在——`if not VALID_QUALITY[result.quality] then quality = status == "ok" and "fresh" or status end`,为下一增量找候选时量到,这是此类缺陷被发现时最不戏剧化的方式。原因是本项目已记录三十三次的那个:质量词表写了三遍(`model/snapshot.lua`、`core/scheduler.lua`、`inspectors/model.lua`)且已分叉——快照版十一项,另外两个十项,缺 `truncated`;更糟的是对谁都不发布的标签三者处理不同:检查器模型具名拒绝,调度器向上取整为 `fresh`,快照直到一个增量前也一样——**项目知道正确形态、有三份拷贝、其中一份正确**,这是关于第二份拷贝最锋利的一句话:它不只会漂移,还能在一处对、在另一处错而一切全绿。修复是增量 47 用在 `fixture_fs.KINDS` 上的收敛:`model/quality.lua` 现在拥有两个词表、三个模块 require 它,调度器的宽容改写随之而去、改设 `collector_returned_invalid_quality`(与既有的 `collector_returned_invalid_status` 并列),条款是性质不是清单(**每个门必须接受每个已发布标签并拒绝同样的**),`core/runner.lua` 的 `VALID_STATUS` 是有意不同的词表(六项含 `timeout`/`cancelled`)故不合并;另一半是重测自己两个增量前的扫描:按位置而非按行的形态测得**十七个**发出而无处翻译的代码(`nvml_unavailable`、`amdsmi_unavailable`、`levelzero_unavailable`、`smartctl_empty_output`、三个 `perf_*` 等),每个都是用户会看到的原因,全部十种语言补翻;让替换模式可靠花了三次尝试(任意提到 `reason` 的行上的字面量给出 41 个候选、`budget_reason` 被算入、比较值无法与代码区分需要解析器),两种匹配不上的形态以书面豁免带理由保留——**写下来的洞可以复审,没写下来的十七个不能**;守卫还要求两种形态各自仍在匹配(单个计数分不清"停了匹配一半词表"与"停了匹配全部");阴性测量:`runner.lua` 的词表根本不是拷贝,"统一四个 status 清单"的直觉会是错的;规则是增量 47 写下的那条的第四次应用:*收敛,然后断言性质,绝不断言清单*。
+
+- 一张手写的采集器名映射,带着一个不存在采集器的别名。**已于 2026-10-02 关闭**,该形态第三十五次,与上一增量同形而角色互换——那里一份词表三份拷贝,这里**一个关系有两个所有者**,拷贝是登记表旁手写的映射:`Snapshot.merge` 经 `ID_TO_RESOURCE` 解析结果 id,解析名不是已知槽就不装载数据,于是 id 既非槽名又无映射条目的采集器每个间隔都被采集却**从不显示、无人说明**——静默丢弃的方向,整个采集器变黑而不是标签被取整。先测关系:十七个注册采集器全部到达槽,九个经映射、八个 id 本身就是槽名;测量同时发现另一半:映射里有给 **`psi`** 的条目(指向 `pressure` 槽),而从来没有采集器叫 `psi`——压力采集器自称 `pressure`,已是槽名、从不走映射;条目无害,这恰使它是陷阱而非笔误:哪天有采集器取名 `psi`,它解析到真压力采集器拥有的槽,两个采集器写一个槽,快照显示后合并的那个,屏幕上却挂着为另一个命名的部件。查找本身分不出"即将被需要"与"永远不会"的条目,所以守卫必须看映射而不是透过它看——`Snapshot.RESOURCE_IDS` 为此导出;三条全性质的条款:每个注册采集器的 id 到达槽、没有两个 id 到达同一槽、映射里没有条目点名不存在的采集者(第二条抓陈旧别名被取走后的碰撞,第三条在人取走之前抓);登记表被询问而非被复述,解析经 merge 观察而不是从两张表读出;一个 Lua 陷阱:碰撞拒绝写成显式 `if` 而非 `assert(cond, message)`,因为 `assert` 急切构造消息,而 `owner_of_slot[where]` 对第一个采集器是 nil,消息在通过路径上拼接不存在的值;阴性测量各便宜:槽集合不等于采集器集合(十七槽、十七采集器、映射十项,都对,多数 id 不需要条目);结论与增量 61 同路:**靠手维护的映射是拷贝,拷贝只在被拷贝物不变之前正确**——消除拷贝的修法(从登记表派生映射)是依赖方向错误,收敛的做法就是一个所有者、一个导出视图、一个读拷贝而不是信拷贝的守卫。
+
+- 同一扫描形态第四次比产品窄,而本会到达用户的原因反正也显示不出来。**已于 2026-10-02 关闭**,该形态第三十六次,别的条目一部分,它有三部分。第一部分:设备清单把两条列表限制在 256 PCI 与 128 USB 条目,超出上限的主机实测发布 `quality = "truncated"` 和逐资源的布尔值,却**没有任何原因**——质量说列表短了,没东西说为什么,而这恰是结果唯一有地方说的位置;产品现在携带 `device_enumeration_truncated`,守卫断言形状而不是值(超限一条是 `truncated` 带该原因、恰好压线是 `fresh` 无原因、两条总线超限报同一个码、封顶读取与缺席总线不是同一个词、原因活过 `Snapshot.merge`),夹具造了 257 PCI 加 129 USB 设备。第二部分:管原因清单的扫描有同样的缺陷——增量 61 扩到 `reason = <fallback> or "code"`,却从不匹配 `reason = <flag> and "code" or nil`(产品对每个条件性降级用的形态),其中测得**十五个**任何目录都没听过的代码(`statvfs_partial`、`connections_partial`、`process_limit_reached`、`socket_data_partial`、`service_not_observed`、`session_provider_unavailable`、`event_provider_unavailable`、`configuration_limit_reached`、`timeout`、`invalid_executor_status`、`smartctl_unavailable`、`smartctl_invalid_payload`、`smartctl_runner_exception`、`invalid_smartctl_runner_result`、`perf_reader_timeout`),每个都是用户会看到的原因,十种语言全部补翻,写此条时清单为 148;修复不是第四种模式——三次放宽三次漏,清单正是漏的原因,规则改为关于**字面量在值表达式中的位置**:代码形态的字面量在值开头或紧跟裸 `and`/`or`/`..` 时是原因,在 `==`/`~=`/`<`/`>`/`<=`/`>=` 之后是操作数而不是代码——这删掉了旧规则携带的豁免清单(`table`、`too_large` 因分不清比较与值而豁免,新规则全树匹配不到任何操作数),规则也首次有自己的测试(只按形态计数时,删掉 `and` 子句后套件全绿而十四个代码坐在规则之外);三条阴性结果(`..` 今天贡献零代码、`local a, b, reason = "x"` 全树无实例、`^%s*local` 锚点因 `grep -rn` 前缀而不可用)与残余(规则读一行,241 个 reason 字段中 97 个同行无字面量,两步测量恰找到一个 `missing CPU counters`,记录在 `docs/PLAN.md`)一并写下。第三部分使前两个作废:Insights "Collectors" 表的 `collector_rows` 经手写的 `COLLECTOR_RESOURCE` 从快照槽读取,那个字面量**十七个注册采集器只有十六项**——缺 `inventory`,设备清单行查到 nil 槽,为可能正报 `truncated` 或失败的采集器印 `ready` 和两个破折号,第一部分加的原因即便翻进了语言也到不了用户,而那行看起来仍像一行;守卫问登记表而非复述,给每个槽一个点名自己的原因;`docs/PLAN.md` 里"truncated 真的从未拼出"的声明原处更正——按位置重测,`truncated` 拼写过**两次**,第二处 `collectors/power_supply.lua` 比这次狩猎更早就在无原因地发布它,现以同因同码修复(其 `partial` 有意不动,原因同上);四条共有的模式值得带走:**每个守卫都写成形态清单,每个都比它管的产品窄——清单从来不是缺陷所在,它像完备性,其实是一个增量对源码阅读的快照**。
+
+- 一条因路径不可达而搁置的发现,而*分支*并非不可达。**已于 2026-10-02 关闭**,该形态第三十七次,对象是本项目上一增量写下的注记:它说 macOS/Windows 采集器 reason 字段里那句英文"本机无法测量",因此记为开放项而不是修补——**这话半真,而假的一半正是全部要点**:那些平台的真原生模块确实从 Linux 主机不可达,这半成立;但 `portable.lua` 在每台主机上都被 `tests/unit/test_portable_collectors.lua` 的伪原生模块驱动,分支离一行夹具之遥(`collect_cpu` 返回没有 `raw` 的表),下一增量用一行 Lua 测得 `status=error`、`quality=error`、`reason="missing CPU counters"`——**未经锻炼的路径与不可测量的路径是两回事,唯一的检验是能否构造输入**。缺陷本身也是形态缺陷而非字符串缺陷:`cpu_data` 返回 `(nil, "missing CPU counters")`,调用方把这个第二返回值赋给名为 `quality` 的变量再发布为 `reason`——**同一个返回槽在成功路径上是质量词、在失败路径上是英文句子**;现在两侧都返回空,调用方发布 `cpu_counters_missing`,十种语言都有翻译;原因拼在 `reason =` 处而非从助手返回,这个摆放是测量:助手返回背后的字面量对源扫描不可见,而树上测得 **263** 行 `return ..., "code"`、几乎全是参数校验(`argv_required`、`interval_must_be_positive`、`collector_not_found`),到不了任何界面;边界成规则:**原因由发布结果的一方发布,因为那一侧拥有原因词表,且写在守卫读得到的地方**;邻居断言有意不动——原生模块自己的失败串(`GlobalMemoryStatusEx failed`)保持句子,分界在*系统*产生的串与*本项目*写下的串之间,只有后者是翻译问题。第二半是没人问过的覆盖测量:扫描声称产品拼的每个原因都在清单里,却从未被问清单实际读了多少——测得读 **149 个中的 116 个**,其余 **35 个没有一个是死翻译**:十五个拼在 C 原生源码(`query_denied`、`memory_unavailable`、`process_identity_changed`、`no_sensors`,来自 `native/wtop_windows.c` 与 `native/wtop_macos_hw.c`,推进 Lua 采集器透传的 `partial_reason` 字符串),二十个拼在规则不读的 Lua 位置(助手返回、被结果聚合而非发布的逐行标记、`Capability.unavailable` 参数),所以扫描是关于 **Lua 树**的声明,却被写成了关于产品的——与增量 63 关闭的缺口方向相反,C 源里新增未翻译原因完全逃过扫描;正确关闭需逐个分类那二十个 Lua 位置(每个都要证明*到达* reason 字段而非只是拼在附近),在那之前一张豁免清单就是记下二十个假设,记为开放项,这里写的是给它定尺寸的测量。一个变异正确存活是本增量诚实的结尾:把原因挪回助手背后不改变任何行为、每个守卫都通过,所以"在字段处拼写"是可维护性论证而非被强制的;其余三个被抓,要紧的是**把产品的原因与测试的期望串一起改**的那个——只有"本项目写的原因是无空白的单 token"断言能抓,这是本项目第三次被两份拷贝同错咬,也是第一次有条款恰为此而写、又恰通过同时编辑两侧来测试。
+
+- 扫描只读了一种语言,而它读的那种语言不是产品。**已于 2026-10-02 关闭**,该形态第三十八次,关闭的开放项正是上一增量自己写下的预测——"加进 C 源的新的未翻译原因完全逃过扫描"——当时因 C 形态未测量而搁置,现在测了:扫描只读 `src/wtop`;`wtop_native.c` 把执行器自身的失败代码赋给名为 `internal_reason` 的局部变量并直接压进结果的 `reason` 字段,`core/runner.lua` 把它拷进发布结果,smartctl、perf 和 service 检查器把它放进 Insights 检查器表经 `Technical.reason` 渲染的 `reason` 字段;测得**五个代码,任何语言任何目录都没有翻译**——`cancelled`、`cancel_callback_failed`、`poll_failed`、`waitid_failed`、`waitpid_failed`(`cancelled` 紧挨着上一增量按测量入册的 `timeout`,其余四个与一直在册的 `read_failed` 同变量的值),到达界面的论证不是来自一行 grep,而是来自两个已入册兄弟的邻接论证——只读测量能给出的最强者;五个代码十种语言全部补翻。同一测量翻出九个更有意思的:`wtop_nvml.c`、`wtop_amdsmi.c`、`wtop_levelzero.c` 各把三个代码赋给 `nvml.reason`/`amdsmi.reason`/`levelzero.reason`,GPU 采集器把它们拷进 `data.providers`,而全 Lua 树测得**只有 `export.lua` 读 `providers`**——它把表拷进 JSON 与 agent 载荷,没有任何视图模型提到它,用户永远看不到那九个词;它们现在都在 `machine_only` 里,每个旁边写着那条理由——豁免说"我决定了",声明说"我测了,这是测量";此前两份清单都不含它们,没有任何东西会告诉任何人它们在那里——守卫看不见的 C 拼写代码正是会无声丢失的东西。扫描现在按两种测得的形态读原生源码——对名字以 `reason` 结尾者的赋值,以及 `lua_setfield(L, -2, "reason")` 前一行压入的字面量(第二形态正是要读一行上下文的原因:值与它成为的字段不在同一行,压入的*变量*经第一形态的赋值解析);每种形态都断言匹配到了东西——这正是三次放宽的全部教训:丢了一种形态的规则仍会兴致勃勃地报告其余;原生扫描不追变量超过一次赋值,这一点写在规则所在处;三个变异全抓;一条阴性结果比三个抓更有价值:清单集合曾由两个循环在读取点上方约一百行处填充表字面量,某版本完全看不见 `machine_only`——构建循环内插入的诊断显示每个键都在设,二十行外的同一查找回 nil;机制未查明、诚实记录如此,现在的代码是一个挨着两份清单、一次构建集合、被两个扫描共用的函数——两个远距扫描都依赖的查找不应在其中一个处组装,这是设计主张而非解释;一条流程注记:本条的开放项是用内联 Lua 脚本改写的,正是增量 58 清空测试文件的模式,内容先在内存拼好、打开后立即核验、文件完好——但纪律存在的原因是失败模式是无错误的空文件,"事后查过"不等于"没做危险的事"。
+
+- 一个有两条方向的守卫,被问到第三条,而第三条才是要紧的那条。**已于 2026-10-02 关闭**,该形态第三十九次,对象是没人问过的问题而非缺陷:`test_reason_localization.lua` 断言产品拼的每个原因都已入清单、清单内每个代码都有十种翻译,从未断言**清单内每个代码都是产品仍能产生的**——三件事里只有这件能在改名、删除分支或从构建去掉厂商库后存活,而每一种都会留下十种语言的字符串和一条断言不存在之物的清单条目;检查是对 `src/` 和 `native/` 的拼写检查,选*拼写*而非*可达*是实质而非捷径:"这个代码作为字面量出现在产品某处"是测试能问的,"这个代码到达某个展示表面会渲染的 reason 字段"不是,树里没有东西可问哪个字段被视图模型读取;两者的距离不藏——就是上面那条开放项,现在装着两次扫描都看不见的二十个代码的分类。两个变异说明条款承重:只删 `status_denied` 的拼写、不替换,是第三方向唯一能抓的变异——改成别名会被第一方向抓(Lua 扫描看见没听过的代码),被别的条款抓住的变异不是该条款有效的证据,这是本项目第三次记录它、第一次在写条款的当下被抓个正着;把拼写检查指向 `src/` 而非 `src/ native/` 同样被抓,而且是要紧的方向——十五个代码只存在于 C 源,只查一棵树让它们对为抓它们而存在的条款全部隐形。最有用的发现是一个扫描看不见、也没人找过的形态:五个工作区与布局拒绝代码根本不在 `reason` 字段里——`tui.lua` 在运行时拼消息 id(`translated(translator, "reason." .. tostring(remove_error), ...)`),在清单所守的正是那个 `reason.` 命名空间里查找;基于字段的规则看不见拼接组装的消息 id,这五个代码之所以正确入册,是因为另一种机制找到了它们。两条流程注记都关于本项目自己的纪律在眼前失效:一个是 Lua 5.5 解析陷阱、此处第八例——**参数表内 `assert(cond, "fmt" % (a, b))` 不解析**,报 `')' expected near ','`,先赋给局部变量再传则无事,失败看起来像括号放错而不是语法规则;另一个是为搬移二十二个代码写的脚本产出了引用未定义变量的文件(移动算出来了,内容检查被另一条重建路径满足,结果一张表引用不存在的 `EXPORT_ONLY_REASON`),靠脚本报成功后读文件抓住、从运行前的副本恢复——教训正是增量 58 写下、这里重演的:改写不是补丁,纪律存在因为失败模式是悄悄错的文件而不是响亮地坏。
+
+- 一个比写下其输入的内核更严格的解析器,由别人启动的容器发现。**已于 2026-10-02 关闭**,该形态第四十一次,缺陷自 cgroup v2 I/O 到达以来就随每个 Docker 主机发布:全量回归在 `test-pty` 上变红——`run_cgroup_health` 断言没有不可读项的 cgroup 树**不**打开"为何部分"的节,而它打开了;第一件事是测被测改动是否负责,方法是把它放回去:回退本增量唯一的产品修改、单独跑失败的用例,**仍然失败**,把搜索从 diff 引向主机;采集器在本机报 190 个节点中 `partial_node_count = 1`,部分节点是 `docker-f0e378c111f1….scope`,唯一 issue 是 `parse/invalid_io_stat_line`。内核为不记账的设备写下 `251:0 `——裸设备号、没有任何键值对(容器内每个设备都是没有 bio 计数的 overlay 或 fuse 挂载),而 `parse_io_stat` 用 `^%s*(%d+:%d+)%s+(.+)%s*$` 匹配行,要求 id 后至少一个字符,于是合法的内核行被当作畸形拒绝、节点变部分;其下的 `field_count == 0` 拒绝在同一输入上永远不可达(任何不是合法 `key=value` 的 token 早已返回 `invalid_io_stat_field`),一个内核行为带了两道守卫,两道都已移除:解析为设备而无计数器的行现在算作无记账设备、留在列表里带空计数表,`derive_map_rates` 只迭代找到的键、不发明零,`io.total` 只覆盖被测过的。修复后同一棵树 `partial_node_count = 0`;回归测试逐字读内核那行(含尾随空格)并分开断言三件事——无解析 issue、无部分节点;两台设备都在列表里,未记账的那台无计数器无速率(M166);总量按键集合恰好等于有记账设备的计数器,让发明的零藏不住(M167);可归纳的半边关于谁写输入:**比产生数据的系统更严格的解析器,终会遇到系统认为合法的行,而它最先现身的地方,是别人创建的容器**。

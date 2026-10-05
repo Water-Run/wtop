@@ -1,131 +1,132 @@
-# Deep Inspection: Current Implementation and Boundaries
+# 深度检查：当前实现与边界
 
-This document describes only the current `0.1.0` implementation. wtop's long-term direction is to put commonly needed read-only diagnostic information in one TUI, but it is not currently a complete replacement for `smartctl`, `perf`, `systemctl`, `ss`, or vendor-specific GPU tools.
+本文档只描述当前的 `0.1.0` 实现。wtop 的长期方向是把常用的只读诊断信息集中到一个 TUI 中，但它目前还不能完全替代 `smartctl`、`perf`、`systemctl`、`ss` 或各厂商专用的 GPU 工具。
 
-## 1. Current Entry Points
+## 1. 当前的入口
 
-The default registry currently registers only three on-demand Inspectors:
+每个检查器（Inspector）的进入方式都相同。按下对应按键会调用检查器的 `enumerate` 步骤，随后 wtop 要么打开选择器，要么直接读取单个实体：
 
-| Key | Inspector | Current sources |
+- **没有可检查的实体** —— 覆盖层说明原因，并带上 `enumerate` 返回的具体缘由；
+- **恰好一个实体** —— 立即检查，不弹出选择器；
+- **多于一个实体** —— 由选择器列出，最多 256 条，超出部分会注明截断。
+
+传给 `inspect` 的实体始终是 `enumerate` 产出之一。因此，某个检查器如果开始列出多个服务或内存控制器，就会自然获得选择器，而不需要新增任何界面；只有一个服务的主机则保持原有行为。选择器是共用的：实体不具备的列留空，而不是猜测填充，所以 PMU 行和磁盘行可以出现在同一个选择器里。
+
+默认注册表目前只注册了三个按需检查器：
+
+| 按键 | 检查器 | 当前数据源 |
 | --- | --- | --- |
-| `s` | SMART / NVMe | `/sys/class/block` + optional `smartctl` |
-| `b` | System RAM bandwidth | PMU sysfs descriptions + optional `perf stat`/`sleep` |
-| `d` | `sshd` service and listening ports | optional `systemctl` + process snapshot + `/proc/net/tcp*` |
+| `s` | SMART / NVMe | `/sys/class/block` + 可选 `smartctl` |
+| `b` | 系统内存带宽 | PMU sysfs 描述 + 可选 `perf stat`/`sleep` |
+| `d` | `sshd` 服务与监听端口 | 可选 `systemctl` + 进程快照 + `/proc/net/tcp*` |
 
-Results appear in a scrollable text overlay. The overlay supports arrow keys, `PageUp`/`PageDown`, `Home`/`End`, and the mouse wheel; close it with `Esc`, `Enter`, or `q`. Scalar values show their quality, and common units such as bytes, bandwidth, percent, temperature, and duration are formatted. Selected collection fields show up to 128 entries inline and mark any remaining count. Field source, timestamp, and reason details are not fully expanded. There is no generic entity browser, hierarchical detail navigation, field pinning to dashboards, Inspector history, or plugin UI; these remain future directions.
+结果显示在一个可滚动的文本覆盖层中。覆盖层支持方向键、`PageUp`/`PageDown`、`Home`/`End` 和鼠标滚轮；用 `Esc`、`Enter` 或 `q` 关闭。标量值会显示其质量（quality），字节、带宽、百分比、温度、时长等常用单位会被格式化。选定的集合字段内联显示最多 128 条，并标注剩余条数。字段来源、时间戳和原因细节目前不会完全展开。导航逻辑已在各检查器之间共享，但仍只有一层：没有层级式的详情导航，不能从一个检查器跳转到相关资源，没有可以固定到仪表盘的字段，没有检查器历史，也没有插件界面。这些都属于未来的方向。
 
-The separate `h` sensor overlay reads the latest shared snapshot on Linux,
-macOS, and Windows. It shows up to 256 channels with their last sampled value,
-quality, additional readings, and limits when the platform exposes them. It
-updates as the shared snapshot changes without starting a separate hardware
-probe. While open, it gives the shared sensor collector the foreground cadence,
-even when the sensor widget does not fit on the page. Closing it restores the
-page's collector cadence. If the last sensor sample is more than 15 seconds
-old, the overlay labels it stale.
+独立的 `h` 传感器覆盖层在 Linux、macOS 和 Windows 上读取最新的共享快照。它最多显示 256 个通道，展示平台提供时的最近采样值、质量、附加读数和阈值。它随共享快照的更新而刷新，不启动独立的硬件探测。打开期间，即使传感器控件放不进当前页面，它也会让共享传感器采集器按前台节奏运行；关闭后恢复页面原本的采集节奏。如果最近一次传感器采样已经超过 15 秒，覆盖层会将其标注为过期（stale）。
 
-Every external helper is invoked through the shell-free argv Runner with timeout, output-size, fixed-environment, and process-cleanup constraints. `--safe-mode` disables the Runner, so the parts of these three Inspectors that depend on external commands become unavailable; ordinary procfs/sysfs collectors continue working.
+所有外部辅助程序都通过不经 shell 的 argv Runner 调用，并带有超时、输出大小、固定环境和进程清理约束。`--safe-mode` 会禁用 Runner，因此这三个检查器中依赖外部命令的部分将不可用；普通的 procfs/sysfs 采集器继续工作。
 
 ## 2. SMART / NVMe
 
-### 2.1 Device Selection
+### 2.1 设备选择
 
-After `s` is pressed, wtop presents a selectable list of block devices instead of checking the “first disk” by default. The selector supports:
+按下 `s` 后，wtop 会枚举块设备；当有多个设备时，由共享实体选择器呈现，而不是默认检查“第一块磁盘”。选择器支持：
 
-- `↑`/`↓`, `PageUp`/`PageDown`, `Home`/`End`, and the mouse wheel to move the selection;
-- `Enter` to inspect the selected device;
-- `Esc` or `q` to close.
+- 用 `↑`/`↓`、`PageUp`/`PageDown`、`Home`/`End` 和鼠标滚轮移动选中项；
+- 按 `Enter` 检查选中的设备；
+- 按 `Esc` 或 `q` 关闭。
 
-Devices come from `/sys/class/block`, with a current limit of 256 entries. Partitions and virtual devices matching `loop*`, `ram*`, `zram*`, or `fd*` are filtered out. Remaining devices are sorted by name and mapped to `/dev/<name>`.
+设备来自 `/sys/class/block`，当前上限为 256 条。匹配 `loop*`、`ram*`、`zram*` 或 `fd*` 的分区和虚拟设备会被过滤。剩余设备按名称排序，并映射为 `/dev/<name>`。
 
-There is currently no `smartctl --scan-open`, USB/SAS bridge `-d` type detection, manually entered device path, or multipath deduplication. Some USB enclosures, RAID devices, device-mapper targets, or nonstandard block devices may therefore be absent or may require unsupported `smartctl` arguments.
+目前没有 `smartctl --scan-open`、USB/SAS 桥接的 `-d` 类型探测、手动输入设备路径或多路径去重。因此某些 USB 硬盘盒、RAID 设备、device-mapper 目标或非标准块设备可能缺席，或需要当前不支持的 `smartctl` 参数。
 
-### 2.2 Invocation and Data
+### 2.2 调用与数据
 
-For the selected device, wtop runs:
+对选中的设备，wtop 运行：
 
 ```text
 smartctl --json=c --nocheck=standby --all /dev/<device>
 ```
 
-The current policy uses a 2-second timeout, a 4 MiB output limit, and a 60-second result cache. `--nocheck=standby` avoids actively waking standby devices. wtop does not start SMART self-tests or perform firmware, repair, or write operations.
+当前策略为：2 秒超时、4 MiB 输出上限、60 秒结果缓存。`--nocheck=standby` 用于避免主动唤醒处于待机状态的设备。wtop 不会启动 SMART 自检，也不会执行固件、修复或写入操作。
 
-Fields currently parsed and directly displayable in scalar sections include:
+当前解析、并可直接显示在标量区中的字段包括：
 
-- model, masked serial number, firmware, capacity, protocol, rotation speed, and inferred device kind;
-- overall SMART passed state, temperature, power-on hours, power-cycle count, and the `smartctl` exit bitmask;
-- NVMe critical warning, available spare, percentage used, data units, media errors, and unsafe shutdowns;
-- ATA SMART attribute ID, name, normalized value, threshold, and raw value are shown as scrollable rows, up to the overlay's 128-entry limit. The full result can contain more entries than the overlay displays.
+- 型号、掩码后的序列号、固件版本、容量、协议、转速和推断出的设备类型；
+- SMART 总体通过状态、温度、通电小时数、通电次数和 `smartctl` 退出位掩码；
+- NVMe 严重警告、可用备用空间、已用百分比、数据单元、介质错误和非正常关机次数；
+- ATA SMART 属性的 ID、名称、归一化值、阈值和原始值以可滚动行显示，上限为覆盖层的 128 条限制。完整结果可能包含比覆盖层所显示更多的条目。
 
-Serial numbers longer than four characters retain only the last four characters by default, replacing the rest with `*`; shorter serial numbers are completely masked. Device-kind inference uses only protocol, rotation rate, or an explicit `SSHD` marker in model/product text. wtop does not invent a cross-vendor “health score.” It also has no dedicated view for SMART self-test history.
+长度超过四个字符的序列号默认只保留后四位，其余以 `*` 代替；更短的序列号则完全掩码。设备类型推断只依据协议、转速或型号/产品文本中的显式 `SSHD` 标记。wtop 不会凭空编造跨厂商的“健康评分”，也没有 SMART 自检历史的专用视图。
 
-A missing `smartctl`, insufficient device permissions, timeout, truncated output, or invalid JSON is returned as unavailable, denied, or error; it is never interpreted as device health.
+缺少 `smartctl`、设备权限不足、超时、输出截断或 JSON 无效，都会返回为不可用（unavailable）、被拒绝（denied）或错误（error）；这些情况永远不会被解释为设备健康状况。
 
-## 3. RAM Bandwidth (Experimental)
+## 3. 内存带宽（实验性）
 
-The current implementation is a one-shot system-wide estimate, not continuous RAM-bandwidth monitoring or a memory benchmark. Pressing `b` does the following:
+当前实现是一次性的系统级估算，不是持续的内存带宽监控，也不是内存基准测试。按下 `b` 后执行以下步骤：
 
-1. Searches `/sys/bus/event_source/devices/` for PMUs whose names begin with `uncore_imc`, `amd_df`, `amd_l3`, `hisi_sccl`, `arm_dmc`, or `dmc`.
-2. Selects a limited set of read/write events from each PMU's `events/` directory.
-3. Runs one approximately 250 ms `perf stat -a -A` sample by absolute path, using `sleep` as the timed workload.
-4. Converts each CPU/uncore-controller instance according to its own runtime in perf CSV, then sums the instance rates into system-wide read/write B/s.
+1. 在 `/sys/bus/event_source/devices/` 中查找名称以 `uncore_imc`、`amd_df`、`amd_l3`、`hisi_sccl`、`arm_dmc` 或 `dmc` 开头的 PMU。
+2. 从每个 PMU 的 `events/` 目录中选取有限的读写事件集合。
+3. 通过绝对路径运行一次约 250 ms 的 `perf stat -a -A` 采样，以 `sleep` 作为计时工作负载。
+4. 按每个 CPU/uncore 控制器实例在 perf CSV 中的各自运行时长换算速率，再把各实例速率加总为系统级读写 B/s。
 
-Sampling is internally limited to 50–2000 ms; the TUI uses 250 ms by default. Runner timeout is the sample duration plus 1250 ms, and the default output limit is 512 KiB. PMU enumeration examines at most 256 devices and 512 sysfs events per device; one `perf` invocation uses at most 64 supported events. Default operation also requires executable `perf` and `sleep`. Reliable parsing requires runtime in `perf stat` CSV, available since perf 4.1; older formats safely return unavailable instead of estimating from wall-clock time. `perf_event_paranoid`, `CAP_PERFMON`, and kernel/platform event support also affect the result.
+采样时长内部限定在 50–2000 ms；TUI 默认使用 250 ms。Runner 超时为采样时长加 1250 ms，默认输出上限为 512 KiB。PMU 枚举最多检查 256 个设备和每个设备 512 个 sysfs 事件；单次 `perf` 调用最多使用 64 个受支持的事件。默认运行还要求 `perf` 和 `sleep` 可执行。可靠解析需要 `perf stat` CSV 中的运行时长（runtime），自 perf 4.1 起可用；更旧的格式会安全地返回不可用，而不会用墙钟时间估算。`perf_event_paranoid`、`CAP_PERFMON` 以及内核/平台的事件支持也会影响结果。
 
-Only these event names or patterns are recognized:
+只识别以下事件名或模式：
 
-- `data_read`, `data_write`;
-- `cas_count_read`, `cas_count_write`;
-- names containing `rdcas`/`wrcas` or `cas_count_rd`/`cas_count_wr`.
+- `data_read`、`data_write`；
+- `cas_count_read`、`cas_count_write`；
+- 名称中包含 `rdcas`/`wrcas` 或 `cas_count_rd`/`cas_count_wr`。
 
-Unknown events are not guessed to be bandwidth events. When a host exposes both Intel free-running data events and substitute CAS families, one complete family is selected, preferring a complete free-running read/write family while retaining every PMU/socket instance in that family. This avoids counting the same DRAM traffic twice. sysfs event aliases with an identical encoding descriptor in the same PMU and direction are also counted only once. Byte units returned by `perf` are converted from the CSV unit; recognized unitless CAS/DRAM events are treated as 64 bytes per count. Every accepted count row must have a valid positive runtime. A missing or malformed runtime rejects that row instead of falling back to the requested sample duration.
+未知事件不会被猜测为带宽事件。当主机同时暴露 Intel free-running 数据事件和替补的 CAS 事件族时，会选择完整的一族，优先选择完整的 free-running 读写族，并保留该族中每个 PMU/插槽实例。这样可以避免同一份 DRAM 流量被重复计数。同一 PMU、同一方向下编码描述符相同的 sysfs 事件别名也只计一次。`perf` 返回的字节单位按 CSV 单位换算；识别出的无单位 CAS/DRAM 事件按每个计数 64 字节处理。每个被接受的计数行都必须具有有效的正运行时长。运行时长缺失或格式错误会使该行被拒绝，而不会回退到请求的采样时长。
 
-If a valid subset remains, the result may succeed with `estimated` quality; if no valid supported count remains, inspection is unavailable. A missing read or write direction, partial supported events or instances, event-list truncation, multiplexing, or a missing running percentage also marks a successful result as `estimated`. A matching PMU only proves that a candidate hardware interface exists; it does not guarantee supported events or current-user permission. The startup capability probe does not run `perf`, so the inspection result after pressing `b` is authoritative. A result is classified `denied` only when output explicitly diagnoses a permission failure. Plain EINVAL/event-open failures cannot distinguish an unsupported event from a permission issue and are therefore `unavailable`, with a `permission_may_be_required` hint only when evidence such as `perf_event_paranoid` supports it. Successful default-TUI results report provider `perf_stat` and formula version `perf-stat-csv-no-aggr-v4`. The implementation invokes external `perf stat`, not `perf_event_open` directly. The overlay formats bandwidth as B/s and utilization as a percentage.
+如果仍有有效子集，结果可以成功但质量标记为 `estimated`；如果没有剩余的有效受支持计数，则检查不可用。缺少读或写方向、受支持事件或实例不完整、事件列表截断、多路复用（multiplexing）或缺少运行百分比，都会把成功结果标记为 `estimated`。匹配的 PMU 只证明候选硬件接口存在，并不保证事件受支持或当前用户有权限。启动时的能力探测不会运行 `perf`，因此按下 `b` 后的检查结果才是权威结果。只有当输出明确诊断出权限失败时，结果才被归类为 `denied`。普通的 EINVAL/事件打开失败无法区分是不受支持的事件还是权限问题，因此归为 `unavailable`，并且仅当有 `perf_event_paranoid` 等证据支持时才附带 `permission_may_be_required` 提示。默认 TUI 的成功结果上报提供方 `perf_stat`，公式版本为 `perf-stat-csv-no-aggr-v4`。该实现调用的是外部 `perf stat`，而不是直接使用 `perf_event_open`。覆盖层将带宽格式化为 B/s，将利用率格式化为百分比。
 
-Theoretical bandwidth is calculated only when the caller explicitly supplies a valid MT/s rate, an integer channel count, and an integer total bus width:
+只有调用方显式提供有效的 MT/s 速率、整数通道数和整数总线宽度时，才会计算理论带宽：
 
 ```text
 MT/s × 1,000,000 × (bus_width_bits / 8) × channels
 ```
 
-The default TUI does not provide these topology parameters and normally shows no theoretical limit or utilization. The implementation does not guess channel count and has no CPU family/model allowlist, per-socket/controller/channel breakdown, long-term history, or platform coverage comparable to vendor reference tools. `perf` CSV and event semantics can also change by kernel/platform, so this feature remains experimental.
+默认 TUI 不提供这些拓扑参数，因此通常不显示理论上限或利用率。该实现不会猜测通道数，没有 CPU 家族/型号白名单，没有按插槽/控制器/通道的细分，没有长期历史，平台覆盖也不及厂商参考工具。`perf` 的 CSV 和事件语义还可能随内核/平台变化，因此该功能仍为实验性。
 
-## 4. `sshd` Service
+## 4. `sshd` 服务
 
-Pressing `d`—or `Enter` on the Insights page—inspects the fixed `sshd.service`. The current implementation can combine:
+按下 `d`，或在 Insights 页面按 `Enter`，会让服务检查器执行枚举，产出唯一的 `sshd.service` 单元并检查它。该单元不再作为手工构造的对象提供，因此检查器只检查自己枚举产出的单元。当前实现可以组合：
 
-- allowlisted fields from `systemctl show sshd.service`, such as ActiveState, MainPID, restart count, exit status, memory, CPU time, and cgroup;
-- processes named `sshd` or `sshd:*` from the collected process snapshot;
-- listening sockets in `/proc/net/tcp` and `/proc/net/tcp6`, using port 22 as a limited fallback when no configuration provider is available.
+- 来自 `systemctl show sshd.service` 的白名单字段，如 ActiveState、MainPID、重启次数、退出状态、内存、CPU 时间和 cgroup；
+- 进程快照中名为 `sshd` 或 `sshd:*` 的进程；
+- `/proc/net/tcp` 和 `/proc/net/tcp6` 中的监听套接字；在没有可用配置提供方时，以端口 22 作为有限的后备。
 
-The current TUI does not inject effective sshd configuration, login sessions, socket owners, or journal/recent-event providers. Default operation therefore does not show effective configuration, active login origins, authentication failures, or recent logs; “unavailable” does not mean that no sessions or events exist. Non-systemd systems fall back to process and procfs-listener evidence only.
+当前 TUI 不注入 sshd 生效配置、登录会话、套接字属主或 journal/近期事件提供方。因此默认运行不会显示生效配置、活跃登录来源、认证失败或近期日志；“不可用”并不意味着不存在会话或事件。非 systemd 系统只回退到进程和 procfs 监听者证据。
 
-Processes, listeners, sessions, events, and configuration are table-valued sections. The overlay shows process, listener, session, and configuration rows beneath their counts, up to 128 per field. Listener addresses/ports and process metrics are shown when present. Events remain count-only until their text can be redacted consistently. Scalar systemd-service fields are displayed directly.
+进程、监听者、会话、事件和配置都是表格型字段。覆盖层在各自条数下方显示进程、监听者、会话和配置行，每个字段最多 128 条。监听者地址/端口和进程指标在有数据时显示。事件在文本能够一致地脱敏之前只显示条数。systemd 服务的标量字段直接显示。
 
-The Inspector model can mask remote addresses when the caller supplies sessions, and the default TUI context enables masking: IPv4 retains only the first two octets and IPv6 only a short prefix. This policy applies only to the sshd Inspector. See [MONITORING.md](MONITORING.md) for privacy boundaries on the Network page and JSON export.
+检查器模型可以在调用方提供会话时掩码远程地址，默认 TUI 上下文启用了掩码：IPv4 只保留前两个字节，IPv6 只保留很短的前缀。该策略只适用于 sshd 检查器。网络页面和 JSON 导出的隐私边界见 [MONITORING.md](MONITORING.md)。
 
-## 5. Capability, Permission, and Failure Semantics
+## 5. 能力、权限与失败语义
 
-- `available` means only that a basic source was detected; it does not guarantee a usable combination of device, permission, and event.
-- `denied` means permission prevented access. wtop does not automatically elevate an Inspector in place.
-- `unavailable` means a helper, PMU, device, event, or optional provider is absent.
-- `error` means timeout, truncation, invalid structured output, or another execution failure.
-- SMART has a 60-second cache. RAM PMU and sshd results are currently uncached and are not sampled continuously after the overlay closes.
+- `available` 只表示检测到了基本数据源，并不保证设备、权限和事件的组合可用。
+- `denied` 表示权限阻止了访问。wtop 不会自动就地提升某个检查器的权限。
+- `unavailable` 表示辅助程序、PMU、设备、事件或可选提供方缺失。
+- `error` 表示超时、截断、结构化输出无效或其他执行失败。
+- SMART 有 60 秒缓存。RAM PMU 和 sshd 的结果目前不缓存，覆盖层关闭后也不会持续采样。
 
-The program runs as an ordinary user by default. A user may explicitly start the whole invocation through direct `sudo wtop` or `--sudo`/`--elevate`; there is no resident privileged helper and no Inspector action that modifies system state.
+程序默认以普通用户运行。用户可以显式通过直接 `sudo wtop` 或 `--sudo`/`--elevate` 启动整个调用；没有常驻的特权辅助进程，也没有任何会修改系统状态的检查器操作。
 
-## 6. Release Validation and Remaining Work
+## 6. 发布验证与剩余工作
 
-Release validation should cover at least:
+发布验证至少应覆盖：
 
-- SMART: multi-disk selection, no disks, list truncation, standby, insufficient permission, missing helper, and ATA/NVMe fixtures;
-- RAM PMU: no PMU, no supported events, missing `perf`/`sleep`, permission denial, multiplexed or one-direction results, and numeric boundaries;
-- sshd: systemd and non-systemd, default and custom ports, no process/listener, and missing log/session providers;
-- selection, scrolling, and close paths at four PTY sizes;
-- confirmation that external commands cannot execute under `--safe-mode`.
+- SMART：多磁盘选择、无磁盘、列表截断、待机设备、权限不足、辅助程序缺失，以及 ATA/NVMe 测试固件；
+- RAM PMU：无 PMU、无受支持事件、缺少 `perf`/`sleep`、权限拒绝、多路复用或单方向结果，以及数值边界；
+- sshd：systemd 与非 systemd、默认端口与自定义端口、无进程/监听者，以及缺少日志/会话提供方；
+- 四种 PTY 尺寸下的选中、滚动和关闭路径；
+- 确认 `--safe-mode` 下外部命令无法执行。
 
-Long-term directions not yet implemented include a generic Resource Inspector, more entities/providers, SMART bridge parameters and self-test history, trusted platform PMU mappings, service session/log sources, and fuller per-field evidence and permission explanations.
+尚未实现的长期方向包括：通用资源检查器、更多实体/提供方、SMART 桥接参数和自检历史、可信的平台 PMU 映射、服务会话/日志来源，以及更完整的逐字段证据和权限说明。
 
-## 7. References
+## 7. 参考资料
 
 - [smartctl JSON/YAML output option](https://www.smartmontools.org/static/doxygen/smartctl_8cpp_source.html)
 - [Linux perf events security](https://docs.kernel.org/admin-guide/perf-security.html)

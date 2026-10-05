@@ -1,4 +1,4 @@
-package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
+package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 
 local CPU = require("wtop.collectors.cpu")
 local Engine = require("wtop.engine")
@@ -8,6 +8,8 @@ local Disk = require("wtop.collectors.disk")
 local Network = require("wtop.collectors.network")
 local Process = require("wtop.collectors.process")
 local GPU = require("wtop.collectors.gpu")
+local Common = require("wtop.collectors.common")
+local Snapshot = require("wtop.model.snapshot")
 
 local function fixture(path)
   local file = assert(io.open("tests/fixtures/" .. path, "rb"))
@@ -85,6 +87,55 @@ now = now + 1000000000
 local cpu_reset = cpu:sample(context, cpu_second)
 assert(cpu_reset.data.total.quality == "gap" and cpu_reset.data.total.user == nil)
 
+-- The CPU collector is the eleventh to publish a reason for a degraded but
+-- running reading, and it is the first one where the measurement says the slot
+-- cannot be ambiguous: `derive_cpu` returns `gap` from five places -- no
+-- previous sample, a counter that went backwards, a delta that overflowed, an
+-- idle larger than total, and a missing per-field delta -- and all five mean
+-- the same thing, that this sample cannot be differenced against the last one.
+-- `partial` has one cause too, the load average.  So the test asserts the
+-- pairing, not just the presence of a reason: one quality, one code, and a
+-- fresh reading with none at all.
+local CPU_REASON = { gap = "cpu_counter_delta_unavailable",
+  partial = "loadavg_unavailable", fresh = false }
+local CollectorReason = require("support.collector_reason")
+local cpu_reason_is = function(result, label)
+  return CollectorReason.assert_reason(result, CPU_REASON, label)
+end
+cpu_reason_is(cpu_first, "the first sample")
+cpu_reason_is(cpu_second, "the second sample")
+cpu_reason_is(cpu_reset, "the sample after a counter reset")
+
+-- The load average is the other half, and it is a different code because it is
+-- a different cause: the counters differenced fine and one file was unreadable.
+cpu_files["/proc/loadavg"] = nil
+now = now + 1000000000
+local cpu_no_loadavg = cpu:sample(context, cpu_reset)
+assert(cpu_no_loadavg.status == "ok", "a missing load average is not a failure")
+cpu_reason_is(cpu_no_loadavg, "a sample with no load average")
+assert(cpu_no_loadavg.quality == "partial",
+  "and it degrades the reading rather than dropping a field silently")
+assert(cpu_no_loadavg.data.load == nil, "with no load invented for it")
+-- And a malformed load average is the same cause, not a second one: the file
+-- was read and could not be understood, which is still "could not be read".
+cpu_files["/proc/loadavg"] = "not a load average\n"
+now = now + 1000000000
+local cpu_broken = cpu:sample(context, cpu_no_loadavg)
+cpu_reason_is(cpu_broken, "a sample with a broken load average")
+-- With the load average back and the counters unchanged, both causes are live
+-- at once -- the load average reads and the samples cannot be differenced -- and
+-- the published quality is `gap`, so the reason must name the gap and not the
+-- load average.  This is the case that would catch a reason written as an
+-- independent second guess rather than as the cause of what was published.
+cpu_files["/proc/loadavg"] = fixture("proc/loadavg")
+now = now + 1000000000
+local cpu_both = cpu:sample(context, cpu_broken)
+cpu_reason_is(cpu_both, "a sample with a readable load average and no counter delta")
+assert(cpu_both.quality == "gap",
+  "the unchanged counters are still the reason the reading is degraded")
+assert(cpu_both.reason == "cpu_counter_delta_unavailable",
+  "and the reason names them, not the load average that is now readable")
+
 context.fs = fake_fs({
   ["/proc/meminfo"] = fixture("proc/meminfo"),
   ["/proc/vmstat"] = fixture("proc/vmstat"),
@@ -99,6 +150,47 @@ context.fs = fake_fs({
 })
 local partial_memory = Memory.new():sample(context)
 assert(partial_memory.status == "ok" and partial_memory.quality == "partial")
+-- A reading that is `partial` has to say why, on the result and not only in the
+-- data.  `Snapshot.merge` copies `result.reason` into `quality[resource].reason`
+-- and that is the slot a caller reads to answer "why is this degraded" -- and
+-- only the error path had ever filled it, through `Common.error_result`.  So a
+-- degraded-but-running reading was the single kind that could not say why: it
+-- reported `partial` with a nil reason, while a collector that failed outright
+-- reported `unavailable` with one.  This collector computed the reason and put
+-- it in `data.vmstat_error`, where no reader was looking.
+assert(type(partial_memory.reason) == "string" and partial_memory.reason ~= "",
+  "a memory reading that is partial carries no reason: the vmstat parse failed "
+    .. "and the collector knows why, so the snapshot can only say `partial` and "
+    .. "a caller has nothing to report to the user but the word itself")
+-- The other way to be partial: the file is not readable at all.  A different
+-- cause, so it has to be a different reason -- a guard that only ever saw the
+-- parse failure would accept a constant here.
+context.fs = fake_fs({ ["/proc/meminfo"] = fixture("proc/meminfo") })
+local unreadable = Memory.new():sample(context)
+assert(unreadable.status == "ok" and unreadable.quality == "partial")
+assert(type(unreadable.reason) == "string" and unreadable.reason ~= ""
+    and unreadable.reason ~= partial_memory.reason,
+  "an unreadable /proc/vmstat and an unparseable one both report "
+    .. tostring(unreadable.reason) .. " / " .. tostring(partial_memory.reason) ..
+    ": the two are different failures and the snapshot has to be able to say "
+    .. "which one happened")
+-- And the reason has to survive the merge, because that is the copy the UI, the
+-- JSON snapshot and an agent all read.
+local merged = Snapshot.merge(Snapshot.new(0, 1), { memory = partial_memory })
+assert(merged.quality.memory.reason == partial_memory.reason,
+  "the reason a collector computed does not reach quality[resource].reason: "
+    .. tostring(merged.quality.memory.reason) .. " instead of "
+    .. tostring(partial_memory.reason) .. ".  Everything downstream reads the "
+    .. "snapshot, not the collector result.")
+-- The two paths are comparable only if both carry one, so pin the other half
+-- too: a collector that failed outright says why, and has always been able to.
+local failed_memory = Snapshot.merge(Snapshot.new(0, 1), {
+  memory = Common.error_result({ kind = "missing", message = "no such file" }, 1, "/proc/meminfo"),
+})
+assert(failed_memory.quality.memory.reason == "no such file",
+  "a collector that failed outright no longer says why, so a degraded reading "
+    .. "and a failed one are not comparable and the vocabulary is not a "
+    .. "contract: " .. tostring(failed_memory.quality.memory.reason))
 context.fs = fake_fs({
   ["/proc/meminfo"] = "MemTotal: 100 kB\nMemAvailable: 200 kB\n",
   ["/proc/vmstat"] = fixture("proc/vmstat"),
@@ -113,7 +205,67 @@ context.fs = fake_fs({
 local pressure = Pressure.new():sample(context)
 assert(pressure.status == "ok" and pressure.data.memory.full.total == 50)
 context.fs = fake_fs({ ["/proc/pressure/cpu"] = fixture("proc/pressure.cpu") })
-assert(Pressure.new():sample(context).quality == "partial")
+
+-- A reading that degraded without failing has to say why, and the reason has to
+-- be *measured* rather than a constant that happens to be attached.  This is the
+-- second collector to carry that contract after memory; the shape is the same one
+-- that made the first worth closing, and the collector is a good second case
+-- because the cause is genuinely single -- the only condition that degrades the
+-- sample is a resource that could not be read, so the aggregate reason and the
+-- per-resource reasons in `data.errors` cannot disagree about which cause it was.
+local partial_pressure = Pressure.new():sample(context)
+assert(partial_pressure.status == "ok" and partial_pressure.quality == "partial")
+assert(type(partial_pressure.reason) == "string" and partial_pressure.reason ~= "",
+  "a pressure sample that is partial carries no reason: two of the three "
+    .. "configured resources could not be read, the collector counted them, and "
+    .. "the snapshot can therefore only say `partial` and leave the question "
+    .. "open.  This is the same contract memory closes above, and the per-"
+    .. "resource detail is already in data.errors -- the aggregate is the one "
+    .. "thing the result did not say.")
+
+-- A different cause, so a different reason.  Every resource failing is a
+-- different state with its own status and its own reason, and a guard that only
+-- ever saw the partial case would be satisfied by any string at all.  The
+-- resources are named so that none of them is the one the current tree declares:
+-- a missing resource and a present one have to be told apart by the fixture, not
+-- by which word follows it.
+local previous_fs = context.fs
+context.fs = fake_fs({})
+local none_pressure = Pressure.new():sample(context)
+assert(none_pressure.status ~= "ok" and none_pressure.quality ~= "partial",
+  "a pressure sample with no readable resource is no longer reported as a "
+    .. "partial ok result: it came back " .. tostring(none_pressure.status) .. " / "
+    .. tostring(none_pressure.quality))
+assert(type(none_pressure.reason) == "string" and none_pressure.reason ~= ""
+    and none_pressure.reason ~= partial_pressure.reason,
+  "the all-unreadable case and the partial case give the same reason ("
+    .. tostring(none_pressure.reason) .. "), so the reason does not identify the "
+    .. "cause: a snapshot reader cannot tell a sample that lost some resources "
+    .. "from one that lost all of them")
+
+-- And the reason has to survive the merge, because that is the copy the UI, the
+-- JSON snapshot and an agent read.
+local pressure_merged = Snapshot.merge(Snapshot.new(0, 1), { pressure = partial_pressure })
+assert(pressure_merged.quality.pressure.reason == partial_pressure.reason,
+  "the reason the pressure collector computed does not reach "
+    .. "quality[pressure].reason: " .. tostring(pressure_merged.quality.pressure.reason)
+    .. " instead of " .. tostring(partial_pressure.reason))
+
+-- And a sample that is not degraded must not claim to be: a reason attached to a
+-- `fresh` reading is a lie of the same shape, and the guard has to see it.
+context.fs = fake_fs({
+  ["/proc/pressure/cpu"] = fixture("proc/pressure.cpu"),
+  ["/proc/pressure/memory"] = fixture("proc/pressure.memory"),
+  ["/proc/pressure/io"] = fixture("proc/pressure.io"),
+})
+local all_readable = Pressure.new():sample(context)
+context.fs = previous_fs
+assert(all_readable.status == "ok" and all_readable.quality == "fresh"
+    and all_readable.reason == nil,
+  "a pressure sample where every resource was read reports `" .. tostring(all_readable.quality)
+    .. "` and still carries a reason (" .. tostring(all_readable.reason)
+    .. "), so a reading that is not degraded is explaining a degradation that "
+    .. "did not happen")
 
 local disk_files = {
   ["/proc/diskstats"] = fixture("proc/diskstats.1"),
@@ -200,6 +352,55 @@ for _, interface in ipairs(unidentified_network.data.interfaces) do
 end
 assert(unidentified_eth0 and unidentified_eth0.ifindex == nil)
 assert(unidentified_eth0.quality == "gap" and next(unidentified_eth0.rates) == nil)
+
+-- The network collector is the twelfth to publish a reason for a degraded but
+-- running reading, and it passes the test a single reason slot has to pass: a
+-- sentence that is true in *every* case that produces the quality.  `partial`
+-- is set only when a route file could not be read or was longer than the line
+-- cap, and "the default-route table is incomplete" is true of both.  `gap` is
+-- set when an interface has no previous sample, when no interval has elapsed,
+-- or when a counter could not be differenced, and all three mean no rate
+-- exists for it this tick.  So the assertion is the pairing again, and it needs
+-- a route read that is refused rather than absent, because an absent file is
+-- how a host with no IPv4 route table looks and it is not a degradation.
+local NET_REASON = { partial = "default_routes_incomplete",
+  gap = "network_rate_unavailable", fresh = false }
+local network_reason_is = function(result, label)
+  return CollectorReason.assert_reason(result, NET_REASON, label)
+end
+network_reason_is(network_first, "the first network sample")
+network_reason_is(network_second, "the second network sample")
+network_reason_is(replaced_network, "a sample after the ifindex changed")
+network_reason_is(unidentified_network, "a sample with no ifindex")
+
+local open_fs = context.fs
+local denying_fs = {}
+for key, value in pairs(open_fs) do denying_fs[key] = value end
+function denying_fs:read(path, limit)
+  if path == "/proc/net/route" then
+    return nil, { kind = "denied", message = "fixture_denied", path = path }
+  end
+  return open_fs.read(self, path, limit)
+end
+context.fs = denying_fs
+now = now + 1000000000
+local denied_routes = network_collector:sample(context, unidentified_network)
+network_reason_is(denied_routes, "a sample whose route table was refused")
+assert(denied_routes.quality == "partial",
+  "a refused route table degrades the reading")
+assert(#denied_routes.data.default_routes == 0,
+  "and no default route is invented for it")
+context.fs = open_fs
+-- Both causes live at once: the route table reads again, and the counters are
+-- unchanged from the sample just taken, so no rate exists for any interface.
+-- The published quality is `gap`, so the reason must name that.
+now = now + 1000000000
+local network_both = network_collector:sample(context, denied_routes)
+network_reason_is(network_both, "a readable route table and no counter delta")
+assert(network_both.quality == "gap",
+  "the unchanged counters are still why the reading is degraded")
+assert(network_both.reason == "network_rate_unavailable",
+  "and the reason names them, not the route table that now reads")
 
 local process_files = {
   ["/proc/100/stat"] = fixture("proc/100.stat.1"),

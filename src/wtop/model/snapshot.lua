@@ -20,6 +20,17 @@ local RESOURCE_KEYS = {
   inventory = true,
 }
 
+-- A collector id that is not also a slot name is mapped here, because the id is
+-- what a collector calls itself and the slot is what a consumer reads.  Measured,
+-- nine of the seventeen registered collectors need this and eight do not, and an
+-- entry for `psi` sat here for a collector that does not exist -- the pressure
+-- collector calls itself `pressure`, which is already a slot name and so never
+-- came through here.  It was harmless until it was not: a collector that took
+-- the id `psi` would have resolved to `pressure`, which the real one owns, and
+-- two collectors would have written one slot with nothing to say so.  Deleted, and
+-- `tests/unit/test_core_primitives.lua` now holds the relation as two properties
+-- -- every registered id reaches a slot, and no two ids reach the same one -- so a
+-- stale alias that is ever taken fails rather than colliding.
 local ID_TO_RESOURCE = {
   disk = "disks",
   gpu = "gpus",
@@ -28,18 +39,18 @@ local ID_TO_RESOURCE = {
   hwmon = "sensors",
   powercap = "power",
   cgroup = "workloads",
-  psi = "pressure",
   system_info = "system",
   power_supply = "power_supplies",
   inventory = "inventory",
 }
 
-local VALID_STATUS = { ok = true, unavailable = true, denied = true, error = true }
-local VALID_QUALITY = {
-  fresh = true, stale = true, gap = true, estimated = true, unavailable = true,
-  denied = true, error = true, partial = true, reset = true, measured = true,
-  truncated = true,
-}
+-- The vocabularies live in `model/quality.lua`.  They used to be written here as
+-- well as in `core/scheduler.lua` and `inspectors/model.lua`, and the three had
+-- already diverged -- this one had eleven entries and the other two ten -- so
+-- there is one list now and one place that says what it is.
+local Quality = require("wtop.model.quality")
+local VALID_STATUS = Quality.VALID_STATUS
+local VALID_QUALITY = Quality.VALID_QUALITY
 
 local function nonnegative_integer(value)
   return type(value) == "number" and value == value
@@ -115,8 +126,22 @@ function Snapshot.merge(previous, results, sequence, timestamp_ns)
     local resource = ID_TO_RESOURCE[id] or id
     local status = type(result) == "table" and result.status or "error"
     local quality = type(result) == "table" and result.quality or "error"
-    if not VALID_STATUS[status] then status, quality = "error", "error" end
-    if not VALID_QUALITY[quality] then quality = status == "ok" and "fresh" or status end
+    -- The vocabulary is closed on purpose: these are the words the UI, the JSON
+    -- snapshot and an agent all read, so an unpublishable one cannot be carried
+    -- through.  What it must not become is the permissive answer.  Measured, an
+    -- unknown quality on an `ok` result used to be rewritten to `fresh` while the
+    -- status stayed `ok` and the reason survived beside it -- a record that
+    -- contradicted itself, and a genuine degradation misspelled as `partail`
+    -- published as fresh data.  The status line above already refused the
+    -- permissive direction; this one now does the same, in one step, so a
+    -- collector that cannot describe its own reading loses the label rather than
+    -- gaining a flattering one.  The spelling that was refused is not recorded
+    -- here -- `quality[resource]` has no field for it and adding one is a change
+    -- to a published v1 document, which is a compatibility decision and not this
+    -- patch's to make.
+    if not VALID_STATUS[status] or not VALID_QUALITY[quality] then
+      status, quality = "error", "error"
+    end
     if RESOURCE_KEYS[resource] and status == "ok" and result.data ~= nil then
       snapshot[resource] = result.data
     elseif RESOURCE_KEYS[resource] and previous[resource] ~= nil then
@@ -151,5 +176,12 @@ end
 function Snapshot.resource_for_collector(id)
   return ID_TO_RESOURCE[id] or id
 end
+
+-- The id map itself, so the relation can be inspected rather than only queried.
+-- `resource_for_collector` answers "where does this id go" and says nothing about
+-- the entries that name nothing, which is the direction a stale alias fails in:
+-- it is inert until a collector takes the name, and nothing about a lookup can
+-- tell an entry that is about to be needed from one that never will be.
+Snapshot.RESOURCE_IDS = ID_TO_RESOURCE
 
 return Snapshot

@@ -1,4 +1,4 @@
-package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
+package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 
 local CPUFreq = require("wtop.collectors.cpufreq")
 local Hwmon = require("wtop.collectors.hwmon")
@@ -145,6 +145,76 @@ assert(not pcall(Hwmon.new, { max_devices = 0 }))
 assert(hwmon:probe(hwmon_context).available)
 local sensors = hwmon:sample(hwmon_context)
 assert(sensors.status == "ok" and sensors.quality == "partial")
+
+-- The hwmon collector publishes a reason for its degraded readings, and both of
+-- its reasons are categories: `partial` is set when the class directory
+-- produced errors or any channel came back partial or unavailable, and
+-- `estimated` when the device identity could not be read or a channel
+-- published no `input` file and the average of its readings stood in for it.
+-- "Part of the sensor data could not be read" and "some sensor values were
+-- derived rather than read directly" are the two sentences that hold for all
+-- the causes, and the channel's own `errors` and `input_source` say which.
+local HWMON_REASON = { partial = "hwmon_data_partial",
+  estimated = "hwmon_value_derived", fresh = false }
+local hwmon_reason_is = function(result, label)
+  return require("support.collector_reason").assert_reason(result, HWMON_REASON, label)
+end
+hwmon_reason_is(sensors, "the hwmon sample with one bad channel")
+
+-- A device that is whole: it has a name, a device target, and a channel with a
+-- readable input.  The fresh case is half the invariant, and a table that lists
+-- only the two degraded qualities would not notice a reason published here.
+local healthy_fs = build_hwmon({ { class = "hwmon0", fixture = "hwmon-healthy.txt" } })
+local healthy = Hwmon.new():sample({ fs = healthy_fs, now_ns = function() return now end })
+assert(healthy.status == "ok", "a whole hwmon device is sampled")
+assert(healthy.quality == "fresh", "a whole hwmon device is fresh, not estimated")
+assert(#healthy.data.devices == 1)
+local healthy_device = healthy.data.devices[1]
+assert(healthy_device.quality == "fresh"
+  and healthy_device.identity_quality == "fresh",
+  "a name and a device target are the whole identity")
+assert(next(healthy_device.errors) == nil)
+assert(#healthy_device.channels == 1)
+local healthy_channel = healthy_device.channels[1]
+assert(healthy_channel.id == "temperature:1" and healthy_channel.quality == "fresh")
+assert(healthy_channel.input_source == nil,
+  "a value read from `input` is not a value derived from somewhere else")
+assert(healthy_channel.readings.average == nil)
+hwmon_reason_is(healthy, "a hwmon sample with nothing wrong")
+
+-- And the fourth case, the one whose absence let a mutation through: a channel
+-- that published no `input` file, so the average of its readings was
+-- substituted.  The reading *was* taken, from a neighbouring field, which is
+-- why its reason is the derived one and not the unreadable one -- a user told
+-- "part of the sensor data could not be read" goes looking for a permissions
+-- problem that does not exist.  The mutation that swapped the two codes for
+-- this quality passed every assertion above, because all three were `partial`.
+local average_fs = build_hwmon({ { class = "hwmon0", fixture = "hwmon-averaged.txt" } })
+local averaged = Hwmon.new():sample({ fs = average_fs, now_ns = function() return now end })
+assert(averaged.status == "ok" and averaged.quality == "estimated",
+  "a channel with only an average reading is estimated, not partial")
+assert(#averaged.data.devices == 1)
+local average_device = averaged.data.devices[1]
+assert(average_device.quality == "estimated")
+-- The whole reason this case exists.  Nothing failed to be read: there is no
+-- error record on the device or the channel, so "part of the sensor data could
+-- not be read" is a false sentence about this sample, and a user who believed
+-- it would go looking for a permissions problem that does not exist.  What
+-- happened instead is that the driver published `power1_average` and no
+-- `power1_input`, and the collector stood the former in for the latter.
+assert(next(average_device.errors) == nil,
+  "the average reading is a substitution, not a failed read")
+assert(#average_device.channels == 1)
+local average_channel = average_device.channels[1]
+assert(average_channel.id == "power:1" and average_channel.quality == "estimated")
+assert(next(average_channel.errors) == nil, "no attribute of this channel failed to be read")
+assert(average_channel.readings.input == nil,
+  "`input` was never published, which is the whole cause of the estimate")
+near(average_channel.readings.average, 125)
+assert(average_channel.input == average_channel.readings.average)
+assert(average_channel.input_source == "average",
+  "the channel itself must say which of its readings stood in for the input")
+hwmon_reason_is(averaged, "a hwmon sample whose input came from an average")
 assert(#sensors.data.devices == 3)
 
 local coretemp_id = "coretemp@../../../devices/platform/coretemp.0"
@@ -163,15 +233,26 @@ assert(bad_temp.errors.input.reason == "expected_integer")
 near(bad_temp.thresholds.max, 90)
 local sentinel_temp = assert(coretemp.by_id["temperature:3"])
 assert(sentinel_temp.input == nil and sentinel_temp.thresholds.max == nil)
-assert(sentinel_temp.errors.input.reason == "implausible_sensor_value")
-assert(sentinel_temp.errors.max.reason == "implausible_sensor_value")
+-- The two u16 range endpoints are how that encoding says "nothing stated", so
+-- they are absent without an error, exactly like a threshold of exactly zero.
+-- A merely implausible number on the same channel is still an error.
+assert(sentinel_temp.errors.input == nil, "a protocol sentinel is not a failed read")
+assert(sentinel_temp.errors.max == nil, "a protocol sentinel is not a failed read")
+assert(sentinel_temp.errors.offset == nil, "a protocol sentinel is not a failed read")
 assert(sentinel_temp.errors.lowest.reason == "implausible_sensor_value")
 assert(sentinel_temp.errors.highest.reason == "implausible_sensor_value")
-assert(sentinel_temp.errors.offset.reason == "implausible_sensor_value")
 assert(sentinel_temp.errors.crit.reason == "implausible_sensor_value")
 assert(sentinel_temp.readings.lowest == nil and sentinel_temp.readings.highest == nil)
 near(sentinel_temp.thresholds.min, -199.999)
 near(sentinel_temp.thresholds.emergency, 999.999)
+-- The `nvme` shape: a sensor the driver rates but states no limits for.  Every
+-- attribute it publishes is a sentinel, so the channel reports no figure and
+-- no error rather than degrading the device on a healthy host.
+local silent_temp = assert(coretemp.by_id["temperature:6"])
+assert(silent_temp.input == nil and silent_temp.readings.input == nil)
+assert(silent_temp.thresholds.min == nil and silent_temp.thresholds.max == nil)
+assert(next(silent_temp.errors) == nil, "a wholly sentinel channel records no error")
+assert(silent_temp.quality == "unavailable", "a channel that published nothing is unavailable")
 local lower_boundary = assert(coretemp.by_id["temperature:4"])
 assert(lower_boundary.input == nil)
 assert(lower_boundary.errors.input.reason == "implausible_sensor_value")
@@ -222,6 +303,8 @@ local oversized = Hwmon.new({ max_text_bytes = 8 }):sample({
   fs = oversized_fs,
   now_ns = function() return now end,
 })
+hwmon_reason_is(limited, "the hwmon sample cut off at its device cap")
+hwmon_reason_is(oversized, "the hwmon sample whose name overflowed the text cap")
 assert(oversized.data.devices[1].quality == "partial")
 assert(oversized.data.devices[1].errors.name.reason == "file_exceeds_limit")
 

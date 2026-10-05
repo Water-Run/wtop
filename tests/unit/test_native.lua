@@ -6,14 +6,29 @@ local FS = require("wtop.linux.fs")
 local System = require("wtop.system")
 local Sysfs = require("wtop.linux.sysfs")
 
+-- Waiting for a child to be reaped is not a performance measurement: the loop
+-- only fails when the process is still live after the whole budget.  The old
+-- 200 ms cap made this a load-sensitive flake on a busy machine, which is
+-- exactly the signal a release gate must not emit.
+local REAP_ATTEMPTS = 200
+local REAP_INTERVAL_MS = 10
+
 local function assert_process_not_live(pid, message)
-    for _ = 1, 40 do
+    for _ = 1, REAP_ATTEMPTS do
         local stat_file = io.open("/proc/" .. pid .. "/stat", "rb")
         if not stat_file then return end
-        local process = Parsers.process_stat(assert(stat_file:read("*a")))
+        local body = stat_file:read("*a")
         stat_file:close()
+        -- Opening the file and reading it are two syscalls, and a reaper can run
+        -- between them, so a child that died a moment ago can leave the handle
+        -- open and the read empty.  That is the very condition this helper
+        -- exists to detect, so it is a reason to stop rather than to fail.
+        -- Measured on this host at roughly one run in thirty of the
+        -- timed-out-descendant case.
+        if not body or body == "" then return end
+        local process = Parsers.process_stat(body)
         if not process or process.state == "Z" then return end
-        native.sleep_ms(5)
+        native.sleep_ms(REAP_INTERVAL_MS)
     end
     error(message, 2)
 end
@@ -33,6 +48,46 @@ assert(FS.classify_error("localized", 13) == "denied")
 assert(FS.classify_error("localized", 2) == "missing")
 assert(injected_fs:list("/items", 0) == nil)
 assert(not pcall(FS.new, { read_file = "invalid" }))
+
+-- An option `FS.new` does not know.  It used to ignore one, and the cost was
+-- measured in a test file rather than in a report: two doubles spelled their
+-- readlink implementation `readlink`, which is not one of the four accessor
+-- names, so the key was accepted, stored in the options table, and never read --
+-- and `FS.new` substituted the *real* readlink for it.  A double that believes
+-- it is hermetic and is not is worse than one that knows it is not, because the
+-- machine running the suite decides the answer: `system_info` resolves the
+-- timezone through `readlink("/etc/localtime")`, so that test was reading this
+-- host's timezone into its sample and asserting nothing about it, and it would
+-- have kept passing on a host with no `/etc/localtime` at all.  `FS.new` refuses
+-- an unknown key by name now.
+--
+-- The refusal has to be able to say *which* key, so the assertion reads the
+-- message rather than only that something was raised: a bare `error` would
+-- satisfy a check for "it refused" and tell a caller nothing about its own
+-- mistake.
+local ok_unknown, err_unknown = pcall(FS.new, { readlink = function() end })
+assert(not ok_unknown and tostring(err_unknown):find("readlink", 1, true),
+  "FS.new accepted an option key it does not know (`readlink`, where the "
+    .. "accessor is named `read_link`), so the key is kept and never read and "
+    .. "the real implementation is substituted for the one the caller believed "
+    .. "it was providing.  A test built on that filesystem is not hermetic and "
+    .. "does not know it.")
+-- And the refusal must not be a blanket: every option the constructor does
+-- accept still has to be accepted, or the requirement above is one nothing can
+-- meet and every caller is broken instead of one.
+for _, key in ipairs({ "root", "read_file", "list_dir", "read_link", "path_type" }) do
+  local options = { [key] = (key == "root") and "/prefix" or function() end }
+  local accepted, err = pcall(FS.new, options)
+  assert(accepted, "FS.new refuses its own option `" .. key .. "`: " .. tostring(err))
+end
+-- The control for the misspelling above, in the form that matters: the correctly
+-- spelled accessor is the one that gets consulted.
+local spelled_right = FS.new({
+  read_link = function() return "/elsewhere" end,
+})
+assert(spelled_right:readlink("/anything") == "/elsewhere",
+  "a correctly spelled read_link implementation is not being used")
+
 assert(not pcall(function() injected_fs:read("") end))
 local number_fs = FS.new({ root = "/fixture", read_file = function() return "12 trailing" end })
 assert(number_fs:read_number("/number") == nil)
@@ -55,7 +110,19 @@ if not native.available then
     return true
 end
 
-assert(native.VERSION == "0.1.0")
+-- The declared version, read rather than written.  It used to be the literal
+-- "0.1.0" here, which is a fourth copy of the same fact and the reason a
+-- version bump meant finding this line: a test that hardcodes the value it is
+-- checking agrees with whatever it is checking, and anyone updating the version
+-- updates it here in the same breath.  The convergence between the module, the
+-- Lua tree and the SBOM is asserted in tests/unit/test_version_convergence.lua;
+-- what this line is for is that the module reports a version at all.
+local declared_handle = assert(io.open("VERSION", "rb"), "VERSION is missing")
+local declared_version = declared_handle:read("*a"):gsub("%s+", "")
+declared_handle:close()
+assert(native.VERSION == declared_version,
+    "the module reports version " .. tostring(native.VERSION) .. " and VERSION says "
+        .. declared_version)
 assert(type(native.pid()) == "number" and native.pid() > 1)
 assert(type(native.monotonic_ns()) == "number")
 assert(type(native.realtime_ns()) == "number")
@@ -144,12 +211,33 @@ assert(not pcall(native.execve, { "/does/not/run" },
 local self_stat_file = assert(io.open("/proc/self/stat", "rb"))
 local self_stat = assert(Parsers.process_stat(assert(self_stat_file:read("*a"))))
 self_stat_file:close()
-assert(native.signal_process(native.pid(), 0, self_stat.starttime_ticks))
-local identity_signal, identity_error = native.signal_process(
-    native.pid(), 0, self_stat.starttime_ticks + 1
-)
-assert(identity_signal == nil)
-assert(tostring(identity_error):find("PID reuse prevented", 1, true))
+-- Whether the pidfd path exists is a property of the *build*, not of the
+-- running kernel: it is compiled in only where <sys/syscall.h> defines
+-- SYS_pidfd_open, and a build against older headers is supposed to say the
+-- capability is absent rather than pretend to signal.  This test demanded the
+-- pidfd path unconditionally, so it could not pass on any build host whose
+-- headers predate Linux 5.1 -- verified by building the whole suite in a
+-- glibc 2.17 container, where it failed with the module's own message.  Both
+-- branches are asserted in full rather than one being skipped.
+local probe_signal, probe_error, probe_errno =
+    native.signal_process(native.pid(), 0, self_stat.starttime_ticks)
+if probe_signal == true then
+    local identity_signal, identity_error = native.signal_process(
+        native.pid(), 0, self_stat.starttime_ticks + 1
+    )
+    assert(identity_signal == nil)
+    assert(tostring(identity_error):find("PID reuse prevented", 1, true))
+else
+    -- A build without pidfd must name that fact.  A bare nil is what a signal
+    -- that failed for any other reason also returns, and it is what a broken
+    -- implementation would return, so asserting "it returned nil" would
+    -- distinguish nothing at all.
+    assert(probe_signal == nil)
+    assert(tostring(probe_error):find("unavailable on this build", 1, true),
+        "a build without pidfd must say so, not fail opaquely: " .. tostring(probe_error))
+    assert(probe_errno == 38,
+        "and it must report ENOSYS, not a signal failure: " .. tostring(probe_errno))
+end
 assert(not pcall(native.signal_process, native.pid(), 4294967296, self_stat.starttime_ticks))
 
 local temporary_directory = "/tmp/wtop-native-test-" .. native.pid()
@@ -192,7 +280,7 @@ assert(os.remove(temporary_directory))
 
 local result = native.run(
     { "/usr/bin/printf", "%s", "argv;is-not-a-shell" },
-    { timeout_ms = 500, max_output_bytes = 1024 }
+    { timeout_ms = 5000, max_output_bytes = 1024 }
 )
 assert(result.status == "ok")
 assert(result.stdout == "argv;is-not-a-shell")
@@ -200,14 +288,14 @@ assert(result.exit_code == 0)
 
 local environment = native.run(
     { "/usr/bin/printenv", "LC_ALL" },
-    { timeout_ms = 500, max_output_bytes = 1024, env = { LANG = "C", LC_ALL = "C" } }
+    { timeout_ms = 5000, max_output_bytes = 1024, env = { LANG = "C", LC_ALL = "C" } }
 )
 assert(environment.status == "ok")
 assert(environment.stdout == "C\n")
 
 local inherited_home = native.run(
     { "/usr/bin/printenv", "HOME" },
-    { timeout_ms = 500, max_output_bytes = 1024 }
+    { timeout_ms = 5000, max_output_bytes = 1024 }
 )
 assert(inherited_home.status == "error")
 assert(inherited_home.stdout == "")
@@ -219,14 +307,14 @@ for descriptor = 3, 32 do
 end
 local inherited_fd = native.run(
     inherited_fd_argv,
-    { timeout_ms = 500, max_output_bytes = 1024 }
+    { timeout_ms = 5000, max_output_bytes = 1024 }
 )
 inherited_file:close()
 assert(not inherited_fd.stdout:find("/etc/hostname", 1, true))
 
 local limited = native.run(
     { "/usr/bin/printf", "%s", "123456789" },
-    { timeout_ms = 500, max_output_bytes = 4 }
+    { timeout_ms = 5000, max_output_bytes = 4 }
 )
 assert(limited.stdout == "1234")
 assert(limited.truncated == true)
@@ -282,7 +370,9 @@ assert_process_not_live(detached_pid, "detached command descendant remained aliv
 
 local redirected_background = native.run(
     { "/bin/sh", "-c", "sleep 30 </dev/null >/dev/null 2>&1 & echo $!" },
-    { timeout_ms = 500, max_output_bytes = 64 }
+    -- Still far below the 30 s the background child would need: a run that
+    -- waits for it has to fail here rather than merely run slowly.
+    { timeout_ms = 1000, max_output_bytes = 64 }
 )
 assert(redirected_background.status == "ok")
 local redirected_pid = tonumber(redirected_background.stdout:match("(%d+)"))
@@ -292,7 +382,7 @@ assert_process_not_live(redirected_pid,
 
 local missing = native.run(
     { "/definitely/not/a/wtop-command" },
-    { timeout_ms = 500, max_output_bytes = 64 }
+    { timeout_ms = 5000, max_output_bytes = 64 }
 )
 assert(missing.status == "error")
 assert(missing.exit_code == 127)

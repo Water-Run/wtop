@@ -271,6 +271,7 @@ function Bandwidth:probe(context)
   if #pmus == 0 then
     return Capability.unavailable("memory_controller_pmu_not_found", { source = self.event_source_path })
   end
+
   local reader = context and context.perf_reader or self.perf_reader
   if type(reader) ~= "function" then
     local paranoid = fs:read_number(self.paranoid_path)
@@ -281,7 +282,28 @@ function Bandwidth:probe(context)
       permission = "CAP_PERFMON_may_be_required",
     })
   end
-  return Capability.available({ source = self.event_source_path, details = { pmus = #pmus } })
+  -- `available` here means what the probe actually established: the
+  -- memory-controller PMUs exist and something can be asked to read them.  It
+  -- does not mean a counter has been opened, because the probe does not open
+  -- one -- doing that on every Insights page render would cost a perf
+  -- invocation per frame.  So the reason says so, rather than leaving the
+  -- operator with a bare "ready" and an empty reason column.
+  --
+  -- This is not hypothetical.  On a host that publishes uncore_imc_0,
+  -- uncore_imc_1, uncore_imc_free_running_0 and uncore_imc_free_running_1 --
+  -- the PMU names the whitelist looks for, and perf lists data_read, data_write
+  -- and data_total on the free-running pair, which are exactly the event names
+  -- the reader knows -- every one of those opens with EINVAL from
+  -- sys_perf_event_open, because a free-running counter is not a counting PMU.
+  -- The probe found four PMUs and reported ready; the first real measurement
+  -- produced memory_events_not_supported.  A line that says ready and then says
+  -- nothing is the same defect as an SBOM with no hashes: it asserts a
+  -- conclusion nobody established.
+  return Capability.available({
+    source = self.event_source_path,
+    reason = "memory_counter_read_unverified",
+    details = { pmus = #pmus },
+  })
 end
 
 function Bandwidth:enumerate(context)

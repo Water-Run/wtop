@@ -1,0 +1,4 @@
+@device=../../../devices/platform/soc.thermal
+name=averaged
+power1_label=Package power
+power1_average=125000000

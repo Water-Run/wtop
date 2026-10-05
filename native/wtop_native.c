@@ -1,4 +1,35 @@
+/* The five feature test macros below are the pre-2.19 glibc default set written
+ * out in full, plus the modern spelling of the same idea.  They exist as a set
+ * because none of them works alone across the range wtop has to build on.
+ *
+ * Measured, not assumed.  This file needs three things: the BSD interface flags
+ * from <net/if.h> and syscall() from <unistd.h>, both behind __USE_MISC; the
+ * XSI wcwidth from <wchar.h>; and, for the build to be portable at all, the
+ * ability to compile on a glibc older than 2.19.
+ *
+ *   _GNU_SOURCE alone satisfies all three and is the obvious answer, and it is
+ *   what this file used while the older-libc build was being made to work.  It
+ *   costs a glibc version, though: under _GNU_SOURCE a glibc of 2.38 or newer
+ *   redirects strtol and strtoull to their C23 spellings __isoc23_strtol and
+ *   __isoc23_strtoull, and the module then needs GLIBC_2.38 where it needed
+ *   GLIBC_2.34 before.  The combined bundle floor is unchanged because the Lua
+ *   interpreter already required 2.38, but a build on a 2.34-to-2.37 host would
+ *   have produced a module one step higher than it used to.
+ *
+ *   _DEFAULT_SOURCE does not raise the floor, but it was introduced in glibc
+ *   2.19 and does nothing on 2.17, which is why carrying it alone is what made
+ *   the module unbuildable there: __USE_MISC never came up and the build died
+ *   with six IFF_* undeclared errors and an implicit syscall.  _BSD_SOURCE and
+ *   _SVID_SOURCE are the 2.17 spellings, and glibc 2.20 turned them into
+ *   deprecated synonyms that warn -- except when _DEFAULT_SOURCE is defined as
+ *   well, which is exactly the arrangement here.  _POSIX_C_SOURCE and
+ *   _XOPEN_SOURCE 700 supply wcwidth.
+ *
+ * Verified on glibc 2.43 and glibc 2.17: this set compiles clean under -Werror
+ * on both, and the module measures GLIBC_2.34 on the newer one. */
 #define _DEFAULT_SOURCE
+#define _BSD_SOURCE
+#define _SVID_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 
@@ -14,6 +45,8 @@
 #include <lauxlib.h>
 
 #include "wtop_nvml.h"
+#include "wtop_amdsmi.h"
+#include "wtop_levelzero.h"
 
 #include <arpa/inet.h>
 #include <dirent.h>
@@ -1664,6 +1697,34 @@ static int l_interface_addresses(lua_State *L) {
     return 1;
 }
 
+/* The build identity comes from a generated header rather than a -D flag so
+ * that it and src/wtop/build_id.lua are the same `git describe` read, which is
+ * what makes the two comparable.  The include is optional so that compiling
+ * this file without the build tree still works -- a test does exactly that to
+ * check the empty case -- and the reported value is then an empty string
+ * rather than a plausible-looking revision nobody vouched for. */
+#if defined(__has_include)
+# if __has_include("build_revision.h")
+#  include "build_revision.h"
+# endif
+# if __has_include("build_version.h")
+#  include "build_version.h"
+# endif
+#endif
+#ifndef WTOP_BUILD_REVISION
+#define WTOP_BUILD_REVISION ""
+#endif
+/* The version is written down once, in VERSION at the top of the tree, and
+ * arrives here through the same generator that produces the revision.  It used
+ * to be a literal in this file, and `--diagnose` printed the result next to the
+ * Lua tree's version, so a release that bumped one and not the other made one
+ * report state two different versions with nothing flagging the disagreement.
+ * An empty fallback keeps a module built outside the build tree honest: it says
+ * it does not know its version rather than claiming one. */
+#ifndef WTOP_VERSION
+#define WTOP_VERSION ""
+#endif
+
 static int l_system_constants(lua_State *L) {
     long clock_ticks = sysconf(_SC_CLK_TCK);
     long page_size = sysconf(_SC_PAGESIZE);
@@ -1673,14 +1734,28 @@ static int l_system_constants(lua_State *L) {
         return push_errno(L, "sysconf");
     }
 
-    lua_createtable(L, 0, 2);
+    lua_createtable(L, 0, 3);
     lua_pushinteger(L, (lua_Integer)clock_ticks);
     lua_setfield(L, -2, "clock_ticks_per_second");
     lua_pushinteger(L, (lua_Integer)page_size);
     lua_setfield(L, -2, "page_size_bytes");
+    /* Which source revision compiled this module.  The Lua tree reports its
+     * own revision from src/wtop/build_id.lua, and before this existed nothing
+     * tied the two together: a bundle could carry a module built from an older
+     * tree and still print the newer revision, because the string came from
+     * the other half of the program.  The two are compared by a test. */
+    lua_pushstring(L, WTOP_BUILD_REVISION);
+    lua_setfield(L, -2, "build_revision");
     return 1;
 }
 
+/* Rejects a PID whose start time no longer matches the one the caller read, so
+ * a recycled PID cannot be signalled in place of the process the user selected.
+ * Only `l_signal_process`'s pidfd path calls it, and that path does not exist
+ * without the two syscall numbers, so the function is compiled out with it --
+ * an unconditional definition would be an unused static on every toolchain
+ * whose headers predate pidfd, which -Werror correctly refuses to build. */
+#if defined(SYS_pidfd_open) && defined(SYS_pidfd_send_signal)
 static int read_process_starttime(pid_t pid, unsigned long long *starttime) {
     char path[64];
     char buffer[65536];
@@ -1756,6 +1831,7 @@ static int read_process_starttime(pid_t pid, unsigned long long *starttime) {
     errno = EPROTO;
     return -1;
 }
+#endif
 
 static int l_signal_process(lua_State *L) {
     lua_Integer pid_value = luaL_checkinteger(L, 1);
@@ -1806,6 +1882,11 @@ static int l_signal_process(lua_State *L) {
 #else
     (void)pidfd;
     (void)current_starttime;
+    /* Assigned above, before the branch, because the argument is validated
+     * identically either way.  The sibling (void) casts are why the unused-
+     * but-set warning does not fire here, and leaving this one out is what
+     * made the module unbuildable on every toolchain without pidfd. */
+    (void)signal_number;
     lua_pushnil(L);
     lua_pushliteral(L, "pidfd signaling is unavailable on this build");
     lua_pushinteger(L, ENOSYS);
@@ -1906,6 +1987,8 @@ static const luaL_Reg functions[] = {
     {"uname", l_uname},
     {"wcwidth", l_wcwidth},
     {"nvml_query", wtop_nvml_query},
+    {"amdsmi_query", wtop_amdsmi_query},
+    {"levelzero_query", wtop_levelzero_query},
     {NULL, NULL},
 };
 
@@ -1932,7 +2015,7 @@ int luaopen_wtop_native(lua_State *L) {
     }
     lua_pop(L, 1);
     luaL_newlib(L, functions);
-    lua_pushliteral(L, "0.1.0");
+    lua_pushliteral(L, WTOP_VERSION);
     lua_setfield(L, -2, "VERSION");
     return 1;
 }

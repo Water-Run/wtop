@@ -15,19 +15,23 @@ function M.export(output_path, layout_path)
     if type(output_path) ~= "string" or output_path == "" then
         return nil, "an output path is required"
     end
-    local orders, status, trees = LayoutStore.load(
+    local orders, status, trees, workspaces, active, columns = LayoutStore.load(
         Workspace.default_orders(), layout_path)
     if status.state == "error" then
         -- A broken persisted layout must not block the export: dumping the
         -- defaults is the recovery starting point, with the reason attached.
         orders = Workspace.default_orders()
-        trees = nil
+        trees, workspaces, active, columns = nil, nil, nil, nil
         status = { state = "default",
             reason = "persisted layout ignored: " .. tostring(status.reason) }
     end
     -- encode() falls back to the linear v1 form without trees; an empty tree
     -- table keeps the v2 branch, which fills each page from its default tree.
-    local encoded, content = pcall(LayoutStore.encode, orders, trees or {})
+    -- A workspace set exports as v3 so a backup carries every arrangement, not
+    -- only the one that happened to be live; a column set makes it v4, so an
+    -- export is a backup that can actually be restored.
+    local encoded, content = pcall(LayoutStore.encode, orders, trees or {}, workspaces, active,
+        columns)
     if not encoded then return nil, tostring(content) end
     if native.available and type(native.atomic_write) == "function" then
         local written, write_error = native.atomic_write(output_path, content, 384)
@@ -53,11 +57,17 @@ function M.import(input_path, target_path)
             .. tostring(read_error and read_error.message or read_error)
     end
     local defaults = Workspace.default_orders()
-    local orders, trees_or_error = LayoutStore.parse(text, defaults, input_path)
+    local orders, trees_or_error, workspaces, active, columns =
+        LayoutStore.parse(text, defaults, input_path)
     if not orders then
         return nil, "not a valid layout file: " .. tostring(trees_or_error)
     end
-    local saved, save_error = LayoutStore.save(orders, target_path, trees_or_error)
+    -- A v3 file carries its own workspace set; importing it must install all of
+    -- them, not just whichever one happened to be active when it was written.
+    -- A v4 file carries the column set with the same intent: importing a backup
+    -- restores the table the user had, not just the arrangement around it.
+    local saved, save_error = LayoutStore.save(orders, target_path, trees_or_error,
+        workspaces, active, columns)
     if not saved then
         return nil, "cannot install the layout: " .. tostring(save_error)
     end

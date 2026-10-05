@@ -160,16 +160,23 @@ local function visible_columns(columns, variant, area_width)
   end
 
   table.sort(chosen, function(left, right) return left.order < right.order end)
-  return chosen, used, #candidates
+  -- The eligible count this used to return as a third value is gone: its one
+  -- consumer wanted the declared count, and a helper that also answers a question
+  -- nobody asks is a second copy of a fact that then drifts from the first.
+  return chosen, used
 end
 
 function M.render(grid, area, model, context, variant)
   context, model = context or {}, model or {}
   area = Util.clip_rect(grid, area)
   local columns = type(model.columns) == "table" and model.columns or {}
-  local visible, used, total_columns = visible_columns(columns, variant, area.width)
+  local visible, used = visible_columns(columns, variant, area.width)
   if #visible == 0 or area.height < 1 then
-    return { columns_visible = 0, columns_total = total_columns }
+    -- The declared count, for the same reason the note uses it: a table that drew
+    -- nothing because it was given nothing and a table that drew nothing because
+    -- it was given everything and had no room are different rows, and only one of
+    -- them has anything to hide.
+    return { columns_visible = 0, columns_total = #columns, columns = {} }
   end
 
   -- Select columns at their minima first, then share spare cells fairly.
@@ -193,7 +200,7 @@ function M.render(grid, area, model, context, variant)
   local header_style = Util.style(context, "text.muted", "surface.header", { bold = true })
   local sort_style = Util.style(context, "accent.primary", "surface.header", { bold = true })
   grid:fill({ x = area.x, y = y, width = area.width, height = 1 }, " ", header_style)
-  local header_boxes = {}
+  local header_boxes, column_boxes = {}, {}
   for _, column in ipairs(visible) do
     local source = column.source
     local label = tostring(source.label or source.key or "")
@@ -206,10 +213,22 @@ function M.render(grid, area, model, context, variant)
     end
     grid:write(x, y, aligned(grid, label, column.width, source.align),
       active and sort_style or header_style, column.width)
+    -- `headers` stays the sortable ones alone: `tui.lua` walks this list on a
+    -- click and calls `set_sort(header.sort_key)`, so a box for a column that
+    -- cannot sort is a click that sorts by nothing.
     if source.sort_key then
       header_boxes[#header_boxes + 1] =
         { sort_key = source.sort_key, x = x, width = column.width }
     end
+    -- Every drawn column is published separately, and for the same reason the tab
+    -- bar publishes its hitboxes and the footer its layout: a guard asking the
+    -- table *what it drew* can then check the numerator on its statement row
+    -- against the columns actually on the screen, which is the only way that
+    -- number is anything but the table's own word for itself.
+    column_boxes[#column_boxes + 1] = {
+      key = source.key or source.id, x = x, width = column.width,
+      label = tostring(source.label or source.key or ""),
+    }
     x = x + column.width + 1
   end
   y = y + 1
@@ -221,22 +240,62 @@ function M.render(grid, area, model, context, variant)
   local bottom = area.y + area.height - 1
   local status_text = model.status_text and tostring(model.status_text) or ""
   local unicode = not (context.capabilities and context.capabilities.unicode == false)
-  local hidden_columns = total_columns - #visible
-  if hidden_columns > 0 and variant == "full" then
-    local note = string.format("%s %d/%d", unicode and "▤" or "#", #visible, total_columns)
+  -- The statement, and it is the same statement in every variant.
+  --
+  -- It used to be the `full` variant's alone, and that is where the whole of this
+  -- rule was: the responsive solver picks the variant, so a narrow terminal did
+  -- not narrow a table, it *replaced* it with a different table that said nothing
+  -- about itself.  Measured on the product's own pages with the product's own
+  -- data -- every page, every width from 20 to 240, every height from 3 to 40,
+  -- 4 480 renders and 4 437 table placements -- **3 406 placements drew fewer
+  -- columns than they were given and 394 of those said so on the row: 3 012 were
+  -- silent**, and the silent ones are the `spark` (1 981), `value` (949) and
+  -- `compact` (82) variants.  The same render told the same story about rows:
+  -- 1 030 placements drew fewer rows than they had, 271 named them and **759 did
+  -- not**.  At 80x24 -- the width and height this product documents -- the compute
+  -- page's table is a `spark` panel 35 cells wide holding four of its seven
+  -- columns, and its last row is a data row.
+  --
+  -- The denominator is what the model gave the table, not what the variant let
+  -- through.  `columns_total` counted the columns eligible for the variant, so a
+  -- `full_only` column was excluded from both the drawing *and* the count: a
+  -- reader told `▤ 2/5` about a table given seven columns cannot tell the two
+  -- kinds of absence apart, and the `full_only` exclusion -- four of the process
+  -- table's twelve columns -- is the difference between "this table is narrow"
+  -- and "this table is not the one you left".
+  local hidden_columns = #columns - #visible
+  if hidden_columns > 0 then
+    local note = string.format("%s %d/%d", unicode and "▤" or "#", #visible, #columns)
     status_text = status_text ~= "" and (note .. " · " .. status_text) or note
   end
+  -- The statement needs a row of its own, and a row of its own needs a header
+  -- and a row of data around it.  Three rows is that floor, and a panel shorter
+  -- than it is the one shape where a table cannot say anything: 454 of the
+  -- measured silent placements are `value` panels one row tall, which have no row
+  -- to spend and are recorded here rather than papered over.
+  local room_for_status = area.height >= 3
   -- Rows that did not fit were previously indistinguishable from rows that do
   -- not exist, which is the difference between "this host has eleven
   -- collectors" and "you are looking at eleven of sixteen".
-  local body_rows = math.max(0, (status_text ~= "" and variant == "full"
-    and area.height >= 3) and area.height - 2 or area.height - 1)
+  --
+  -- The row the statement costs is taken *before* the count that depends on it.
+  -- Deciding it from `status_text` instead -- which is empty right up until a
+  -- note is written into it -- let a table whose only note is this one keep a row
+  -- the statement was about to take: at 232x32 the compute page's collector table
+  -- reserved eleven body rows, wrote `▾ 11/16`, and then drew the statement over
+  -- the eleventh, so the row named a row the reader could not see.  The
+  -- measurement was the guard's own: it counts the body rows that carry ink and
+  -- compares them with the number on the row, and 4 431 of 4 437 placements agreed
+  -- and these six did not.  The row is now reserved whenever there is anything at
+  -- all to say.  A table that turns out to have nothing to say is unaffected,
+  -- because the reservation is only ever used to write a note.
+  local body_rows = math.max(0, room_for_status and area.height - 2 or area.height - 1)
   if #rows > body_rows and body_rows > 0 then
     local note = string.format("%s %d/%d", unicode and "▾" or "v",
       math.min(#rows, offset + body_rows), #rows)
     status_text = status_text ~= "" and (note .. " · " .. status_text) or note
   end
-  local show_status = status_text ~= "" and variant == "full" and area.height >= 3
+  local show_status = status_text ~= "" and room_for_status
   local data_bottom = show_status and bottom - 1 or bottom
   local data_top = y
 
@@ -294,7 +353,12 @@ function M.render(grid, area, model, context, variant)
   local drawn_rows = math.max(0, data_bottom - data_top + 1)
   return {
     columns_visible = #visible,
-    columns_total = total_columns,
+    columns_total = #columns,
+    -- What was drawn, one box per drawn column.  Published beside `headers` and not
+    -- inside it: `headers` answers "which of these sort", this answers "which of
+    -- these are on the screen", and a guard that read the second out of the first
+    -- would be counting the sort keys of a table it is trying to check.
+    columns = column_boxes,
     headers = header_boxes,
     header_y = area.y,
     rows_x = area.x,

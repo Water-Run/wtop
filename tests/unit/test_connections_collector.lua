@@ -166,6 +166,17 @@ equal(result.data.counts.udp6, 1, "collector UDP6 count")
 equal(result.data.counts.unix, 3, "collector UNIX count")
 assert(not result.data.partial)
 equal(result.data.owner_scan.status, "disabled", "owner scan disabled")
+-- The owner scan is off by default and switched on only for the network tab,
+-- so on every other page -- and in every noninteractive export -- nobody looked.
+-- Reporting a count of zero there would say "no process holds this socket"
+-- while the same record says the owner data is unavailable, and on a host with
+-- the scan off every listening socket reads as unowned, sshd's port 22 included.
+-- That contradiction is the whole reason the count is absent rather than zero.
+for _, connection in ipairs(result.data.connections) do
+  equal(connection.owners_quality, "unavailable", "row owner quality without a scan")
+  equal(connection.owner_count, nil,
+    "a socket nobody looked up does not report that it has no owner: " .. connection.id)
+end
 local ids = {}
 for index, connection in ipairs(result.data.connections) do
   assert(type(connection.id) == "string" and connection.id ~= "")
@@ -204,6 +215,8 @@ equal(owned.data.owner_scan.link_races, 1, "fd race")
 equal(owned.data.owner_scan.owners_attached, 4, "owners attached")
 local inode111 = assert(owned.data.by_inode["111"])[1]
 equal(#inode111.owners, 1, "one listener owner")
+equal(inode111.owner_count, 1, "a socket the scan attributed reports its count")
+equal(inode111.owners_quality, "estimated", "and the scan's own quality travels with it")
 equal(inode111.owners[1].pid, 100, "listener PID")
 equal(inode111.owners[1].fd, 3, "listener fd")
 equal(inode111.owners[1].name, "worker-a?", "sanitized process name")

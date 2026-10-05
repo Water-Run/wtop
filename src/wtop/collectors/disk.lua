@@ -272,6 +272,30 @@ function Disk:sample(context, previous)
     raw_by_identity = raw_by_identity,
   }, {
     quality = any_partial and "partial" or (any_gap and "gap" or "fresh"),
+    -- Two categories, and the first one reopens a verdict this item settled
+    -- eight increments ago by reading rather than measuring.  `partial` has
+    -- exactly three leaf causes, all of them measured here for the first time:
+    -- a `/sys/dev/block/<dev>/slaves` listing refused with something other than
+    -- an absence, that same listing stopped at its 4096-slave cap, and a
+    -- caller's `include` predicate raising.  The third was recorded then as
+    -- "not a partial read at all", and the test that rejects a reason is not
+    -- that every cause is a read that failed -- it is that *one sentence is true
+    -- of every cause*.  "Part of the disk data could not be collected" is true
+    -- of all three: a device whose topology could not be listed, a device
+    -- whose slave list is incomplete, and a device the caller's filter dropped
+    -- by throwing on it, which is a device `/proc/diskstats` published and the
+    -- result does not contain.  The verb is *collected* because one of the
+    -- three is a cap this collector chose and "could not be read" would send a
+    -- user after permissions that are not the problem.
+    --
+    -- `gap` is the rate, and it is the same word process and cgroup already
+    -- carry: no device on this sample had a rate to publish, whether because
+    -- there is no previous sample, because a counter went backwards, or
+    -- because a derived figure came out outside its own range.  A device
+    -- carries `reset_reason` for the last of those and nothing is degraded
+    -- about the table itself.
+    reason = any_partial and "disk_data_partial"
+      or (any_gap and "disk_rate_unavailable" or nil),
     duration_ns = Common.elapsed_ns(now, started) or 0,
     source = self.diskstats_path,
   })

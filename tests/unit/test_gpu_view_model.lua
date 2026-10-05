@@ -60,6 +60,49 @@ assert(models.gpu_table.rows[1].temperature:find("72.5", 1, true))
 assert(models.gpu_table.rows[1].power == "118.2 W")
 assert(#models.gpu_table.rows[1].sensor_sources == 1)
 
+-- The frequency column against a one-clock and a two-clock device.  A discrete
+-- card drives a graphics clock and a memory clock, and a bare number under a
+-- header reading "Frequency" would claim to be the device's single clock, which
+-- is not what was measured.  The single-clock device is the other half of the
+-- contract: it is the common case and it must stay exactly as it was.
+local clock_snapshot = {
+  cpu = {}, memory = {}, pressure = {}, disks = {}, network = {}, processes = {},
+  cpu_frequency = {}, mounts = {}, workloads = {}, connections = {}, quality = {},
+  sensors = { devices = {} },
+  gpus = { devices = {
+    { id = "0000:01:00.0", card = "card9",
+      metrics = { frequency_current_hz = 450000000, frequency_domain = "gt0" },
+      frequencies = { domains = { { id = "gt0", current_hz = 450000000 } } } },
+    { id = "0000:02:00.0", card = "card8",
+      metrics = { frequency_current_hz = 1800000000, frequency_domain = "graphics" },
+      frequencies = { domains = {
+        { id = "graphics", current_hz = 1800000000 },
+        { id = "memory", current_hz = 1000000000 },
+      } } },
+    -- A clock the kernel published a reading for but no ceiling for, which is
+    -- what i915 does on this host.  The annotation counts the device's clocks,
+    -- not how complete they are.
+    { id = "0000:03:00.0", card = "card7",
+      metrics = { frequency_current_hz = 900000000, frequency_domain = "tile0/gt0/freq0" },
+      frequencies = { domains = {
+        { id = "tile0/gt0/freq0", current_hz = 900000000 },
+        { id = "tile1/gt0/freq0", current_hz = 1400000000 },
+      } } },
+    -- No clock list at all: nothing to count, so nothing to annotate, and the
+    -- em dash stands alone rather than gaining a "+0".
+    { id = "0000:04:00.0", card = "card6", metrics = {} },
+  } },
+}
+local clock_rows = ViewModel.build(engine, clock_snapshot, translator, {}, "gpu").gpu_table.rows
+assert(clock_rows[1].frequency == "450 MHz",
+  "one clock needs no annotation, and the cell is unchanged: " .. tostring(clock_rows[1].frequency))
+assert(clock_rows[2].frequency == "1.8 GHz +1",
+  "two clocks must not read as one: " .. tostring(clock_rows[2].frequency))
+assert(clock_rows[3].frequency == "900 MHz +1",
+  "an incomplete clock is still one of several: " .. tostring(clock_rows[3].frequency))
+assert(clock_rows[4].frequency == "—",
+  "a device with no reading gets no annotation: " .. tostring(clock_rows[4].frequency))
+
 -- Reverse navigation feeds: every row carries its numeric PID, the model
 -- exposes the id list, and a selected PID maps to a row index.
 local nav_models = ViewModel.build(engine, snapshot, translator, {}, "gpu", nil,

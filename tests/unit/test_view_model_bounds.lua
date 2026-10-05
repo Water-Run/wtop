@@ -43,6 +43,10 @@ local storage_models = ViewModel.build(engine, storage, translator, {}, "storage
 assert(#storage_models.mount_table.rows == 512)
 assert(storage_models.mount_table.rows[1].mount == "/mnt/0001")
 assert(storage_models.mount_table.rows[512].mount == "/mnt/0512")
+assert(storage_models.mount_table.status_text == "showing 512 of 600",
+  "a mount table capped at the model row limit reports what was dropped")
+assert(network_models.mount_table.status_text == nil,
+  "a mount table below the cap shows no truncation note")
 
 local sensors = snapshot()
 sensors.sensors.devices = { { name = "device", channels = {} } }
@@ -71,6 +75,8 @@ local workload_models = ViewModel.build(engine, workloads, translator, {}, "work
 assert(#workload_models.workload_table.rows == 512)
 assert(workload_models.workload_table.rows[1].workload:find("scope%-1"))
 assert(workload_models.workload_table.rows[512].workload:find("scope%-512"))
+assert(workload_models.workload_table.status_text == "showing 512 of 600",
+  "a workload table capped at the model row limit reports what was dropped")
 
 local hidden_models = ViewModel.build(engine, network, translator, {}, "network", nil,
   { network_summary = true })

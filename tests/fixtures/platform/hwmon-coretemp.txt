@@ -24,3 +24,7 @@ temp4_max=999999
 temp5_label=Upper plausibility boundary
 temp5_input=-199999
 temp5_max=1000000
+temp6_label=Silent sentinel
+temp6_input=-273150
+temp6_min=-273150
+temp6_max=65261850

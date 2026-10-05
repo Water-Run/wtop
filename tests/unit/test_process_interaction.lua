@@ -87,7 +87,10 @@ assert(joined:find("2:20", 1, true))
 assert(joined:find("needle --worker", 1, true))
 assert(joined:find("I/O", 1, true))
 
-local smart_devices = TUI.smart_selection_lines({
+-- The entity picker is shared by every inspector that can enumerate more than
+-- one thing, so the columns an entity does not carry are simply left blank.
+local smart_devices = TUI.entity_picker_lines(
+    { key = "inspector.smart_devices", fallback = "SMART / NVMe devices" }, {
     { path = "/dev/nvme0n1", model = "Fast NVMe", rotational = 0 },
     { path = "/dev/sda", vendor = "Disk Corp", rotational = 1 },
 }, 2, translator, true)
@@ -96,6 +99,17 @@ assert(smart_joined:find("/dev/nvme0n1", 1, true))
 assert(smart_joined:find("▸ /dev/sda", 1, true))
 assert(smart_joined:find("HDD", 1, true))
 assert(smart_joined:find("截断", 1, true))
+-- A memory controller or a service unit has no rotational flag; the medium
+-- column is then empty rather than showing a guess.
+local pmu_rows = TUI.entity_picker_lines(
+    { key = "inspector.ram_bandwidth", fallback = "RAM bandwidth" },
+    { { id = "uncore_imc_0", name = "uncore_imc_0" },
+      { id = "uncore_imc_1", name = "uncore_imc_1" } }, 1, translator, false, false)
+local pmu_joined = table.concat(pmu_rows, "\n")
+assert(pmu_joined:find("uncore_imc_0", 1, true), "a PMU row is listed by name")
+assert(not pmu_joined:find("HDD", 1, true) and not pmu_joined:find("SSD", 1, true),
+    "an entity with no medium does not get one invented")
+assert(pmu_joined:find("> uncore_imc_0", 1, true), "an ASCII terminal gets a plain marker")
 
 -- Overlay reflow: a long line must wrap to the overlay width with every
 -- continuation row the same width and indent.  Before this, overlays hard-clipped

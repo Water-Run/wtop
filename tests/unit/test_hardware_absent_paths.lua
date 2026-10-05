@@ -115,6 +115,31 @@ local package_after = find(second.data.zones, function(z) return z.name == "pack
 assert(package_after, "the package zone survives the second sample")
 close(package_after.power_watts, 45, 1.0, "45 J over one second is 45 W")
 
+-- The powercap collector publishes a reason for its degraded reading, and its
+-- `partial` is a category: it is set when some zone reported an issue -- a
+-- counter file that could not be read -- or when some enumeration hit its cap,
+-- and "part of the power data could not be read" is the one sentence true of
+-- both.  Which zone and which file stays in `issues`, where it already was.
+local POWERCAP_REASON = { partial = "powercap_data_incomplete", fresh = false }
+local rapl_whole = Powercap.new({ fs = Fixture.new(Hardware.powercap_intel_rapl()) })
+local whole = rapl_whole:sample({ now_ns = function() return 1000000000 end })
+require("support.collector_reason").assert_reason(whole, POWERCAP_REASON,
+  "a powercap sample with every zone readable")
+assert(whole.quality == "fresh", "and nothing about it was degraded")
+
+-- The denied case: one zone's energy counter cannot be read, so the aggregate
+-- is partial and the reason names the category rather than a file the user
+-- would have to guess at from `issues`.
+local rapl_denied_spec = Hardware.powercap_intel_rapl()
+rapl_denied_spec.denied = { ["/sys/class/powercap/intel-rapl:0:0/energy_uj"] = true }
+local rapl_denied = Powercap.new({ fs = Fixture.new(rapl_denied_spec) })
+local denied_zone = rapl_denied:sample({ now_ns = function() return 1000000000 end })
+require("support.collector_reason").assert_reason(denied_zone, POWERCAP_REASON,
+  "a powercap sample whose zone counter was refused")
+assert(denied_zone.quality == "partial", "so the reading is degraded")
+assert(#denied_zone.data.issues > 0,
+  "and the zone that could not be read is still named in `issues`")
+
 -- ---------------------------------------------------------------------------
 -- cpufreq: kHz, shared policies, and the governor/driver identity.
 -- ---------------------------------------------------------------------------
@@ -130,6 +155,35 @@ equal(shared.governor, "powersave", "governor")
 equal(shared.driver, "intel_pstate", "driver")
 close(shared.frequencies.current_hz, 3200000000, 1, "3200000 kHz is 3.2 GHz")
 close(shared.frequencies.scaling_maximum_hz, 4700000000, 1, "scaling maximum")
+
+-- The cpufreq collector publishes a reason for its degraded reading, and both
+-- of its reasons are categories.  `partial` has three unrelated causes -- the
+-- class directory was truncated, two policy directories resolved to one
+-- identity, or a policy has an unreadable value -- and only "part of the
+-- frequency information is missing" is true of all three; which one it was is
+-- already in `truncated`, `duplicates_skipped` and each policy's `errors`.
+-- `estimated` has two, a policy with no CPU list and a current frequency taken
+-- from `scaling_cur_freq`, and both mean a value was derived rather than read.
+local CPUFREQ_REASON = { partial = "cpufreq_data_incomplete",
+  estimated = "cpufreq_value_derived", fresh = false }
+local CollectorReason = require("support.collector_reason")
+CollectorReason.assert_reason(cpufreq, CPUFREQ_REASON,
+  "a cpufreq sample from the shipped fixture")
+
+-- The refused-value case: a policy whose governor cannot be read is partial,
+-- and the reason names the category rather than the file, which stays in the
+-- policy's own `errors`.
+local cpufreq_spec = Hardware.cpufreq_policies()
+cpufreq_spec.denied = {
+  ["/sys/devices/system/cpu/cpufreq/policy0/scaling_governor"] = true,
+}
+local cpufreq_denied = Cpufreq.new({ fs = Fixture.new(cpufreq_spec) }):sample({})
+CollectorReason.assert_reason(cpufreq_denied, CPUFREQ_REASON,
+  "a cpufreq sample whose governor was refused")
+assert(cpufreq_denied.quality == "partial", "so the reading is degraded")
+local denied_policy = find(cpufreq_denied.data.policies,
+  function(p) return p.errors and p.errors.scaling_governor ~= nil end)
+assert(denied_policy, "and the policy that could not be read still says so")
 
 -- ---------------------------------------------------------------------------
 -- GPU: two vendors with different sysfs vocabularies, plus a DRM client.

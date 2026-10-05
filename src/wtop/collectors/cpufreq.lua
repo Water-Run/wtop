@@ -363,6 +363,19 @@ function CPUFreq:sample(context)
     truncated = truncated,
   }, {
     quality = any_partial and "partial" or (any_estimated and "estimated" or "fresh"),
+    -- Two categories, and the reason for calling them that is that three
+    -- unrelated things set `partial`: the class directory was truncated, two
+    -- policy directories resolved to the same identity and one was dropped, or
+    -- a policy has an unreadable or unparsable value.  Only one sentence covers
+    -- all three -- part of the frequency information is missing -- and it is
+    -- worth saying, because the three call for different investigations and
+    -- the payload already says which: `truncated`, `duplicates_skipped` and
+    -- each policy's `errors`.  `estimated` has two causes too, a policy with no
+    -- `related_cpus`/`affected_cpus` and a current frequency taken from
+    -- `scaling_cur_freq` because the hardware value was not there, and both
+    -- mean a value was derived rather than read.
+    reason = any_partial and "cpufreq_data_incomplete"
+      or (any_estimated and "cpufreq_value_derived" or nil),
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = self.base_path,
   })

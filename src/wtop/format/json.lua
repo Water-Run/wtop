@@ -135,6 +135,18 @@ local function shape(value, marker, name)
     return setmetatable(value, marker)
 end
 
+-- The length of the well-formed UTF-8 sequence starting at `position`, or nil.
+--
+-- Exported because the same question is asked outside the encoder: a value
+-- that will be written to a file or drawn on a terminal has to be a well-formed
+-- sequence before anything else about it can be decided, and a second copy of
+-- this table would be a second place to get the surrogate, overlong and
+-- out-of-range cases wrong.  `index` steps over whole sequences, so a caller
+-- walks the string with it rather than byte by byte.
+function M.utf8_sequence_length(value, position)
+    return valid_sequence_length(value, position)
+end
+
 function M.object(value)
     return shape(value == nil and {} or value, OBJECT, "object")
 end

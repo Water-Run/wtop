@@ -129,9 +129,31 @@ local function constraints(self, fs, base, entries, issues)
       "constraint.maximum_time_window", self)
     local minimum_window = optional_integer(fs, prefix .. "min_time_window_us", issues,
       "constraint.minimum_time_window", self)
-    constraint.power_limit_watts = limit and limit / 1000000 or nil
-    constraint.maximum_power_watts = maximum and maximum / 1000000 or nil
-    constraint.minimum_power_watts = minimum and minimum / 1000000 or nil
+    -- The three power figures are bounds, not readings, and a bound of zero is
+    -- not a bound.  This matters in two ways on real hardware.  A disabled
+    -- `intel-rapl` zone publishes `constraint_0_power_limit_uw` as 0, which
+    -- would otherwise be read as "this zone is capped at zero watts" when the
+    -- truth is that nothing is capping it.  And a package zone's `short_term`
+    -- and `peak_power` constraints publish `max_power_uw` as 0, which lands in
+    -- the same snapshot beside their own 26 W and 114 W limits -- a maximum
+    -- below the limit it bounds is not a specification, and that contradiction
+    -- is visible without knowing anything about the driver.
+    --
+    -- The time windows are left alone: the kernel returns ENODATA for the ones
+    -- it does not have, so they already arrive absent rather than as a zero,
+    -- and a zero there is not a case this host demonstrates.  ENODATA is also
+    -- what a `peak_power` constraint and a core or uncore sub-zone's maximum
+    -- power answer with, and the filesystem layer classifies it as
+    -- "unavailable" for the same reason this function treats it as optional: the
+    -- attribute was opened and the driver had no figure to put in it.  It took
+    -- the errno mapping to say so, and until it did, four of the eight issues on
+    -- the development host's powercap zones were this -- a report of a failed
+    -- read for files the driver read successfully.
+    constraint.power_limit_watts = limit and Common.bound_value(limit / 1000000) or nil
+    constraint.maximum_power_watts =
+      maximum and Common.bound_value(maximum / 1000000) or nil
+    constraint.minimum_power_watts =
+      minimum and Common.bound_value(minimum / 1000000) or nil
     constraint.time_window_seconds = window and window / 1000000 or nil
     constraint.maximum_time_window_seconds = maximum_window and maximum_window / 1000000 or nil
     constraint.minimum_time_window_seconds = minimum_window and minimum_window / 1000000 or nil
@@ -457,6 +479,14 @@ function Powercap:sample(context, previous)
     truncated = truncated,
   }, {
     quality = (partial or truncated) and "partial" or "fresh",
+    -- The reason is a category, and the category is what the one slot can
+    -- carry.  `partial` is set when some zone reported an issue -- a counter
+    -- file that could not be read or parsed -- or when some enumeration hit
+    -- its cap, either the class directory or a zone's own entries or
+    -- constraints.  Those are different investigations, but one sentence is
+    -- true of all of them: not all of the power data was read.  Which zone and
+    -- which file stays where it already is, in `issues` and `truncated`.
+    reason = (partial or truncated) and "powercap_data_incomplete" or nil,
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = self.base_path,
   })

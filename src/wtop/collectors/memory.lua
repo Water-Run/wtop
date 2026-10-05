@@ -136,6 +136,15 @@ function Memory:sample(context)
     raw = info,
   }, {
     quality = vmstat_partial and "partial" or (estimated_available and "estimated" or "fresh"),
+    -- The reason the reading is partial, on the result and not only in the data.
+    -- `Snapshot.merge` copies `result.reason` into `quality[resource].reason`,
+    -- and that slot is the one a caller -- the UI, the JSON snapshot, an agent
+    -- -- reads to answer "why is this degraded".  Every collector that returns
+    -- `ok` with a `partial` quality was leaving it nil, so a degraded-but-running
+    -- reading was the only kind that could not say why: a collector that failed
+    -- outright goes through `Common.error_result`, which has always carried one.
+    -- This collector computed the reason and then put it where nobody looked.
+    reason = vmstat_parse_error or (vmstat_read_error and vmstat_read_error.message),
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = { self.meminfo_path, self.vmstat_path },
   })

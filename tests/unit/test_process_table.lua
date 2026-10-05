@@ -247,6 +247,107 @@ assert(#highlight_status.query_highlights == 1,
     "only positive literal terms are highlightable")
 assert(highlight_status.query_highlights[1] == "root", "the literal term is reported")
 
+-- Numeric comparisons combine with the text terms, so "root and over 100 MB"
+-- is one query.  A bare number must stay a substring: a PID or a size typed
+-- without an operator has always been a text term, and turning it into a
+-- comparison would silently change every existing query.
+local metric_set = {
+    { id = "1:1", pid = 1, name = "systemd", user = "root", state = "S",
+      starttime_ticks = 1, cpu_percent = 0.4, resident_bytes = 12 * 1024 * 1024,
+      virtual_bytes = 400 * 1024 * 1024, threads = 1, cpu_ticks = 250 },
+    { id = "2:2", pid = 42, name = "bash", user = "waterrun", state = "S",
+      starttime_ticks = 2, cpu_percent = 55.5, resident_bytes = 900 * 1024 * 1024,
+      virtual_bytes = 1024 * 1024 * 1024, threads = 4, cpu_ticks = 90000,
+      io = { read_bytes = 5 * 1024 * 1024, write_bytes = 0 } },
+    { id = "3:3", pid = 99, name = "kworker", user = "root", state = "D",
+      starttime_ticks = 3, cpu_percent = 12, resident_bytes = 300 * 1024 * 1024,
+      virtual_bytes = 300 * 1024 * 1024, threads = 2, cpu_ticks = 1200,
+      io = { read_bytes = 0, write_bytes = 2 * 1024 * 1024 } },
+}
+
+local function expect_metric_query(query, expected, label)
+    local actual = query_names(query, metric_set)
+    if actual ~= expected then
+        error(string.format("%s: query %q expected [%s], got [%s]",
+            label, query, expected, actual), 2)
+    end
+end
+
+expect_metric_query("cpu>50", "bash", "greater than")
+expect_metric_query("cpu>12", "bash", "a value on the boundary is excluded by >")
+expect_metric_query("cpu>=12", "bash,kworker", ">= includes the boundary")
+expect_metric_query("cpu<1", "systemd", "less than")
+expect_metric_query("cpu<=12", "kworker,systemd", "<= includes the boundary")
+expect_metric_query("cpu=12", "kworker", "equality")
+expect_metric_query("cpu>12.5", "bash", "a fractional threshold")
+expect_metric_query("cpu>10%", "bash,kworker", "a percent sign is accepted")
+-- Suffixes are binary multiples, matching how the tables print sizes.
+expect_metric_query("mem>500M", "bash", "a byte suffix with M")
+expect_metric_query("mem>1G", "", "a threshold above every process")
+expect_metric_query("mem<20M", "systemd", "a threshold below every process")
+expect_metric_query("mem>1k", "bash,kworker,systemd", "a K suffix is 1024 bytes")
+expect_metric_query("mem>50M", "bash,kworker", "a 50 MB floor")
+expect_metric_query("mem>1T", "", "an unreadable suffix narrows rather than zeroing")
+expect_metric_query("virt>900M", "bash", "the virtual-memory field")
+expect_metric_query("threads>1", "bash,kworker", "thread count")
+expect_metric_query("threads>=2", "bash,kworker", "thread count with a boundary")
+expect_metric_query("pid>50", "kworker", "pid as a number")
+expect_metric_query("pid>1", "bash,kworker", "pid excludes the smallest")
+-- CPU time is stored in centiseconds and filtered in seconds.
+expect_metric_query("time>100", "bash", "cpu time in seconds")
+expect_metric_query("time>3", "bash,kworker", "a three-second floor")
+expect_metric_query("ioread>1M", "bash", "io read")
+expect_metric_query("iowrite>1M", "kworker", "io write")
+-- A process with no reading never satisfies a comparison in either
+-- direction: an unknown value is not zero.  systemd has no io table at all, so
+-- `ioread<1M` must not pick it up just because "less than 1 MB" sounds true of
+-- a process whose I/O was never read.
+expect_metric_query("ioread<1M", "kworker", "an unreadable io value matches nothing")
+
+-- The point of the feature: text and numbers in one query.
+expect_metric_query("user:root cpu>10", "kworker", "a text term and a comparison")
+expect_metric_query("user:root mem>100M", "kworker", "and with a size")
+expect_metric_query("cpu>10 state:D", "kworker", "a comparison and a field term")
+expect_metric_query("user:waterrun cpu>10 threads>3", "bash", "several terms still combine")
+expect_metric_query("!cpu>10", "systemd", "a comparison can be negated")
+
+-- Backwards compatibility: everything the grammar accepted before still means
+-- the same thing, including values that merely look numeric.
+expect_metric_query("42", "bash", "a bare number is still a substring")
+expect_metric_query("pid:42", "bash", "pid: is still a field term")
+expect_metric_query("!bash", "kworker,systemd", "negation still works")
+expect_metric_query("/^kw/", "kworker", "patterns still work")
+expect_metric_query("cpu>10 42", "bash", "a comparison and a bare number together")
+-- A bare word naming a numeric field is a substring search, not a comparison:
+-- it finds processes whose text contains it, whatever their CPU is doing.
+local literal_set = {
+    { id = "1:1", pid = 1, name = "cpupower", command = "/usr/bin/cpupower",
+      user = "root", state = "S", starttime_ticks = 1, cpu_percent = 99 },
+    { id = "2:2", pid = 2, name = "sleep", command = "sleep 1", user = "root",
+      state = "S", starttime_ticks = 2, cpu_percent = 0, threads = 8 },
+}
+local function expect_literal_query(query, expected, label)
+    local actual = query_names(query, literal_set)
+    if actual ~= expected then
+        error(string.format("%s: query %q expected [%s], got [%s]",
+            label, query, expected, actual), 2)
+    end
+end
+
+expect_literal_query("cpu", "cpupower", "a bare field name is a substring")
+expect_literal_query("threads", "", "and matches nothing when no text contains it")
+-- An unknown left-hand side is not a comparison, even with an operator.
+expect_metric_query("foo=bar", "", "an unknown field keeps literal behaviour")
+expect_metric_query("a->b", "", "an arrow is not a comparison operator")
+-- A value the filter cannot read degrades to a literal, like a bad pattern.
+expect_metric_query("cpu>abc", "", "an unreadable value narrows rather than zeroing")
+
+-- Comparisons are not highlightable: there is no substring to mark.
+local _, metric_status = query_names("root cpu>10", metric_set)
+assert(#metric_status.query_highlights == 1,
+    "a comparison contributes no highlight")
+assert(metric_status.query_highlights[1] == "root", "the literal term still does")
+
 -- Sorting must cover every declared key in both directions without error.
 local sort_controller = Controller.new({})
 sort_controller:update(query_set)

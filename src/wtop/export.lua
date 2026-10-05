@@ -355,6 +355,19 @@ local function export_processes(processes, limit)
             "resident_bytes", "virtual_bytes", "io_read_bytes", "io_write_bytes",
             "quality", "partial", "partial_reason",
         })
+        -- Namespace nesting comes from the status file the base scan already
+        -- reads, so it is identity rather than detail, and a consumer needs it
+        -- to tell a container's init from a host process.  The chain is
+        -- reduced to the two ids a consumer acts on; the raw list stays out.
+        local namespaces = candidates[index].namespaces
+        if type(namespaces) == "table" then
+            result.top[index].namespaces = json.object({
+                namespaced = namespaces.namespaced == true,
+                inner_pid = namespaces.inner_pid,
+                host_pid = namespaces.host_pid,
+                depth = #namespaces.nspid,
+            })
+        end
     end
     return result
 end
@@ -378,7 +391,7 @@ local function export_gpu_frequencies(frequencies)
         local output = copy_fields(domain, {
             "id", "actual_hz", "current_hz", "minimum_hz", "maximum_hz",
             "hardware_minimum_hz", "efficient_hz", "hardware_maximum_hz",
-            "source_kind", "source",
+            "source_kind", "source", "quality",
         })
         output.states = json.array({})
         for state_index, state in ipairs(domain.states or {}) do
@@ -387,6 +400,21 @@ local function export_gpu_frequencies(frequencies)
         result.domains[index] = output
     end
     result.truncated = frequencies and frequencies.truncated == true or false
+    return result
+end
+
+-- A client's clocks are a different shape from a device's: the kernel names them
+-- independently of the engines and publishes no DPM state table for them, so
+-- this does not reuse the device exporter -- an empty `states` array on a
+-- client's clock would read as "this clock has no states" rather than "this
+-- clock has no state table", which is a different statement.
+local function export_gpu_client_frequencies(domains)
+    local result = json.array({})
+    for index, domain in ipairs(domains or {}) do
+        result[index] = copy_fields(domain, {
+            "id", "current_hz", "maximum_hz", "engine", "of_maximum_percent", "quality",
+        })
+    end
     return result
 end
 
@@ -409,6 +437,7 @@ local function export_gpu_processes(processes)
             output.process_ids[process_index] = process_id
         end
         output.engines = export_gpu_engines(client.engines)
+        output.frequency_domains = export_gpu_client_frequencies(client.frequency_domains)
         output.memory_summary = copy_object(client.memory_summary)
         result.clients[index] = output
     end
@@ -426,6 +455,8 @@ local function export_gpu_processes(processes)
                 "fd_count", "observed_at_ns", "quality",
             })
             exported_client.engines = export_gpu_engines(client.engines)
+            exported_client.frequency_domains =
+                export_gpu_client_frequencies(client.frequency_domains)
             exported_client.memory_summary = copy_object(client.memory_summary)
             output.clients[client_index] = exported_client
         end
@@ -585,6 +616,7 @@ local function export_workload_summary(summary)
         "denied_issue_count", "missing_issue_count", "parse_issue_count",
         "skipped_symlinks", "skipped_dot_entries", "skipped_unsafe_entries",
         "max_depth", "max_nodes", "depth_limited", "node_limited", "truncated",
+        "service_count", "container_count", "pod_count", "user_session_count",
     })
     result.issues_by_kind = copy_object(summary and summary.issues_by_kind)
     if summary and summary.root then
@@ -623,6 +655,17 @@ local function export_workloads(workloads, limit)
             "id", "name", "parent_id", "depth", "accessible", "partial",
             "issue_count", "rate_quality", "quality",
         })
+        -- Identity derived from the cgroup path, not read from the kernel, so a
+        -- consumer can tell "this is a containerd scope" from "the path happens
+        -- to contain a long hex run".  Absent fields mean the path never
+        -- established them, and a non-Linux workload has no semantics at all.
+        if workload.semantics ~= nil then
+            exported.semantics = copy_fields(workload.semantics, {
+                "unit", "unit_type", "container", "container_scope", "runtime",
+                "container_id", "container_short_id", "pod", "pod_scope",
+                "user_id", "user_slice", "label",
+            })
+        end
         exported.processes = copy_fields(workload.processes, { "count" })
         exported.cpu = copy_fields(workload.cpu, { "utilization_percent", "weight" })
         if workload.cpu and workload.cpu.max then
@@ -1011,8 +1054,20 @@ function M.agent(snapshot, options)
         output.metrics = copy_fields(device.metrics, {
             "utilization_percent", "utilization_source",
             "memory_used_bytes", "memory_total_bytes", "process_memory_bytes",
-            "frequency_current_hz", "temperature_celsius", "power_watts",
+            -- `frequency_domain` travels with the scalar it qualifies: a card
+            -- that publishes a graphics clock and a memory clock reports two
+            -- different quantities, and a summary carrying one of them
+            -- unnamed reads as "the" frequency of the device.
+            "frequency_current_hz", "frequency_domain",
+            "temperature_celsius", "power_watts",
         })
+        -- The full clock set, in the same shape the snapshot uses.  This
+        -- summary is what an agent or an insight reads, and it is also the
+        -- only view that survives into whatever consumes it, so dropping the
+        -- domains here would drop them for good: the count is what says a
+        -- device has more than one clock, and the truncation flag is what
+        -- says the list is not all of them.
+        output.frequencies = export_gpu_frequencies(device.frequencies)
         gpu_summaries[index] = output
     end
     threshold("gpu", "high_utilization", maximum_gpu_utilization, 85, 97, "percent",

@@ -169,4 +169,178 @@ local _, network_page = fresh:tick_visible()
 assert(network_page.network and network_page.connections)
 fresh:stop()
 
+-- An absent kernel interface must cost its own panel and nothing else.
+--
+-- This is what "wtop has no minimum kernel" means in practice, so it is worth
+-- more than the sentence: the claim only holds because a collector whose probe
+-- cannot find its source is recorded as a capability and then sampled anyway,
+-- returning nothing, while every other collector keeps producing.  The shape
+-- below is an old kernel rather than a broken one -- no cgroup v2, no PSI, no
+-- hwmon, no DRM, no powercap, no cpufreq, no DMI -- and the program still ticks.
+local function absent(id, reason)
+    return {
+        id = id,
+        default_interval_ms = 1000,
+        probe = function()
+            return { state = "unavailable", available = false, reason = reason }
+        end,
+        sample = function()
+            return {
+                status = "unavailable", quality = "unavailable",
+                timestamp_ns = clock:now_ns(), reason = reason, data = nil,
+            }
+        end,
+    }
+end
+
+local old_kernel = Engine.new({
+    clock = clock,
+    history_capacity = 4,
+    collectors = {
+        cpu = collector("cpu", { total = { utilization = 11 } }),
+        memory = collector("memory", { total_bytes = 100, used_bytes = 25 }),
+        cgroup = absent("cgroup", "cgroup_v2_unavailable"),
+        pressure = absent("pressure", "proc_pressure_unavailable"),
+        hwmon = absent("hwmon", "sys_hwmon_unavailable"),
+        gpu = absent("gpu", "drm_unavailable"),
+        powercap = absent("powercap", "sys_powercap_unavailable"),
+        cpufreq = absent("cpufreq", "sys_cpufreq_unavailable"),
+    },
+})
+local old_capabilities = old_kernel:probe()
+assert(old_capabilities.cpu.available, "a present interface is still available")
+for _, id in ipairs({ "cgroup", "pressure", "hwmon", "gpu", "powercap", "cpufreq" }) do
+    assert(old_capabilities[id], "the absent interface is still reported: " .. id)
+    assert(old_capabilities[id].available == false,
+        "an interface the kernel does not have is not available: " .. id)
+end
+local old_snapshot = old_kernel:tick(true)
+assert(old_snapshot.sequence == 1, "an old kernel still produces a snapshot")
+assert(old_snapshot.cpu.total.utilization == 11,
+    "the collectors that do have a source keep their figures")
+assert(old_snapshot.memory.total_bytes == 100, "and so does memory")
+-- Absent, not zero, and *why*.  A panel with no source to read must not be
+-- handed a figure for the interface it could not find -- and the reason has to
+-- reach the snapshot, because that record is what the panel and the export both
+-- read.  Asserting the key is nil would prove nothing, since a fresh snapshot
+-- pre-populates every resource key; the claim under test is what the quality
+-- record says, and that no figure was invented to fill the space.
+for _, id in ipairs({ "workloads", "pressure", "sensors", "gpus", "power", "cpu_frequency" }) do
+    local record = assert(old_snapshot.quality[id], "the snapshot reports " .. id)
+    assert(record.status == "unavailable",
+        id .. " is reported unavailable rather than as a reading: " .. tostring(record.status))
+    assert(type(record.reason) == "string" and record.reason ~= "",
+        id .. " carries the reason the collector gave, not a bare state")
+    assert(record.quality == "unavailable",
+        id .. " is not dressed up as a fresh or estimated sample")
+end
+-- `Snapshot.merge` stores data only on an ok result, so each of these is what a
+-- fresh snapshot starts as rather than something the collector produced.
+for _, id in ipairs({ "workloads", "sensors", "gpus", "power" }) do
+    local value = old_snapshot[id]
+    assert(value == nil or next(value) == nil,
+        "a panel with no source must not carry invented data: " .. id)
+end
+-- The chart history follows the same rule, but in a subtler way.  Asserting
+-- "no sample" would be wrong: the ring is dense on purpose, and a missing slot
+-- would silently shift every later column.  What the renderer must see is a
+-- gap -- the boolean sentinel -- rather than a fabricated zero watts, which
+-- would draw a line along the floor and read as a powered-down machine.
+local power_history = old_kernel:history_values("cpu_power")
+assert(power_history.n == 1, "an absent panel still occupies its slot in the ring")
+assert(power_history[1] == false,
+    "and that slot is a gap sentinel, not a fabricated zero: " .. tostring(power_history[1]))
+assert(old_kernel:history_values("cpu")[1] == 11,
+    "a panel that does have a source still charts a real reading")
+old_kernel:stop()
+
+-- An old kernel is not only a kernel whose probes answer "absent".  A probe
+-- that reads a file the running kernel never laid out can raise before it gets
+-- to answer, and `probe_all` runs every probe under a pcall precisely so that
+-- one raising probe cannot take the program down with it.  That pcall is the
+-- load-bearing half of "no minimum kernel", so it gets its own case: a probe
+-- that throws is still just a capability, and its absence is still local.
+local function raising(id)
+    return {
+        id = id,
+        default_interval_ms = 1000,
+        probe = function()
+            error("probe exploded on " .. id, 0)
+        end,
+        sample = function()
+            return {
+                status = "unavailable", quality = "unavailable",
+                timestamp_ns = clock:now_ns(), reason = id .. "_unavailable", data = nil,
+            }
+        end,
+    }
+end
+
+local hostile = Engine.new({
+    clock = clock,
+    history_capacity = 4,
+    collectors = {
+        cpu = collector("cpu", { total = { utilization = 7 } }),
+        hwmon = raising("hwmon"),
+        powercap = raising("powercap"),
+    },
+})
+local hostile_capabilities = assert(hostile:probe(), "a raising probe does not stop probing")
+assert(hostile_capabilities.hwmon.state == "error" and hostile_capabilities.hwmon.available == false,
+    "a probe that raised is recorded as an errored capability, not an available one")
+assert(hostile_capabilities.hwmon.reason:find("hwmon", 1, true) ~= nil,
+    "and it keeps the failure text, so the cause is not swallowed into a bare state")
+assert(hostile_capabilities.cpu.available,
+    "the collectors that did answer are unaffected by their neighbour's failure")
+local hostile_snapshot = hostile:tick(true)
+assert(hostile_snapshot.cpu.total.utilization == 7,
+    "a raising probe costs its own panel and nothing else")
+for _, id in ipairs({ "sensors", "power" }) do
+    assert(hostile_snapshot.quality[id].status == "unavailable",
+        "the panel behind a raising probe is still reported unavailable: " .. id)
+end
+hostile:stop()
+
+-- And the engine does not take a collector's word for it that its data is
+-- good.  Every collector in the tree returns `data = nil` alongside a non-ok
+-- status today, so nothing exercises the guard that refuses to install data
+-- from a result that is not ok -- which means a future collector that returns
+-- partial figures alongside a failed status would silently paint them onto a
+-- panel that the snapshot is simultaneously labelling unavailable.  The two
+-- claims would then disagree in the same record, so the guard is pinned here.
+local function contradicting(id)
+    return {
+        id = id,
+        default_interval_ms = 1000,
+        probe = function()
+            return { state = "unavailable", available = false, reason = id .. "_unavailable" }
+        end,
+        sample = function()
+            return {
+                status = "unavailable", quality = "unavailable",
+                timestamp_ns = clock:now_ns(), reason = id .. "_unavailable",
+                -- Deliberately self-contradictory: the collector both refuses to
+                -- read and hands over a figure anyway.
+                data = { devices = { { name = "phantom" } } },
+            }
+        end,
+    }
+end
+
+local liar = Engine.new({
+    clock = clock,
+    history_capacity = 4,
+    collectors = {
+        cpu = collector("cpu", { total = { utilization = 5 } }),
+        hwmon = contradicting("hwmon"),
+    },
+})
+local liar_snapshot = liar:tick(true)
+assert(liar_snapshot.quality.sensors.status == "unavailable",
+    "the result is still labelled unavailable")
+local liar_sensors = liar_snapshot.sensors
+assert(liar_sensors == nil or next(liar_sensors) == nil,
+    "and its self-contradictory payload is not installed: " .. type(liar_sensors))
+liar:stop()
+
 return true

@@ -245,6 +245,16 @@ function PowerSupply:sample(context)
     truncated = truncated == true,
   }, {
     quality = quality,
+    -- `truncated` here means exactly what it means in the device inventory: the
+    -- enumeration stopped at `MAX_DEVICES` with nothing failing, so the devices
+    -- that are listed are exact and the tail of a bounded list is missing.  It
+    -- was published with no reason at all, which left the quality saying the
+    -- list was short and nothing saying why -- and this collector publishes
+    -- `partial` too, so the two degradation words sat on the same result with
+    -- only the word to tell them apart.  The `partial` case stays without a
+    -- reason: its cause is per-device read degradation rather than one condition,
+    -- and `partial` without a reason is what thirteen other collectors do.
+    reason = truncated and "device_enumeration_truncated" or nil,
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = self.base_path,
   })

@@ -1,3 +1,5 @@
+local ProcessColumns = require("wtop.model.process_columns")
+
 local Controller = {}
 Controller.__index = Controller
 
@@ -222,9 +224,12 @@ end
 --   user:root           restrict a term to one field
 --   !kernel             negate a term
 --   /^systemd%-/        a Lua pattern (Lua patterns, not PCRE — `%` escapes)
+--   cpu>20              compare a number, combined with the text terms
+--   mem>512M            the same, with a byte-size suffix
 --
 -- A bare substring is still the common case, so a query with no colons,
--- exclamation marks or slashes behaves exactly as it did before.
+-- exclamation marks, slashes or comparison operators behaves exactly as it
+-- did before.
 local QUERY_FIELDS = {
   pid = "pid",
   ppid = "parent_pid",
@@ -233,14 +238,110 @@ local QUERY_FIELDS = {
   name = "name",
   cmd = "command",
   command = "command",
+  -- The id a namespaced process knows itself by, so `ns:1` finds every
+  -- container's init in one query.
+  ns = "namespace_inner_pid",
+}
+
+-- Numeric filters speak the same vocabulary as the sort keys, so a filter and
+-- a sort can be written with the same word.  `scale` converts the stored value
+-- into the unit the user types, and `bytes` says the value takes K/M/G/T
+-- suffixes.
+local QUERY_NUMERIC_FIELDS = {
+  cpu = { field = "cpu_percent", bytes = false },
+  memory = { field = "resident_bytes", bytes = true },
+  mem = { field = "resident_bytes", bytes = true },
+  virtual = { field = "virtual_bytes", bytes = true },
+  virt = { field = "virtual_bytes", bytes = true },
+  threads = { field = "threads", bytes = false },
+  thr = { field = "threads", bytes = false },
+  pid = { field = "pid", bytes = false },
+  -- CPU time is stored in centiseconds; the filter takes seconds because that
+  -- is what the detail overlay shows.
+  time = { field = "cpu_ticks", bytes = false, scale = 0.01 },
+  ioread = { field = nil, bytes = true, io = "read" },
+  iowrite = { field = nil, bytes = true, io = "write" },
 }
 
 local MAX_QUERY_TERMS = 16
 
 local function field_text(process, field)
   local value = process[field]
+  -- A namespaced process is searchable by the id it has inside its own
+  -- namespace, which is a property of the process rather than a column.
+  if field == "namespace_inner_pid" then
+    local namespaces = type(process.namespaces) == "table" and process.namespaces or nil
+    value = namespaces and namespaces.inner_pid or nil
+  end
   if value == nil then return nil end
   return tostring(value):lower()
+end
+
+-- Accepts a plain number or one with a single unit suffix.  A value the
+-- filter cannot read makes the term demote to a literal substring, the same
+-- way a malformed pattern does, so `mem>1Q` matches nothing rather than
+-- quietly becoming `mem>0`.
+local function parse_number(text, bytes)
+  text = text:lower()
+  if bytes then
+    local suffixes = {
+      t = 1099511627776, g = 1073741824, m = 1048576, k = 1024, b = 1,
+    }
+    local number, suffix = text:match("^([%d%.]+)([kmgtb]?)$")
+    if not number then return nil end
+    local value = tonumber(number)
+    local scale = suffixes[suffix ~= "" and suffix or "b"]
+    if not value or not scale then return nil end
+    return value * scale
+  end
+  -- A percent sign is accepted and ignored: it is what a user types, and the
+  -- field already says what it measures.
+  local number = text:match("^(%d+%.?%d*)%%?$")
+  if not number then return nil end
+  return tonumber(number)
+end
+
+local function numeric_matches(process, term)
+  local value
+  if term.io then
+    value = io_value(process, term.io)
+  else
+    value = process[term.field]
+  end
+  if type(value) ~= "number" or value ~= value then return false end
+  value = value * (term.scale or 1)
+  if term.operator == ">" then return value > term.value end
+  if term.operator == ">=" then return value >= term.value end
+  if term.operator == "<" then return value < term.value end
+  if term.operator == "<=" then return value <= term.value end
+  return value == term.value
+end
+
+-- Returns a term when the word is a comparison, or nil when it is not.  A
+-- word only counts as a comparison when its left side names a numeric field,
+-- so `->` inside a command stays a literal substring.  Lua patterns have no
+-- alternation, so the ordering operators and the equality operator are tried
+-- as separate shapes.
+local function compile_comparison(word)
+  local name, operator, rest = word:match("^([%a][%w_]*)([<>]=?)(.+)$")
+  if not name then
+    -- The equality operator is a literal, so it is not captured.
+    name, rest = word:match("^([%a][%w_]*)=(.+)$")
+    operator = "="
+  end
+  if not name then return nil end
+  local spec = QUERY_NUMERIC_FIELDS[name]
+  if not spec then return nil end
+  local value = parse_number(rest, spec.bytes)
+  if value == nil then return nil end
+  return {
+    numeric = true,
+    field = spec.field,
+    io = spec.io,
+    scale = spec.scale,
+    operator = operator,
+    value = value,
+  }
 end
 
 local function compile_query(normalized_query)
@@ -257,26 +358,32 @@ local function compile_query(normalized_query)
       word = word:sub(2)
     end
     if word ~= "" then
-      local field, rest = word:match("^([a-z]+):(.*)$")
-      if field and QUERY_FIELDS[field] then
-        term.field = QUERY_FIELDS[field]
-        word = rest
-      end
-      local pattern = word:match("^/(.*)/$") or (#word > 1 and word:sub(1, 1) == "/"
-        and word:sub(2) or nil)
-      if pattern and pattern ~= "" then
-        -- A malformed pattern must narrow nothing rather than raise inside the
-        -- render loop, so it is validated once here and demoted to a literal.
-        local ok = pcall(string.find, "", pattern)
-        if ok then
-          term.pattern = pattern
-        else
-          term.text = word:lower()
+      local comparison = compile_comparison(word)
+      if comparison then
+        comparison.negate = term.negate
+        terms[#terms + 1] = comparison
+      else
+        local field, rest = word:match("^([a-z]+):(.*)$")
+        if field and QUERY_FIELDS[field] then
+          term.field = QUERY_FIELDS[field]
+          word = rest
         end
-      elseif word ~= "" then
-        term.text = word
+        local pattern = word:match("^/(.*)/$") or (#word > 1 and word:sub(1, 1) == "/"
+          and word:sub(2) or nil)
+        if pattern and pattern ~= "" then
+          -- A malformed pattern must narrow nothing rather than raise inside the
+          -- render loop, so it is validated once here and demoted to a literal.
+          local ok = pcall(string.find, "", pattern)
+          if ok then
+            term.pattern = pattern
+          else
+            term.text = word:lower()
+          end
+        elseif word ~= "" then
+          term.text = word
+        end
+        if term.text or term.pattern then terms[#terms + 1] = term end
       end
-      if term.text or term.pattern then terms[#terms + 1] = term end
     end
   end
   if #terms == 0 then return nil end
@@ -310,8 +417,26 @@ end
 local function process_matches(process, compiled)
   if compiled == nil then return true end
   for _, term in ipairs(compiled) do
-    if term_matches(process, term) == term.negate then return false end
+    -- A process the collector has no number for never satisfies a comparison,
+    -- in either direction: treating an unknown reading as zero would make
+    -- `cpu<5` quietly select every process whose CPU could not be measured.
+    local matched
+    if term.numeric then
+      matched = numeric_matches(process, term)
+    else
+      matched = term_matches(process, term)
+    end
+    if matched == term.negate then return false end
   end
+  return true
+end
+
+-- The query and the cgroup membership filter both narrow the table, and
+-- together they are an intersection: a cgroup reached while a query is active
+-- shows that cgroup's processes that the query also accepts.
+local function record_matches(record, compiled, pid_filter)
+  if not process_matches(record.process, compiled) then return false end
+  if pid_filter and not pid_filter[record.process.pid] then return false end
   return true
 end
 
@@ -494,6 +619,9 @@ function Controller.new(options)
     _compiled_query = compile_query(normalized_query),
     _query_truncated = query_truncated,
     _tree = options.tree == true,
+    -- Normalized on the way in for the same reason every other option is
+    -- validated here: the caller's list is a preference, not a contract.
+    _columns = ProcessColumns.normalize(options.columns),
     _max_query_bytes = maximum_query_bytes,
     _max_tree_depth = bounded_integer(options.max_tree_depth, 64, 1, 256),
     _max_rows = bounded_integer(options.max_rows, DEFAULT_MAX_ROWS, 1, HARD_MAX_ROWS),
@@ -505,6 +633,9 @@ function Controller.new(options)
     _selected_index = 0,
     _revision = 0,
     _stats = {},
+    _pid_filter = nil,
+    _pid_filter_size = 0,
+    _pid_filter_label = nil,
   }, Controller)
   self:update({})
   return self
@@ -526,17 +657,20 @@ function Controller:_rebuild(preferred_id, preferred_index)
   local rows = {}
   local depth_limited = 0
   local matched, included = 0, 0
+  local pid_filter = self._pid_filter
   if self._tree then
     local direct = {}
     for _, record in ipairs(records) do
-      if process_matches(record.process, self._compiled_query) then
+      if record_matches(record, self._compiled_query, pid_filter) then
         direct[record] = true
         matched = matched + 1
       end
     end
 
     local include = {}
-    if self._normalized_query ~= "" then
+    -- A cgroup filter is a narrowing just like a query, so the ancestor chain
+    -- a user needs to read it is kept the same way.
+    if self._normalized_query ~= "" or pid_filter then
       for record in pairs(direct) do
         local current = record
         while current and not include[current] do
@@ -600,9 +734,9 @@ function Controller:_rebuild(preferred_id, preferred_index)
   else
     local visible
     local matches
-    if self._compiled_query then
+    if self._compiled_query or pid_filter then
       matches = function(record)
-        return process_matches(record.process, self._compiled_query)
+        return record_matches(record, self._compiled_query, pid_filter)
       end
     end
     visible, matched = bounded_best(records, self._max_rows, compare, matches)
@@ -612,7 +746,7 @@ function Controller:_rebuild(preferred_id, preferred_index)
     -- it falls just outside the bounded top set. Search can still reach every
     -- collected process because matching happens before the heap limit.
     local preferred = preferred_id and by_id[preferred_id] or nil
-    if preferred and process_matches(preferred.process, self._compiled_query) then
+    if preferred and record_matches(preferred, self._compiled_query, pid_filter) then
       local found = false
       for _, record in ipairs(visible) do
         if record == preferred then found = true; break end
@@ -797,6 +931,89 @@ function Controller:toggle_tree()
   return self._tree
 end
 
+--- Which columns the table shows, and in what order.
+---
+--- Session state, like the sort key, the sort direction and the full-path
+--- toggle: it is a view choice rather than a measurement, and nothing about the
+--- process data changes when it moves.  Those stay in the session and are not
+--- written to layout.yml -- persisting one of them while the rest reset would
+--- make the table's appearance depend on which of its own settings happen to
+--- be saved.
+---
+--- The column set is the exception, and the difference is what it is a choice
+--- *of*.  A sort key or a filter belongs to the investigation being run right
+--- now: the next session is a different question.  The column set is the shape
+--- of the table itself, and it belongs beside the layout -- so a user who hid
+--- the resident column to watch the machine, or moved Command to the front to
+--- line names up, opens the next session to the table they left rather than to
+--- one that quietly grew columns back.
+function Controller:columns()
+  return self._columns
+end
+
+function Controller:set_columns(value)
+  self._columns = ProcessColumns.normalize(value)
+  -- The rendered columns changed, so a consumer keyed on the revision has to
+  -- rebuild even though the row set did not.
+  self._revision = self._revision + 1
+  return self._columns
+end
+
+-- Both operations report why they did nothing, so the editor can say so instead
+-- of leaving a key that looks broken.
+function Controller:toggle_column(key)
+  local next_columns, reason = ProcessColumns.toggle(self._columns, key)
+  if reason == nil then self:set_columns(next_columns) end
+  return next_columns, reason
+end
+
+function Controller:move_column(key, direction)
+  local next_columns, reason = ProcessColumns.move(self._columns, key, direction)
+  if reason == nil then self:set_columns(next_columns) end
+  return next_columns, reason
+end
+
+-- A cgroup membership filter is a second, independent narrowing: it is reached
+-- by navigating from a workload, not by typing, so it never enters the query
+-- text.  An empty cgroup clears itself rather than hiding every row, because a
+-- filter that matches nothing with no way back is worse than no filter.
+function Controller:set_pid_filter(pids, label)
+  if pids == nil then return self:clear_pid_filter() end
+  if type(pids) ~= "table" then error("pid filter must be a table", 2) end
+  if type(label) ~= "string" or label == "" then
+    error("pid filter label must be a non-empty string", 2)
+  end
+  local filter, count = {}, 0
+  for _, pid in ipairs(pids) do
+    if type(pid) == "number" and pid == pid and pid == math.floor(pid) and pid > 0 then
+      if not filter[pid] then
+        filter[pid] = true
+        count = count + 1
+      end
+    end
+  end
+  if count == 0 then return self:clear_pid_filter() end
+  self._pid_filter = filter
+  self._pid_filter_size = count
+  self._pid_filter_label = label
+  -- The previous selection almost certainly belongs to another cgroup, so the
+  -- The previous selection almost certainly belongs to another cgroup, so the
+  -- cursor starts at the top of the set the user just asked to see.
+  self:_rebuild(nil, 1)
+  return true, count
+end
+
+function Controller:clear_pid_filter()
+  if self._pid_filter == nil then return false end
+  local preferred_id = self._selected_id
+  local preferred_index = self._selected_index
+  self._pid_filter = nil
+  self._pid_filter_size = 0
+  self._pid_filter_label = nil
+  self:_rebuild(preferred_id, preferred_index)
+  return true
+end
+
 function Controller:status()
   local status = {
     total = self._stats.total or 0,
@@ -829,8 +1046,11 @@ function Controller:status()
     max_query_bytes = self._max_query_bytes,
     tree = self._tree,
     show_paths = self._show_paths == true,
+    columns = self._columns,
     max_tree_depth = self._max_tree_depth,
     max_rows = self._max_rows,
+    cgroup_filter = self._pid_filter_label,
+    cgroup_filter_size = self._pid_filter_size or 0,
     revision = self._revision,
   }
   return status

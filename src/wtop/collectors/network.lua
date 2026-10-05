@@ -277,6 +277,24 @@ function Network:sample(context, previous)
     end
     return left.name < right.name
   end)
+  -- The reason is chosen by the expression that chooses the quality, and the
+  -- test it has to pass is the one this file records for a single reason slot:
+  -- **there must be a sentence that is true in every case that produces this
+  -- quality.**  For `partial` there is -- "the default-route table is
+  -- incomplete" holds both when a route file could not be read and when it was
+  -- longer than the line cap, which are the only two ways `routes_partial` is
+  -- set.  For `gap` there is -- an interface is left `gap` when it has no
+  -- previous sample, when no interval has elapsed, or when a counter could not
+  -- be differenced, and all three mean that no rate exists for it this tick.
+  -- Which route file was refused, and which counter moved backwards, stay where
+  -- they already are: `addresses_status` and `interface.reset_counter`.
+  --
+  -- Disk is the case that fails this test, and it is why the test is written
+  -- down rather than assumed.  Its `partial` has three causes -- the caller's
+  -- `include` predicate raised, the slave enumeration hit its cap, and the
+  -- slaves file was refused -- and the first of them is not a partial read at
+  -- all, so no sentence is true of all three.  That is a different fix.
+  local quality = routes_partial and "partial" or (any_gap and "gap" or "fresh")
   return Common.result("ok", now, {
     interfaces = interfaces,
     addresses_status = addresses_by_name and (addresses_note or "ok") or addresses_note,
@@ -284,7 +302,9 @@ function Network:sample(context, previous)
     raw_by_name = raw_by_name,
     raw_by_ifindex = raw_by_ifindex,
   }, {
-    quality = routes_partial and "partial" or (any_gap and "gap" or "fresh"),
+    quality = quality,
+    reason = routes_partial and "default_routes_incomplete"
+      or (any_gap and "network_rate_unavailable" or nil),
     duration_ns = Common.elapsed_ns(now, started) or 0,
     source = { self.netdev_path, self.route_path, self.ipv6_route_path, self.sys_class_path },
   })

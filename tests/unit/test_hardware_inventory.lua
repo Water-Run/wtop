@@ -1,9 +1,22 @@
-package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
+package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 
 local CPUInfo = require("wtop.collectors.cpu_info")
 local Export = require("wtop.export")
 local Powercap = require("wtop.collectors.powercap")
 local Snapshot = require("wtop.model.snapshot")
+
+-- The reason column.  Both reasons are categories, and the two samples added at
+-- the end of the cpu-info block are what decide them.  Instrumenting the two
+-- quality locals across this suite gave six samples: two `fresh`, four
+-- `partial` reached by three distinct causes, and one `estimated` -- all from
+-- the same cause, a CPU whose topology the system did not state.  The three
+-- that never appeared are the ones the sentences turn on, and they are added
+-- here as samples of their own.
+local CPU_INFO_REASON = { partial = "cpu_info_data_incomplete",
+    estimated = "cpu_info_value_not_stated", fresh = false }
+local cpu_info_reason_is = function(result, label)
+    return require("support.collector_reason").assert_reason(result, CPU_INFO_REASON, label)
+end
 
 local function fake_fs(files, directories)
     local fs = {}
@@ -111,6 +124,15 @@ end
 local cpu_collector = CPUInfo.new({ fs = fake_fs(cpu_files, cpu_directories) })
 local cpu_result = cpu_collector:sample({ now_ns = function() return 100 end })
 assert(cpu_result.status == "ok" and cpu_result.quality == "fresh")
+-- The `fresh` half of the invariant, and the third time in three increments
+-- that the mutation battery has found a reason table with no row for `fresh`:
+-- a sample that states its identity, publishes a whole topology and hits no
+-- cap names no cause, and nothing above this line was asserting it.  M196
+-- published one anyway and passed.
+assert(not cpu_result.data.truncated and #cpu_result.data.issues == 0)
+assert(cpu_result.data.identity.model_name ~= nil and cpu_result.data.identity.vendor ~= nil)
+assert(cpu_result.data.topology.quality == "fresh")
+cpu_info_reason_is(cpu_result, "the cpu-info sample with nothing wrong")
 assert(cpu_result.data.identity.vendor == "Arm Limited")
 assert(cpu_result.data.identity.model_name == "Cortex-A55")
 assert(cpu_result.data.identity.architecture == "8")
@@ -197,6 +219,12 @@ local flags_limited = CPUInfo.new({
 assert(flags_limited.quality == "partial" and flags_limited.data.truncated)
 assert(flags_limited.data.identity.flags_count == 2)
 assert(flags_limited.data.identity.flags_truncated)
+-- A cap, not a failure.  Nothing was unreadable and nothing errored: the
+-- collector stopped at the flag limit it was given.  It is still `partial`,
+-- and this is the sample that keeps the reason's verb honest -- "collected"
+-- is true of a limit wtop chose, "read" would not be.
+assert(#flags_limited.data.issues == 0)
+cpu_info_reason_is(flags_limited, "the cpu-info sample stopped at its flag cap")
 
 local caches_limited = CPUInfo.new({
     fs = fake_fs(cpu_files, cpu_directories),
@@ -218,6 +246,10 @@ local malformed_cache = CPUInfo.new({
 }):sample({ now_ns = function() return 103 end })
 assert(malformed_cache.quality == "partial")
 assert(issue_by_field(malformed_cache.data.issues, "cache.size").reason == "invalid_cache_size")
+-- The opposite half of the same quality: a read that happened and produced
+-- something unusable, against the cap above where nothing failed at all.
+assert(not malformed_cache.data.truncated)
+cpu_info_reason_is(malformed_cache, "the cpu-info sample with an unusable cache size")
 cpu_files["/sys/devices/system/cpu/cpu0/cache/index0/size"] = saved_cache_size
 
 assert(not pcall(CPUInfo.new, "invalid"))
@@ -263,6 +295,7 @@ assert(riscv_result.data.topology.logical_cpus[1].maximum_frequency_hz == nil)
 assert(riscv_result.data.topology.logical_cpus[1].kernel_core_type == nil)
 assert(#riscv_result.data.issues == 0,
     "missing optional topology attributes must remain a clean fallback")
+cpu_info_reason_is(riscv_result, "the cpu-info sample whose topology the system left unstated")
 
 local x86_sections = {}
 for cpu = 0, 3 do
@@ -316,6 +349,82 @@ assert(x86_result.data.core_types[2].physical_core_count == 2)
 assert(x86_result.data.core_types[2].logical_cpu_count == 2)
 assert(x86_result.data.topology.logical_cpus[4].maximum_frequency_hz == nil,
     "an offline CPU may legitimately lack a cpufreq node")
+
+-- The three causes that no existing sample reached, each isolated, because the
+-- `estimated` sentence is decided by two of them and the `partial` verb by the
+-- third.
+
+-- A machine that states everything the topology needs and *no model name*.
+-- This is not a derivation: the field is absent, so nothing was inferred from
+-- anything, and "some CPU value was derived rather than read directly" -- the
+-- sentence hwmon and gpu both use -- is false of it.  What is true is that the
+-- system did not state it, which is what the reason says.
+local nameless_sections = {}
+for cpu = 0, 1 do
+    nameless_sections[#nameless_sections + 1] = table.concat({
+        "processor : " .. cpu,
+        "vendor_id : GenuineIntel",
+        "cpu family : 6",
+        "physical id : 0",
+        "core id : " .. cpu,
+        "flags : fpu sse2",
+    }, "\n")
+end
+local nameless_result = CPUInfo.new({
+    fs = fake_fs({ ["/proc/cpuinfo"] = table.concat(nameless_sections, "\n\n") .. "\n" }, {}),
+}):sample({ now_ns = function() return 106 end })
+assert(nameless_result.status == "ok" and nameless_result.quality == "estimated")
+assert(nameless_result.data.identity.model_name == nil)
+assert(nameless_result.data.identity.vendor == "GenuineIntel",
+    "only the model name is missing; the vendor is still stated")
+assert(nameless_result.data.topology.quality ~= "estimated",
+    "the topology is complete, so this sample is not estimated for its sake")
+assert(not nameless_result.data.truncated and #nameless_result.data.issues == 0,
+    "nothing failed and nothing was cut off; the identity is simply incomplete")
+cpu_info_reason_is(nameless_result, "the cpu-info sample whose model name the system omits")
+
+-- And the same with the vendor missing instead, which is a different key on
+-- different architectures: a RISC-V board publishes `vendor_id` and a model
+-- string, an ARM one publishes `CPU implementer`, and plenty of systems
+-- publish neither.  Both absences must reach the same sentence.
+local vendorless_sections = {}
+for cpu = 0, 1 do
+    vendorless_sections[#vendorless_sections + 1] = table.concat({
+        "processor : " .. cpu,
+        "model name : Example CPU",
+        "cpu family : 6",
+        "physical id : 0",
+        "core id : " .. cpu,
+        "flags : fpu sse2",
+    }, "\n")
+end
+local vendorless_result = CPUInfo.new({
+    fs = fake_fs({ ["/proc/cpuinfo"] = table.concat(vendorless_sections, "\n\n") .. "\n" }, {}),
+}):sample({ now_ns = function() return 107 end })
+assert(vendorless_result.status == "ok" and vendorless_result.quality == "estimated")
+assert(vendorless_result.data.identity.vendor == nil)
+assert(vendorless_result.data.identity.model_name == "Example CPU")
+assert(vendorless_result.data.topology.quality ~= "estimated")
+assert(not vendorless_result.data.truncated and #vendorless_result.data.issues == 0)
+cpu_info_reason_is(vendorless_result, "the cpu-info sample whose vendor the system omits")
+
+-- A topology enumeration stopped at its cap: the third `partial` shape, and
+-- the one that is a limit rather than a failure.  `max_sys_entries = 1` clips
+-- the `/sys/devices/system/cpu` listing while /proc/cpuinfo still parses in
+-- full, so this is the topology cap alone and not the section cap.
+local capped_result = CPUInfo.new({
+    fs = fake_fs(cpu_files, cpu_directories),
+    max_sys_entries = 1,
+}):sample({ now_ns = function() return 108 end })
+assert(capped_result.quality == "partial" and capped_result.data.truncated)
+assert(#capped_result.data.issues == 0,
+    "nothing was unreadable; the listing was cut at the cap wtop was given")
+-- `max_sys_entries` clips twice on purpose: the listing is asked for one more
+-- than the cap so the collector can tell a full directory from a cut one, and
+-- the loop then re-clips to the cap.  Two CPUs are in the fixture and one
+-- survives, which is what makes this the cap alone rather than a section cap.
+assert(#capped_result.data.topology.logical_cpus == 1)
+cpu_info_reason_is(capped_result, "the cpu-info sample whose topology listing hit its cap")
 assert(x86_result.data.topology.logical_cpus[1].cpu_capacity == nil)
 assert(x86_result.data.topology.logical_cpus[1].kernel_core_type == nil)
 assert(#x86_result.data.issues == 0)

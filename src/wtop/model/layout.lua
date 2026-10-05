@@ -17,6 +17,74 @@ local MAX_GAP = 16
 
 local AXES = { horizontal = true, vertical = true }
 
+--- Whether a workspace name is usable, in a layout file or in a live session.
+---
+--- One implementation for both, deliberately.  A name accepted when saving and
+--- rejected when loading loses the whole layout, because one unusable key fails
+--- the file rather than the entry -- so a rule that lives in two places is a
+--- rule that will eventually disagree with itself, and the failure mode is a
+--- user's arrangement disappearing rather than a message they can act on.
+---
+--- A workspace name is a label the user types, not an identifier, so the rule
+--- says what has to stay out rather than what has to be in.  Below ASCII that is
+--- the historical set: letters, digits, space, underscore, dot and dash, which
+--- excludes control characters and every structural character a name could be
+--- confused with.
+---
+--- Above ASCII it is "a well-formed UTF-8 sequence", and that is the point: a
+--- C-locale character class cannot express it, so a zh-CN or ja-JP user could not
+--- name a workspace the way they talk about it -- `工作区` was refused outright.
+--- Deciding what a "letter" is would need Unicode tables this project has no
+--- reason to depend on for a user-chosen label, and the distinction would not
+--- earn its cost, since a name written in emoji is odd rather than harmful.
+---
+--- Requiring well-formedness is what makes the relaxation safe rather than
+--- merely permissive.  Validating sequences instead of accepting every byte above
+--- 0x7f is what keeps the 8-bit control range out: 0x9b is a bare CSI to a
+--- terminal that honours it, and under an "any byte above ASCII" rule a
+--- hand-edited layout file could put one into a name that is drawn on screen.  As
+--- a *continuation* byte it is only ever the interior of a multi-byte character,
+--- which is not a control character.
+---
+--- The length bound is in bytes, not characters, on both sides: the editor stops
+--- typing at the same number and this is the same number, so a name of CJK
+--- characters is shorter than 64 characters yet still bounded by 64 bytes.
+local MAX_WORKSPACE_NAME_BYTES = 64
+
+function Layout.workspace_name_ok(name)
+    if type(name) ~= "string" then return false end
+    if #name < 1 or #name > MAX_WORKSPACE_NAME_BYTES then return false end
+    local position, length = 1, #name
+    while position <= length do
+        local byte = string.byte(name, position)
+        if byte < 0x80 then
+            -- Printable ASCII that is not one of the structural characters a
+            -- name could be confused with.  A space is allowed inside a name --
+            -- "my qx" is an ordinary thing to type -- but not at either end:
+            -- the session path trims before it gets here, so an end space can
+            -- only arrive from a hand-edited file, and a key the editor cannot
+            -- produce is not a workspace the editor can go back to.
+            if byte < 0x20 or byte == 0x7f then return false end
+            if not string.match(string.char(byte), "[%w_.-]") and byte ~= 0x20 then
+                return false
+            end
+            if position == 1 and (byte == 0x20 or byte == 0x2e or byte == 0x2d) then
+                return false
+            end
+            if position == length and byte == 0x20 then return false end
+            position = position + 1
+        else
+            local sequence = JSONEncode.utf8_sequence_length(name, position)
+            if not sequence then return false end
+            position = position + sequence
+        end
+    end
+    return true
+end
+
+Layout.MAX_WORKSPACE_NAME_BYTES = MAX_WORKSPACE_NAME_BYTES
+
+
 local function finite_number(value)
   if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
     return nil

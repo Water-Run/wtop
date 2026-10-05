@@ -1,362 +1,330 @@
-# Cross-Platform Product Requirements
+# 跨平台产品需求
 
-## Product Direction and Current Baseline
+## 产品方向与当前基线
 
-wtop's target is a modern, responsive system monitor that runs natively on Linux,
-macOS, and Windows. Windows must monitor the Windows host itself. A native
-32-bit x86 build and compatibility with Windows XP are implementation targets.
-Windows Server 2008 is the available real-host Windows validation target; an XP
-test environment is not available. Compatibility with older hardware and
-classic Windows consoles running `cmd.exe`, including consoles without VT/ANSI
-support, is a primary requirement.
+wtop 的目标是做一个现代、响应式的系统监控工具，原生运行于 Linux、macOS
+和 Windows。Windows 版本必须监控 Windows 主机本身。原生 32 位 x86 构建以及
+Windows XP 兼容性是明确的实现目标。Windows Server 2008 是当前可用的真实
+Windows 验证主机；目前没有 XP 测试环境。对旧硬件以及运行 `cmd.exe` 的经典
+Windows 控制台(包括不支持 VT/ANSI 的控制台)的兼容性是首要需求。
 
-Version 0.1.0 and its LuaRocks package remain Linux-only releases. The source
-tree now includes development builds for macOS and Windows x86, with native
-host collectors and shared Snapshot/TUI code. These builds have real-host
-smoke evidence below; they have not been shipped as a cross-platform release.
+0.1.0 版本及其 LuaRocks 安装包仍是仅限 Linux 的发布。源码树目前已包含
+macOS 和 Windows x86 的开发构建,带有原生主机采集器以及共享的
+Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证据;它们尚未作为
+跨平台版本发布。
 
-## Required Behavior
+## 必备行为
 
-1. **Native host monitoring.** On each of Linux, macOS, and Windows, the TUI
-   shows CPU, memory, processes, storage, network, and basic system identity.
-   `--snapshot`, `--agent`, and `--diagnose` work on the same host. The common
-   Snapshot and quality contracts remain consistent across operating systems.
-   Metrics with no equivalent source on an operating system report their actual
-   availability; they must not appear as zero or as fresh data.
-2. **Terminal adaptation.** The UI supports capable VT/ANSI terminals and a
-   native Windows console path for consoles without VT/ANSI. It detects actual
-   capabilities before enabling alternate screen, mouse input, paste modes,
-   color, and Unicode glyphs. A keyboard-only, colorless ASCII presentation
-   remains usable on a small console. Terminal input, resize, Ctrl+C, and
-   normal/error exit restore the user's console state. A terminal that cannot
-   process escape sequences must not display raw escape codes.
-3. **Older-device behavior.** Collection and rendering remain bounded, avoid
-   unnecessary work for hidden panels, and stay usable at the smallest layout
-   sizes already supported by the UI. Performance targets and a minimum hardware
-   baseline require measurements on the oldest supported machines.
-4. **Platform-specific controls.** Process identity, process actions, privilege
-   behavior, configuration paths, and optional inspectors use platform-specific
-   implementations. An action is exposed only where the platform can enforce
-   its safety checks and report failures accurately.
-5. **Native delivery.** Each supported operating system has a build and
-   distribution path that can start the TUI and structured-output commands on
-   that system. Windows XP compatibility is a code and build target; without an
-   XP runtime test, it remains unverified and must not be presented as a tested
-   release guarantee.
+1. **原生主机监控。** 在 Linux、macOS 和 Windows 上,TUI 均展示 CPU、内存、
+   进程、存储、网络和基本系统标识信息。`--snapshot`、`--agent` 和
+   `--diagnose` 在同一主机上可用。通用的 Snapshot 与质量契约在各个操作系统
+   之间保持一致。在某个操作系统上没有等价数据源的指标,必须报告其真实
+   可用状态;不得以零值或新鲜数据的形式出现。
+2. **终端适配。** UI 既支持具备完整能力的 VT/ANSI 终端,也为不支持 VT/ANSI
+   的控制台提供原生 Windows 控制台路径。在启用备用屏幕、鼠标输入、粘贴
+   模式、颜色和 Unicode 字形之前,会先探测终端的实际能力。仅键盘操作、
+   无彩色的 ASCII 呈现方式,在小型控制台上仍然可用。终端输入、尺寸调整、
+   Ctrl+C 以及正常/异常退出,都要恢复用户的控制台状态。无法处理转义序列
+   的终端不得显示原始转义码。
+3. **旧设备行为。** 采集和渲染保持有界,不为隐藏面板做不必要的工作,并在
+   UI 已支持的最小布局尺寸下保持可用。性能目标和最低硬件基线需要在受支持
+   的最老机器上实测得出。
+4. **平台相关控制。** 进程标识、进程操作、权限行为、配置路径和可选检查器
+   均采用平台相关实现。只有在平台能够执行其安全检查并准确报告失败时,
+   才会暴露相应操作。
+5. **原生交付。** 每个受支持的操作系统都有构建与分发路径,可以在该系统上
+   启动 TUI 及结构化输出命令。Windows XP 兼容性是代码和构建目标;在没有
+   XP 运行时测试的情况下,它仍未验证,不得作为经过测试的发布承诺对外呈现。
 
-## Implementation Boundaries
+## 实现边界
 
-- Keep Snapshot, ViewModel, widgets, layout, and the backend-neutral cell diff
-  shared. Select the host collector and native-service implementations by
-  operating system; keep Linux `/proc` and `/sys` readers in the Linux backend.
-- The terminal backend keeps `start`, `size`, `poll`, `present`, `capabilities`,
-  and `stop`. Native Win32 console sessions use screen-buffer APIs and native
-  key events; ANSI streams use the shared encoder. The Cygwin/OpenSSH launcher
-  sets its PTY to raw mode while the program runs.
-- Hardware sources beyond the core resources are native per platform.
-  Windows enumerates display adapters through SetupAPI and joins DXGI 1.1 for
-  the adapter LUID that keys the PDH GPU counters; processor frequency,
-  ACPI thermal zones, and GPU load come from PDH counters with English names;
-  batteries from `GetSystemPowerStatus`; workloads are running services
-  grouped by host process. macOS reads IOAccelerator statistics, HID
-  temperature services, SMC fan and power keys, IOReport energy and
-  performance-state residency, IOPowerSources, per-process socket
-  descriptors, and resource coalitions. IOReport, IOHID events, the SMC and
-  the coalition query have no SDK header, so each is resolved at run time and
-  a missing one reports its source as unavailable.
-- Linux opens NVML (`libnvidia-ml.so.1`) with `dlopen` when present and joins
-  it onto DRM devices by PCI address; safe mode does not load it.
-- The Windows x86 artifact bundles a matching 32-bit Lua runtime and native
-  module. It is built with an XP target macro and PE32 i386 format. Newer API
-  calls needed for version, architecture, and uptime are resolved dynamically;
-  CPU counters have a dynamically selected pre-SP1 fallback. This is build and
-  API evidence, not an XP runtime result.
+- Snapshot、ViewModel、组件(widget)、布局以及与后端无关的单元格差分渲染
+  保持共享。按操作系统选择主机采集器和原生服务实现;Linux 的 `/proc` 和
+  `/sys` 读取器保留在 Linux 后端中。
+- 终端后端保留 `start`、`size`、`poll`、`present`、`capabilities` 和
+  `stop` 接口。原生 Win32 控制台会话使用屏幕缓冲区 API 和原生按键事件;
+  ANSI 流使用共享编码器。Cygwin/OpenSSH 启动器在程序运行期间将其 PTY
+  设置为 raw 模式。
+- 核心资源以外的硬件数据源按平台原生实现。Windows 通过 SetupAPI 枚举
+  显示适配器,并结合 DXGI 1.1 获取适配器 LUID,作为 PDH GPU 计数器的键;
+  处理器频率、ACPI 热区和 GPU 占用率来自使用英文名称的 PDH 计数器;
+  电池信息来自 `GetSystemPowerStatus`;负载(workload)是按宿主进程分组的
+  运行中服务。macOS 读取 IOAccelerator 统计、HID 温度服务、SMC 风扇和
+  电源键值、IOReport 能耗与性能状态驻留、IOPowerSources、按进程统计的
+  socket 描述符以及资源 coalition。IOReport、IOHID 事件、SMC 和 coalition
+  查询没有 SDK 头文件,因此均在运行时解析;缺失的接口会将其数据源报告为
+  不可用。
+- Linux 在存在时通过 `dlopen` 打开 NVML(`libnvidia-ml.so.1`),并按 PCI
+  地址将其与 DRM 设备关联;安全模式不会加载它。
+- Windows x86 产物捆绑了配套的 32 位 Lua 运行时和原生模块,以 XP 目标宏和
+  PE32 i386 格式构建。版本、架构和运行时间所需的新 API 调用均动态解析;
+  CPU 计数器有一个动态选择的 pre-SP1 回退实现。这是构建和 API 层面的
+  证据,不是 XP 运行时的实测结果。
 
-## Validation Matrix
+## 验证矩阵
 
-| Runtime host | Terminal case | Acceptance focus |
+| 运行时主机 | 终端场景 | 验收重点 |
 | --- | --- | --- |
-| Linux x86_64 | Fedora 44 development host | 50 Lua test files, the Lua 5.4 subset, and the PTY matrix; Snapshot with DRM/fdinfo GPU data; NVML reported unavailable without the NVIDIA driver |
-| Linux aarch64 | Ubuntu 24.04, DGX Spark (Cortex-X925/A725, NVIDIA GB10, driver 580), SSH | Native build and the 50 Lua test files; NVML joined onto the DRM node: utilization, clocks, temperature, power, UUID, driver version, per-process GPU memory |
-| Linux | Debian 13 x86_64 SSH PTY | Snapshot, Agent, diagnose, TUI quit (earlier run) |
-| macOS | macOS 26.5 arm64 (M4) SSH PTY | CPU with per-core user/system/nice, P/E cluster frequency from performance-state residency, memory, processes including protected-process identity, IOKit disk I/O with estimated busy time, 64-bit interface counters, sockets with owners, GPU utilization, clock and memory, HID temperatures, SMC fan and system power, IOReport CPU/GPU/ANE/DRAM energy, coalition workloads, load average; Snapshot and TUI |
-| Windows XP, 32-bit x86 | No test environment available | PE32 i386 build; every import of the native DLL is present on XP (reviewed with objdump); runtime remains unverified |
-| Windows Server 2008 | 6.0.6003 x86_64 host running the x86 artifact | Native resources including per-core CPU utilization and time classes, CPU identity and caches, memory composition, physical-disk I/O, sockets with owning processes, the display adapter with driver version and memory through SetupAPI, power-plan and rated CPU frequency, service-host workloads, Snapshot, Agent, diagnose, configuration/layout I/O, and Cygwin/OpenSSH PTY TUI including hang-up exit |
-| Newer Windows | 10.0.26100 x86_64 host running the x86 artifact | The same resources as Server 2008 with 64-bit interface counters, effective CPU frequency including turbo, an ACPI thermal zone, 64-bit process memory read from a 32-bit build, Snapshot, Agent, diagnose, and native Win32 console TUI through PowerShell/OpenSSH ConPTY |
-| Server 2008 classic CMD | Legacy console with code page 936, driven by `tools/console_harness.c` | Screen-buffer drawing, Chinese text in double-byte cells, key events, page switching, the terminate menu, buffer resize, `q` and Ctrl+C exit with the console restored |
-| Windows with WSL | Linux runtime in WSL | Linux compatibility; this does not establish native Windows support |
+| Linux x86_64 | Fedora 44 开发主机,kernel 7.2.7 | 119 个 Lua 测试文件、Lua 5.4 子集以及 PTY 矩阵;带 DRM/fdinfo GPU 数据的 Snapshot;无 NVIDIA 驱动时 NVML 报告为不可用 |
+| Linux x86_64,旧 libc | manylinux2014 容器,glibc 2.17,宿主内核 7.2.7 | 在 glibc 2.17 工具链上完成原生构建和全部 119 个 Lua 测试文件,`--version` 正常应答;合并的 glibc 下限为 2.17,而宿主构建需要 2.38。容器共享宿主内核,因此本行仅是 libc 证据,不能说明最低内核版本。 |
+| Linux aarch64 | Ubuntu 24.04,DGX Spark(Cortex-X925/A725,NVIDIA GB10,驱动 580),SSH | 原生构建和 Lua 测试套件(当时运行时为 50 个文件);NVML 关联到 DRM 节点:利用率、频率、温度、功耗、UUID、驱动版本、按进程统计的 GPU 内存 |
+| Linux | Debian 13 x86_64 SSH PTY | Snapshot、Agent、diagnose、TUI 退出(较早的一次运行) |
+| macOS | macOS 26.5 arm64(M4)SSH PTY | CPU 按核显示 user/system/nice,基于性能状态驻留的 P/E 集群频率,内存,含受保护进程标识的进程列表,带估算繁忙时间的 IOKit 磁盘 I/O,64 位接口计数器,带属主的 socket,GPU 利用率、频率和显存,HID 温度,SMC 风扇和系统功耗,IOReport CPU/GPU/ANE/DRAM 能耗,coalition 负载,平均负载;Snapshot 和 TUI |
+| Windows XP,32 位 x86 | 无测试环境 | PE32 i386 构建;原生 DLL 的每个导入在 XP 上都存在(用 objdump 核查);运行时仍未验证 |
+| Windows Server 2008 | 6.0.6003 x86_64 主机运行 x86 产物 | 原生资源:含每核 CPU 利用率和时间类别、CPU 标识和缓存、内存构成、物理磁盘 I/O、带属主进程的 socket、经 SetupAPI 获取的显示适配器(含驱动版本和显存)、电源计划和额定 CPU 频率、服务宿主负载、Snapshot、Agent、diagnose、配置/布局 I/O,以及 Cygwin/OpenSSH PTY TUI(含挂断退出) |
+| 较新的 Windows | 10.0.26100 x86_64 主机运行 x86 产物 | 与 Server 2008 相同的资源,另有 64 位接口计数器、含睿频的有效 CPU 频率、一个 ACPI 热区、从 32 位构建读取 64 位进程内存,以及经 PowerShell/OpenSSH ConPTY 的原生 Win32 控制台 TUI,涵盖 Snapshot、Agent、diagnose |
+| Server 2008 经典 CMD | 代码页 936 的遗留控制台,由 `tools/console_harness.c` 驱动 | 屏幕缓冲区绘制、双字节单元格中的中文文本、按键事件、页面切换、终止菜单、缓冲区尺寸调整、`q` 和 Ctrl+C 退出并恢复控制台 |
+| 带 WSL 的 Windows | WSL 中的 Linux 运行时 | Linux 兼容性;这不构成原生 Windows 支持的证据 |
 
-On 2026-09-28, the x86 development bundle reported cumulative read and write
-transfer bytes for all 50 exported top processes on both Windows hosts. On
-Server 2008, an 80×25 code-page-936 classic-console run opened a process
-detail with nonzero I/O counters and exited cleanly. The same view worked on
-the newer Windows host. For each host, the bulk counter for the current
-process did not exceed a subsequent direct `GetProcessIoCounters` reading, and
-the direct query rejected a deliberately mismatched creation time. One newer
-host process had more than 144 billion read bytes, exercising the 64-bit
-counter path in the x86 build. These are cumulative process I/O transfers, not
-disk throughput.
+2026-09-28,x86 开发包在两台 Windows 主机上为全部 50 个导出的 top 进程
+报告了累计读写传输字节数。在 Server 2008 上,一次 80×25 代码页 936 的
+经典控制台运行打开了进程详情,I/O 计数器非零,并干净退出。同一视图在较新
+的 Windows 主机上也可用。在每台主机上,当前进程的批量计数器均未超过随后
+直接调用 `GetProcessIoCounters` 的读数,直接查询也拒绝了故意不匹配的
+创建时间。较新主机上有一个进程的读字节数超过 1440 亿,在 x86 构建中
+实际命中了 64 位计数器路径。这些是进程的累计 I/O 传输量,不是磁盘吞吐量。
 
-On 2026-09-28 the same day's build gained a device inventory on both Windows
-hosts: SetupAPI's PCI and USB enumerators list present devices with ids and
-driver-provided names (25 PCI + 5 USB on Server 2008; 20 PCI + 8 USB on
-10.0.26100), exported under `inventory` and shown on the System page. The PCI
-class column stays empty there because SetupAPI exposes no class code; serial
-numbers are not read on any platform.
+2026-09-28,同一天的构建在两台 Windows 主机上新增了设备清单:SetupAPI 的
+PCI 和 USB 枚举器列出在场设备及其 id 和驱动提供的名称(Server 2008 为
+25 个 PCI + 5 个 USB;10.0.26100 为 20 个 PCI + 8 个 USB),以 `inventory`
+导出并显示在 System 页。该处的 PCI 类别列保持为空,因为 SetupAPI 不提供
+类别代码;任何平台都不会读取序列号。
 
-The macOS 26.5 arm64 host joined the same day: IOKit's IOPCIDevice and
-IOUSBHostDevice enumerations reported 8 PCI entries (Apple Silicon exposes
-mostly internal bridges, with registry names such as `pcic3-bridge`) and
-2 USB hubs with `locationID` identities, exported under `inventory` in a
-`--snapshot` run. Apple Silicon PCI entries carry no OpenFirmware `reg`
-address, so the address column stays empty there instead of inventing
-`00:00.0`; vendor names use the small vendor map shared with the GPU source
-because macOS ships no `pci.ids`. Microsoft's
-[`GetProcessIoCounters` reference](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getprocessiocounters)
-lists Windows XP as its minimum client version; this is API evidence, not an
-XP runtime result.
+同一天,macOS 26.5 arm64 主机也接入了该能力:IOKit 的 IOPCIDevice 和
+IOUSBHostDevice 枚举报告了 8 条 PCI 条目(Apple Silicon 公开的主要是
+内部桥接器,注册表名称形如 `pcic3-bridge`)和 2 个带 `locationID` 标识的
+USB 集线器,在一次 `--snapshot` 运行中以 `inventory` 导出。Apple Silicon
+的 PCI 条目没有 OpenFirmware `reg` 地址,因此地址列保持为空,而不是编造
+`00:00.0`;供应商名称使用与 GPU 数据源共享的小型供应商映射,因为 macOS
+不带 `pci.ids`。微软的
+[`GetProcessIoCounters` 参考文档](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getprocessiocounters)
+将 Windows XP 列为最低客户端版本;这是 API 证据,不是 XP 运行时结果。
 
-Also on 2026-09-28, a verification build with the bulk collector disabled ran
-the same checks on Server 2008 through the Toolhelp fallback. All 76 process
-rows carried cumulative read and write bytes with no partial rows; the current
-process's row counters did not exceed a subsequent direct
-`GetProcessIoCounters` reading, and a deliberately mismatched creation time
-was rejected. `--snapshot` exported `io_read_bytes`/`io_write_bytes` for all
-50 top processes, and an 80×25 code-page-936 classic-console run opened a
-process detail whose I/O section showed nonzero counters before a clean exit.
-This verifies the fallback collector on that host; it is not an XP runtime
-result.
+同样在 2026-09-28,一个禁用批量采集器的验证构建在 Server 2008 上经由
+Toolhelp 回退路径运行了相同检查。全部 76 行进程都带有累计读写字节数,
+没有部分行;当前进程行的计数器未超过随后直接 `GetProcessIoCounters` 的
+读数,故意不匹配的创建时间也被拒绝。`--snapshot` 为全部 50 个 top 进程
+导出了 `io_read_bytes`/`io_write_bytes`,一次 80×25 代码页 936 经典控制台
+运行打开了进程详情,其 I/O 区域显示非零计数器后干净退出。这验证了该主机
+上的回退采集器;它不是 XP 运行时结果。
 
-The Server 2008 SSH session runs through a Cygwin pipe. To exercise the
-legacy console itself, `tools/console_harness.c` allocates a real console on
-that host, starts wtop on it, then reads the screen buffer and injects key
-and resize events. That checks what the console holds, not how a physical
-monitor and font render it; a person at the machine is still the final check. The newer Windows ConPTY run exercises the Win32 console
-backend, but does not establish old CMD display quality. XP cannot receive a
-runtime-tested claim without an XP test environment. macOS deployment targets
-are 11.0 for arm64 and 10.13 for x86_64; only arm64 macOS 26.5 has been run.
+Server 2008 的 SSH 会话走 Cygwin 管道。为了直接考验遗留控制台本身,
+`tools/console_harness.c` 在该主机上分配一个真实控制台,在其上启动 wtop,
+然后读取屏幕缓冲区并注入按键和尺寸调整事件。这检查的是控制台中实际
+存储的内容,而不是物理显示器和字体如何呈现它;机器前的人眼检查仍是
+最终确认。较新 Windows 上的 ConPTY 运行考验了 Win32 控制台后端,但
+不能证明旧 CMD 的显示质量。没有 XP 测试环境,XP 就无法获得经运行时
+检验的结论。macOS 的部署目标为 arm64 对应 11.0、x86_64 对应 10.13;
+实际运行过的只有 arm64 的 macOS 26.5。
 
-On 2026-09-28, an 80×25 code-page-936 console harness run on Server 2008
-opened the Chinese sensor overlay with `h`. The host had no thermal zone
-reading, so the overlay showed its unavailable reason and an empty-data
-message. Esc returned to the page, `q` exited with code 0, and the console
-screen was restored. This run validates the empty state and console behavior,
-not sensor-value updates or a physical monitor's glyph rendering.
+2026-09-28,在 Server 2008 上一次 80×25 代码页 936 控制台 harness 运行
+中用 `h` 打开了中文传感器浮层。该主机没有热区读数,因此浮层显示了
+不可用原因和空数据提示。Esc 返回页面,`q` 以退出码 0 退出,控制台屏幕
+被恢复。这次运行验证的是空状态和控制台行为,不是传感器数值更新,也不是
+物理显示器的字形渲染。
 
-On the 10.0.26100 host, the same 80×25 code-page-936 harness showed one ACPI
-thermal-zone reading at 27.85 oC with fresh quality while the overlay remained
-open for six seconds. Esc and `q` again returned and restored the console.
-The reading stayed constant, so this run did not exercise a changing value.
+在 10.0.26100 主机上,同一个 80×25 代码页 936 harness 显示了一条
+ACPI 热区读数 27.85 oC,质量为新鲜,浮层保持打开达六秒。Esc 和 `q`
+同样返回并恢复了控制台。读数保持恒定,因此这次运行没有考验数值变化的
+情形。
 
-A follow-up 80×25 Overview run on both Windows hosts opened `h` before the
-sensor collector's five-second background deadline. The overlay's next frame
-showed the Server 2008 unavailable reason and the newer host's fresh ACPI
-reading, despite the sensor widget being absent from the compact page.
-Both consoles restored their screen after exit. A clock-controlled scheduler
-check confirmed that closing the overlay returns the collector to its
-background cadence.
+随后在两台 Windows 主机上进行的 80×25 Overview 运行中,都在传感器
+采集器五秒后台期限之前打开了 `h`。浮层的下一帧即显示了 Server 2008 的
+不可用原因和较新主机的新鲜 ACPI 读数,尽管传感器组件并不存在于紧凑
+页面中。两个控制台在退出后都恢复了屏幕。一次由时钟控制的调度器检查
+确认,关闭浮层会使采集器恢复其后台节奏。
 
-The 2026-09-28 code-page-936 console follow-up also checked translated
-collector labels. In Chinese, Server 2008 displayed an unavailable sensor
-status and a readable Windows thermal-zone reason; the newer host displayed
-normal/fresh status around its ACPI reading. Both 80×25 overlays fit and both
-consoles restored their screen after exit. Server 2008 `--snapshot` still
-exported the original `thermal_zone_counters_unavailable` reason code.
+2026-09-28 的代码页 936 控制台后续检查还验证了翻译后的采集器标签。
+在中文界面下,Server 2008 显示了传感器不可用状态和可读的 Windows 热区
+原因;较新主机在其 ACPI 读数周围显示正常/新鲜状态。两个 80×25 浮层
+都能容纳,两个控制台退出后都恢复了屏幕。Server 2008 的 `--snapshot`
+仍导出原始的 `thermal_zone_counters_unavailable` 原因码。
 
-On 2026-09-28, the current x86 development bundle ran `--snapshot` on the
-Server 2008 host. C: and D: returned complete capacity. WMI reported D: as a
-removable drive. In three direct native mount samples, D: was pending on the
-first call and fresh one second later; C: stayed fresh. This exercises the
-background probe with working media. Empty or slow media, hotplug, and mapped
-network drives remain untested with this build.
+2026-09-28,当前的 x86 开发包在 Server 2008 主机上运行了 `--snapshot`。
+C: 和 D: 返回了完整容量。WMI 将 D: 报告为可移动驱动器。在三次直接原生
+挂载采样中,D: 在首次调用时为 pending,一秒后变为 fresh;C: 一直保持
+fresh。这考验的是带可用介质的后台探测。空介质或慢介质、热插拔以及映射
+网络驱动器在本构建下仍未测试。
 
-In a separate back-to-back native call sample on that host, discarding each
-collector's first call, the median of eight calls was 2.56 ms for processes,
-0.01 ms for GPU, 0.74 ms for disks, and 0.04 ms for mounts. This measures warm
-collector calls before the bulk process collector; it does not include periodic
-rescans or TUI CPU usage.
+在同一主机上另行进行的一次背靠背原生调用采样中(丢弃每个采集器的首次
+调用),八次调用的中位数为:进程 2.56 ms,GPU 0.01 ms,磁盘 0.74 ms,
+挂载 0.04 ms。这测量的是批量进程采集器出现之前的采集器热调用;不包括
+定期重扫或 TUI 的 CPU 占用。
 
-The x86 Windows collector now reads the process table with a dynamically
-resolved [`NtQuerySystemInformation` SystemProcessInformation call](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntquerysysteminformation).
-It validates the returned layout against its own process and keeps the
-Toolhelp collector as a fallback. Paths and owner labels are still resolved
-per process when their identity-keyed caches need a refresh. On Server 2008,
-eight warm calls for about 78 processes took 0.80–0.94 ms with the bulk path,
-versus 2.49–2.62 ms with the previous collector. On the 10.0.26100 host,
-about 380-process warm calls took 4.26–5.09 ms, versus 9.69–10.57 ms. Both
-development bundles produced fresh snapshots. On the newer host, the bulk
-table's 55,963,648-byte working set for the protected Secure System process
-matched PowerShell; the previous per-process query reported 131,072 bytes.
-The 32-bit bulk memory fields are reread through the existing 64-bit-aware
-process query if saturated. A 10-second Processes-page classic-console run on
-Server 2008 used 1.56% of one core and exited with the console restored.
-These runs do not establish XP compatibility or 1,000-process performance.
+x86 Windows 采集器现在通过动态解析的
+[`NtQuerySystemInformation` SystemProcessInformation 调用](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntquerysysteminformation)
+读取进程表。它将返回的布局与自身进程对照校验,并保留 Toolhelp 采集器
+作为回退。路径和属主标签仍在按身份键控的缓存需要刷新时按进程解析。
+在 Server 2008 上,约 78 个进程的八次热调用使用批量路径耗时
+0.80–0.94 ms,而旧采集器为 2.49–2.62 ms。在 10.0.26100 主机上,约
+380 个进程的热调用耗时 4.26–5.09 ms,旧采集器为 9.69–10.57 ms。
+两个开发包都产出了新鲜快照。在较新主机上,批量表中受保护的 Secure
+System 进程的工作集为 55,963,648 字节,与 PowerShell 一致;旧的
+按进程查询报告为 131,072 字节。32 位批量内存字段若饱和,会通过现有
+支持 64 位的进程查询重新读取。Server 2008 上一次 10 秒的进程页经典
+控制台运行占用了单核的 1.56%,并以控制台恢复状态退出。这些运行不能
+证明 XP 兼容性,也不能证明 1,000 个进程规模下的性能。
 
-The path and owner caches now keep eight identities per hash bucket. In a
-same-host, alternating direct collector comparison, 11 warm calls on Server
-2008 with 76 rows took 0.60–0.85 ms with the previous direct-mapped caches and
-0.38–0.63 ms with the new caches. On the 10.0.26100 host, about 375-row calls
-took 3.98–5.29 ms and 1.73–2.17 ms respectively. Each run retained nearly all
-available paths and owners, with no denied or raced rows. These are short warm
-collector samples; whole-TUI use and 1,000 real processes need separate checks.
+路径和属主缓存现在每个哈希桶保存八个身份。在同主机、交替直接采集器
+对比中,Server 2008 上 76 行的 11 次热调用,使用旧的直接映射缓存为
+0.60–0.85 ms,使用新缓存为 0.38–0.63 ms。在 10.0.26100 主机上,约
+375 行的调用分别为 3.98–5.29 ms 和 1.73–2.17 ms。每次运行几乎都保留了
+全部可用路径和属主,没有被拒绝或竞争态的行。这些都是短时热采集器采样;
+整 TUI 使用情况和 1,000 个真实进程需要单独检查。
 
-The classic-console harness now measures child CPU time over a chosen window.
-On this Server 2008 host, the bundle with frame coalescing and printable-ASCII
-layout used 1.71–1.87% of one core on Overview, 3.43–4.05% on Processes,
-and 1.71% on GPU across repeated 10-second windows after a two-second warm-up.
-Before those changes, separate runs used roughly 14%, 21%, and 7% on the same
-pages. The later single-cell grid overwrite and direct ASCII write paths used
-2.80–2.96% on Processes and 1.56% on Overview; alternating process-page runs
-of the immediately preceding bundle used 3.58–3.89%. The process exited
-normally in each run. These short single-host runs do not establish a release
-performance baseline.
+经典控制台 harness 现在可以在选定窗口内测量子进程 CPU 时间。在这台
+Server 2008 主机上,带帧合并和可打印 ASCII 布局的产物,在两秒预热后、
+多次重复的 10 秒窗口中:Overview 占用单核 1.71–1.87%,进程页
+3.43–4.05%,GPU 页 1.71%。在这些改动之前,同一批页面在各自单独的
+运行中约为 14%、21% 和 7%。之后引入的单单元格网格覆写和直接 ASCII
+写入路径,在进程页为 2.80–2.96%,Overview 为 1.56%;其前一个产物在
+进程页上交替运行时为 3.58–3.89%。每次运行进程都正常退出。这些短时
+单主机运行不能确立发布性能基线。
 
-On 2026-09-28 the Workloads page gained keyboard navigation on a live
-cgroup v2 host (Debian 13, 176 cgroup nodes): arrow keys move a selection
-whose detail panel follows it, and `c` collapses or expands the selected
-subtree, hiding the whole subtree rather than direct children only. Both
-were driven end-to-end over SSH on that host.
-60-second windows on the classic console at the default update rate, covering
-full periodic-refresh cycles (15-second adapter cache, 30-second path and
-owner refreshes). Server 2008 used 1.72% of one core on Overview, 2.29% on
-Processes, and 1.56% on GPU. The 10.0.26100 host with about 380 processes
-used 2.58% on Overview and 2.81% on Processes. Both processes exited
-normally. On Linux, `make benchmark` now provides the repeatable measurement
-script for run-to-run comparison on the same host. Later on 2026-09-28 the
-Linux process collector cached static identity fields (UID, resolved user,
-command line) per `(pid,starttime)` and replaced the greedy `/proc/stat`
-comm pattern with direct scanning: a warm 550-process sample dropped from
-about 68 ms to about 29 ms, and the whole-TUI Processes page on that host
-fell from 7.6% to 4.8% of one core. The identity cache is rebuilt from the
-live process set each sample, so PID reuse cannot serve stale identity, and
-selected rows still reread status and command line for their detail.
+2026-09-28,负载(Workloads)页在一台运行中的 cgroup v2 主机
+(Debian 13,176 个 cgroup 节点)上获得了键盘导航:方向键移动选择,
+详情面板跟随选择,`c` 折叠或展开选中的子树,隐藏整个子树而不仅是
+直接子节点。两项功能都在该主机上通过 SSH 端到端驱动验证。
+默认更新速率下,经典控制台上的 60 秒窗口覆盖了完整的定期刷新周期
+(15 秒适配器缓存、30 秒路径和属主刷新)。Server 2008 在 Overview 上
+占用单核 1.72%,进程页 2.29%,GPU 页 1.56%。约 380 进程的
+10.0.26100 主机在 Overview 上为 2.58%,进程页 2.81%。两个进程都正常
+退出。在 Linux 上,`make benchmark` 提供可重复的测量脚本,它会记录
+测量对象:每个结果都注明其 **subject**(`source-tree` 或 `bundle`)
+和其 **host**(内核、机器、核数),无论打印输出还是 JSON 中都如此。这
+不是装饰——两个 subject 是两个不同的程序,而工具自身"仅比较同一
+主机"的提示,在不知道数字出自哪台主机时是无法使用的。要测量发布实际
+交付的产物而不是开发树:
 
-A final pass the same day added a native batch `/proc` reader (`proc_batch`:
-one Lua-to-C crossing for every stat file, keeping the single-file reader's
-O_NOFOLLOW, regular-file, and oversize checks, with EACCES reported
-separately) and removed a wasted second stat read-and-parse that the
-generation re-verification had still performed for fully cached rows. The
-warm 540-process sample fell to about 21 ms and the whole-TUI Processes page
-to 3.8–4.0% on that host, within 0.2–0.4 points of the Overview page; the
-remaining floor is per-process stat parsing and row construction, not I/O.
-The 2%-at-1000-processes release goal remains open: this host's shared
-rendering baseline alone is about 3.5%, so the goal needs its calibrated
-minimum hardware to be meaningful.
+```bash
+make benchmark BENCH_EXECUTABLE=dist/wtop/wtop
+make benchmark BENCH_EXECUTABLE=dist/wtop-onefile
+```
 
-The Processes table now formats only rows accessed by the viewport. In two
-alternating 10-second classic-console runs, the preceding bundle used 3.12%
-and 3.27% of one core; the lazy-row bundle used 2.34% and 2.02%. A separate
-instrumented run measured 43.2 ms of ViewModel work across nine process-page
-frames before skipping other pages' models, and 20.2 ms afterward. The later
-whole-process CPU samples varied, so these measurements do not establish a
-stable 2% result or the 1,000-process target.
+上文的 Windows 数字来自经典控制台 harness 驱动产物,因此它们始终
+测量的是产物。Linux 数字则不是:在此次改动之前,`make benchmark` 默认
+驱动开发树且没有任何记录说明这一点——这就是一个 Linux 数字和一个
+Windows 数字曾被并排当作同一程序来描述的原因。2026-09-28 稍晚时候,
+Linux 进程采集器按 `(pid,starttime)` 缓存静态身份字段(UID、解析后的
+用户、命令行),并用直接扫描替代了贪婪的 `/proc/stat` comm 模式:一个
+550 进程的热采样从约 68 ms 降至约 29 ms,该主机上整个 TUI 的进程页
+从单核 7.6% 降至 4.8%。身份缓存每次采样都从活动进程集合重建,因此
+PID 复用不会提供过期身份;选中的行仍会为重读状态和命令行的详情页
+重新读取。
 
-The flat process controller now sorts directly when the collected set fits
-its row limit, caches comparison values for each rebuild, and keeps process
-fields in row views without copying every field. On Server 2008, 30 synthetic
-1,000-process updates had a 21.93 ms median before the change and 8.06 ms
-afterward; 4,096-process updates dropped from 88.51 to 38.37 ms in 15 samples.
-The host's real process page held about 78 rows. Two 10-second classic-console
-CPU runs before this controller change used 1.87% and 1.71% of one core; two
-steady-state runs afterward used 1.71% and 1.40%. These short runs show a
-controller scaling improvement, not a whole-TUI result at 1,000 real
-processes.
+当天最后一轮改动新增了原生批量 `/proc` 读取器(`proc_batch`:每个
+stat 文件一次 Lua 到 C 的跨界,保留单文件读取器的 O_NOFOLLOW、常规
+文件和超大文件检查,EACCES 单独报告),并去掉了代际重校验对完全
+缓存行仍会执行的多余第二次 stat 读取与解析。该主机上 540 进程的热
+采样降至约 21 ms,整个 TUI 的进程页降至 3.8–4.0%,与 Overview 页相差
+0.2–0.4 个百分点以内;剩余的下限来自按进程解析 stat 和构建行,而非
+I/O。"1,000 进程时 2%"的发布目标仍未达成:仅该主机的共享渲染基线就
+约为 3.5%,因此这个目标需要经过校准的最低硬件才有意义。
 
-A follow-up classic-console run on Server 2008 showed executable basenames in
-the Processes command column by default. Pressing `p` switched to image paths;
-the 80-column view shortened them from the start to keep executable names
-visible. A later run from the final source tree exited normally.
-On macOS 26.5, two 160-column SSH PTY runs confirmed basenames by default and
-executable paths shortened from the start after `p`; both sessions exited
-normally.
+进程表现在只格式化视口访问到的行。在两次交替的 10 秒经典控制台
+运行中,前一个产物占用单核 3.12% 和 3.27%;惰性行产物为 2.34% 和
+2.02%。另一次插桩运行测得 ViewModel 工作在跳过其他页面模型之前,
+九个进程页帧共 43.2 ms,之后为 20.2 ms。此后的整进程 CPU 采样有所
+波动,因此这些测量不能确立稳定的 2% 结果,也不能确立 1,000 进程
+目标。
 
-On the same Mac, `proc_pidinfo` denied about 300 of roughly 760 processes to
-the unprivileged account. The earlier collector dropped those rows and
-reported the remaining rows as fresh. A `KERN_PROC_ALL` process-table fallback
-now retains their PID, start time, name, user, parent and executable path while
-marking CPU and memory unavailable. In a follow-up snapshot, 766 rows were
-exported from 768 candidates, with 306 permission-limited rows, one process
-race and partial process quality. Eight direct collector calls took 2.06–10.96
-ms; the last four took 2.06–2.37 ms. This is a single M4 host sample, not an
-older-device performance result.
+扁平进程控制器现在在采集集合能放进其行数上限时直接排序,为每次
+重建缓存比较值,并在行视图中保留进程字段而不复制每个字段。
+在 Server 2008 上,30 次合成的 1,000 进程更新在改动前中位数为
+21.93 ms,改动后为 8.06 ms;4,096 进程更新在 15 次采样中从 88.51 ms
+降至 38.37 ms。该主机真实的进程页约为 78 行。此控制器改动前的两次
+10 秒经典控制台 CPU 运行占用单核 1.87% 和 1.71%;改动后的两次稳态
+运行为 1.71% 和 1.40%。这些短时运行展示的是控制器的扩展性改进,不是
+1,000 个真实进程下的整 TUI 结果。
 
-## Development Builds
+Server 2008 上的一次后续经典控制台运行显示,进程页命令列默认展示
+可执行文件基名。按 `p` 切换为映像路径;80 列视图从头部开始截断,
+以保持可执行文件名可见。稍晚一次从最终源码树出发的运行正常退出。
+在 macOS 26.5 上,两次 160 列 SSH PTY 运行确认了默认基名以及按 `p`
+后从头部截断的可执行路径;两个会话都正常退出。
 
-On macOS, run `./tools/build_macos.sh`; the executable bundle is
-`dist/macos/wtop`. On Linux with a 32-bit MinGW cross compiler, run
-`./tools/build_windows_x86.sh` and copy `dist/windows-x86` to Windows.
-Run `wtop.cmd` from CMD or PowerShell. In a Cygwin/OpenSSH PTY, use
-`wtop.sh` so keyboard input is delivered without line buffering. Both bundles
-contain Lua 5.5.1 and their matching native module.
+在同一台 Mac 上,`proc_pidinfo` 对约 760 个进程中的约 300 个拒绝了
+无特权账户的访问。此前的采集器直接丢弃这些行,并把剩余行报告为新鲜。
+现在 `KERN_PROC_ALL` 进程表回退会保留这些进程的 PID、启动时间、
+名称、用户、父进程和可执行路径,同时将 CPU 和内存标记为不可用。
+在一次后续快照中,768 个候选导出了 766 行,其中 306 行受权限限制,
+一个进程竞争态,进程质量为 partial。八次直接采集器调用耗时
+2.06–10.96 ms;后四次为 2.06–2.37 ms。这是单台 M4 主机的采样,不是
+旧设备的性能结果。
 
-The x86 Windows bundle was built with `_WIN32_WINNT=0x0501`. `lua.exe` and
-`wtop_native.dll` are PE32 i386, and the native module does not hard-import
-newer APIs such as `GetTickCount64`. The CPU API
+## 开发构建
+
+在 macOS 上运行 `./tools/build_macos.sh`;可执行包位于
+`dist/macos/wtop`。在 Linux 上使用 32 位 MinGW 交叉编译器运行
+`./tools/build_windows_x86.sh`,并将 `dist/windows-x86` 拷贝到
+Windows。在 CMD 或 PowerShell 中运行 `wtop.cmd`。在
+Cygwin/OpenSSH PTY 中,使用 `wtop.sh`,以便键盘输入不经行缓冲直接
+送达。两个包都包含 Lua 5.5.1 及其配套原生模块。
+
+x86 Windows 包以 `_WIN32_WINNT=0x0501` 构建。`lua.exe` 和
+`wtop_native.dll` 均为 PE32 i386,原生模块不硬导入 `GetTickCount64`
+等较新 API。CPU API
 [`GetSystemTimes`](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getsystemtimes)
-is documented from XP SP1 onward, so the module resolves it dynamically and
-has an NT processor-counter fallback for earlier XP. That fallback matched
-`GetSystemTimes` counters on Server 2008 when forced for validation. It is
-still unverified on XP itself.
+的文档从 XP SP1 起才有,因此该模块动态解析它,并为更早的 XP 提供
+NT 处理器计数器回退。该回退在 Server 2008 上被强制启用做验证时,
+与 `GetSystemTimes` 计数器一致。它在 XP 本身上仍未验证。
 
-## Known Issues
+## 已知问题
 
-- Windows Processes-page performance is still unproven at scale.
-  An earlier TUI bundle on its default page used about 15% of one core on the
-  10.0.26100 host. Its process list took about 15 ms per call there and the
-  socket table about 6 ms; on Server 2008 the
-  display-adapter query took about 18 ms, disks 11 ms and mounts 8 ms.
-  Display-adapter identity is now cached for up to 15 seconds. Process paths
-  and owner labels are keyed by PID and creation time in bounded eight-way
-  caches with 4,096 entries each, avoiding repeated handle opens when two
-  process identities hash to the same first slot. Owner labels are queried
-  again after 30 seconds, or after 5 seconds when lookup failed. The disk
-  collector skips absent physical-drive numbers between periodic rescans.
-  Warm collector calls and whole-TUI CPU were measured on Server 2008 as noted
-  above. The TUI now merges automatic redraws at the selected update interval
-  and uses a direct width path for printable ASCII. Process rows are formatted
-  when the viewport accesses them, and the active Processes page skips other
-  pages' models. The process controller avoids duplicate sorting and copying
-  every sampled field into its rows. The Processes page exceeded the 2%
-  single-core goal in some earlier runs on that host. Periodic-refresh timing
-  and broader hardware
-  measurements are still needed.
-- Windows has no pressure or power-zone source and shows them as
-  unavailable. Its CPU frequency comes from PDH from Windows 7 / 2008 R2 on;
-  older systems report the rated frequency as an estimate. An adapter without
-  a WDDM driver, or one that DXGI does not list in a service session, has
-  identity and memory but no utilization.
-- Windows retains a drive-letter mount row when capacity cannot be read, with
-  capacity marked partial instead of zero. Filesystem identity is cached for
-  30 seconds on fixed drives. Removable and optical capacity/identity queries
-  now use at most two background workers. Their first sample can be pending;
-  complete results are cached for 30 seconds, failed results retry after five
-  seconds, and expired results are marked stale during a refresh.
-  Two permanently blocked devices can prevent other removable probes from
-  starting; the collector does not wait for those workers. Working removable
-  media has been checked on Server 2008, but the slow and empty cases remain.
-  Mapped network drives remain in the list with capacity marked partial, since
-  querying a disconnected server can block.
-  The wide storage table shows mount quality.
-- macOS has no pressure source or per-process GPU usage. Without root,
-  protected processes appear with basic identity but without CPU or memory
-  metrics; sockets and workloads cover only the caller's own processes. Disk
-  busy time is an estimate from summed request service time. Cluster-to-CPU
-  numbering is inferred from the performance-level counts.
-- The macOS sensor, energy, frequency and workload sources use private
-  interfaces. They were validated on M4 and macOS 26.5 only; other chips and
-  releases may report them as unavailable.
-- A classic console shows line art as ASCII. Text in the console's code page
-  (for example Chinese on code page 936) is shown as is; other characters
-  appear as `?`. Without `LANG` or `--lang`, a Windows console follows the
-  display language only when its code page can show it.
+- Windows 进程页在规模下的性能仍未证实。一个较早的 TUI 产物在其
+  默认页面上,于 10.0.26100 主机占用了约 15% 的单核。其进程列表
+  每次调用约 15 ms,socket 表约 6 ms;Server 2008 上显示适配器
+  查询约 18 ms,磁盘 11 ms,挂载 8 ms。显示适配器标识现在最多缓存
+  15 秒。进程路径和属主标签以 PID 和创建时间为键,存放在每个
+  4,096 项、八路的有界缓存中,避免两个进程身份哈希到同一首槽时
+  重复打开句柄。属主标签在 30 秒后重新查询,查询失败时则 5 秒后
+  重试。磁盘采集器在定期重扫之间跳过不存在的物理驱动器号。
+  热采集器调用和整 TUI CPU 已在 Server 2008 上按上文测量。TUI
+  现在按所选更新间隔合并自动重绘,并对可打印 ASCII 使用直接
+  宽度路径。进程行在视口访问时才格式化,活动进程页会跳过其他页面
+  的模型。进程控制器避免重复排序,也不再把每个采样字段复制进
+  行中。该主机上早些时候的某些运行中,进程页超出了 2% 单核目标。
+  定期刷新时序和更广泛的硬件测量仍然需要做。
+- Windows 没有压力或电源区域数据源,将其显示为不可用。其 CPU 频率
+  自 Windows 7 / 2008 R2 起来自 PDH;更旧的系统报告额定频率作为
+  估计值。没有 WDDM 驱动的适配器,或 DXGI 在服务会话中不列出的
+  适配器,有标识和显存但没有利用率。
+- Windows 在无法读取容量时保留盘符挂载行,容量标记为 partial 而
+  不是零。固定驱动器的文件系统标识缓存 30 秒。可移动介质和光驱的
+  容量/标识查询现在最多使用两个后台工作线程。首次采样可以是
+  pending;完整结果缓存 30 秒,失败结果 5 秒后重试,过期结果在
+  刷新期间标记为 stale。两个永久阻塞的设备可能阻止其他可移动探测
+  启动;采集器不会等待这些工作线程。可用可移动介质已在 Server 2008
+  上检查过,但慢介质和空介质的情形仍未覆盖。映射网络驱动器保留在
+  列表中且容量标记为 partial,因为查询已断开的Server可能会阻塞。
+  宽存储表显示挂载质量。
+- macOS 没有压力数据源,也没有按进程的 GPU 占用。非 root 运行时,
+  受保护进程只有基本标识,没有 CPU 或内存指标;socket 和负载只覆盖
+  调用者自己的进程。磁盘繁忙时间是由请求服务时间求和估算的。
+  集群到 CPU 的编号是从性能层级数量推断的。
+- macOS 的传感器、能耗、频率和负载数据源使用私有接口。它们仅在
+  M4 和 macOS 26.5 上验证过;其他芯片和版本可能将它们报告为不可用。
+- 经典控制台将线条图形显示为 ASCII。控制台代码页内的文本(例如
+  代码页 936 上的中文)按原样显示;其他字符显示为 `?`。没有
+  `LANG` 或 `--lang` 时,Windows 控制台仅当其代码页能显示该语言时
+  才跟随显示语言。
 
-## Baselines Still to Decide
+## 仍待确定的基线
 
-- Windows XP service-pack and CPU architecture variants beyond required x86.
-- Windows x64 artifact scope and the versions on which it will be validated.
-- Earlier macOS versions and Intel hardware runtime validation.
-- Minimum Linux kernel, libc, and CPU architectures.
-- Measured CPU, memory, startup, and input-latency budgets for older hardware.
+- 必需的 x86 之外的 Windows XP 服务包和 CPU 架构变体。
+- Windows x64 产物的范围,以及将在哪些版本上验证。
+- 更早的 macOS 版本和 Intel 硬件的运行时验证。
+- 最低 Linux 内核、libc 和 CPU 架构。libc 一半已有答案并设有
+  门禁:`tools/baseline.conf` 承诺一个 glibc 下限,`make baseline`
+  测量每个交付的 ELF 并在超限时失败,当前 Fedora x86_64 构建需要
+  glibc 2.38。同一份源码在 manylinux2014 容器中构建需要 2.17,并
+  能通过全部单元套件,因此该下限是构建宿主属性,是一个有实测范围
+  的值而非单一数字;`make cross-libc` 可复现它。内核一半的答案
+  是"无",各数据源的降级行为见
+  [Monitoring Scope and Performance Operations](MONITORING.md),
+  该性质由 `tests/unit/test_engine.lua` 固定。CPU 架构覆盖仍未
+  确定:只构建过 x86_64。
+- 面向旧硬件的 CPU、内存、启动和输入延迟的实测预算。
 
-Until those baselines are chosen and validated, the compatibility target should
-not be presented as a released platform guarantee.
+在这些基线选定并验证之前,不应将兼容性目标作为已发布平台的承诺对外
+呈现。

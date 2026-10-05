@@ -1,8 +1,55 @@
-package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
+package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 
 local Cgroup = require("wtop.collectors.cgroup")
 assert(not pcall(Cgroup.new, "invalid"))
 assert(not pcall(Cgroup.new, { max_nodes = 65537 }))
+
+-- A filesystem that cannot say what a path is.  This scan has to know whether an
+-- entry is a directory or a symlink before it descends, and the answer it used
+-- to fall back on -- "directory", for an object with no `kind` -- was the one
+-- answer that switches the symlink avoidance off.  In production the question is
+-- always answerable, because `FS.default` answers it, so the fallback existed
+-- for incomplete test doubles: two of them in this very file were relying on it,
+-- and the node- and breadth-budget assertions below were passing through a
+-- constant the product wrote rather than through a filesystem.  So an object that
+-- cannot answer is refused by name now, and this is the clause for that.
+--
+-- The methods are not listed here.  `Cgroup.new` owns which questions it asks,
+-- and a list in this file would be a second copy of that list, free to drift from
+-- it the way this fallback did.
+local FS = require("wtop.linux.fs")
+local function answers_everything(fs)
+  return pcall(Cgroup.new, { fs = fs, mount_path = "/cg" })
+end
+-- First the control: the real filesystem must pass, or the refusal below would
+-- be satisfied by a requirement nothing can meet.
+assert(answers_everything(FS.default),
+  "Cgroup.new refuses the real filesystem, so the requirement it enforces cannot "
+    .. "be the one the product actually runs under")
+-- Then each question, removed one at a time.  A filesystem is built out of
+-- functions bound to the real implementation, so only the one under test is
+-- absent and the refusal has to name it.
+for _, method in ipairs({ "read", "list", "readlink", "kind" }) do
+  local fs = {
+    read = FS.default.read, list = FS.default.list,
+    readlink = FS.default.readlink, kind = FS.default.kind,
+  }
+  fs[method] = nil
+  local ok, err = pcall(Cgroup.new, { fs = fs, mount_path = "/cg" })
+  assert(not ok and tostring(err):find(":" .. method .. "%(%)", 1),
+    "a filesystem that cannot answer `:" .. method .. "()` was accepted by "
+      .. "Cgroup.new.  The scan asks that question before it descends into an "
+      .. "entry, and an entry whose kind is unknown is not a directory: treating "
+      .. "it as one is what makes a bounded walk unbounded.")
+end
+-- And the refusal has to be a decision, not a crash: a non-filesystem, and a
+-- filesystem-shaped thing whose methods are not functions, are both refused.
+-- (`fs = nil` is not in this list and cannot be: it means "use the real
+-- filesystem", which is the production default.)
+for _, bad in ipairs({ "not a table", 42, { read = "no", list = "no", readlink = "no", kind = "no" } }) do
+  assert(not answers_everything(bad),
+    "Cgroup.new accepted something that is not a filesystem: " .. tostring(bad))
+end
 
 local function fixture(name)
   local file = assert(io.open("tests/fixtures/cgroup/" .. name, "rb"))
@@ -187,6 +234,19 @@ assert(collector:probe(context).available)
 -- sample partial rather than failed.
 local first = collector:sample(context)
 assert(first.status == "ok" and first.quality == "partial")
+
+-- The cgroup collector is the one whose aggregate quality maps one-to-one onto
+-- a single measured counter -- `result_quality` reads `partial_node_count`,
+-- then `reset_node_count`, then `gap_node_count`, and nothing else -- so it
+-- needs three reasons rather than the single category the list-shaped
+-- collectors take, and the pairing is the whole claim: which counter was
+-- non-zero is the cause, and the reason has to be that counter's code.
+local CGROUP_REASON = { partial = "cgroup_node_partially_read",
+  reset = "cgroup_counter_reset", gap = "cgroup_rate_unavailable", fresh = false }
+local cgroup_reason_is = function(result, label)
+  return require("support.collector_reason").assert_reason(result, CGROUP_REASON, label)
+end
+cgroup_reason_is(first, "the first cgroup sample")
 assert(first.data.schema == "dev.waterrun.wtop.cgroup/v1")
 assert(first.data.root == "/" and first.data.summary.root_id == "/")
 assert(#first.data.workloads == 4 and first.data.summary.node_count == 4)
@@ -249,6 +309,7 @@ assert(root.rate_status["pressure.cpu.some.total_usec"] == "reset")
 assert(root.cpu.rates.usage_usec_per_second == nil)
 assert(root.io.by_id["8:0"].rates.rbytes_per_second == nil)
 assert(reset.data.summary.reset_node_count == 3)
+cgroup_reason_is(reset, "a cgroup sample whose counters were reset")
 
 -- Without partial subtrees, the collector-level quality follows the
 -- adjacent-counter state exactly: gap -> fresh -> reset.
@@ -261,10 +322,12 @@ local clean_collector = Cgroup.new({
 })
 local clean_first = clean_collector:sample(context)
 assert(clean_first.quality == "gap")
+cgroup_reason_is(clean_first, "a clean cgroup sample with no rate yet")
 set_tree_state("2")
 now = now + 1000000000
 local clean_second = clean_collector:sample(context, clean_first)
 assert(clean_second.quality == "fresh")
+cgroup_reason_is(clean_second, "a clean cgroup sample with a rate")
 set_tree_state("reset")
 now = now + 1000000000
 local clean_reset = clean_collector:sample(context, clean_second)
@@ -309,6 +372,15 @@ local function budget_fs(root_entries)
   function bounded:readlink()
     calls.readlink = calls.readlink + 1
     return nil, { kind = "not_link", message = "invalid argument" }
+  end
+  -- `kind` answers the question the scan has to ask before it descends, and it
+  -- used to be missing here.  The product carried a fallback for that: an object
+  -- without `kind` was read as "every entry is a directory", which is the one
+  -- answer that switches the symlink avoidance off.  These budget assertions were
+  -- therefore passing through a hard-coded constant rather than through a
+  -- filesystem, and the counts below were the fallback's numbers.
+  function bounded:kind()
+    return "directory"
   end
   function bounded:read(path)
     return nil, { kind = "missing", message = "fixture_missing", path = path }
@@ -362,6 +434,13 @@ end
 function breadth_fs:read(path)
   return nil, { kind = "missing", message = "fixture_missing", path = path }
 end
+-- The scan asks what an entry is before it descends, so this double has to be
+-- able to say; see the note on `budget_fs:kind` above for why the product no
+-- longer answers that question for it.
+function breadth_fs:kind(path)
+  breadth_trace[#breadth_trace + 1] = "kind:" .. path
+  return "directory"
+end
 local breadth_budgeted = Cgroup.new({
   fs = breadth_fs,
   mount_path = "/wide",
@@ -369,12 +448,24 @@ local breadth_budgeted = Cgroup.new({
   max_nodes = 4,
 }):sample({ now_ns = function() return now end })
 assert(breadth_budgeted.status == "ok" and breadth_budgeted.data.summary.node_count == 4)
-assert(breadth_trace[1] == "list:/wide")
-assert(breadth_trace[2] == "readlink:/wide/a")
-assert(breadth_trace[3] == "readlink:/wide/b")
-assert(breadth_trace[4] == "readlink:/wide/c")
-assert(breadth_trace[5] == "list:/wide/a",
-  "breadth discovery must not preload child entry tables")
+-- The whole order, not a prefix of it.  A trace that records the first few
+-- operations and ignores the rest is how "breadth discovery must not preload
+-- child entry tables" went on being true of a sequence nobody finished reading,
+-- and the `kind` calls below are the reason it has to be the whole order now:
+-- each candidate is asked what it is before the scan descends, so a trace that
+-- left `kind` out would be describing a scan that never asked.
+local expected_breadth = {
+  "list:/wide",
+  "readlink:/wide/a", "kind:/wide/a",
+  "readlink:/wide/b", "kind:/wide/b",
+  "readlink:/wide/c", "kind:/wide/c",
+  "list:/wide/a", "list:/wide/b", "list:/wide/c",
+}
+local actual_breadth = table.concat(breadth_trace, "\n")
+assert(actual_breadth == table.concat(expected_breadth, "\n"),
+  "the breadth scan visited a different sequence than the one this file pins.\n"
+    .. "  expected:\n    " .. table.concat(expected_breadth, "\n    ")
+    .. "\n  actual:\n    " .. actual_breadth:gsub("\n", "\n    "))
 for _, operation in ipairs(breadth_trace) do
   assert(not operation:find("/grandchild%-", 1),
     "node budget must stop before grandchild I/O")

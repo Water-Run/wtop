@@ -629,6 +629,32 @@ function CPUInfo:sample(context)
     truncated = truncated,
   }, {
     quality = partial and "partial" or (estimated and "estimated" or "fresh"),
+    -- Two categories.  `partial` is set by a list that stopped at one of five
+    -- different caps, or by an entry in `issues` -- a read that failed, a list
+    -- that failed, an empty value, an unparseable integer, a cache size that
+    -- made no sense.  "Part of the CPU information could not be collected" is
+    -- true of both, and the verb is *collected* rather than *read* for a
+    -- reason this project has already paid for twice: a cap is a limit wtop
+    -- chose, not a failure, and a user told a read failed goes looking for a
+    -- permissions problem that the payload's own `truncated` flag contradicts.
+    -- `data.truncated` and `data.issues` already say which of the two it was.
+    --
+    -- `estimated` is set by three causes that are *not* all the same kind, and
+    -- that is what the sentence has to survive.  A CPU whose
+    -- `physical_package_id` or `core_id` the system did not publish had one
+    -- defaulted -- a value inferred from its absence -- but a machine whose
+    -- /proc/cpuinfo states no `model name` and no vendor is not the same
+    -- thing: nothing was inferred from anything, the fields are simply not
+    -- there, and the identity the UI shows is a placeholder.  So this is not
+    -- "some value was derived" -- that sentence is false of the two absent
+    -- fields, and it is the sentence hwmon and gpu both use.  What is true of
+    -- all three is that the system did not state it: a defaulted
+    -- `physical_package_id` or `core_id` and an absent `model name` or vendor
+    -- are the same fact seen from two sides, and it points the user at the
+    -- kernel rather than at wtop or at their permissions, which is the only
+    -- place the answer can come from.
+    reason = partial and "cpu_info_data_incomplete"
+      or (estimated and "cpu_info_value_not_stated" or nil),
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = { self.proc_cpuinfo_path, self.sys_cpu_path },
   })

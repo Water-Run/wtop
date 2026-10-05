@@ -516,9 +516,22 @@ function Connections:sample(context)
         connection.owners[index] = { pid = owner.pid, fd = owner.fd, name = owner.name }
       end
     end
-    connection.owner_count = #connection.owners
     connection.owners_quality = (not scan_enabled or connection.inode == "0") and "unavailable"
       or (owner_scan.partial and "estimated" or "fresh")
+    -- The count is only a count where it was counted.
+    --
+    -- The quality field above already knows the difference: a socket is
+    -- `unavailable` when the owner scan never ran, or when the socket has no
+    -- inode to look up.  Publishing `owner_count = 0` for those says "no
+    -- process holds this socket", which is a finding, while the truth is that
+    -- nobody looked -- and the two fields sit in the same record, so the
+    -- document contradicts itself on every row.  It reads worst where it is
+    -- most load-bearing: the export and an agent consumer, where "this socket
+    -- has no owner" is a statement someone might act on, and on a host with the
+    -- scan off every listening socket looks unowned, sshd's port 22 included.
+    if connection.owners_quality ~= "unavailable" then
+      connection.owner_count = #connection.owners
+    end
   end
 
   local finished = Common.now_ns(context)

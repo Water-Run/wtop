@@ -13,7 +13,17 @@ local function equal(actual, expected, label)
 end
 
 --- A filesystem backed by a plain path->content table.
-local function fake_fs(files, directories, denied)
+--
+-- Every accessor is supplied, and the reason is not tidiness.  `FS.new`
+-- substitutes the real implementation for any accessor it is not given, and this
+-- double used to spell its readlink implementation `readlink` -- not a name
+-- `FS.new` knows -- so it was accepted, kept, and never read, and the collector
+-- under test (`system_info`, which resolves the timezone through
+-- `/etc/localtime`) got a real `readlink(2)` on whichever host was running the
+-- suite.  Nothing asserted the timezone, so the host's answer rode along in the
+-- sample unnoticed.  `path_type` said `"file"`, which is also not a word the
+-- product produces: `native.path_type` answers `regular` for S_ISREG.
+local function fake_fs(files, directories, denied, links)
   return FS.new({
     root = "/",
     read_file = function(path)
@@ -33,8 +43,19 @@ local function fake_fs(files, directories, denied)
       end
       return entries, nil, false
     end,
-    readlink = function() return nil, { kind = "missing" } end,
-    path_type = function() return "file" end,
+    read_link = function(path)
+      local target = links and links[path]
+      if target == nil then
+        return nil, { kind = "missing", message = "not a symlink" }
+      end
+      return target
+    end,
+    path_type = function(path)
+      if links and links[path] then return "symlink" end
+      if files[path] ~= nil then return "regular" end
+      if directories and directories[path] then return "directory" end
+      return nil, { kind = "missing", message = "no such path" }
+    end,
   })
 end
 
@@ -157,6 +178,38 @@ equal(data.swap.total_bytes, 1024 * 1024, "swap total")
 equal(data.vmstat.pgmajfault, 7, "vmstat field")
 equal(data.load.one, 0.50, "load average")
 
+-- The timezone, and why it is asserted at all.  `read_timezone` falls back to
+-- `readlink("/etc/localtime")`, and this double used to spell its readlink
+-- implementation `readlink` -- a key `FS.new` does not know -- so that accessor
+-- silently fell through to the real filesystem and the sample carried whatever
+-- timezone the machine running the suite happened to have.  Nothing asserted it,
+-- so the host's answer rode along unnoticed: on a host with no `/etc/localtime`
+-- the value would be nil and the test would still pass.  Declaring the link and
+-- asserting the answer makes it a fact about the fixture, and the second case
+-- below is the control that the assertion is not simply reading something.
+local linked = SystemInfo.new({
+  fs = fake_fs(files, nil, nil, { ["/etc/localtime"] = "../usr/share/zoneinfo/Etc/UTC" }),
+})
+equal(linked:sample({}).data.timezone, "Etc/UTC",
+  "the timezone comes from the declared symlink, not from the host")
+local unlinked = SystemInfo.new({ fs = fake_fs(files) })
+equal(unlinked:sample({}).data.timezone, nil,
+  "a filesystem with no /etc/localtime reports no timezone rather than the host's")
+-- And the file form wins over the link form, which is the order the kernel's own
+-- convention uses and therefore the order a wrong implementation would get
+-- backwards.  The full fixture is extended rather than restated, because a
+-- partial tree makes the sample unavailable and the assertion would then be
+-- about a failed read.
+local with_zone = {}
+for path, content in pairs(files) do with_zone[path] = content end
+with_zone["/etc/timezone"] = "Etc/Asia/Tokyo\n"
+local both = SystemInfo.new({
+  fs = fake_fs(with_zone, nil, nil,
+    { ["/etc/localtime"] = "../usr/share/zoneinfo/Etc/UTC" }),
+})
+equal(both:sample({}).data.timezone, "Etc/Asia/Tokyo",
+  "/etc/timezone is read before the symlink is followed")
+
 -- Firmware placeholders are worse than nothing: they read like real hardware.
 equal(data.firmware.product_name, nil, "an O.E.M. placeholder is discarded")
 equal(data.firmware.system_vendor, "Test Systems", "a real vendor survives")
@@ -178,6 +231,73 @@ local denied_data = denied_collector:sample({}).data
 equal(denied_data.firmware, nil, "no readable DMI fields")
 local notes = table.concat(denied_data.quality_notes or {}, ",")
 assert(notes:find("dmi_denied", 1, true), "denial is distinguished from absence")
+
+-- The system-info collector publishes a reason for its degraded reading, and
+-- this one is deliberately a category rather than a cause.  Its `quality_notes`
+-- is a list of three members from two independent sources -- the os-release
+-- file and the DMI directory -- so no sentence names one of them, and picking
+-- the first note would assert a priority the quality field never expresses.
+-- "Part of the system identity could not be read" is the one sentence that is
+-- true of every case, which is the test a single reason slot has to pass.
+--
+-- The list is also dead data, measured: across the whole tree
+-- `quality_notes` is read by exactly one thing, the assertion above.  No view
+-- model, no TUI and no export mentions it.  So the category is all a user gets
+-- today, and whether the notes should be rendered or deleted is recorded as the
+-- next decision here rather than taken quietly as part of this one.
+local denied_result = denied_collector:sample({})
+equal(denied_result.quality, "partial",
+  "a refused DMI directory degrades the reading rather than failing it")
+equal(denied_result.reason, "system_identity_incomplete",
+  "and the reason names the category the notes belong to")
+-- The other note, from the other source, gives the same reason: the slot is one
+-- and the notes are several, so this is what a category is for.
+local unaccounted_collector = SystemInfo.new({
+  fs = fake_fs({
+    ["/proc/uptime"] = "1000.0 500.0\n",
+    ["/proc/stat"] = "cpu  1 2 3 4 5 6 7 8\nbtime 1000000\n",
+    ["/proc/sys/kernel/hostname"] = "testhost\n",
+    ["/proc/sys/kernel/domainname"] = "(none)\n",
+    ["/proc/sys/kernel/osrelease"] = "6.8.0-test\n",
+    ["/proc/sys/kernel/ostype"] = "Linux\n",
+    ["/proc/sys/kernel/version"] = "#1\n",
+    ["/proc/cmdline"] = "root=/dev/sda1 ro\n",
+    ["/proc/sys/kernel/random/boot_id"] = "0000-1111\n",
+  }),
+})
+local unaccounted = unaccounted_collector:sample({})
+equal(unaccounted.quality, "partial",
+  "an absent DMI directory degrades it the same way a refused one does")
+equal(unaccounted.reason, "system_identity_incomplete",
+  "and the single slot carries one answer for both")
+-- One note from one source gives the same single answer as two notes from two
+-- sources, which is the whole point of a category rather than a cause: the slot
+-- is one and the notes are several.
+local release_missing = SystemInfo.new({
+  fs = fake_fs({
+    ["/proc/uptime"] = "1000.5 500.25\n",
+    ["/proc/sys/kernel/hostname"] = "testhost\n",
+    ["/proc/sys/kernel/ostype"] = "Linux\n",
+    ["/proc/sys/kernel/osrelease"] = "6.8.0-test\n",
+    ["/proc/sys/kernel/version"] = "#1 SMP Test\n",
+    ["/proc/sys/kernel/domainname"] = "(none)\n",
+    ["/proc/cmdline"] = "BOOT_IMAGE=/vmlinuz ro quiet\n",
+    ["/proc/sys/fs/file-nr"] = "1024 0 65536\n",
+    ["/proc/stat"] = "cpu  1 2 3 4\nbtime 1700000000\n",
+    ["/proc/loadavg"] = "0.50 0.25 0.10 2/300 12345\n",
+    ["/sys/class/dmi/id/sys_vendor"] = "Test Systems\n",
+    ["/sys/class/dmi/id/product_name"] = "To Be Filled By O.E.M.\n",
+  }),
+})
+local without_release = release_missing:sample({})
+equal(without_release.quality, "partial",
+  "an os-release that cannot be read degrades the reading too")
+equal(without_release.reason, "system_identity_incomplete",
+  "and it lands in the same category as a DMI that cannot be read")
+-- A whole reading names no cause, which is the half of the invariant that a
+-- reason written as an independent second guess gets wrong.
+equal(sample.quality, "fresh", "a complete sample is fresh")
+equal(sample.reason, nil, "and names no cause")
 
 -- Without /proc/uptime there is nothing to report at all.
 local empty = SystemInfo.new({ fs = fake_fs({}) }):sample({})
@@ -226,6 +346,35 @@ equal(none.status, "unavailable", "a host with no power supplies reports unavail
 equal(none.quality, "unavailable", "and its quality matches")
 equal(none.reason, "no_power_supplies", "with a reason the Insights page can show")
 equal(none.data, nil, "an unavailable sample carries no payload")
+
+-- The same bounded enumeration as the device inventory's, and the same reason.
+-- `MAX_DEVICES` is 16 here, so seventeen entries is the shortest list that
+-- truncates.  This was the second place in the tree publishing `truncated` as a
+-- result quality, and it published it with no reason at all -- the quality said
+-- the list was short and nothing said why -- while the same result could also
+-- carry `partial` for a different cause, leaving the word as the only
+-- distinction.  The two collectors share one code because they share one cause;
+-- the reason column is already inside one collector's row.
+local many_files, many_entries = {}, {}
+for index = 1, 17 do
+  local name = string.format("BAT%d", index)
+  many_entries[#many_entries + 1] = name
+  many_files["/sys/class/power_supply/" .. name .. "/type"] = "Battery\n"
+  many_files["/sys/class/power_supply/" .. name .. "/present"] = "1\n"
+  many_files["/sys/class/power_supply/" .. name .. "/status"] = "Full\n"
+  many_files["/sys/class/power_supply/" .. name .. "/capacity"] = "80\n"
+end
+local capped = PowerSupply.new({
+  fs = fake_fs(many_files, { ["/sys/class/power_supply"] = many_entries }),
+}):sample({})
+equal(capped.status, "ok", "a capped power supply list is still a successful read")
+equal(capped.quality, "truncated", "a list past the cap says so")
+equal(capped.reason, "device_enumeration_truncated",
+  "and names the cause, with the same code the device inventory uses")
+equal(#capped.data.batteries, 16, "the device list stops at the cap")
+equal(capped.data.truncated, true, "the per-resource flag agrees")
+equal(supplies.reason, nil, "a list inside the cap has no reason to give")
+equal(supplies.quality, "fresh", "and stays fresh")
 
 -- ---------------------------------------------------------------------------
 -- User name resolution

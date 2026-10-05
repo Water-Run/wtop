@@ -91,4 +91,12 @@ local encoded = json.encode(exported)
 assert(encoded:find("203.0.113.x", 1, true), "export masks remote addresses")
 assert(not encoded:find("203.0.113.9", 1, true), "export never leaks the full remote address")
 
+-- The CLI switch is the one explicit path to full addresses; the masked id
+-- rebuild must step aside for it too.
+local unmasked = Export.snapshot(snapshot, { include_remote_addresses = true })
+local unmasked_encoded = json.encode(unmasked)
+assert(unmasked_encoded:find("203.0.113.9", 1, true), "opt-in export keeps the full address")
+assert(unmasked_encoded:find("tcp:10.0.0.1:51000:203.0.113.9:443", 1, true),
+    "opt-in export ids use the unmasked endpoint")
+
 print("ok: privacy masking (table, config, export agree)")

@@ -1,0 +1,4 @@
+@device=../../../devices/platform/soc.thermal
+name=healthy
+temp1_label=Board
+temp1_input=42000

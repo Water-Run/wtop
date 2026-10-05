@@ -111,6 +111,17 @@ function CPU:sample(context, previous)
     load_partial = true
   end
   local finished = Common.now_ns(context)
+  -- The reason is chosen by the same expression that chooses the quality, and
+  -- that is what keeps the single slot unambiguous.  Measured, each published
+  -- quality has exactly one cause here: `partial` is only ever the load average,
+  -- and `gap` is only ever a /proc/stat sample that cannot be differenced
+  -- against the previous one -- no previous sample yet, a counter that went
+  -- backwards, a delta that overflowed, or idle larger than total, which are
+  -- the five places `derive_cpu` returns `gap` above.  When both are true the
+  -- quality is `partial` and the reason names the load average, so the gap goes
+  -- unnamed; that is the quality field's own precedence, not a second meaning
+  -- for one slot.
+  local quality = load_partial and "partial" or (any_gap and "gap" or "fresh")
   return Common.result("ok", finished, {
     total = total,
     cores = cores,
@@ -123,7 +134,9 @@ function CPU:sample(context, previous)
     boot_time_seconds = parsed.metadata.btime,
     raw = parsed,
   }, {
-    quality = load_partial and "partial" or (any_gap and "gap" or "fresh"),
+    quality = quality,
+    reason = load_partial and "loadavg_unavailable"
+      or (any_gap and "cpu_counter_delta_unavailable" or nil),
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = { self.stat_path, self.loadavg_path },
   })

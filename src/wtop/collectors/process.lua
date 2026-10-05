@@ -10,12 +10,23 @@ Process.__index = Process
 local DEFAULT_MAX_PROCESSES = 8192
 local HARD_MAX_PROCESSES = 65536
 local DIRECTORY_ENTRY_SLACK = 256
+local DEFAULT_MAX_DETAIL_THREADS = 1024
+local HARD_MAX_DETAIL_THREADS = 4096
 
 local function bounded_process_limit(value)
   if value == nil then return DEFAULT_MAX_PROCESSES end
   if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge
       or value % 1 ~= 0 or value < 1 or value > HARD_MAX_PROCESSES then
     error("max_processes must be an integer in 1.." .. HARD_MAX_PROCESSES, 3)
+  end
+  return value
+end
+
+local function bounded_detail_thread_limit(value)
+  if value == nil then return DEFAULT_MAX_DETAIL_THREADS end
+  if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge
+      or value % 1 ~= 0 or value < 1 or value > HARD_MAX_DETAIL_THREADS then
+    error("max_detail_threads must be an integer in 1.." .. HARD_MAX_DETAIL_THREADS, 3)
   end
   return value
 end
@@ -113,11 +124,20 @@ function Process.new(options)
     read_io = options.read_io == true,
     read_cgroup = options.read_cgroup == true,
     max_processes = bounded_process_limit(options.max_processes),
+    max_detail_threads = bounded_detail_thread_limit(options.max_detail_threads),
     _method_style = true,
     -- Static per-identity fields (uid, resolved user, command line) survive
     -- between samples; a process keeps them for its whole lifetime, so
     -- re-reading status and cmdline for every row every second was pure I/O.
     identity_cache = {},
+    -- The previous schedstat reading of everything this collector has been
+    -- asked to measure: the processes whose rows the operator can see, and the
+    -- individual threads they opened.  Keyed by an identity string that carries
+    -- the pid and tid, so a recycled id can never inherit a previous task's
+    -- counters.  Only what has actually been displayed or inspected is kept, so
+    -- this is bounded by the viewport and by curiosity rather than by the
+    -- process or thread count on the machine.
+    sched_memo = {},
   }, Process)
 end
 
@@ -134,6 +154,223 @@ function Process:probe(context)
   return Capability.unavailable(err and err.message or "proc_enumeration_unavailable", { source = self.proc_path })
 end
 
+-- One thread, a handful of small files.  A thread is a schedulable task rather
+-- than a process, so what the kernel publishes per thread is not a copy of the
+-- process's own numbers: its context switches, its I/O, its cgroup membership
+-- and how long it spent queued for a cpu are all tracked per task and each can
+-- differ from the process the thread belongs to.  The reads happen for the
+-- selected TID only -- a process with a thousand threads must not cost a
+-- thousand extra files.
+function Process:_thread_detail(fs, context, base, task_entry, tid, starttime_ticks, now)
+  local task_base = base .. "/task/" .. task_entry
+  local result = { tid = tid }
+  local source = task_base
+
+  local status_content, status_error = fs:read(task_base .. "/status", 256 * 1024)
+  -- The switch counters come out of this same file, and they are the only
+  -- per-thread reading that says whether the kernel took the cpu away from
+  -- this thread or the thread gave it up itself.  They are kept aside rather
+  -- than differenced here so the one interval below covers every rate.
+  local switches
+  if status_content then
+    local status = Parsers.process_status(status_content)
+    if status then
+      -- The stat row carries the single-letter state; the status line spells
+      -- it out ("S (sleeping)"), which is the difference between a code an
+      -- operator has to look up and a word they can read.
+      result.state_text = status.raw.State
+      result.tgid = status.tgid
+      result.uid = status.uid
+      result.nspid = status.nspid
+      result.voluntary_switches = status.voluntary_context_switches
+      result.involuntary_switches = status.nonvoluntary_context_switches
+      if type(status.voluntary_context_switches) == "number"
+          and type(status.nonvoluntary_context_switches) == "number" then
+        switches = {
+          voluntary = status.voluntary_context_switches,
+          involuntary = status.nonvoluntary_context_switches,
+        }
+      end
+    else
+      result.status_reason = "parse_error"
+    end
+  elseif status_error then
+    result.status_error = FS.error_status(status_error)
+  end
+
+  -- io and cgroup are read unconditionally here, unlike the per-process pass
+  -- that gates them behind collector options: this method only runs for a
+  -- thread the operator explicitly opened, and leaving a column blank because
+  -- a bulk-scan option is off would be a worse answer than the read it avoids.
+  local io_content, io_error = fs:read(task_base .. "/io", 65536)
+  if io_content then
+    local parsed_io = Parsers.process_io(io_content)
+    if parsed_io then
+      result.io = parsed_io
+    else
+      result.io_error = "parse_error"
+    end
+  elseif io_error then
+    result.io_error = FS.error_status(io_error)
+  end
+
+  local cgroup_content, cgroup_error = fs:read(task_base .. "/cgroup", 65536)
+  if cgroup_content then
+    local parsed_cgroups = Parsers.cgroup(cgroup_content)
+    if parsed_cgroups then
+      result.cgroups = parsed_cgroups
+    else
+      result.cgroup_error = "parse_error"
+    end
+  elseif cgroup_error then
+    result.cgroup_error = FS.error_status(cgroup_error)
+  end
+
+  -- How long this thread spent queued for a cpu is the one number that
+  -- separates "this thread is slow" from "this thread is starved", and no
+  -- other file reports it.  schedstat carries it in three fixed-width numbers;
+  -- sched carries the policy, and only the policy, because its field set
+  -- changes with the kernel and everything else in it is either already known
+  -- or not worth a guess.  The status file already read above contributes the
+  -- switch counters, so no additional file is opened for the rates.
+  local identity = "tid " .. base .. "/" .. tid
+  local schedstat_content, schedstat_error = fs:read(task_base .. "/schedstat", 4096)
+  local parsed_schedstat, schedstat_status
+  if schedstat_content then
+    parsed_schedstat = Parsers.thread_schedstat(schedstat_content)
+    if not parsed_schedstat then schedstat_status = "parse_error" end
+  elseif schedstat_error then
+    -- A kernel without CONFIG_SCHEDSTATS does not create the file.  That is
+    -- the kernel declining to publish the figure, not a reading of zero, and
+    -- the two must not look alike.
+    schedstat_status = FS.error_status(schedstat_error)
+  end
+
+  local sched_content, sched_error = fs:read(task_base .. "/sched", 64 * 1024)
+  local parsed_sched
+  if sched_content then
+    parsed_sched = Parsers.thread_sched(sched_content)
+  end
+
+  -- One rate call for the whole thread, after every file has been read: the
+  -- interval has to be shared by the wait, timeslice and switch families, and
+  -- it has to be established even on a kernel that publishes no schedstat at
+  -- all, where the switch counters are then the only rate there is.
+  local scheduler = self:_sched_rate(identity, parsed_schedstat, starttime_ticks, now,
+    switches)
+  if schedstat_status then
+    -- The schedstat status is a statement about that file alone.  A kernel
+    -- without CONFIG_SCHEDSTATS still has switch counters, so the family is
+    -- reported as partially read rather than lost.
+    scheduler.schedstat_status = schedstat_status
+  end
+  if parsed_sched then
+    if parsed_sched.policy ~= nil then
+      scheduler.policy = parsed_sched.policy
+    else
+      -- The key is absent on kernels that do not print it; that is not the
+      -- same as a policy of zero.
+      scheduler.policy_status = "unavailable"
+    end
+  elseif sched_error then
+    scheduler.policy_status = FS.error_status(sched_error)
+  elseif sched_content then
+    scheduler.policy_status = "parse_error"
+  end
+  result.scheduler = scheduler
+
+  result.source = source
+  return result
+end
+
+-- Cumulative scheduler counters say nothing about right now: a thread that
+-- waited 7 ms in its first hour and none in the last minute is not currently
+-- starved.  The rate is therefore differenced against this thread's own
+-- previous reading, matched on (pid, tid, starttime) so a recycled TID never
+-- inherits a previous thread's counters.
+--
+-- The previous reading is kept on the collector rather than in the sample
+-- because schedstat is read for the selected thread only.  Moving the cursor
+-- away and back therefore resumes from the last time *this* thread was read,
+-- and the rate covers the whole gap -- which is the interval the counters
+-- actually span, and is stated rather than silently rescaled to one tick.
+--
+-- The context-switch counters travel in the same slot even though they come
+-- from a different file, for two reasons.  They are the only per-thread signal
+-- that separates a thread the kernel keeps preempting from one that blocks on
+-- something itself, and they cost nothing extra: the status file this thread is
+-- already read for its thread group carries them.  One slot and one interval
+-- also means the two families cannot end up describing different spans.
+function Process:_sched_rate(identity, parsed, starttime_ticks, now, switches)
+  local key = self.sched_memo
+  local result = {}
+  if parsed then
+    result.run_ns = parsed.run_ns
+    result.wait_ns = parsed.wait_ns
+    result.timeslices = parsed.timeslices
+  end
+  local slot = key[identity]
+  local previous = (slot and slot.starttime_ticks == starttime_ticks) and slot or nil
+  local elapsed_ns = previous and now and Common.elapsed_ns(now, previous.at_ns) or nil
+  local fresh = false
+  if elapsed_ns and elapsed_ns > 0 then
+    local seconds = elapsed_ns / 1000000000
+    if parsed then
+      local run_delta = Common.delta(parsed.run_ns, previous.run_ns)
+      local wait_delta = Common.delta(parsed.wait_ns, previous.wait_ns)
+      local slice_delta = Common.delta(parsed.timeslices, previous.timeslices)
+      if run_delta and wait_delta and slice_delta then
+        result.wait_rate_ns = (wait_delta + 0.0) / seconds
+        result.timeslice_rate = (slice_delta + 0.0) / seconds
+        fresh = true
+      end
+    end
+    if switches and previous.switches then
+      local voluntary = Common.delta(switches.voluntary, previous.switches.voluntary)
+      local involuntary = Common.delta(switches.involuntary, previous.switches.involuntary)
+      if voluntary and involuntary then
+        result.voluntary_switch_rate = voluntary / seconds
+        result.involuntary_switch_rate = involuntary / seconds
+        result.switch_rate = (voluntary + involuntary) / seconds
+        local total = voluntary + involuntary
+        -- The share of this thread's switches the kernel took away from it.
+        -- Left nil when the thread switched not at all: a fraction of nothing
+        -- is an absence of evidence, not a zero.
+        if total > 0 then
+          result.preempted_fraction = involuntary / total
+        end
+        fresh = true
+      end
+    end
+  end
+  if not fresh then
+    -- A first reading, or a TID whose starttime moved under us.  Either way
+    -- there is no interval to divide by, and a rate invented from a single
+    -- cumulative total would be a fiction.
+    result.quality = "gap"
+  else
+    result.quality = "fresh"
+    result.interval_ns = elapsed_ns
+  end
+  key[identity] = {
+    starttime_ticks = starttime_ticks,
+    -- Recorded only from a real reading.  A kernel without CONFIG_SCHEDSTATS
+    -- publishes no schedstat at all, and carrying a previous value forward
+    -- would difference a counter against a span it was not measured over.
+    run_ns = parsed and parsed.run_ns or nil,
+    wait_ns = parsed and parsed.wait_ns or nil,
+    timeslices = parsed and parsed.timeslices or nil,
+    -- Recorded even when schedstat is absent, so the interval is established
+    -- for the switch counters on a kernel that publishes neither.
+    switches = switches and {
+      voluntary = switches.voluntary,
+      involuntary = switches.involuntary,
+    } or nil,
+    at_ns = now,
+  }
+  return result
+end
+
 local function context_fs(self, context)
   if type(context) ~= "table" then return nil end
   return context.fs
@@ -145,6 +382,48 @@ local function wants_detail(context, process_id)
   end
   local selected = context.selected_process_ids
   return type(selected) == "table" and selected[process_id] == true
+end
+
+-- The process ids the table is currently drawing, bounded so a malformed or
+-- hostile context cannot turn a viewport measurement into a full sweep.  The
+-- bound is generous next to any real terminal: a viewport is as tall as the
+-- screen, and a 200-row terminal is already far past where this table is
+-- usable.
+local MAX_VISIBLE_PROCESSES = 256
+
+local function visible_process_ids(context)
+  local selected = context and context.visible_process_ids
+  if type(selected) ~= "table" then return nil end
+  local result, count = {}, 0
+  for id, wanted in pairs(selected) do
+    if wanted == true and type(id) == "string" and id ~= "" then
+      count = count + 1
+      if count > MAX_VISIBLE_PROCESSES then return nil end
+      result[id] = true
+    end
+  end
+  if count == 0 then return nil end
+  return result
+end
+
+-- Per-thread detail is a second, narrower selection: the operator has picked
+-- one TID out of a process they are already inspecting.  It is keyed by pid
+-- rather than by process id because a TID is only meaningful together with the
+-- process that owns it, and a stale entry for a process that is gone can never
+-- match.
+local function selected_thread_tid(context, pid)
+  if not context then
+    return nil
+  end
+  local selected = context.selected_thread_ids
+  if type(selected) ~= "table" then
+    return nil
+  end
+  local tid = selected[pid]
+  if type(tid) ~= "number" or tid <= 0 or tid ~= tid then
+    return nil
+  end
+  return tid
 end
 
 function Process:sample(context, previous)
@@ -199,6 +478,7 @@ function Process:sample(context, previous)
   local parse_errors = 0
   local supplemental_parse_errors = 0
   local scanned = 0
+  local visible_ids = visible_process_ids(context)
 
   local candidates = {}
   for _, entry in ipairs(entries) do
@@ -328,6 +608,20 @@ function Process:sample(context, previous)
                   voluntary = status.voluntary_context_switches,
                   involuntary = status.nonvoluntary_context_switches,
                 }
+                -- NSpid/NStgid arrive with the status file the base scan reads
+                -- anyway, so namespace nesting costs no extra procfs read.  A
+                -- chain longer than one entry means the process is namespaced,
+                -- and the first entry is the id it knows itself by -- 1 for a
+                -- container's init, which is what makes it worth surfacing.
+                if status.nspid and #status.nspid > 0 then
+                  process.namespaces = {
+                    nspid = status.nspid,
+                    nstgid = status.nstgid,
+                    namespaced = #status.nspid > 1,
+                    inner_pid = status.nspid[1],
+                    host_pid = status.nspid[#status.nspid],
+                  }
+                end
               else
                 process.partial = true
                 process.partial_reason = "status_parse_error"
@@ -393,9 +687,170 @@ function Process:sample(context, previous)
               process.cgroup_status = FS.error_status(cgroup_error)
             end
           end
+          -- Thread rows are a detail-only read: enumerating every process's
+          -- /proc/<pid>/task every tick would multiply procfs traffic by the
+          -- thread count for one table that shows a single selection.
+          if detail then
+            supplemental_read = true
+            local task_entries, task_error, task_truncated =
+              fs:list(base .. "/task", self.max_detail_threads)
+            if task_entries then
+              local previous_threads = type(old) == "table"
+                and type(old.thread_ticks_by_tid) == "table"
+                and old.thread_ticks_by_tid or nil
+              local thread_rows = {}
+              local thread_ticks_by_tid = {}
+              local thread_details = {}
+              local thread_races = 0
+              for _, task_entry in ipairs(task_entries) do
+                local tid = canonical_pid(task_entry)
+                if tid then
+                  local task_stat, task_stat_error =
+                    fs:read(base .. "/task/" .. task_entry .. "/stat", 65536)
+                  local parsed_task = task_stat and Parsers.process_stat(task_stat)
+                  if parsed_task and parsed_task.pid == tid then
+                    local thread = {
+                      tid = tid,
+                      name = sanitize_text(parsed_task.comm),
+                      state = parsed_task.state,
+                      nice = parsed_task.nice,
+                      priority = parsed_task.priority,
+                      cpu_ticks = parsed_task.cpu_ticks,
+                      starttime_ticks = parsed_task.starttime_ticks,
+                      leader = tid == process.pid,
+                      cpu_percent = nil,
+                      quality = "gap",
+                    }
+                    -- TIDs are recycled as threads exit, so ticks are only
+                    -- differenced against the same thread identity, the same
+                    -- starttime discipline the process rows use.
+                    local previous_thread = previous_threads
+                      and previous_threads[tid]
+                    if previous_thread
+                        and previous_thread.starttime_ticks == thread.starttime_ticks
+                        and elapsed_ns and elapsed_ns > 0 then
+                      local ticks = Common.delta(thread.cpu_ticks,
+                        previous_thread.cpu_ticks)
+                      if ticks then
+                        local thread_percent = (ticks + 0.0) / clock_ticks_per_second
+                          / (elapsed_ns / 1000000000) * 100
+                        if thread_percent == thread_percent
+                            and thread_percent < math.huge then
+                          thread.cpu_percent = math.max(0, thread_percent)
+                          thread.quality = "fresh"
+                        end
+                      end
+                    end
+                    thread_ticks_by_tid[tid] = {
+                      cpu_ticks = thread.cpu_ticks,
+                      starttime_ticks = thread.starttime_ticks,
+                    }
+                    if tid == selected_thread_tid(context, process.pid) then
+                      supplemental_read = true
+                      thread_details[tid] = self:_thread_detail(fs, context, base,
+                        task_entry, tid, thread.starttime_ticks, now)
+                    end
+                    thread_rows[#thread_rows + 1] = thread
+                  else
+                    -- A thread that exited between the listing and the stat
+                    -- read is normal churn, not a failed process sample.
+                    thread_races = thread_races + 1
+                  end
+                end
+              end
+              table.sort(thread_rows, function(left, right)
+                return left.tid < right.tid
+              end)
+              process.thread_rows = thread_rows
+              process.thread_ticks_by_tid = thread_ticks_by_tid
+              if next(thread_details) ~= nil then
+                process.thread_details = thread_details
+              end
+              process.thread_scan = {
+                total = process.threads,
+                scanned = #thread_rows,
+                races = thread_races,
+                truncated = task_truncated == true,
+              }
+            elseif task_error then
+              process.thread_status = FS.error_status(task_error)
+            end
+          end
+          -- PSS/USS come from smaps_rollup, which is a small kernel-maintained
+          -- summary rather than the full smaps walk: reading every mapping of
+          -- every process would be unbounded I/O, and the rollup already
+          -- carries the proportional and private totals the table needs.
+          if detail then
+            supplemental_read = true
+            local rollup_content, rollup_error = fs:read(base .. "/smaps_rollup", 65536)
+            if rollup_content then
+              local parsed_rollup = Parsers.process_smaps_rollup(rollup_content)
+              if parsed_rollup then
+                local private_clean = parsed_rollup.Private_Clean
+                local private_dirty = parsed_rollup.Private_Dirty
+                process.memory_detail = {
+                  pss = parsed_rollup.Pss,
+                  -- USS is not a kernel field; it is the private share.
+                  uss = (type(private_clean) == "number" and type(private_dirty) == "number")
+                    and (private_clean + private_dirty) or nil,
+                  rss = parsed_rollup.Rss,
+                  swap = parsed_rollup.Swap,
+                  shared_clean = parsed_rollup.Shared_Clean,
+                  shared_dirty = parsed_rollup.Shared_Dirty,
+                  pss_anon = parsed_rollup.Pss_Anon,
+                  pss_file = parsed_rollup.Pss_File,
+                  referenced = parsed_rollup.Referenced,
+                }
+              else
+                process.memory_status = "parse_error"
+                process.partial = true
+                supplemental_parse_errors = supplemental_parse_errors + 1
+              end
+            elseif rollup_error then
+              -- Kernels before 4.14 have no rollup file at all; report the
+              -- reason instead of silently showing an empty memory section.
+              process.memory_status = FS.error_status(rollup_error)
+              process.partial = true
+            end
+          end
           if context and type(context.resolve_username) == "function" and process.uid then
             local resolved, user = pcall(context.resolve_username, process.uid)
             if resolved then process.user = sanitize_text(user) end
+          end
+
+          -- Run-queue wait for a process, read only for the rows the table is
+          -- actually showing.  The process table is where triage happens, and
+          -- CPU share alone cannot tell a busy process from a starved one --
+          -- both are running.  Reading it for every process on the machine
+          -- would be a second full procfs sweep every tick for a column the
+          -- operator cannot see, so the viewport is the bound: what is not on
+          -- screen is not measured.
+          if visible_ids and visible_ids[process.id] then
+            -- Deliberately not marked as a supplemental read.  That flag exists
+            -- to re-verify a row's identity after opening /proc/<pid>/... for
+            -- fields that were already attached to it, and it pays for that by
+            -- re-reading stat and discarding the row on a mismatch -- which for
+            -- a viewport-sized set would mean a second stat read per visible
+            -- process per tick and healthy rows dropped for a window that the
+            -- rate check below already closes.  The schedstat reading is
+            -- protected by its own identity: it is differenced against a
+            -- previous reading only when the starttime still matches, so a
+            -- recycled pid yields no rate instead of another process' figure.
+            local schedstat_content, schedstat_error = fs:read(base .. "/schedstat", 4096)
+            if schedstat_content then
+              local parsed_schedstat = Parsers.thread_schedstat(schedstat_content)
+              if parsed_schedstat then
+                process.scheduler = self:_sched_rate("pid " .. base,
+                  parsed_schedstat, process.starttime_ticks, now)
+              else
+                process.scheduler = { status = "parse_error" }
+              end
+            elseif schedstat_error then
+              -- A kernel without CONFIG_SCHEDSTATS does not create the file.
+              -- That is the kernel declining to publish the figure, which must
+              -- not be drawn as a process that never waited for a cpu.
+              process.scheduler = { status = FS.error_status(schedstat_error) }
+            end
           end
 
           -- status is a supplemental read too.  Each /proc/<pid> path lookup
@@ -476,6 +931,39 @@ function Process:sample(context, previous)
     quality = (truncated or denied > 0 or parse_errors > 0
         or supplemental_parse_errors > 0 or any_process_partial)
       and "partial" or (any_fresh and "fresh" or "gap"),
+    -- Two reasons, and this is the only collector on the list whose quality
+    -- expression reaches a third word.  `partial` is set by the enumeration
+    -- stopping at its cap, by a `/proc/<pid>/stat` that was denied, by two
+    -- different parse failures, and by any single process carrying a
+    -- `partial_reason` -- ten separate sites, all of them a read that failed or
+    -- a read that produced something unparseable.  The verb is *collected*
+    -- rather than *read`, and the reason is the cap: a cap is a limit this
+    -- collector chose, and "could not be read" would send a user after a
+    -- permissions problem that `data.truncated` contradicts in the same
+    -- payload.  The per-process detail is already on each row as
+    -- `partial_reason`, and the four sample-level counters are published
+    -- beside it.
+    --
+    -- `gap` is the word that made this collector its own shape, and it has
+    -- exactly one cause: no process on this sample has a fresh CPU rate, so
+    -- there is no interval to difference against.  That is not a degradation
+    -- of the process *data* -- every row may be perfectly readable, and the
+    -- first sample after start-up always looks like this -- which is why it
+    -- gets its own code rather than folding into the one above.  A user
+    -- reading "part of the process data could not be collected" on a machine
+    -- whose process table is complete would be chasing a fault that is not
+    -- there; what they actually need to know is that a rate needs a second
+    -- sample, or that a counter went backwards, and the per-row quality and
+    -- the collector's own previous-sample reuse already say which.
+    reason = (truncated or denied > 0 or parse_errors > 0
+        or supplemental_parse_errors > 0 or any_process_partial)
+      and "process_data_partial"
+      -- Written `not any_fresh and "..." or nil` and not the other way round:
+      -- `any_fresh and nil or "..."` evaluates to the string on the fresh path,
+      -- because `and` yields nil and `or` then takes over.  That is the same
+      -- trap as `cond and x or y` when x is nil or false, and it is invisible
+      -- until a sample that is *not* degraded reaches the pairing assertion.
+      or (not any_fresh and "process_rate_unavailable" or nil),
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = self.proc_path,
   })
@@ -484,5 +972,6 @@ end
 Process.sanitize_text = sanitize_text
 Process.DEFAULT_MAX_PROCESSES = DEFAULT_MAX_PROCESSES
 Process.HARD_MAX_PROCESSES = HARD_MAX_PROCESSES
+Process.DEFAULT_MAX_DETAIL_THREADS = DEFAULT_MAX_DETAIL_THREADS
 
 return Process

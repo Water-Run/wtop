@@ -40,6 +40,71 @@ function M.hwmon_coretemp(base)
   }
 end
 
+--- `intel-rapl` as the development host publishes it, which is not the same
+--- shape as the fixture above.
+---
+--- There, the attributes the driver has no figure for are *present* and answer
+--- ENODATA rather than being absent: a `peak_power` constraint has no time
+--- window to publish, and a core or uncore sub-zone has no maximum power.  The
+--- unset-bounds fixture above models the other absence -- the file not being
+--- there at all -- and the two reach the collector by different routes, so a
+--- test that only used the first would never run the errno mapping at all.
+--- Modelled from what `cat` actually prints on this host.
+function M.powercap_intel_rapl_no_data(base)
+  base = base or "/sys/class/powercap"
+  local package = base .. "/intel-rapl:0"
+  local core = base .. "/intel-rapl:0:0"
+  local uncore = base .. "/intel-rapl:0:1"
+  return {
+    files = {
+      [base .. "/intel-rapl/enabled"] = "1\n",
+
+      [package .. "/name"] = "package-0\n",
+      [package .. "/enabled"] = "1\n",
+      [package .. "/energy_uj"] = "123456789012\n",
+      [package .. "/max_energy_range_uj"] = "262143328850\n",
+      [package .. "/constraint_0_name"] = "long_term\n",
+      [package .. "/constraint_0_power_limit_uw"] = "26000000\n",
+      [package .. "/constraint_0_time_window_us"] = "31981568\n",
+      [package .. "/constraint_0_max_power_uw"] = "45000000\n",
+      [package .. "/constraint_1_name"] = "short_term\n",
+      [package .. "/constraint_1_power_limit_uw"] = "26000000\n",
+      [package .. "/constraint_1_time_window_us"] = "2440\n",
+      [package .. "/constraint_2_name"] = "peak_power\n",
+      [package .. "/constraint_2_power_limit_uw"] = "114000000\n",
+      [package .. "/constraint_2_max_power_uw"] = "0\n",
+
+      [core .. "/name"] = "core\n",
+      [core .. "/enabled"] = "1\n",
+      [core .. "/energy_uj"] = "45678901234\n",
+      [core .. "/max_energy_range_uj"] = "262143328850\n",
+      [core .. "/constraint_0_name"] = "long_term\n",
+      [core .. "/constraint_0_power_limit_uw"] = "0\n",
+      [core .. "/constraint_0_time_window_us"] = "976\n",
+
+      [uncore .. "/name"] = "uncore\n",
+      [uncore .. "/enabled"] = "1\n",
+      [uncore .. "/energy_uj"] = "1234567890\n",
+      [uncore .. "/max_energy_range_uj"] = "262143328850\n",
+      [uncore .. "/constraint_0_name"] = "long_term\n",
+      [uncore .. "/constraint_0_power_limit_uw"] = "0\n",
+      [uncore .. "/constraint_0_time_window_us"] = "976\n",
+    },
+    -- Present, opened successfully, and holding no value: the driver declining
+    -- to state a figure rather than a read going wrong.
+    errors = {
+      [package .. "/constraint_2_time_window_us"] = 61,
+      [core .. "/constraint_0_max_power_uw"] = 61,
+      [uncore .. "/constraint_0_max_power_uw"] = 61,
+    },
+    links = {
+      [package] = "../../devices/virtual/powercap/intel-rapl/intel-rapl:0",
+      [core] = "../../devices/virtual/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:0",
+      [uncore] = "../../devices/virtual/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:1",
+    },
+  }
+end
+
 --- AMD `k10temp` alongside a `nct6775` super-I/O chip that does publish fans,
 --- voltages and power, so the non-temperature channel kinds get exercised.
 function M.hwmon_nct6775(base)
@@ -125,7 +190,114 @@ function M.powercap_intel_rapl(base)
   }
 end
 
+--- A DIMM temperature sensor and a UCSI power-source channel, shaped after the
+--- development host, where both publish bound attributes the driver never set.
+---
+--- `spd5118` registers the full standard set of temperature bounds but only
+--- programs the maximum and the critical, leaving `temp1_min` and `temp1_lcrit`
+--- at zero.  `ucsi_source_psy` is a USB-C power source with nothing attached, so
+--- it reports no voltage and no current and its limit attributes are zero as
+--- well.  Both are the case a bound of exactly zero has to survive: the file
+--- exists, the number parses, and it is not a bound.  The nvme channel carries a
+--- real *negative* minimum, which the same rule must leave alone -- the point is
+--- the zero, not the sign or the size.
+function M.hwmon_unset_bounds(base)
+  base = base or "/sys/class/hwmon"
+  local spd = base .. "/hwmon5"
+  local ucsi = base .. "/hwmon4"
+  local nvme = base .. "/hwmon3"
+  return {
+    files = {
+      [spd .. "/name"] = "spd5118\n",
+      [spd .. "/temp1_input"] = "46250\n",
+      [spd .. "/temp1_max"] = "55000\n",
+      [spd .. "/temp1_crit"] = "85000\n",
+      [spd .. "/temp1_min"] = "0\n",
+      [spd .. "/temp1_lcrit"] = "0\n",
+
+      [ucsi .. "/name"] = "ucsi_source_psy_USBC000:001\n",
+      [ucsi .. "/in0_input"] = "0\n",
+      [ucsi .. "/in0_min"] = "0\n",
+      [ucsi .. "/in0_max"] = "0\n",
+      [ucsi .. "/curr1_input"] = "0\n",
+      [ucsi .. "/curr1_max"] = "0\n",
+
+      [nvme .. "/name"] = "nvme\n",
+      [nvme .. "/temp1_input"] = "45850\n",
+      [nvme .. "/temp1_max"] = "83850\n",
+      [nvme .. "/temp1_crit"] = "87850\n",
+      [nvme .. "/temp1_min"] = "-40150\n",
+    },
+    links = {
+      [spd] = "../../devices/platform/spd5118.0/hwmon/hwmon5",
+      [ucsi] = "../../devices/platform/ucsi-source-psy.0/hwmon/hwmon4",
+      [nvme] = "../../devices/platform/nvme.0/hwmon/hwmon3",
+    },
+  }
+end
+
+--- A powercap tree where the driver leaves bounds unset, shaped after the
+--- development host's `intel-rapl`.
+---
+--- Two shapes of unset bound appear and they are different.  The sub-zones
+--- `intel-rapl:0:0` and `intel-rapl:0:1` are disabled and publish
+--- `constraint_0_power_limit_uw` as zero.  And the package zone's `short_term`
+--- and `peak_power` constraints publish `max_power_uw` as zero while setting
+--- real limits of 78 W and 114 W on the same constraint -- a maximum below the
+--- limit it bounds, which is visible inside one snapshot without knowing
+--- anything about the driver.
+function M.powercap_intel_rapl_unset_bounds(base)
+  base = base or "/sys/class/powercap"
+  local package = base .. "/intel-rapl:0"
+  local core = base .. "/intel-rapl:0:0"
+  local uncore = base .. "/intel-rapl:0:1"
+  return {
+    files = {
+      [base .. "/intel-rapl/enabled"] = "1\n",
+
+      [package .. "/name"] = "package-0\n",
+      [package .. "/enabled"] = "1\n",
+      [package .. "/energy_uj"] = "123456789012\n",
+      [package .. "/max_energy_range_uj"] = "262143328850\n",
+      [package .. "/constraint_0_name"] = "long_term\n",
+      [package .. "/constraint_0_power_limit_uw"] = "26000000\n",
+      [package .. "/constraint_0_max_power_uw"] = "45000000\n",
+      [package .. "/constraint_1_name"] = "short_term\n",
+      [package .. "/constraint_1_power_limit_uw"] = "78000000\n",
+      [package .. "/constraint_1_max_power_uw"] = "0\n",
+      [package .. "/constraint_2_name"] = "peak_power\n",
+      [package .. "/constraint_2_power_limit_uw"] = "114000000\n",
+      [package .. "/constraint_2_max_power_uw"] = "0\n",
+
+      [core .. "/name"] = "core\n",
+      [core .. "/enabled"] = "0\n",
+      [core .. "/energy_uj"] = "45678901234\n",
+      [core .. "/max_energy_range_uj"] = "262143328850\n",
+      [core .. "/constraint_0_name"] = "long_term\n",
+      [core .. "/constraint_0_power_limit_uw"] = "0\n",
+
+      [uncore .. "/name"] = "uncore\n",
+      [uncore .. "/enabled"] = "0\n",
+      [uncore .. "/energy_uj"] = "1234567890\n",
+      [uncore .. "/max_energy_range_uj"] = "262143328850\n",
+      [uncore .. "/constraint_0_name"] = "long_term\n",
+      [uncore .. "/constraint_0_power_limit_uw"] = "0\n",
+    },
+    links = {
+      [package] = "../../devices/virtual/powercap/intel-rapl/intel-rapl:0",
+      [core] = "../../devices/virtual/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:0",
+      [uncore] = "../../devices/virtual/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:1",
+    },
+  }
+end
+
 --- The same tree one sample later, so a rate can be derived from the delta.
+--
+-- `microjoules` is the energy the package counter has advanced by, and the
+-- sub-zone by half of it, which is the shape the development host shows.  It is
+-- required rather than defaulted to zero: a zero delta is the same tree this
+-- function derives from, and a fixture pair that cannot be told apart is a
+-- second name for one tree.
 function M.powercap_intel_rapl_advanced(base, microjoules)
   local tree = M.powercap_intel_rapl(base)
   base = base or "/sys/class/powercap"

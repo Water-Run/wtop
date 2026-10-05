@@ -1,12 +1,33 @@
 local Engine = require("wtop.engine")
 local Technical = require("wtop.i18n.technical")
 local ProcessTable = require("wtop.model.process_table")
+local ProcessColumns = require("wtop.model.process_columns")
+local Quality = require("wtop.model.quality")
 local Privacy = require("wtop.privacy")
 
 local M = {}
 local EMPTY_PROCESS_SOURCE = {}
 local PROCESS_VIEW_CACHE = setmetatable({}, { __mode = "k" })
 local TABLE_ROW_LIMIT = 512
+
+-- How wide a column is when its cell is a technical state or quality label.
+--
+-- Measured, not chosen: the widest label the ten shipped catalogues produce is
+-- French "Échantillon manquant" for `gap`, at 20 terminal cells, and five labels
+-- exceed 13 (`gap` 20, `denied` and `unavailable` 15, `stale` 14, `reset` and
+-- `truncated` 13).  Sizing these columns to the English words clipped the rest.
+--
+-- It is a *preferred* width, and that is what makes the number safe to raise.
+-- `ui/widgets/table.lua` includes a column when its `min_width` fits the area
+-- and then hands out the leftover cells one at a time, up to this width, so a
+-- preferred width cannot cost another column its place.  Measured across the
+-- eight sizes the PTY matrix uses: 22 of 64 (column, size) pairs change and no
+-- table loses a column anywhere; the 42 that do not are the tight sizes where
+-- the column already sits at its minimum and would have been clipped either
+-- way.  `min_width` is deliberately left alone for the same reason -- raising
+-- it would make the column *disappear* on a narrow terminal, which is a worse
+-- answer than a short cell.
+local STATE_COLUMN_WIDTH = 20
 
 local function bounded_best_add(heap, limit, better, value)
     local function worse(left, right) return better(right, left) end
@@ -174,13 +195,132 @@ local function process_sort_label(i18n, key)
     return translated(i18n, label[1], label[2])
 end
 
+--- The process table's columns, in the order the user chose.
+---
+--- Every column is defined here once and then emitted in the order the column
+--- state asks for, so a column cannot be described in one place and ordered in
+--- another.  `priority` and `full_only` stay on the column: those decide what a
+--- *small panel* drops, which is the renderer's call and still applies on top of
+--- whatever the user has chosen.  A column the user hid is absent from the list
+--- entirely rather than present and widthless, so it is not merely squeezed out
+--- on a wide terminal too.
+--- The widest pid Linux can hand out, in cells.
+---
+--- `/proc/sys/kernel/pid_max` is capped at 2^22, so `4194304` -- seven digits --
+--- is the ceiling on every kernel, and a column that can be given fewer than
+--- seven cells will eventually draw one of those as `41943…`, which is a
+--- different pid and, on a long-lived host, a pid that exists.  A pid is the one
+--- value in this table a reader acts on: `k` opens a confirmation naming it and
+--- the thread picker filters on it, so a shortened pid is not a cosmetic loss the
+--- way a shortened sentence is -- increment 84 deliberately left `min_width`
+--- alone for exactly that reason, and this is the case where the trade runs the
+--- other way.  `min_width` is the right lever rather than `width` because it is
+--- what the table guarantees: a column is only selected when its minimum fits,
+--- selection runs in priority order, and the PID column is at 90 while the
+--- columns that would give up their cells (`Virt` 35, `Link` 40, `MTU` 35) sit
+--- near the bottom.  So the two extra cells are taken from the least important
+--- column rather than out of the pid's own digits -- and where even that is not
+--- enough the column leaves the screen entirely, which is the correct answer for
+--- a value that cannot be shown honestly.
+local PID_COLUMN_MIN_WIDTH = 7
+
+local function ordered_process_columns(chosen, i18n, process_status, platform)
+  local definitions = {
+    pid = {
+      key = "pid", label = "PID", sort_key = "pid",
+      width = 8, min_width = PID_COLUMN_MIN_WIDTH, priority = 90,
+      align = "right", highlight = true,
+    },
+    user = {
+      key = "user", label = translated(i18n, "metrics.user", "User"),
+      sort_key = "user", width = 12, min_width = 8, priority = 55, highlight = true,
+    },
+    priority = {
+      key = "priority", label = "PRI", width = 4, min_width = 3,
+      align = "right", priority = 20, full_only = true,
+    },
+    nice = {
+      key = "nice", label = "NI", width = 4, min_width = 3,
+      align = "right", priority = 22, full_only = true,
+    },
+    virtual_memory = {
+      key = "virtual_memory", label = translated(i18n, "metrics.virtual", "Virt"),
+      sort_key = "virtual", width = 10, min_width = 8,
+      align = "right", priority = 35, full_only = true,
+    },
+    memory = {
+      key = "memory", label = translated(i18n, "metrics.memory", "Res"),
+      sort_key = "memory", width = 10, min_width = 8, align = "right", priority = 80,
+      token = function(_, row)
+        return severity_token(row.memory_fraction and row.memory_fraction * 100, 10, 25)
+      end,
+      bar = function(_, row) return row.memory_fraction end,
+    },
+    state = {
+      key = "state", label = "S", width = 3, min_width = 3, priority = 45,
+      sort_key = "state",
+      token = function(value)
+        if value == "R" then return "metric.good" end
+        if value == "D" then return "metric.critical" end
+        if value == "Z" then return "metric.warn" end
+        return nil
+      end,
+    },
+    cpu = {
+      key = "cpu", label = "CPU", sort_key = "cpu",
+      width = 9, min_width = 7, align = "right", priority = 95,
+      token = function(_, row) return severity_token(row.cpu_value, 40, 80) end,
+      bar = function(_, row)
+        return row.cpu_value and math.min(1, row.cpu_value / 100) or nil
+      end,
+    },
+    time = {
+      key = "time", label = "TIME+", sort_key = "time",
+      width = 10, min_width = 8, align = "right", priority = 40,
+    },
+    threads = {
+      key = "threads", label = translated(i18n, "metrics.threads", "Thr"),
+      sort_key = "threads", width = 5, min_width = 4,
+      align = "right", priority = 25, full_only = true,
+    },
+    name = {
+      key = "name", label = translated(i18n, "metrics.command", "Command"),
+      sort_key = "name", width = 40, min_width = 12, priority = 85, highlight = true,
+      truncate = process_status.show_paths
+        and (platform == "Windows" or platform == "Darwin")
+        and "path" or nil,
+    },
+    -- Run-queue wait, read only for the rows the viewport is showing.  The
+    -- formatted value is computed in format_row, where the rate and its quality
+    -- are known, and is nil for a row that has just scrolled into view or whose
+    -- first reading has no interval yet.  Nil renders as "—", which is the
+    -- honest cell: a zero here is the claim "this process never waited for a
+    -- cpu", and that is exactly what the column exists to say.
+    queued = {
+      key = "queued", label = translated(i18n, "process.thread_queued", "Queued"),
+      width = 11, min_width = 8, align = "right", priority = 30, full_only = true,
+    },
+  }
+  local order = ProcessColumns.normalize(chosen)
+  local result = {}
+  for _, key in ipairs(order) do
+    local definition = definitions[key]
+    if definition then result[#result + 1] = definition end
+  end
+  return result
+end
+
 local function process_status_text(i18n, status)
     local filter = status.query ~= "" and translated(i18n, "process.filter_status",
         " · Filter: {query}", { query = status.query }) or ""
     local tree = status.tree and translated(i18n, "process.tree_status", " · Tree") or ""
     local collection = status.collection_truncated and translated(i18n, "process.collection_truncated",
         " · collection capped at {limit}", { limit = status.collection_limit or status.total }) or ""
-    tree = tree .. collection
+    -- A cgroup reached from the Workloads page is announced here rather than
+    -- hidden, because nothing about the process table says why the rows ended.
+    local cgroup = status.cgroup_filter and translated(i18n, "process.cgroup_status",
+        " · cgroup: {name} · Esc clears", { name = status.cgroup_filter }) or ""
+    tree = tree .. cgroup .. collection
     return translated(i18n, "process.table_status",
         "Sort: {sort} {direction} · {visible}/{total}{filter}{tree}", {
             sort = process_sort_label(i18n, status.sort_key),
@@ -192,6 +332,23 @@ local function process_status_text(i18n, status)
             tree = tree,
             collection = collection,
         })
+end
+
+--- How long a process waited on a runqueue, per second.
+---
+--- Returns nil unless the collector published a *rate*: the file has to have
+--- been read for this row, and two samples have to exist to have an interval to
+--- divide by.  Both gaps are real and neither is a zero, so both are nil -- a
+--- cell reading 0 would be the claim "this process never queued", and that is
+--- exactly the claim this figure must not make without having measured it.
+local function queued_rate(format, scheduler)
+  if type(scheduler) ~= "table" then return nil end
+  if scheduler.quality ~= "fresh" then return nil end
+  local rate = scheduler.wait_rate_ns
+  if type(rate) ~= "number" or rate ~= rate or rate < 0 then return nil end
+  local rendered = format:duration(rate / 1000000000)
+  if type(rendered) ~= "string" then return nil end
+  return rendered .. "/s"
 end
 
 local function top_processes(snapshot, format, controller, i18n, platform)
@@ -259,6 +416,12 @@ local function top_processes(snapshot, format, controller, i18n, platform)
             time = cpu_seconds and duration(format, cpu_seconds) or "—",
             state = process.state or "—",
             user = process.user or "—",
+            -- Run-queue wait is only read for the rows the viewport is showing,
+            -- and only has a rate once two samples exist.  Both gaps render as
+            -- nil, which the table draws as "—": a zero would be the claim that
+            -- the process never waited for a cpu, which is the one thing this
+            -- column must not invent.
+            queued = queued_rate(format, process.scheduler),
             -- Process I/O byte counters are cumulative, not a per-second rate.
             -- Linux samples them for the selection; Windows bulk collection
             -- supplies them for every row without opening each process.
@@ -370,7 +533,19 @@ local function network_rows(snapshot, format)
             state = interface.operstate or "?",
             receive = rate(format, rates.rx_bytes_per_second),
             transmit = rate(format, rates.tx_bytes_per_second),
-            speed = interface.speed_mbps and (tostring(interface.speed_mbps) .. " Mbit/s") or "—",
+            -- Scaled, not concatenated.  `tostring(mbps) .. " Mbit/s"` reads the
+            -- number sysfs gives and is exactly one cell too long from 100
+            -- Gbit/s upward: `100000 Mbit/s` is thirteen cells into twelve, and
+            -- what the reader is left with is a quantity with no unit.  The
+            -- header says "Link" and not "Mbit/s", so both spellings are correct
+            -- -- but only one of them fits.  `format:bits_per_second` is what the
+            -- receive and transmit columns already go through, and measured over
+            -- every rate a real NIC reports (1 to 400 Gbit/s) its longest
+            -- output is `400 Gbit/s`, ten cells, against twelve today.
+            speed = interface.speed_mbps
+                and formatted(function()
+                    return assert(format:bits_per_second(interface.speed_mbps * 1000000))
+                end) or "—",
             mac = interface.address or "—",
             mtu = interface.mtu and tostring(interface.mtu) or "—",
             duplex = interface.duplex or "—",
@@ -431,15 +606,28 @@ local function connection_rows(snapshot, mask_remote)
     return rows
 end
 
-local function gpu_rows(snapshot, format)
-    local rows = {}
-    local sensors_by_class, sensors_by_target = {}, {}
-    for _, sensor in ipairs(snapshot.sensors and snapshot.sensors.devices or {}) do
-        if sensor.class then sensors_by_class[sensor.class] = sensor end
-        if sensor.device_target then sensors_by_target[sensor.device_target] = sensor end
+-- GPU board figures come from the general hwmon snapshot, joined on
+-- `class`/`device_target`.  hwmon has no vocabulary for "board total": a GPU
+-- driver may publish a package power *and* per-rail powers on the same device,
+-- and those overlap, so summing them would invent a number no meter ever
+-- measured.  The single defensible rule is therefore the largest published
+-- channel, and the channel it came from has to travel with it -- otherwise the
+-- table shows a bare watt figure that a reader will take for a board total.
+--
+-- This is one function with two consumers on purpose: the GPU table's numbers
+-- and the sensor overlay's account of where they came from must not be able to
+-- disagree.
+function M.gpu_sensor_join(snapshot)
+    local sensors = snapshot and snapshot.sensors and snapshot.sensors.devices or {}
+    local by_class, by_target = {}, {}
+    for _, sensor in ipairs(sensors) do
+        if sensor.class then by_class[sensor.class] = sensor end
+        if sensor.device_target then by_target[sensor.device_target] = sensor end
     end
-    for _, gpu in ipairs(snapshot.gpus and snapshot.gpus.devices or {}) do
-        local metrics = gpu.metrics or {}
+
+    local entries = {}
+    local gpus = snapshot and snapshot.gpus and snapshot.gpus.devices or {}
+    for _, gpu in ipairs(gpus) do
         local matched, seen = {}, {}
         local function add_sensor(sensor)
             if sensor and not seen[sensor] then
@@ -448,29 +636,85 @@ local function gpu_rows(snapshot, format)
             end
         end
         for _, reference in ipairs(gpu.hwmon_refs or {}) do
-            add_sensor(reference.class and sensors_by_class[reference.class])
-            add_sensor(reference.device_target and sensors_by_target[reference.device_target])
+            add_sensor(reference.class and by_class[reference.class])
+            add_sensor(reference.device_target and by_target[reference.device_target])
         end
-        add_sensor(gpu.device_target and sensors_by_target[gpu.device_target])
-        local joined_temperature, joined_power
+        add_sensor(gpu.device_target and by_target[gpu.device_target])
+
+        local temperature, power, fan
+        local power_channels = 0
         for _, sensor in ipairs(matched) do
             for _, channel in ipairs(sensor.channels or {}) do
                 if type(channel.input) == "number" then
+                    local current = channel
                     if channel.type == "temperature" then
-                        joined_temperature = joined_temperature
-                            and math.max(joined_temperature, channel.input) or channel.input
+                        -- The hottest junction is the one that throttles; an
+                        -- edge sensor and a hot spot are not interchangeable, so
+                        -- the maximum is stated as a maximum rather than
+                        -- averaged into something that is neither.
+                        temperature = temperature
+                            and (current.input > temperature.input and current or temperature)
+                            or current
                     elseif channel.type == "power" then
-                        -- A hwmon device can expose overlapping total and rail
-                        -- channels.  The maximum is useful without pretending
-                        -- that summing them is a physical board-power total.
-                        joined_power = joined_power and math.max(joined_power, channel.input)
-                            or channel.input
+                        power_channels = power_channels + 1
+                        power = power and (current.input > power.input and current or power)
+                            or current
+                    elseif channel.type == "fan" then
+                        -- A board with several fans reports several channels;
+                        -- the fastest is the one an operator would act on.
+                        fan = fan and (current.input > fan.input and current or fan) or current
                     end
                 end
             end
         end
-        local temperature_celsius = metrics.temperature_celsius or joined_temperature
-        local power_watts = metrics.power_watts or joined_power
+        for _, sensor in ipairs(matched) do
+            entries[#entries + 1] = {
+                gpu = gpu,
+                sensor = sensor,
+                sensors = matched,
+                temperature = temperature,
+                power = power,
+                power_channels = power_channels,
+                fan = fan,
+            }
+        end
+    end
+    return entries
+end
+
+local function gpu_rows(snapshot, format)
+    local rows = {}
+    local joins = M.gpu_sensor_join(snapshot)
+    local by_gpu = {}
+    for _, entry in ipairs(joins) do
+        local list = by_gpu[entry.gpu]
+        if not list then
+            list = {}
+            by_gpu[entry.gpu] = list
+        end
+        list[#list + 1] = entry
+    end
+    for _, gpu in ipairs(snapshot.gpus and snapshot.gpus.devices or {}) do
+        local metrics = gpu.metrics or {}
+        local matched, seen = {}, {}
+        local temperature_channel, power_channel, fan_channel
+        local power_channels = 0
+        for _, entry in ipairs(by_gpu[gpu] or {}) do
+            for _, sensor in ipairs(entry.sensors) do
+                if not seen[sensor] then
+                    seen[sensor] = true
+                    matched[#matched + 1] = sensor
+                end
+            end
+            temperature_channel = temperature_channel or entry.temperature
+            power_channel = power_channel or entry.power
+            fan_channel = fan_channel or entry.fan
+            power_channels = math.max(power_channels, entry.power_channels)
+        end
+        local temperature_celsius = metrics.temperature_celsius
+            or (temperature_channel and temperature_channel.input)
+        local power_watts = metrics.power_watts or (power_channel and power_channel.input)
+        local fan_rpm = fan_channel and fan_channel.input
         local memory_used = metrics.memory_used_bytes or metrics.process_memory_bytes
         local memory_total = metrics.memory_total_bytes
         local memory_text = "—"
@@ -483,18 +727,52 @@ local function gpu_rows(snapshot, format)
         if pci.current_link_width then
             pcie = (pcie and (pcie .. " ") or "") .. "x" .. tostring(pci.current_link_width)
         end
+        -- A device can publish several independent clocks: a discrete card
+        -- drives a graphics clock and a memory clock, and a multi-tile device
+        -- drives one per tile.  The column carries the promoted clock, and
+        -- when that is one of several the cell says so -- a bare number under
+        -- a header reading "Frequency" would claim to be the device's single
+        -- clock, which on such a card is not what was measured.  The count is
+        -- of the clocks the cell is *not* showing, so the figure stays the one
+        -- people mean by GPU frequency and the row stops implying it is all
+        -- of it.  The full set is in the exported clocks, not here: a table
+        -- cell has no room to name which clock is which.
+        local frequency_text = frequency(format, metrics.frequency_current_hz)
+        local clock_count = #(type(gpu.frequencies) == "table"
+            and gpu.frequencies.domains or {})
+        if clock_count > 1 and metrics.frequency_current_hz ~= nil then
+            frequency_text = frequency_text .. " +" .. tostring(clock_count - 1)
+        end
         rows[#rows + 1] = {
             gpu = gpu.model_name or gpu.card or gpu.id,
+            -- The name of the card itself, which is the one string that tells two
+            -- devices apart when they are the same device.  A four-GPU box
+            -- reports four rows of "NVIDIA GeForce RTX 4090" with the same
+            -- vendor, the same driver and the same clocks, and there is no
+            -- column here that says which of the four a row is: give the model
+            -- name forty cells and the rows are still identical.  `card0` is
+            -- what the GPU process table has always shown, so the device table
+            -- showing the same string is also what makes the two tables join up.
+            card = tostring(gpu.card or gpu.id or "?"),
             vendor = gpu.vendor_name or gpu.vendor or "?",
             driver = gpu.driver or "?",
             utilization = percent(format, metrics.utilization_percent),
             memory = memory_text,
-            frequency = frequency(format, metrics.frequency_current_hz),
+            frequency = frequency_text,
             pcie = pcie or "—",
             temperature = temperature_celsius
                 and formatted(function() return assert(format:temperature(temperature_celsius)) end)
                 or "—",
             power = power_watts and string.format("%.1f W", power_watts) or "—",
+            -- The channel the figures came from, so a reader can tell a
+            -- package power from a rail and an edge sensor from a hot spot.
+            fan = fan_rpm and formatted(function()
+                return assert(format:number(fan_rpm, { precision = 0 }))
+            end) .. " RPM" or "—",
+            temperature_source = temperature_channel,
+            power_source = power_channel,
+            power_channels = power_channels,
+            fan_source = fan_channel,
             sensor_sources = matched,
         }
     end
@@ -729,7 +1007,7 @@ local function mount_rows(snapshot, format, options)
                 or (mount.readonly and "ro" or "rw"),
         }
     end
-    return rows, hidden
+    return rows, hidden, #source
 end
 
 local function workload_by_id(snapshot)
@@ -739,6 +1017,19 @@ local function workload_by_id(snapshot)
         lookup[workload.id] = workload
     end
     return lookup
+end
+
+-- A container cgroup is named by the kernel as a 64-character id, or as a
+-- "cri-containerd-<id>.scope" that says nothing at a glance.  The collector
+-- already resolved what those components encode, so the row shows the runtime
+-- and the short id.  A node that merely sits inside a container keeps its own
+-- unit name, because that is the unit an operator would act on.
+local function workload_row_name(workload)
+    local semantics = workload.semantics
+    if semantics and semantics.container_scope and semantics.label then
+        return semantics.label
+    end
+    return workload.name or workload.id
 end
 
 local function workload_rows(snapshot, format, collapsed, selected_id)
@@ -764,35 +1055,38 @@ local function workload_rows(snapshot, format, collapsed, selected_id)
         return false
     end
     local rows, ids, selected_index = {}, {}, nil
+    local matched = 0
     for _, workload in ipairs(source) do
-        if #rows >= TABLE_ROW_LIMIT then break end
         if not hidden(workload) then
-            local io_rates = workload.io and workload.io.totals and workload.io.totals.rates or {}
-            local pressure = workload.pressure and workload.pressure.cpu
-            local cpu_pressure = pressure and pressure.some and pressure.some.avg10
-            local children = has_children[workload.id]
-            local marker = children and (collapsed and collapsed[workload.id]
-                and "▸ " or "▾ ") or "· "
-            rows[#rows + 1] = {
-                workload = string.rep("  ", math.min(workload.depth or 0, 6))
-                    .. marker .. (workload.name or workload.id),
-                cpu = percent(format, workload.cpu and workload.cpu.utilization_percent),
-                memory = bytes(format, workload.memory and workload.memory.current_bytes),
-                read = rate(format, io_rates.rbytes_per_second),
-                write = rate(format, io_rates.wbytes_per_second),
-                processes = tostring(workload.processes and workload.processes.count or 0),
-                pressure = percent(format, cpu_pressure),
-                quality = workload.quality or "—",
-                raw_cpu = workload.cpu and workload.cpu.utilization_percent or -1,
-                workload_ref = workload,
-            }
-            ids[#ids + 1] = workload.id
-            if selected_id ~= nil and workload.id == selected_id then
-                selected_index = #rows
+            matched = matched + 1
+            if #rows < TABLE_ROW_LIMIT then
+                local io_rates = workload.io and workload.io.totals and workload.io.totals.rates or {}
+                local pressure = workload.pressure and workload.pressure.cpu
+                local cpu_pressure = pressure and pressure.some and pressure.some.avg10
+                local children = has_children[workload.id]
+                local marker = children and (collapsed and collapsed[workload.id]
+                    and "▸ " or "▾ ") or "· "
+                rows[#rows + 1] = {
+                    workload = string.rep("  ", math.min(workload.depth or 0, 6))
+                        .. marker .. workload_row_name(workload),
+                    cpu = percent(format, workload.cpu and workload.cpu.utilization_percent),
+                    memory = bytes(format, workload.memory and workload.memory.current_bytes),
+                    read = rate(format, io_rates.rbytes_per_second),
+                    write = rate(format, io_rates.wbytes_per_second),
+                    processes = tostring(workload.processes and workload.processes.count or 0),
+                    pressure = percent(format, cpu_pressure),
+                    quality = workload.quality or "—",
+                    raw_cpu = workload.cpu and workload.cpu.utilization_percent or -1,
+                    workload_ref = workload,
+                }
+                ids[#ids + 1] = workload.id
+                if selected_id ~= nil and workload.id == selected_id then
+                    selected_index = #rows
+                end
             end
         end
     end
-    return rows, ids, selected_index
+    return rows, ids, selected_index, matched
 end
 
 local function power_rows(snapshot, format)
@@ -1124,10 +1418,21 @@ local function system_device_rows(snapshot)
     local rows, pci_total, usb_total, truncated = {}, 0, 0, false
     local pci = type(inventory.pci) == "table" and inventory.pci or {}
     local usb = type(inventory.usb) == "table" and inventory.usb or {}
-    pci_total = pci.total or #pci.devices or 0
-    usb_total = usb.total or #usb.devices or 0
+    -- `#pci.devices or 0` is not a nil guard: the length is taken before the
+    -- `or` can fall through, so an absent `devices` raises instead of counting
+    -- zero.  The two lines below use the guarded form, and the difference was
+    -- the tell -- a fresh snapshot pre-populates `inventory` as an empty table
+    -- and the collector leaves it that way whenever it reports no device
+    -- inventory at all, which is a container or a host whose PCI enumeration is
+    -- not readable.  So this was reachable on exactly the machines least likely
+    -- to have a GPU, and it took the whole system page down rather than showing
+    -- an empty device table.
+    local pci_devices = type(pci.devices) == "table" and pci.devices or {}
+    local usb_devices = type(usb.devices) == "table" and usb.devices or {}
+    pci_total = pci.total or #pci_devices
+    usb_total = usb.total or #usb_devices
     truncated = pci.truncated == true or usb.truncated == true
-    for _, device in ipairs(pci.devices or {}) do
+    for _, device in ipairs(pci_devices) do
         local name = device.vendor_name
             or (device.vendor_id and string.format("%04x", device.vendor_id) or "?")
         if device.device_name then name = name .. " " .. device.device_name end
@@ -1138,7 +1443,7 @@ local function system_device_rows(snapshot)
             class = device.class_id and string.format("%06x", device.class_id) or "—",
         }
     end
-    for _, device in ipairs(usb.devices or {}) do
+    for _, device in ipairs(usb_devices) do
         local name = device.manufacturer
             or (device.vendor_id and string.format("%04x", device.vendor_id) or "?")
         if device.product then name = name .. " " .. device.product end
@@ -1274,12 +1579,22 @@ local function address_rows(snapshot)
     return rows
 end
 
+-- Which snapshot slot a collector's row reads.  A collector missing here is not
+-- skipped: `collector_rows` looks the slot up, gets nil, and prints `ready` and
+-- two em dashes for a collector that may be publishing `truncated` or a failure
+-- reason.  Measured, this list had sixteen entries for seventeen registered
+-- collectors and `inventory` was the one left out, so the device inventory row
+-- could not show any of the states it actually has.  The relation is now a
+-- property in `tests/unit/test_view_model_collectors.lua`: every registered
+-- collector id must have a row whose reason is the reason of the slot that
+-- collector writes, which fails both for a missing entry and for one pointing at
+-- a neighbour's slot.
 local COLLECTOR_RESOURCE = {
     cpu = "cpu", cpu_info = "cpu_info", memory = "memory", pressure = "pressure",
     disk = "disks", network = "network", connections = "connections",
     process = "processes", gpu = "gpus", cpufreq = "cpu_frequency", hwmon = "sensors",
     powercap = "power", mounts = "mounts", cgroup = "workloads",
-    system_info = "system", power_supply = "power_supplies",
+    system_info = "system", power_supply = "power_supplies", inventory = "inventory",
 }
 
 local function collector_rows(snapshot, capabilities, i18n)
@@ -1447,6 +1762,34 @@ local WORKLOAD_KINDS = {
     },
 }
 
+-- The identity the cgroup path encodes: the systemd unit, and the container,
+-- pod or login session it belongs to.  Only fields the path actually
+-- established appear, so an ordinary service shows a unit and nothing else.
+local function workload_identity_entries(semantics)
+    if type(semantics) ~= "table" then return {} end
+    local entries = {}
+    if semantics.unit and semantics.unit ~= semantics.label then
+        entries[#entries + 1] = entry("workloads.selection_unit", "Unit", semantics.unit)
+    end
+    if semantics.container_id then
+        -- The full id is already in the path row above, so the value keeps the
+        -- readable form: the runtime when the path named one, the short id
+        -- alone when it did not.
+        local container = semantics.runtime
+            and (semantics.runtime .. " " .. semantics.container_short_id)
+            or semantics.container_short_id
+        entries[#entries + 1] = entry("workloads.selection_container", "Container", container)
+    end
+    if semantics.pod then
+        entries[#entries + 1] = entry("workloads.selection_pod", "Pod", semantics.pod)
+    end
+    if semantics.user_id then
+        entries[#entries + 1] = entry("workloads.selection_user", "Login session",
+            "user-" .. tostring(semantics.user_id))
+    end
+    return entries
+end
+
 local function workload_selected_entries(selected, format, i18n)
     local io_rates = selected.io and selected.io.totals
         and selected.io.totals.rates or {}
@@ -1454,8 +1797,13 @@ local function workload_selected_entries(selected, format, i18n)
     local entries = {
         section("workloads.selection_section", "Selection"),
         entry("workloads.selection_name", "Workload",
-            selected.name or selected.id, { emphasis = true }),
+            workload_row_name(selected), { emphasis = true }),
         entry("workloads.selection_path", "Path", selected.path or selected.id),
+    }
+    for _, identity in ipairs(workload_identity_entries(selected.semantics)) do
+        entries[#entries + 1] = identity
+    end
+    for _, metric in ipairs({
         entry("metrics.cpu", "CPU",
             percent(format, selected.cpu and selected.cpu.utilization_percent)),
         entry("metrics.memory", "Memory",
@@ -1468,7 +1816,9 @@ local function workload_selected_entries(selected, format, i18n)
             percent(format, cpu_pressure and cpu_pressure.some
                 and cpu_pressure.some.avg10)),
         entry("inspector.quality", "Quality", Technical.state(i18n, selected.quality)),
-    }
+    }) do
+        entries[#entries + 1] = metric
+    end
     return entries
 end
 
@@ -1505,16 +1855,31 @@ local function workload_detail_entries(snapshot, format, i18n, selected)
         entry("workloads.processes", "Visible processes", summary.visible_process_count or 0),
         entry("workloads.partial", "Partial cgroups", summary.partial_node_count or 0,
             { token = (summary.partial_node_count or 0) > 0 and "metric.warn" or nil }),
-        section("workloads.root_section", "Root cgroup"),
-        entry("metrics.cpu", "CPU", percent(format, root.cpu_utilization_percent)),
-        entry("metrics.memory", "Memory", bytes(format, root.memory_current_bytes)),
     }
+    -- What the tree is made of, counted only where the path establishes it: a
+    -- container's own children are not extra containers, and a cgroupfs pod
+    -- that never named its runtime is still a pod.
+    for _, count in ipairs({
+        { "workloads.services", "Service units", summary.service_count },
+        { "workloads.containers", "Containers", summary.container_count },
+        { "workloads.pods", "Pods", summary.pod_count },
+        { "workloads.user_sessions", "Login sessions", summary.user_session_count },
+    }) do
+        if (count[3] or 0) > 0 then
+            entries[#entries + 1] = entry(count[1], count[2], count[3])
+        end
+    end
+    entries[#entries + 1] = section("workloads.root_section", "Root cgroup")
+    entries[#entries + 1] = entry("metrics.cpu", "CPU",
+        percent(format, root.cpu_utilization_percent))
+    entries[#entries + 1] = entry("metrics.memory", "Memory",
+        bytes(format, root.memory_current_bytes))
     if (summary.partial_node_count or 0) > 0 then
         entries[#entries + 1] = section("workloads.why_section", "Why partial")
         entries[#entries + 1] = {
             label = "",
             value = translated(i18n, "workloads.partial_reason",
-                "Controllers not delegated to this cgroup, or files unreadable as this user."),
+                "A control file the kernel created could not be read as this user."),
             token = "text.muted",
         }
     end
@@ -1548,52 +1913,7 @@ local function process_table_model(i18n, process_rows, process_status,
                     and "process.direction.descending" or "process.direction.ascending",
                     process_status.descending and "descending" or "ascending"),
             }),
-        columns = {
-            { key = "pid", label = "PID", sort_key = "pid",
-                width = 8, min_width = 5, priority = 90, align = "right",
-                highlight = true },
-            { key = "user", label = translated(i18n, "metrics.user", "User"),
-                sort_key = "user", width = 12, min_width = 8, priority = 55,
-                highlight = true },
-            { key = "priority", label = "PRI", width = 4, min_width = 3,
-                align = "right", priority = 20, full_only = true },
-            { key = "nice", label = "NI", width = 4, min_width = 3,
-                align = "right", priority = 22, full_only = true },
-            { key = "virtual_memory", label = translated(i18n, "metrics.virtual", "Virt"),
-                sort_key = "virtual", width = 10, min_width = 8,
-                align = "right", priority = 35, full_only = true },
-            { key = "memory", label = translated(i18n, "metrics.memory", "Res"),
-                sort_key = "memory", width = 10, min_width = 8, align = "right", priority = 80,
-                token = function(_, row)
-                    return severity_token(row.memory_fraction and row.memory_fraction * 100, 10, 25)
-                end,
-                bar = function(_, row) return row.memory_fraction end },
-            { key = "state", label = "S", width = 3, min_width = 3, priority = 45,
-                sort_key = "state",
-                token = function(value)
-                    if value == "R" then return "metric.good" end
-                    if value == "D" then return "metric.critical" end
-                    if value == "Z" then return "metric.warn" end
-                    return nil
-                end },
-            { key = "cpu", label = "CPU", sort_key = "cpu",
-                width = 9, min_width = 7, align = "right", priority = 95,
-                token = function(_, row) return severity_token(row.cpu_value, 40, 80) end,
-                bar = function(_, row)
-                    return row.cpu_value and math.min(1, row.cpu_value / 100) or nil
-                end },
-            { key = "time", label = "TIME+", sort_key = "time",
-                width = 10, min_width = 8, align = "right", priority = 40 },
-            { key = "threads", label = translated(i18n, "metrics.threads", "Thr"),
-                sort_key = "threads", width = 5, min_width = 4,
-                align = "right", priority = 25, full_only = true },
-            { key = "name", label = translated(i18n, "metrics.command", "Command"),
-                sort_key = "name", width = 40, min_width = 12, priority = 85,
-                highlight = true,
-                truncate = process_status.show_paths
-                    and (platform == "Windows" or platform == "Darwin")
-                    and "path" or nil },
-        },
+        columns = ordered_process_columns(process_status.columns, i18n, process_status, platform),
         rows = process_rows,
         highlights = process_status.query_highlights,
         selected = process_status.selected_index,
@@ -1696,14 +2016,15 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
     local cpufreq_table_rows = on("compute", "cpufreq_table") and cpufreq_rows(snapshot, format) or {}
     local sensor_table_rows = on("compute", "sensor_table") and sensor_rows(snapshot, format) or {}
     local power_table_rows = on("compute", "power_table") and power_rows(snapshot, format) or {}
-    local mount_table_rows, mounts_hidden = {}, 0
+    local mount_table_rows, mounts_hidden, mounts_total = {}, 0, 0
     if on("storage", "mount_table") then
-        mount_table_rows, mounts_hidden = mount_rows(snapshot, format,
+        mount_table_rows, mounts_hidden, mounts_total = mount_rows(snapshot, format,
             { show_pseudo = options.show_pseudo_filesystems })
     end
-    local workload_table_rows, workload_row_ids, workload_selected_index = {}, {}, nil
+    local workload_table_rows, workload_row_ids, workload_selected_index, workloads_total =
+        {}, {}, nil, 0
     if on("workloads", "workload_table") then
-        workload_table_rows, workload_row_ids, workload_selected_index =
+        workload_table_rows, workload_row_ids, workload_selected_index, workloads_total =
             workload_rows(snapshot, format,
                 type(options.workload_collapsed) == "table"
                     and options.workload_collapsed or nil,
@@ -1711,6 +2032,21 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
     end
     local workload_selected = options.workload_selected ~= nil
         and workload_by_id(snapshot)[options.workload_selected] or nil
+
+    -- A table that stopped at the model's row cap must say so: an absent row
+    -- is otherwise indistinguishable from an object that does not exist.
+    local mount_status_text = #mount_table_rows < mounts_total
+        and translated(i18n, "ui.rows_capped", "showing {visible} of {total}",
+            { visible = #mount_table_rows, total = mounts_total }) or nil
+    if mounts_hidden > 0 then
+        local hidden_note = translated(i18n, "storage.hidden_mounts",
+            "{count} pseudo filesystems hidden", { count = mounts_hidden })
+        mount_status_text = mount_status_text
+            and hidden_note .. " · " .. mount_status_text or hidden_note
+    end
+    local workload_status_text = #workload_table_rows < workloads_total
+        and translated(i18n, "ui.rows_capped", "showing {visible} of {total}",
+            { visible = #workload_table_rows, total = workloads_total }) or nil
 
     local average_frequency = Engine.average_cpu_frequency(snapshot.cpu_frequency)
     local maximum_temperature = Engine.maximum_temperature(snapshot.sensors)
@@ -1824,7 +2160,18 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         load_summary = { entries = load_entries(snapshot, format, i18n) },
         core_table = {
             columns = {
-                { key = "core", label = "CPU", width = 8, min_width = 5, priority = 90 },
+                -- The core name is the row's identity, and on the machines where a
+                -- core table is worth reading the names run past five characters:
+                -- `cpu0`..`cpu31` fit, `cpu32` is exactly five, and from `cpu100`
+                -- upward a five-cell column draws `cpu1…` for every core, so an
+                -- idle 128-core host shows twenty-eight rows with the same text
+                -- in every column.  `CONFIG_NR_CPUS` tops out at 8192 on the
+                -- architectures this product runs on, so `cpu8191` is seven
+                -- characters and seven is the bound -- the same arithmetic as the
+                -- PID column's, and for the same reason: a guarantee is not a
+                -- sample.  The preference stays at 8, so nothing on screen
+                -- changes above the narrow band.
+                { key = "core", label = "CPU", width = 8, min_width = 7, priority = 90 },
                 { key = "total", label = translated(i18n, "metrics.total", "Total"),
                     width = 9, min_width = 7, align = "right", priority = 95,
                     token = function(_, row) return severity_token(row.total_value, 70, 90) end,
@@ -1861,7 +2208,18 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "device", label = translated(i18n, "metrics.device", "Device"), width = 16, min_width = 9, priority = 80 },
                 { key = "sensor", label = translated(i18n, "metrics.sensor", "Sensor"), width = 22, min_width = 12, priority = 90 },
                 { key = "value", label = translated(i18n, "metrics.value", "Value"), width = 14, min_width = 9, align = "right", priority = 95 },
-                { key = "status", label = translated(i18n, "metrics.state", "State"), width = 12, min_width = 8, priority = 60,
+                -- The state columns are sized to the widest label the shipped
+                -- catalogues actually produce, not to the English one.  The
+                -- worst is French "Échantillon manquant" for `gap` at 20 cells;
+                -- `min_width` stays where it was, because a column is *included*
+                -- by its minimum and only grows toward `width` with whatever
+                -- cells are left over.  Measured across the eight sizes the PTY
+                -- matrix uses, raising the preferred width removes no column
+                -- anywhere -- 22 of 64 (column, size) pairs change, all of them
+                -- where there were spare cells to spend -- and the sizes that do
+                -- not change are the ones where the column was already sitting
+                -- at its minimum and would have been clipped either way.
+                { key = "status", label = translated(i18n, "metrics.state", "State"), width = STATE_COLUMN_WIDTH, min_width = 8, priority = 60,
                     format = function(value) return Technical.state(i18n, value) end,
                     token = function(value) return (value == "ALARM" or value == "FAULT")
                         and "metric.critical" or nil end },
@@ -1876,7 +2234,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "energy", label = translated(i18n, "metrics.energy", "Energy"), width = 14, min_width = 9, align = "right", priority = 50 },
                 { key = "limit", label = translated(i18n, "metrics.maximum", "Limit"), width = 12, min_width = 9, align = "right", priority = 60 },
                 { key = "source", label = translated(i18n, "metrics.source", "Source"), width = 14, min_width = 9, priority = 20, full_only = true },
-                { key = "state", label = translated(i18n, "metrics.state", "State"), width = 11, min_width = 8, priority = 25, full_only = true,
+                { key = "state", label = translated(i18n, "metrics.state", "State"), width = STATE_COLUMN_WIDTH, min_width = 8, priority = 25, full_only = true,
                     format = function(value) return Technical.state(i18n, value) end },
             },
             rows = power_table_rows,
@@ -1957,22 +2315,40 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "available", label = translated(i18n, "metrics.available", "Available"), width = 12, min_width = 9, align = "right", priority = 85 },
                 { key = "size", label = translated(i18n, "metrics.total", "Total"), width = 12, min_width = 9, align = "right", priority = 80 },
                 { key = "inodes", label = translated(i18n, "metrics.inodes", "Inodes"), width = 9, min_width = 7, align = "right", priority = 30, full_only = true },
-                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 10, min_width = 8, priority = 28, full_only = true,
+                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = STATE_COLUMN_WIDTH, min_width = 8, priority = 28, full_only = true,
                     format = function(value) return Technical.state(i18n, value) end,
                     token = function(_, row)
-                        return (row.quality == "partial" or row.quality == "stale")
-                            and "metric.warn" or "text.muted"
+                        local severity = Quality.SEVERITY[row.quality]
+                        return severity and ("metric." .. severity) or "text.muted"
                     end },
                 { key = "readonly", label = "RW", width = 3, min_width = 2, priority = 20, full_only = true },
                 { key = "source", label = translated(i18n, "metrics.source", "Source"), width = 22, min_width = 10, priority = 25, full_only = true },
             },
             rows = mount_table_rows,
-            status_text = mounts_hidden > 0 and translated(i18n, "storage.hidden_mounts",
-                "{count} pseudo filesystems hidden", { count = mounts_hidden }) or nil,
+            status_text = mount_status_text,
         },
         smart_hint = { entries = smart_hint_entries(snapshot, capabilities, i18n) },
 
         -- Network --------------------------------------------------------
+        -- The interface name is the one value in this table that says *which*
+        -- network interface a row is about: state, rates, MTU, MAC and errors
+        -- all describe a card without naming it, and the MAC column is
+        -- `full_only` at the lowest priority, so on a narrow terminal it is the
+        -- first thing to go.  A truncated interface name is therefore worse
+        -- than a shortened sentence -- two names cut to the same string are two
+        -- identical rows, and the user is looking at a bug that is not there.
+        --
+        -- `IFNAMSIZ` is 16 including the terminator, so the kernel guarantees
+        -- an interface name is at most 15 characters, and 15 is the only width
+        -- that keeps *every* legal pair distinguishable rather than the ones a
+        -- fixture happened to list.  Measured with `Width.truncate`: at the
+        -- declared 8 cells, four same-model NICs (`enp0s31f1`..`enp0s31f4`) and
+        -- the VLANs on them all read `enp0s31…`; at 12, the preference, two
+        -- VLANs on one card still collide (`enp0s31f1.1…` for `.100` and
+        -- `.101`); at 14, two 15-character legal names on one card collide
+        -- (`enp0s31f10.40…` for `.4093` and `.4094`).  Anything less than the
+        -- kernel's own bound only works for the names you thought of, and a
+        -- guarantee is not a sample.
         network_summary = {
             label = translated(i18n, "metrics.network", "Network"),
             display_value = "↓ " .. rate(format, network_receive) .. "  ↑ " .. rate(format, network_transmit),
@@ -1981,7 +2357,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         },
         network_table = {
             columns = {
-                { key = "interface", label = translated(i18n, "metrics.interface", "Interface"), width = 12, min_width = 8, priority = 95 },
+                { key = "interface", label = translated(i18n, "metrics.interface", "Interface"), width = 15, min_width = 15, priority = 95 },
                 { key = "state", label = translated(i18n, "metrics.state", "State"), width = 9, min_width = 7, priority = 70,
                     token = function(value)
                         if value == "up" then return "metric.good" end
@@ -1990,7 +2366,14 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                     end },
                 { key = "receive", label = translated(i18n, "metrics.receive", "Receive"), width = 12, min_width = 10, align = "right", priority = 92 },
                 { key = "transmit", label = translated(i18n, "metrics.transmit", "Transmit"), width = 12, min_width = 10, align = "right", priority = 90 },
-                { key = "speed", label = translated(i18n, "metrics.link", "Link"), width = 12, min_width = 9, align = "right", priority = 40 },
+                { key = "speed", label = translated(i18n, "metrics.link", "Link"),
+                  -- Ten, measured over every rate a real NIC reports: the longest
+                  -- scaled output is `400 Gbit/s`.  A link rate is not bounded
+                  -- the way an interface name or a PCI address is -- sysfs
+                  -- reports whatever integer the driver put there -- so this is
+                  -- the measured worst case of a known set and not a kernel
+                  -- bound, and it is recorded as such rather than dressed up.
+                  width = 12, min_width = 10, align = "right", priority = 40 },
                 { key = "mtu", label = "MTU", width = 6, min_width = 5, align = "right", priority = 35 },
                 { key = "mac", label = "MAC", width = 18, min_width = 17, priority = 25, full_only = true },
                 { key = "errors", label = translated(i18n, "metrics.errors", "Err"), width = 6, min_width = 5, align = "right", priority = 30,
@@ -2002,7 +2385,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         },
         address_table = {
             columns = {
-                { key = "interface", label = translated(i18n, "metrics.interface", "Interface"), width = 12, min_width = 8, priority = 90 },
+                { key = "interface", label = translated(i18n, "metrics.interface", "Interface"), width = 15, min_width = 15, priority = 90 },
                 { key = "family", label = translated(i18n, "metrics.family", "Family"), width = 6, min_width = 5, priority = 70 },
                 { key = "address", label = translated(i18n, "metrics.address", "Address"), width = 30, min_width = 14, priority = 95 },
                 { key = "netmask", label = translated(i18n, "metrics.netmask", "Netmask"), width = 20, min_width = 12, priority = 40, full_only = true },
@@ -2050,6 +2433,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         gpu_table = {
             columns = {
                 { key = "gpu", label = "GPU", width = 26, min_width = 12, priority = 95 },
+                { key = "card", label = "Card", width = 10, min_width = 8, priority = 93 },
                 { key = "vendor", label = translated(i18n, "metrics.vendor", "Vendor"), width = 16, min_width = 8, priority = 50 },
                 { key = "driver", label = translated(i18n, "metrics.driver", "Driver"), width = 12, min_width = 8, priority = 45 },
                 { key = "utilization", label = translated(i18n, "metrics.utilization", "Util"), width = 9, min_width = 7, align = "right", priority = 90 },
@@ -2058,6 +2442,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "pcie", label = "PCIe", width = 18, min_width = 9, priority = 25, full_only = true },
                 { key = "temperature", label = translated(i18n, "metrics.temperature", "Temp"), width = 9, min_width = 7, align = "right", priority = 70 },
                 { key = "power", label = translated(i18n, "metrics.power", "Power"), width = 10, min_width = 8, align = "right", priority = 40, full_only = true },
+                { key = "fan", label = translated(i18n, "metrics.fan", "Fan"), width = 10, min_width = 7, align = "right", priority = 30, full_only = true },
             },
             rows = gpu_table_rows,
         },
@@ -2066,12 +2451,19 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             selected = gpu_process_selected_index,
             columns = {
                 { key = "gpu", label = "GPU", width = 10, min_width = 6, priority = 70 },
-                { key = "pid", label = "PID", width = 8, min_width = 6, align = "right", priority = 80 },
+                -- The same seven as the process table's own pid column, and for
+                -- the same reason: this table declares a second one, and the
+                -- fixture that found the first one had no GPU in it, so the
+                -- second was never rendered and never cut and never checked.
+                -- `4194304` and `4194303` are the pair that proves it -- they
+                -- differ in one digit, and a six-cell column draws both as
+                -- `41943…`, which is a different process from the one named.
+                { key = "pid", label = "PID", width = 8, min_width = 7, align = "right", priority = 80 },
                 { key = "process", label = translated(i18n, "metrics.process", "Process"), width = 22, min_width = 10, priority = 95 },
                 { key = "utilization", label = translated(i18n, "metrics.utilization", "Utilization"), width = 12, min_width = 8, align = "right", priority = 90 },
                 { key = "memory", label = translated(i18n, "metrics.memory", "Memory"), width = 14, min_width = 10, align = "right", priority = 85 },
                 { key = "engines", label = translated(i18n, "metrics.engines", "Engines"), width = 30, min_width = 12, priority = 25, full_only = true },
-                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 11, min_width = 8, priority = 20, full_only = true,
+                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = STATE_COLUMN_WIDTH, min_width = 8, priority = 20, full_only = true,
                     format = function(value) return Technical.state(i18n, value) end },
             },
             rows = gpu_process_table_rows,
@@ -2109,12 +2501,13 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "write", label = translated(i18n, "metrics.write", "Write"), width = 12, min_width = 9, align = "right", priority = 48 },
                 { key = "processes", label = translated(i18n, "metrics.processes", "Procs"), width = 7, min_width = 6, align = "right", priority = 60 },
                 { key = "pressure", label = translated(i18n, "metrics.pressure", "Pressure"), width = 9, min_width = 7, align = "right", priority = 30, full_only = true },
-                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 10, min_width = 8, priority = 22, full_only = true,
+                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = STATE_COLUMN_WIDTH, min_width = 8, priority = 22, full_only = true,
                     format = function(value) return Technical.state(i18n, value) end },
             },
             rows = workload_table_rows,
             ids = workload_row_ids,
             selected = workload_selected_index,
+            status_text = workload_status_text,
             panel_title = snapshot.workloads and WORKLOAD_KINDS[snapshot.workloads.kind]
                 and translated(i18n, WORKLOAD_KINDS[snapshot.workloads.kind].title[1],
                     WORKLOAD_KINDS[snapshot.workloads.kind].title[2]) or nil,
@@ -2139,7 +2532,15 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "bus", label = translated(i18n, "inventory.bus", "Bus"),
                   width = 5, min_width = 4, priority = 80 },
                 { key = "id", label = translated(i18n, "inventory.identifier", "ID"),
-                  width = 12, min_width = 8, priority = 75 },
+                  -- A PCI address is `%04x:%02x:%02x.%d` -- twelve characters,
+                  -- every time, for every device, forever.  At eight cells the
+                  -- two functions of one controller (`0000:00:1f.6` and
+                  -- `0000:00:1f.7`, the management and data ports of one board
+                  -- NIC) both read `0000:00:…`, and since the model name on the
+                  -- neighbouring column is the same for both, the two rows are
+                  -- the same row.  Unlike an address, this one has a bound, so
+                  -- the guarantee can simply be the bound.
+                  width = 12, min_width = 12, priority = 75 },
                 { key = "device", label = translated(i18n, "inventory.device", "Device"),
                   width = 34, min_width = 16, priority = 95 },
                 { key = "class", label = translated(i18n, "inventory.class", "Class"),
@@ -2156,14 +2557,14 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         collector_table = {
             columns = {
                 { key = "collector", label = translated(i18n, "insights.collector", "Collector"), width = 14, min_width = 10, priority = 95 },
-                { key = "status", label = translated(i18n, "metrics.state", "State"), width = 13, min_width = 9, priority = 90,
+                { key = "status", label = translated(i18n, "metrics.state", "State"), width = STATE_COLUMN_WIDTH, min_width = 9, priority = 90,
                     format = function(value) return Technical.state(i18n, value) end,
                     token = function(_, row)
                         if not row.available then return "text.muted" end
                         if row.status == "denied" or row.status == "error" then return "metric.critical" end
                         return "metric.good"
                     end },
-                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = 11, min_width = 8, priority = 70,
+                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = STATE_COLUMN_WIDTH, min_width = 8, priority = 70,
                     format = function(value) return Technical.state(i18n, value) end },
                 { key = "source", label = translated(i18n, "metrics.source", "Source"), width = 34, min_width = 12, priority = 50 },
                 { key = "reason", label = translated(i18n, "inspector.reason", "Reason"), width = 28, min_width = 10, priority = 30, full_only = true,
@@ -2179,7 +2580,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             columns = {
                 { key = "key", label = translated(i18n, "insights.key", "Key"), width = 4, min_width = 3, priority = 80 },
                 { key = "inspector", label = translated(i18n, "insights.inspector", "Inspector"), width = 30, min_width = 14, priority = 95 },
-                { key = "status", label = translated(i18n, "metrics.state", "State"), width = 12, min_width = 9, priority = 90,
+                { key = "status", label = translated(i18n, "metrics.state", "State"), width = STATE_COLUMN_WIDTH, min_width = 9, priority = 90,
                     format = function(value) return Technical.state(i18n, value) end,
                     token = function(_, row) return row.available and "metric.good" or "text.muted" end },
                 { key = "reason", label = translated(i18n, "inspector.reason", "Reason"), width = 26, min_width = 10, priority = 40, full_only = true,

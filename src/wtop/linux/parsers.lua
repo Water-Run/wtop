@@ -418,6 +418,15 @@ function Parsers.process_status(content)
   end
   local uid = result.Uid and unsigned_number(result.Uid:match("^(%d+)%s")) or nil
   if result.Uid and uid == nil then return nil, "invalid_process_uid" end
+  -- Tgid is the thread group's id: for a process it repeats the pid, and for a
+  -- thread it names the process the thread belongs to.  It is read from status
+  -- rather than from field 5 of stat because that field is not a portable
+  -- thread-group id: kernels and containers have been seen to report 0 or -1
+  -- there while status still carries the real value, and a wrong ownership
+  -- claim is worse than no claim at all.  The line carries a single id, so the
+  -- match is anchored rather than trailing-space tolerant like Uid's.
+  local tgid = result.Tgid and unsigned_number(result.Tgid:match("^(%d+)%s*$")) or nil
+  if result.Tgid and tgid == nil then return nil, "invalid_process_tgid" end
   local vmrss = result.VmRSS and unsigned_number(result.VmRSS:match("^(%d+)%s+kB%s*$")) or nil
   if result.VmRSS and vmrss == nil then return nil, "invalid_process_rss" end
   local rss_bytes = vmrss and checked_multiply(vmrss, 1024) or nil
@@ -432,12 +441,43 @@ function Parsers.process_status(content)
   if result.nonvoluntary_ctxt_switches and involuntary == nil then
     return nil, "invalid_nonvoluntary_context_switches"
   end
+  -- NSpid and NStgid list the id as seen from the innermost namespace outwards,
+  -- so a process inside a container reports its own pid first.  A single value
+  -- means the process shares the namespace of whoever read it; more than one
+  -- means it is nested, and the first value is the id an operator sees from
+  -- inside.  The list is capped because a deeply nested chain is not something
+  -- a table should be sized by.
+  local function id_chain(key)
+    local line = result[key]
+    if not line then return nil end
+    local chain, count = {}, 0
+    for token in line:gmatch("%d+") do
+      local value = unsigned_number(token)
+      if value == nil then return nil, "invalid_" .. key:lower() end
+      count = count + 1
+      if count > 4 then
+        -- A chain longer than any real nesting is malformed input, not a
+        -- deeper container, and must not be silently truncated into a lie.
+        return nil, "process_namespace_chain_too_long"
+      end
+      chain[#chain + 1] = value
+    end
+    if #chain == 0 then return nil, "invalid_" .. key:lower() end
+    return chain
+  end
+  local nspid, nspid_error = id_chain("NSpid")
+  if nspid_error then return nil, nspid_error end
+  local nstgid, nstgid_error = id_chain("NStgid")
+  if nstgid_error then return nil, nstgid_error end
   return {
     raw = result,
     uid = uid,
+    tgid = tgid,
     rss_bytes = rss_bytes,
     voluntary_context_switches = voluntary,
     nonvoluntary_context_switches = involuntary,
+    nspid = nspid,
+    nstgid = nstgid,
   }
 end
 
@@ -454,6 +494,74 @@ function Parsers.process_io(content)
     if result[key] ~= nil then return nil, "duplicate_process_io_key" end
     result[key] = number
   end
+  return result
+end
+
+-- /proc/<pid>/task/<tid>/schedstat is three unsigned numbers on one line:
+-- nanoseconds spent running on a cpu, nanoseconds spent waiting on a runqueue,
+-- and the number of timeslices the task was given.  Unlike /sched, whose field
+-- set changes with the kernel version and its configuration, this file is a
+-- fixed three-field ABI, so it is the one the scheduler view is built on.  A
+-- kernel built without CONFIG_SCHEDSTATS does not create the file at all, which
+-- is reported as unavailable rather than as three zeroes.
+function Parsers.thread_schedstat(content)
+  if type(content) ~= "string" then
+    return nil, "content_required"
+  end
+  local run_ns, wait_ns, timeslices =
+    content:match("^%s*(%d+)%s+(%d+)%s+(%d+)%s*$")
+  if not run_ns then
+    return nil, "invalid_thread_schedstat"
+  end
+  return {
+    run_ns = unsigned_number(run_ns),
+    wait_ns = unsigned_number(wait_ns),
+    timeslices = unsigned_number(timeslices),
+  }
+end
+
+-- /proc/<pid>/task/<tid>/sched is a human-readable dump whose keys come and go
+-- with the kernel version and its build options: a field this host does not
+-- print (se.statistics.wait_sum, for one) is simply absent, not zero.  Only
+-- the scheduling policy is taken, and only because nothing smaller reports it;
+-- every other key is ignored rather than guessed at, so a kernel that renames
+-- or drops one costs this view nothing.  An unrecognised policy number is kept
+-- as the number, because naming it would be a guess.
+function Parsers.thread_sched(content)
+  if type(content) ~= "string" then
+    return nil, "content_required"
+  end
+  local result = {}
+  local policy = content:match("\npolicy%s+:%s*(%-?%d+)")
+  if policy then
+    result.policy = tonumber(policy)
+  end
+  return result
+end
+
+-- /proc/<pid>/smaps_rollup is the kernel's per-process memory summary.  The
+-- first line is the synthetic mapping header that ends in "[rollup]"; every
+-- later line is "Key: <n> kB" and is converted to bytes here so callers never
+-- have to know the unit the kernel prints.
+function Parsers.process_smaps_rollup(content)
+  if type(content) ~= "string" then
+    return nil, "content_required"
+  end
+  local result = {}
+  local fields = 0
+  for line in content:gmatch("[^\n]+") do
+    local key, value = line:match("^([%w_]+):%s*(%d+)%s*kB%s*$")
+    if key then
+      local number = unsigned_number(value)
+      if number == nil then return nil, "invalid_smaps_rollup_value" end
+      if result[key] ~= nil then return nil, "duplicate_smaps_rollup_key" end
+      result[key] = number * 1024
+      fields = fields + 1
+    elseif not line:match("%[rollup%]%s*$") then
+      return nil, "invalid_smaps_rollup_line"
+    end
+  end
+  if fields == 0 then return nil, "empty_smaps_rollup" end
   return result
 end
 

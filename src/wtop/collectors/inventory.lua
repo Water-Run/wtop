@@ -180,12 +180,28 @@ function Inventory:sample(context)
       source = self.pci_base,
     })
   end
-  local quality = (pci_truncated or usb_truncated) and "truncated" or "fresh"
+  local truncated = (pci_truncated or usb_truncated)
+  local quality = truncated and "truncated" or "fresh"
   return Common.result("ok", finished, {
     pci = { devices = pci_devices, total = pci_total, truncated = pci_truncated },
     usb = { devices = usb_devices, total = usb_total, truncated = usb_truncated },
   }, {
     quality = quality,
+    -- The cause is one condition and it is measured rather than assumed: an
+    -- enumeration stopped at its configured device cap, so the list is shorter
+    -- than the total and nothing failed.  That is why the label is `truncated`
+    -- and not `partial` -- the figures that are present are current and exact,
+    -- and what is missing is the tail of a bounded list.
+    --
+    -- One cause, one code: the power supply list publishes `truncated` for the
+    -- same reason -- an enumeration that stopped at its own cap with nothing
+    -- failing -- and a user reading the reason column is already looking at one
+    -- collector's row, so a second code for the same fact would be a
+    -- distinction without a difference.  Note what the reason is for at all:
+    -- `truncated` was published here with no reason, so the quality said the
+    -- list was short and nothing said why.  The per-resource flags stay where
+    -- they are; they are row markers, and this is the one slot a result has.
+    reason = truncated and "device_enumeration_truncated" or nil,
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = self.pci_base,
   })

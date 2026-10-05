@@ -39,7 +39,14 @@ end
 
 local function cpu_data(data, previous)
   local current = data.raw
-  if type(current) ~= "table" then return nil, "missing CPU counters" end
+  -- No `raw` table means the native payload is not the shape this derivation
+  -- reads, so there is nothing to derive and no quality to describe.  Both
+  -- returns are empty on purpose: the second value is the quality of what was
+  -- derived, and a payload that yields nothing has no quality, so publishing a
+  -- word here would be publishing a description of a reading that does not
+  -- exist.  The reason belongs to the caller, which is the side that publishes
+  -- a result and therefore the side that owns the reason vocabulary.
+  if type(current) ~= "table" then return nil, nil end
   local old_data = previous_ok(previous)
   local old = old_data and old_data.raw or nil
   local used = old and Common.delta(current.busy, old.busy)
@@ -483,7 +490,13 @@ local function connections_data(data)
       if raw.pid then
         connection.owners[1] = { pid = raw.pid, name = raw.owner_name }
       end
-      connection.owner_count = #connection.owners
+      -- Same rule as the Linux collector: a count of zero is a count only where
+      -- the lookup happened.  A backend that cannot attribute a socket says so
+      -- through `owners_quality`, and it must not also report that the socket
+      -- has no owner.
+      if connection.owners_quality ~= "unavailable" then
+        connection.owner_count = #connection.owners
+      end
       connection.base_id = table.concat({
         table_name, local_endpoint.text, remote_endpoint.text, state_code,
       }, ":")
@@ -552,10 +565,24 @@ local function new_collector(id, description, options)
     end
     local quality = "fresh"
     if id == "cpu" then
-      data, quality = cpu_data(data, previous)
-      if not data then
-        return Common.result("error", timestamp_ns, nil, {reason = quality})
+      local derived, derived_quality = cpu_data(data, previous)
+      if not derived then
+        -- Spelled here rather than returned from `cpu_data` so the source scan
+        -- in `tests/unit/test_reason_localization.lua` reads it.  Measured, the
+        -- tree holds 263 lines of `return ..., "code"` with no `reason` on the
+        -- line, and the rule cannot serve that shape: nearly all of them are
+        -- argument validation -- `argv_required`, `interval_must_be_positive`,
+        -- `collector_not_found` -- that never reaches an interface, so a family
+        -- for it would demand translations for things that are not reasons.  A
+        -- literal behind a helper's return is therefore outside the rule, and
+        -- the only place a reason can be guaranteed visible is the field.
+        -- This is also why it is a code and not a sentence: the reason is
+        -- rendered through `Technical.reason`, which has a translation for a
+        -- code and none for English prose.
+        return Common.result("error", timestamp_ns, nil,
+          { reason = "cpu_counters_missing" })
       end
+      data, quality = derived, derived_quality
     elseif id == "process" then
       local realtime_ok, realtime_ns = false, nil
       if type(self.native.realtime_ns) == "function" then
@@ -578,6 +605,31 @@ local function new_collector(id, description, options)
     end
     return Common.result("ok", timestamp_ns, data, {
       quality = quality,
+      -- This dispatcher published a quality with no reason at all, and it is
+      -- the one collector where that is guaranteed rather than incidental: it
+      -- runs on every macOS and Windows host, so *every* degraded reading
+      -- there reached the reason column empty.  Two categories, both of them
+      -- measured across the seven helpers above.  `gap` is set when a counter
+      -- cannot be differenced against the previous sample, for the CPU
+      -- helper, an interface in `network_data`, a device in `disk_data` or a
+      -- workload in `workload_data` -- one sentence covers all of them, that
+      -- no rate exists for at least one item.  `partial` is set from three
+      -- unrelated places, `data.partial` for processes,
+      -- `summary.partial_node_count` for workloads and a truncated scan, and
+      -- "part of the platform data could not be read" is true of all three.
+      --
+      -- **The alternative is deliberately not taken here.** Each helper could
+      -- carry the reason its Linux counterpart publishes -- the CPU helper
+      -- would say `cpu_counter_delta_unavailable`, the network helper
+      -- `network_rate_unavailable` -- which is more informative and needs no
+      -- new vocabulary.  It also asks a question this increment has no
+      -- measurement for: whether a Windows service host's rate gap and a Linux
+      -- cgroup's are the same code, since they are the same user-visible fact
+      -- reached by a different source.  That is a scope decision about the
+      -- vocabulary across platforms, and it belongs recorded rather than
+      -- decided inside a dispatcher.
+      reason = quality == "partial" and "platform_data_partial"
+        or (quality == "gap" and "platform_rate_unavailable" or nil),
       source = "native:" .. self.method,
     })
   end

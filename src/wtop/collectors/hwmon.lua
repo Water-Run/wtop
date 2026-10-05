@@ -146,6 +146,30 @@ local function plausible_sensor_value(spec, value)
   return true
 end
 
+-- A u16 temperature published in degrees with an implicit 273.15 C offset
+-- makes the encoding's own two range endpoints the natural "nothing stated"
+-- sentinels: raw 0 reads back as absolute zero and raw 65535 as 65,261.85 C.
+-- The `nvme` temperature driver publishes exactly these for the sensors whose
+-- limits it does not know, beside the composite sensor's real 83.85 C maximum
+-- and -40.15 C minimum, so the pair is a statement about the encoding rather
+-- than about the hardware.  Such a value is left absent without an error, the
+-- same decision a threshold of exactly zero already gets.  A merely
+-- implausible number that is not one of these two endpoints stays an error:
+-- nothing else separates a corrupt reading from a specification no hardware
+-- has, and inventing a wider exemption would hide the first to accommodate
+-- the second.
+local SENTINEL_U16_OFFSET_C = -273.15
+local SENTINEL_U16_MAXIMUM = 65535
+
+local function protocol_sentinel(spec, value)
+  if spec.kind ~= "temperature" then
+    return false
+  end
+  local offset = math.abs(value - SENTINEL_U16_OFFSET_C)
+  local top = math.abs(value - (SENTINEL_U16_MAXIMUM + SENTINEL_U16_OFFSET_C))
+  return math.min(offset, top) <= 1e-6
+end
+
 local function boolean_number(fs, path)
   local value, err = normalized_number(fs, path, 1, 1)
   if value == nil then
@@ -338,14 +362,28 @@ local function read_channel(fs, base, group, options)
       end
     else
       local value, err = normalized_number(fs, path, spec.scale, options.max_abs_raw_value)
-      if value ~= nil and not plausible_sensor_value(spec, value) then
-        value = nil
-        err = { kind = "parse_error", message = "implausible_sensor_value", path = path }
-      end
       if value == nil then
         channel.errors[attribute] = error_record(err, path)
+      elseif not plausible_sensor_value(spec, value) then
+        -- Dropped either way, because neither is a usable figure.  Only the
+        -- non-sentinel one is an error: see protocol_sentinel for why a driver
+        -- that declined to state a limit is not a read that failed.
+        if not protocol_sentinel(spec, value) then
+          channel.errors[attribute] = error_record(
+            { kind = "parse_error", message = "implausible_sensor_value", path = path }, path)
+        end
+        value = nil
       elseif spec.thresholds[attribute] then
-        channel.thresholds[attribute] = value
+        -- A threshold of exactly zero is a driver's unset attribute, not a
+        -- bound, so it is left absent rather than reported.  On the development
+        -- host the `spd5118` DIMM sensor registers `temp1_min` and
+        -- `temp1_lcrit` and leaves both at 0 beside a real 55 C maximum and
+        -- 85 C critical, and the UCSI power-source channel publishes
+        -- `in0_min`/`in0_max` as 0 -- none of which any of those devices
+        -- specifies.  No error is recorded for it either: the value is not
+        -- malformed, it is simply not a bound, and reporting an unreadable
+        -- file would be worse than reporting a file that was never set.
+        channel.thresholds[attribute] = Common.bound_value(value)
       else
         channel.readings[attribute] = value
         if attribute == "input" then
@@ -489,6 +527,18 @@ function Hwmon:sample(context)
     truncated = truncated,
   }, {
     quality = any_partial and "partial" or (any_estimated and "estimated" or "fresh"),
+    -- Two categories, measured across the device loop above.  `partial` is set
+    -- when the class directory produced errors, or any channel came back
+    -- `partial` or `unavailable` -- that is, when some reading could not be
+    -- taken -- and "part of the sensor data could not be read" is true of both.
+    -- `estimated` is set when the device's identity could not be read, or when a
+    -- channel published no `input` file and the average of its readings was
+    -- substituted for it; both mean a value was derived rather than read
+    -- directly, though from different things.  Which channel and which
+    -- attribute is already in the channel's own `errors` and
+    -- `input_source`.
+    reason = any_partial and "hwmon_data_partial"
+      or (any_estimated and "hwmon_value_derived" or nil),
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = self.base_path,
   })

@@ -1,27 +1,15 @@
 local Clock = require("wtop.core.clock")
+-- The vocabularies live in `model/quality.lua`, shared with the snapshot model
+-- and the inspector model.  They used to be written here as well, and the copies
+-- had already diverged -- this one was missing `truncated`, which the snapshot
+-- published -- and they disagreed about what to do with a label none of them
+-- publishes.  See the note in that module for the measurement.
+local Quality = require("wtop.model.quality")
+local VALID_STATUS = Quality.VALID_STATUS
+local VALID_QUALITY = Quality.VALID_QUALITY
 
 local Scheduler = {}
 Scheduler.__index = Scheduler
-
-local VALID_STATUS = {
-  ok = true,
-  unavailable = true,
-  denied = true,
-  error = true,
-}
-
-local VALID_QUALITY = {
-  fresh = true,
-  stale = true,
-  gap = true,
-  estimated = true,
-  unavailable = true,
-  denied = true,
-  error = true,
-  partial = true,
-  reset = true,
-  measured = true,
-}
 
 local MAX_INTERVAL_MS = 2147483647
 
@@ -71,17 +59,22 @@ local function normalize_result(raw, started_ns, finished_ns)
   end
   local result = {}
   for key, value in pairs(raw) do result[key] = value end
+  -- A status or a quality this project does not publish is refused, not rounded
+  -- up.  The quality half used to rewrite an unpublishable label to `fresh`
+  -- whenever the status was `ok`, silently: a collector that misspelled
+  -- `partial` had its degradation published as fresh data, with the numbers
+  -- installed under it, and nothing in the record said so.  The status half
+  -- above already refused that direction and named itself in the reason, so the
+  -- two are now one step with one reason, and the quality half stops agreeing to
+  -- something the status half would not.
   if not VALID_STATUS[result.status] then
     result.status = "error"
     result.quality = "error"
     result.reason = result.reason or "collector_returned_invalid_status"
-  end
-  if not VALID_QUALITY[result.quality] then
-    if result.status == "ok" then
-      result.quality = "fresh"
-    else
-      result.quality = result.status
-    end
+  elseif not VALID_QUALITY[result.quality] then
+    result.status = "error"
+    result.quality = "error"
+    result.reason = result.reason or "collector_returned_invalid_quality"
   end
   if result.status ~= "ok" and (result.quality == "fresh" or result.quality == "measured") then
     result.quality = result.status

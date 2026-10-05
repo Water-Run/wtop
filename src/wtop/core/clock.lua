@@ -111,21 +111,49 @@ function Clock:now_ns()
       -- broken proc mount supplies an older value.
       if self.last_ns and now < self.last_ns then
         now = self.last_ns
+        -- Named for what it is.  The value is the previous reading, not a new
+        -- one, so `procfs_uptime` would be reporting a measurement that was
+        -- rejected a line earlier.
+        self.source = "held"
+      else
+        self.source = "procfs_uptime"
       end
       self.last_ns = now
-      self.source = "procfs_uptime"
       return now
     end
   end
 
   local called, fallback_value = pcall(self.fallback)
   local now = called and decimal_seconds_to_ns(fallback_value) or nil
-  if not now then now = self.last_ns or 0 end
-  if self.last_ns and now < self.last_ns then
+  if now then
+    if self.last_ns and now < self.last_ns then
+      -- The default fallback is `os.clock`, which is the process's own CPU
+      -- time: not a second copy of a monotonic wall clock but a different
+      -- quantity on a different scale.  So the moment `/proc/uptime` stops
+      -- answering, the candidate is always older than the reading being held,
+      -- the clamp below rejects it, and **the clock stops advancing for as long
+      -- as the read keeps failing** -- measured, a single failed read after a
+      -- two-year uptime freezes every rate derived from `now_ns()` at that
+      -- value.  Holding is the safe answer, and it is the answer this keeps
+      -- giving.  What was not safe was calling it `process_clock_fallback`,
+      -- because nothing came from the process clock at all: the label said the
+      -- value had been re-derived while the value was the one already in hand.
+      now = self.last_ns
+      self.source = "held"
+    else
+      self.source = "process_clock_fallback"
+    end
+  elseif self.last_ns then
     now = self.last_ns
+    self.source = "held"
+  else
+    -- Nothing has ever been measured and nothing could be measured.  0 is a
+    -- placeholder the caller can see through, and `unavailable` is the word
+    -- this project already uses for an optional reading it could not take.
+    now = 0
+    self.source = "unavailable"
   end
   self.last_ns = now
-  self.source = "process_clock_fallback"
   return now
 end
 

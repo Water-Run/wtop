@@ -107,6 +107,7 @@ make run
 | 选项 | |
 |---|---|
 | `--snapshot` | 输出一份 JSON 快照后退出 |
+| `--unmask-remote-addresses` | 配合 `--snapshot`：导出完整的远端套接字地址 |
 | `--agent` | 输出给脚本和 LLM Agent 用的精简 JSON |
 | `--diagnose` | 显示这台机器上哪些数据源可用 |
 | `--lang LOCALE` | 界面语言，如 `zh-CN`、`fr-FR`、`ru-RU` |

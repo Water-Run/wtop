@@ -1,4 +1,27 @@
-package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
+package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
+
+-- The dispatcher publishes a reason for its degraded readings, and it is the
+-- one collector where the reason column was guaranteed to be empty rather than
+-- merely often empty: this is the whole collector on every macOS and Windows
+-- host.  Both of its reasons are categories, measured across the seven
+-- derivation helpers -- `gap` is set when a counter cannot be differenced
+-- against the previous sample, for the CPU helper, an interface, a device or a
+-- workload, and `partial` from three unrelated places, `data.partial` for
+-- processes, a workload summary count, and a truncated scan.
+--
+-- `estimated` is the interesting third case and it is **not** in the table:
+-- the dispatcher can publish it (a first frame with only lifetime averages),
+-- and no sentence covers it -- a value derived from a lifetime average and a
+-- value derived from an unavailable interval are different facts.  So the
+-- assertion below must object to it rather than skip it, which is what the
+-- shared helper does: a quality nobody has decided a sentence for is refused
+-- at the moment it appears, instead of silently passing.
+local PORTABLE_REASON = { partial = "platform_data_partial",
+  gap = "platform_rate_unavailable", fresh = false }
+local function portable_reason_is(result, label)
+  return require("support.collector_reason").assert_reason(
+    result, PORTABLE_REASON, label)
+end
 
 -- The macOS and Windows collectors turn native counters into the Linux
 -- Snapshot contract. These fixtures stand in for the native module so the
@@ -59,6 +82,42 @@ local failed_memory = failing.memory:sample(at(1))
 equal(failed_memory.status, "unavailable", "native failure status")
 equal(failed_memory.reason, "GlobalMemoryStatusEx failed", "native failure reason")
 
+-- That last assertion is the shape a reason can legitimately take here, and it
+-- is worth saying why the next one is different.  A native module's own failure
+-- string arrives from the operating system and cannot be enumerated, so the
+-- presentation layer shows it as it is.  A string *this project writes* cannot
+-- be argued that way: it is a fixed set of words, it is rendered through
+-- `Technical.reason`, and `docs/PLAN.md` once recorded an English sentence in
+-- this very field with the note that the path could not be exercised here.  That
+-- note was wrong -- this collector is driven by a fake native module on every
+-- host, so the case is one line of fixture -- and the sentence was real.
+--
+-- `cpu_data` returned `(nil, "missing CPU counters")` for a payload with no
+-- `raw` table, and the caller assigned that second value to a variable named
+-- `quality` and published it as `reason`, so one return slot was carrying a
+-- quality word on the success path and a sentence on the failure path.
+local shapeless = collectors(fake_native({ collect_cpu = { { busy = 1, total = 2 } } })).cpu
+local shapeless_result = shapeless:sample(at(1))
+equal(shapeless_result.status, "error", "a payload the derivation cannot read fails")
+equal(shapeless_result.reason, "cpu_counters_missing",
+  "the reason is a code, not a sentence: this field is rendered through "
+    .. "`Technical.reason`, which has a translation for a code and none for prose")
+equal(shapeless_result.data, nil, "and there is nothing to report")
+-- The shape is checked rather than the string, because a sentence satisfies both
+-- clauses: it is a string, and it differs from the code.  What a sentence fails
+-- is the inventory, and that is a separate guard -- a code that is not
+-- translated reaches nine of ten users as a raw token, which is the same defect
+-- in a different dress.
+assert(type(shapeless_result.reason) == "string"
+    and not shapeless_result.reason:find("%s"), 
+  "a reason written by this project must be a single code with no spaces in it; "
+    .. "got " .. string.format("%q", tostring(shapeless_result.reason))
+    .. ", which renders untranslated in every catalogue")
+-- The success path is checked in the CPU section below, and it is the other half
+-- of the same change: the second return used to be published as a reason when the
+-- data was absent and as a quality when it was present, so a payload that derives
+-- nothing used to report a description of a reading that did not exist.
+
 -- ---------------------------------------------------------------------------
 -- CPU: totals and per-core utilization come from counter deltas.
 -- ---------------------------------------------------------------------------
@@ -73,9 +132,11 @@ local cpu = collectors(fake_native({ collect_cpu = {
 } })).cpu
 local cpu_first = cpu:sample(at(0))
 equal(cpu_first.quality, "gap", "first CPU sample has no interval")
+portable_reason_is(cpu_first, "the first CPU sample")
 equal(cpu_first.data.total.utilization, nil, "first CPU sample has no utilization")
 local cpu_second = cpu:sample(at(1000000000), cpu_first)
 equal(cpu_second.quality, "fresh", "second CPU sample is fresh")
+portable_reason_is(cpu_second, "the second CPU sample")
 close(cpu_second.data.total.utilization, 30, 1e-9, "300 of 1000 ticks busy")
 close(cpu_second.data.cores[1].utilization, 50, 1e-9, "cpu0 utilization")
 close(cpu_second.data.cores[2].utilization, 10, 1e-9, "cpu1 utilization")
@@ -113,8 +174,10 @@ equal(service.quality, "estimated", "first frame uses the lifetime average")
 close(service.cpu_percent, 20, 1e-6, "20 s of CPU over 100 s is 20%")
 equal(process_first.data.by_pid[11].quality, "gap", "a denied process has no CPU value")
 equal(process_first.quality, "partial", "a denied process makes the sample partial")
+portable_reason_is(process_first, "a sample with a denied process")
 local process_second = processes:sample(at(500000000), process_first)
 equal(process_second.quality, "fresh", "a complete second sample is fresh")
+portable_reason_is(process_second, "a complete process sample")
 equal(process_second.data.by_pid[10].quality, "fresh", "interval CPU is fresh")
 close(process_second.data.by_pid[10].cpu_percent, 100, 1e-6, "50 ticks in 0.5 s is one full core")
 
@@ -139,6 +202,7 @@ local wrap = collectors(fake_native({ collect_network = {
 } })).network
 local wrap_first = wrap:sample(at(0))
 equal(wrap_first.quality, "gap", "first network sample has no rate")
+portable_reason_is(wrap_first, "the first network sample")
 local wrap_second = wrap:sample(at(1000000000), wrap_first)
 close(wrap_second.data.interfaces[1].rates.rx_bytes_per_second, 1000, 1e-9,
     "a wrapped 32-bit counter still yields its true rate")
@@ -170,6 +234,7 @@ local disk = collectors(fake_native({ collect_disk = {
 } })).disk
 local disk_first = disk:sample(at(0))
 equal(disk_first.quality, "gap", "first disk sample has no rate")
+portable_reason_is(disk_first, "the first disk sample")
 local drive = disk:sample(at(1000000000), disk_first).data.devices[1]
 equal(drive.quality, "fresh", "second disk sample is fresh")
 close(drive.read_bytes_per_second, 409600, 1e-6, "read throughput")
@@ -241,6 +306,7 @@ local table_sample = sockets:sample(at(1))
 local tables = table_sample.data
 equal(tables.total, 5, "valid rows are kept")
 equal(table_sample.quality, "partial", "a malformed row makes the table partial")
+portable_reason_is(table_sample, "a socket table with a malformed row")
 equal(tables.counts.tcp, 3, "IPv4 TCP count")
 equal(tables.counts.tcp6, 1, "IPv6 TCP count")
 equal(tables.counts.udp, 1, "UDP count")
@@ -256,6 +322,12 @@ equal(established.remote_endpoint.text, "93.184.216.34:443", "remote endpoint te
 equal(established.owners[1].name, "browser.exe", "owner name")
 equal(established.owners_quality, "fresh", "owner quality")
 equal(by_port[22].state, "LISTEN", "MIB_TCP_STATE 2 is LISTEN")
+-- A counted zero is a count; where the lookup did not run there is no count to
+-- publish, and saying "this socket has no owner" next to "owner data is
+-- unavailable" contradicts the record it sits in.
+equal(established.owner_count, 1, "a socket with one owner reports one owner")
+equal(by_port[8080].owner_count, 0,
+  "a scanned socket the lookup found nothing for reports a counted zero")
 equal(by_port[8080].local_endpoint.text, "[::1]:8080", "IPv6 endpoints are bracketed")
 equal(by_port[8080].remote_address, "::", "IPv6 unspecified remote")
 equal(by_port[53].state, "CLOSE", "UDP sockets use the Linux unconnected state")
@@ -277,5 +349,7 @@ local ownerless = collectors(fake_native({ collect_connections = { {
 } } })).connections:sample(at(1)).data
 equal(ownerless.owner_scan.status, "unavailable", "pre-SP2 XP has no owner PIDs")
 equal(ownerless.connections[1].owners_quality, "unavailable", "row owner quality")
+equal(ownerless.connections[1].owner_count, nil,
+  "a backend that could not look up owners does not report that there are none")
 
 return true

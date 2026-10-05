@@ -45,6 +45,18 @@ assert(assert(cli.parse({ "--diagnose" })).command == "diagnose")
 assert(assert(cli.parse({ "--snapshot" })).command == "snapshot")
 assert(assert(cli.parse({ "--agent" })).command == "agent")
 
+local unmasked = assert(cli.parse({ "--snapshot", "--unmask-remote-addresses" }))
+assert(unmasked.command == "snapshot" and unmasked.include_remote_addresses == true)
+assert(assert(cli.parse({ "--unmask-remote-addresses", "--snapshot" }))
+    .include_remote_addresses == true,
+    "flag order must not matter for the end-of-parse command check")
+assert(assert(cli.parse({ "--snapshot" })).include_remote_addresses == nil)
+assert(cli.parse({ "--unmask-remote-addresses" }) == nil,
+    "unmasking without --snapshot has nothing to affect")
+assert(cli.parse({ "--unmask-remote-addresses", "--agent" }) == nil)
+assert(cli.parse({ "--unmask-remote-addresses", "--snapshot",
+    "--unmask-remote-addresses" }) == nil)
+
 assert(cli.requires_elevation({ command = "tui", elevate = true }, { root = false }))
 assert(cli.requires_elevation({ command = "snapshot", elevate = true }, { root = false }))
 assert(not cli.requires_elevation({ command = "help", elevate = true }, { root = false }))

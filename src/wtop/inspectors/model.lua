@@ -1,24 +1,12 @@
 local Model = {}
 
-local VALID_QUALITY = {
-  fresh = true,
-  stale = true,
-  gap = true,
-  partial = true,
-  reset = true,
-  measured = true,
-  estimated = true,
-  unavailable = true,
-  denied = true,
-  error = true,
-}
-
-local VALID_STATUS = {
-  ok = true,
-  unavailable = true,
-  denied = true,
-  error = true,
-}
+-- The vocabularies live in `model/quality.lua`, shared with the snapshot model
+-- and the scheduler.  They used to be written here as well, and this copy was
+-- already missing `truncated`, which the snapshot published -- so the three were
+-- not the same list.  The refusal below is the shape the other two now also use.
+local Quality = require("wtop.model.quality")
+local VALID_QUALITY = Quality.VALID_QUALITY
+local VALID_STATUS = Quality.VALID_STATUS
 
 local function options_table(options, level)
   options = options or {}
