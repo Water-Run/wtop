@@ -2,57 +2,63 @@
 
 [English](README.md) · [中文](README-zh.md) · [Français](README-fr.md) · [Русский](README-ru.md)
 
-**WaterRun's top** 是一个终端系统监视器，目标是哪里都能跑：新的
-Linux、macOS、Windows 能跑，被新工具抛下的老机器、老控制台也能跑。
+**WaterRun's top** 是一个终端系统监视器，目标是在任何地方都能运行：
+现代 Linux、macOS 和 Windows，也包括新工具已经抛弃的旧机器和旧控制台。
 
-CPU、内存、磁盘、网络、进程、GPU 等信息集中在一个自适应的界面里。
-它会按终端的实际能力调整显示：从支持真彩色和鼠标的终端，到没有任何
-颜色的 `cmd.exe` 窗口，都能用。
+它在一个自适应的界面里展示 CPU、内存、磁盘、网络、进程、GPU 等信息，
+并根据终端的实际能力进行调整——从支持鼠标和真彩色的终端，到完全没有
+颜色的普通 `cmd.exe` 窗口。
 
 ```bash
-wtop                # 交互式监视
-wtop --snapshot     # 输出一份 JSON 快照，给脚本用
-wtop --diagnose     # 看看 wtop 在这台机器上能读到什么
+wtop                # interactive monitor
+wtop --snapshot     # one JSON snapshot, for scripts
+wtop --diagnose     # what wtop can see on this machine
 ```
 
-## 支持的系统
+## 运行平台
 
 | 系统 | 状态 |
 |---|---|
-| Linux（x86_64） | 已发布 0.1.0，可用 LuaRocks 安装 |
-| Windows 32 位版 | 开发中。已在 Windows Server 2008 和当前 Windows 上测试；按 XP 构建 |
-| macOS（Apple 芯片、Intel） | 开发中。已在 macOS 26（Apple 芯片）上运行 |
+| Linux (x86_64) | 已发布 0.1.0，可通过 LuaRocks 安装 |
+| Windows 32 位构建 | 开发中。已在 Windows Server 2008 和当前版本的 Windows 上测试；面向 XP 构建 |
+| macOS (Apple silicon、Intel) | 开发中。可在 macOS 26 (Apple silicon) 上运行 |
 
-Windows 版是一个 32 位包，覆盖从 XP 到 Windows 11。它监视的是 Windows
-本身，而不是跑在上面的 Linux 子系统。XP 是构建目标，但还没在真实的 XP
-机器上测过。
+Windows 构建是一个 32 位包，目标覆盖从 XP 到 Windows 11 的所有系统。
+它监控的是 Windows 本身，而不是运行在其上的 Linux 层。XP 是构建目标，
+但尚未在真实的 XP 机器上测试过。
 
 > [!NOTE]
-> Windows 和 macOS 版目前从源码构建。0.1.0 正式版和 LuaRocks 包只支持 Linux。
+> Windows 和 macOS 构建目前直接来自源码树。0.1.0 版本和 LuaRocks
+> 包仅支持 Linux。
 
-## 为老设备而做
+## 为旧硬件而生
 
-- **朴素的控制台。** wtop 先检测终端支持什么，再决定用不用颜色、鼠标、
-  Unicode 和备用屏幕。遇到不支持 ANSI 转义的控制台（比如老版 Windows 的
-  `cmd.exe`），就改用 Windows 控制台 API 绘制，不会满屏乱码。
-- **小屏幕。** 布局能缩到很小的窗口；无颜色、纯键盘的 ASCII 模式也照样能用。
-- **开销低。** 采集按定时器进行并有合理下限；看不见的面板不采集也不绘制。
-- **没有依赖。** 只有 PUC Lua 和一个小的 C 模块。不需要 Python，不需要
-  装运行时，默认路径上也不调用外部程序。
+- **普通控制台。** wtop 在使用颜色、鼠标、Unicode 或备用屏幕之前，会先
+  检测终端支持哪些能力。在没有 ANSI 转义序列支持的控制台上（例如旧版
+  Windows 的 `cmd.exe`)，它改用 Windows 控制台 API 绘制，转义码不会
+  残留在屏幕上。
+- **小屏幕。** 布局可以重排到非常小的窗口，无颜色、纯键盘操作的 ASCII
+  模式也能正常使用。
+- **低开销。** 数据采集由定时器驱动，并设有合理的下限；看不见的面板
+  不会被采集或绘制。
+- **零依赖。** 它只依赖 PUC Lua 和一个小型 C 模块。不需要 Python，没有
+  要安装的运行时，默认路径上也不依赖任何外部辅助程序。
 
-## 能看到什么
+## 展示内容
 
-- 十个标签页：概览、进程、计算、内存、存储、网络、GPU、工作负载、系统、洞察。
-- 进程列表支持搜索、排序、树形视图，以及需要确认的信号菜单。
-- 主机上有相应工具时，可做 SMART/NVMe、内存带宽、sshd 等深度检查。
-- 读取失败或不完整的数据会标明原因（比如 `denied`、`partial`），不会显示成空白或 0。
-- 十种界面语言，运行时按 `L` 切换；五套配色主题。
+- 十个标签页：概览、进程、计算、内存、存储、网络、GPU、工作负载、
+  系统和洞察。
+- 进程列表支持搜索、排序、树形视图，以及带确认环节的信号菜单。
+- 主机上具备相应工具时，可选的深度检查（SMART/NVMe、内存带宽、sshd)。
+- 读取失败或不完整的指标会如实标注（例如 `denied` 或 `partial`)，
+  不会显示为空白或零值。
+- 十种界面语言，运行时按 `L` 切换；五种配色主题。
 
 ## 安装
 
 ### Linux
 
-需要 LuaRocks 3.13+ 和 Lua 5.5：
+需要 LuaRocks 3.13+ 和 Lua 5.5:
 
 ```bash
 git clone https://github.com/Water-Run/wtop.git
@@ -61,10 +67,10 @@ luarocks --lua-version=5.5 make wtop-scm-1.rockspec
 wtop
 ```
 
-LuaRocks 找不到 Lua 5.5 时，加上 `--lua-dir=/path/to/lua`。
+如果 LuaRocks 找不到 Lua 5.5，加上 `--lua-dir=/path/to/lua`。
 
-也可以不用 LuaRocks，直接从源码运行。它会把 Lua 5.5.1 下载到仓库里、
-校验 SHA-256，再编译原生模块：
+也可以跳过 LuaRocks，直接从源码树运行。这会把 Lua 5.5.1 下载到仓库中，
+校验其 SHA-256，并构建原生模块：
 
 ```bash
 make run
@@ -80,8 +86,8 @@ make run
 ./tools/build_windows_x86.sh
 ```
 
-把 `dist/windows-x86` 复制到 Windows 上，在 `cmd.exe` 或 PowerShell 里运行
-`wtop.cmd`。通过 Cygwin/OpenSSH 登录时改用 `wtop.sh`。
+把 `dist/windows-x86` 复制到 Windows 机器上，在 `cmd.exe` 或 PowerShell
+中运行 `wtop.cmd`。通过 Cygwin/OpenSSH 会话使用时，改用 `wtop.sh`。
 
 ### macOS
 
@@ -89,7 +95,8 @@ make run
 make run
 ```
 
-构建结果在 `dist/macos/wtop`。Apple 芯片最低 macOS 11，Intel 最低 10.13。
+构建产物位于 `dist/macos/wtop`，目标平台是 Apple silicon 上的 macOS 11
+和 Intel 上的 10.13。
 
 ## 使用
 
@@ -106,26 +113,27 @@ make run
 
 | 选项 | |
 |---|---|
-| `--snapshot` | 输出一份 JSON 快照后退出 |
+| `--snapshot` | 输出一份 JSON 快照并退出 |
 | `--unmask-remote-addresses` | 配合 `--snapshot`：导出完整的远端套接字地址 |
-| `--agent` | 输出给脚本和 LLM Agent 用的精简 JSON |
-| `--diagnose` | 显示这台机器上哪些数据源可用 |
-| `--lang LOCALE` | 界面语言，如 `zh-CN`、`fr-FR`、`ru-RU` |
+| `--agent` | 输出供脚本和 LLM 代理使用的紧凑 JSON 上下文 |
+| `--diagnose` | 显示本机哪些数据源可用 |
+| `--lang LOCALE` | 界面语言，例如 `zh-CN`、`fr-FR`、`ru-RU` |
 | `--theme NAME` | `lua-blue`、`water-dark`、`water-light`、`high-contrast`、`colorblind` |
 | `--interval MS` | 采样间隔，100 到 10000（默认 1000） |
-| `--no-color` | 不用颜色 |
+| `--no-color` | 不使用颜色 |
 | `--safe-mode` | 不运行任何可选的辅助程序 |
-| `--sudo` | 通过 `sudo` 重新启动（Linux） |
+| `--sudo` | 通过 `sudo` 重启（Linux） |
 
 </details>
 
-设置也可以写进 `~/.config/wtop/config.yml`，参见
+设置也可以写入 `~/.config/wtop/config.yml`;参见
 [config.example.yml](config.example.yml)。
 
-### root 权限
+### Root 权限
 
-日常监视用普通用户即可。有些细节需要 root，比如其他用户进程的连接或 SMART
-数据：运行 `sudo wtop` 或 `wtop --sudo`。root 会话不会读写你个人的配置和布局。
+日常监控用普通用户即可。部分细节信息（例如其他用户的套接字连接或
+SMART 数据）需要 root 权限：运行 `sudo wtop` 或 `wtop --sudo`。root
+会话不会读取或写入你的个人配置和布局。
 
 ## 开发
 
@@ -133,13 +141,13 @@ make run
 |---|---|
 | `make run` | 构建并启动 |
 | `make test-fast` | 快速测试 |
-| `make test` | 单元、fixture 和终端测试 |
+| `make test` | 单元、夹具和终端测试 |
 | `make test-all` | 全部测试，包括 LuaRocks 和打包 |
 
-设计文档在 [docs/](docs/)：[架构](docs/ARCHITECTURE.md)、
-[跨平台](docs/CROSS_PLATFORM.md)、[界面](docs/UI.md)、
+设计说明见 [docs/](docs/)：[架构](docs/ARCHITECTURE.md)、
+[跨平台](docs/CROSS_PLATFORM.md)、[UI](docs/UI.md)、
 [监控](docs/MONITORING.md)、[国际化](docs/I18N.md)、
-[打包](docs/PACKAGING.md)，以及 [Agent JSON](docs/AGENT.md)。
+[打包](docs/PACKAGING.md)以及 [agent JSON](docs/AGENT.md)。
 
 ## 许可证
 

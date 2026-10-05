@@ -2,65 +2,73 @@
 
 [English](README.md) · [中文](README-zh.md) · [Français](README-fr.md) · [Русский](README-ru.md)
 
-**WaterRun's top** 是一个终端系统监视器,目标是在任何地方运行:既能跑在
-Linux、macOS 和较新的 Windows 上,也能跑在老旧机器和被现代工具抛弃的
-旧式控制台上。
+**WaterRun's top** est un moniteur système pour le terminal qui veut
+tourner partout : sur Linux, macOS et Windows récents, mais aussi sur les
+vieilles machines et les vieilles consoles que les outils modernes ont
+laissées de côté.
 
-CPU、内存、磁盘、网络、进程、GPU 等所有内容都显示在一个随窗口大小
-自适应的屏幕上。wtop 还会根据终端的实际能力进行调整——从支持鼠标
-的 truecolor 终端,到没有颜色的普通 `cmd.exe` 窗口。
+Processeur, mémoire, disques, réseau, processus, GPU et le reste tiennent
+sur un seul écran qui s'adapte à la fenêtre. wtop s'adapte aussi à ce que
+le terminal sait réellement faire, d'un terminal truecolor avec souris
+jusqu'à une simple fenêtre `cmd.exe` sans couleur.
 
 ```bash
-wtop                # 交互式监视器
-wtop --snapshot     # 输出一个 JSON 快照,供脚本使用
-wtop --diagnose     # 列出 wtop 在这台机器上能读取的数据
+wtop                # moniteur interactif
+wtop --snapshot     # un instantané JSON, pour les scripts
+wtop --diagnose     # ce que wtop peut lire sur cette machine
 ```
 
-## 支持的系统
+## Systèmes pris en charge
 
-| 系统 | 状态 |
+| Système | État |
 |---|---|
-| Linux (x86_64) | 0.1.0 版本已发布,可通过 LuaRocks 安装 |
-| Windows(32 位) | 开发中。已在 Windows Server 2008 和当前版本的 Windows 上测试;已针对 XP 编译 |
-| macOS(Apple silicon、Intel) | 开发中。已在 macOS 26(Apple silicon)上运行 |
+| Linux (x86_64) | Version 0.1.0 publiée, installable avec LuaRocks |
+| Windows, version 32 bits | En développement. Testé sur Windows Server 2008 et un Windows actuel ; compilé pour XP |
+| macOS (Apple silicon, Intel) | En développement. Fonctionne sur macOS 26 (Apple silicon) |
 
-Windows 版是一个单一的 32 位软件包,目标覆盖从 XP 到 Windows 11 的
-所有版本。它监视的是 Windows 本身,而不是跑在 Windows 之上的 Linux
-兼容层。XP 只是编译目标,尚未在真正的 XP 机器上测试过。
+La version Windows est un seul paquet 32 bits qui vise tout, de XP à
+Windows 11. Elle surveille Windows lui-même, pas une couche Linux par-dessus.
+XP est une cible de compilation, mais n'a pas encore été testé sur une
+vraie machine XP.
 
 > [!NOTE]
-> 目前 Windows 和 macOS 版本需要从源码编译。0.1.0 版本和 LuaRocks
-> 软件包仅面向 Linux。
+> Pour l'instant, les versions Windows et macOS se compilent depuis les
+> sources. La version 0.1.0 et le paquet LuaRocks sont réservés à Linux.
 
-## 为老旧硬件而设计
+## Pensé pour le vieux matériel
 
-- **简单的控制台。** wtop 在使用颜色、鼠标、Unicode 或备用屏幕之前,
-  会先检测终端实际支持什么。在没有 ANSI 转义序列的控制台(如旧版
-  Windows 上的 `cmd.exe`)上,它通过 Windows 控制台 API 绘制界面,
-  不会在屏幕上留下原始转义代码。
-- **小屏幕。** 布局会一直自适应到非常小的窗口;无颜色的纯 ASCII
-  模式仅使用键盘即可操作。
-- **资源占用低。** 数据采集遵循定时器,并有合理的最小间隔;不可见
-  的面板既不采集也不绘制。
-- **零依赖。** 只需要 PUC Lua 和一个小型 C 模块。没有 Python,没有
-  需要安装的运行环境,默认不调用任何外部程序。
+- **Consoles simples.** wtop vérifie ce que le terminal prend en charge
+  avant d'utiliser couleurs, souris, Unicode ou écran alternatif. Sur une
+  console sans séquences ANSI, comme `cmd.exe` sur les anciens Windows, il
+  dessine via l'API console de Windows : pas de codes d'échappement bruts à
+  l'écran.
+- **Petits écrans.** La disposition se réorganise jusqu'à de très petites
+  fenêtres, et un mode ASCII sans couleur, au clavier seul, reste utilisable.
+- **Peu gourmand.** La collecte suit une minuterie avec des intervalles
+  minimaux raisonnables, et les panneaux invisibles ne sont ni collectés ni
+  dessinés.
+- **Aucune dépendance.** Juste PUC Lua et un petit module C. Pas de Python,
+  pas d'environnement d'exécution à installer, aucun programme externe par
+  défaut.
 
-## 显示内容
+## Ce qu'il affiche
 
-- 十个标签页:概览、进程、计算、内存、存储、网络、GPU、工作负载、
-  系统和分析。
-- 进程列表支持搜索、排序、树状视图,以及带确认的信号菜单。
-- 可选的深度检测(SMART/NVMe、内存带宽、sshd),前提是机器上
-  安装了相应的工具。
-- 采集失败或不完整的指标会如实标注(例如 `denied` 或 `partial`),
-  而不是显示为空或零。
-- 界面支持十种语言,运行中按 `L` 即可切换;另有五种配色主题。
+- Dix onglets : Vue d'ensemble, Processus, Calcul, Mémoire, Stockage,
+  Réseau, GPU, Charges de travail, Système et Analyses.
+- Une liste de processus avec recherche, tri, vue arborescente et menu de
+  signaux avec confirmation.
+- Des inspections approfondies facultatives (SMART/NVMe, bande passante
+  mémoire, sshd) quand les outils sont présents sur la machine.
+- Une mesure qui a échoué ou qui est incomplète est signalée comme telle
+  (par exemple `denied` ou `partial`) au lieu d'apparaître vide ou à zéro.
+- Dix langues d'interface, à changer en cours de route avec `L`, et cinq
+  thèmes de couleurs.
 
-## 安装
+## Installation
 
 ### Linux
 
-需要 LuaRocks 3.13+ 和 Lua 5.5:
+Avec LuaRocks 3.13+ et Lua 5.5 :
 
 ```bash
 git clone https://github.com/Water-Run/wtop.git
@@ -69,29 +77,30 @@ luarocks --lua-version=5.5 make wtop-scm-1.rockspec
 wtop
 ```
 
-如果 LuaRocks 找不到 Lua 5.5,请添加 `--lua-dir=/path/to/lua`。
+Si LuaRocks ne trouve pas Lua 5.5, ajoutez `--lua-dir=/chemin/vers/lua`.
 
-也可以不用 LuaRocks,直接从源码运行 wtop。这会把 Lua 5.5.1 下载到
-仓库目录中,校验其 SHA-256,并编译原生模块:
+Vous pouvez aussi vous passer de LuaRocks et lancer wtop depuis les
+sources. Cela télécharge Lua 5.5.1 dans le dépôt, vérifie son SHA-256 et
+compile le module natif :
 
 ```bash
 make run
 ```
 
-需要 C 编译器、`make`,以及 `curl` 或 `wget`。
+Il faut un compilateur C, `make`, et `curl` ou `wget`.
 
 ### Windows
 
-在 Linux 下用 MinGW 交叉编译器(`i686-w64-mingw32-gcc`)编译
-32 位软件包:
+Compilez le paquet 32 bits sous Linux avec un compilateur croisé MinGW
+(`i686-w64-mingw32-gcc`) :
 
 ```bash
 ./tools/build_windows_x86.sh
 ```
 
-把 `dist/windows-x86` 复制到 Windows 机器上,从 `cmd.exe` 或
-PowerShell 中运行 `wtop.cmd`。在 Cygwin/OpenSSH 会话中,请改用
-`wtop.sh`。
+Copiez `dist/windows-x86` sur la machine Windows et lancez `wtop.cmd`
+depuis `cmd.exe` ou PowerShell. Dans une session Cygwin/OpenSSH, utilisez
+plutôt `wtop.sh`.
 
 ### macOS
 
@@ -99,62 +108,63 @@ PowerShell 中运行 `wtop.cmd`。在 Cygwin/OpenSSH 会话中,请改用
 make run
 ```
 
-构建产物位于 `dist/macos/wtop`。目标平台为 Apple silicon 上的
-macOS 11 和 Intel 上的 macOS 10.13。
+Le résultat se trouve dans `dist/macos/wtop`. Il vise macOS 11 sur Apple
+silicon et 10.13 sur Intel.
 
-## 使用
+## Utilisation
 
-| 按键 | 作用 |
+| Touche | Action |
 |---|---|
-| `1`–`8`、`Tab` | 切换标签页和焦点 |
-| `f` | 调整刷新频率 |
-| `L` | 切换语言 |
-| `?` 或 `F1` | 查看全部按键 |
-| `q` 或 `Ctrl+C` | 退出 |
+| `1`–`8`, `Tab` | Changer d'onglet et de focus |
+| `f` | Changer la fréquence de rafraîchissement |
+| `L` | Changer de langue |
+| `?` ou `F1` | Toutes les touches |
+| `q` ou `Ctrl+C` | Quitter |
 
 <details>
-<summary><b>命令行选项</b></summary>
+<summary><b>Options de la ligne de commande</b></summary>
 
-| 选项 | |
+| Option | |
 |---|---|
-| `--snapshot` | 输出一个 JSON 快照后退出 |
-| `--unmask-remote-addresses` | 配合 `--snapshot`:导出完整的远端地址 |
-| `--agent` | 输出紧凑 JSON,供脚本和 LLM 智能体使用 |
-| `--diagnose` | 列出在当前环境中可用的数据源 |
-| `--lang LOCALE` | 界面语言,例如 `fr-FR`、`zh-CN`、`ru-RU` |
-| `--theme NOM` | `lua-blue`、`water-dark`、`water-light`、`high-contrast`、`colorblind` |
-| `--interval MS` | 采样间隔,100 到 10000(默认 1000) |
-| `--no-color` | 不使用颜色 |
-| `--safe-mode` | 不运行任何可选的辅助程序 |
-| `--sudo` | 通过 `sudo` 重新启动(Linux) |
+| `--snapshot` | Affiche un instantané JSON puis quitte |
+| `--unmask-remote-addresses` | Avec `--snapshot` : exporte les adresses de socket distantes complètes |
+| `--agent` | JSON compact pour les scripts et les agents LLM |
+| `--diagnose` | Indique quelles sources de données fonctionnent ici |
+| `--lang LOCALE` | Langue de l'interface, par ex. `fr-FR`, `zh-CN`, `ru-RU` |
+| `--theme NOM` | `lua-blue`, `water-dark`, `water-light`, `high-contrast`, `colorblind` |
+| `--interval MS` | Intervalle d'échantillonnage, de 100 à 10000 (1000 par défaut) |
+| `--no-color` | Pas de couleurs |
+| `--safe-mode` | N'exécute aucun programme auxiliaire facultatif |
+| `--sudo` | Relance via `sudo` (Linux) |
 
 </details>
 
-设置也可以写入 `~/.config/wtop/config.yml`;参见
-[config.example.yml](config.example.yml)。
+Les réglages peuvent aussi aller dans `~/.config/wtop/config.yml` ; voir
+[config.example.yml](config.example.yml).
 
-### 需要 root 权限的情况
+### Accès root
 
-日常监视用普通用户即可。某些细节信息——例如其他用户的进程连接
-情况或 SMART 数据——需要 root 权限:运行 `sudo wtop` 或
-`wtop --sudo`。root 会话不会读取或写入你的个人配置和界面布局。
+La surveillance courante fonctionne en utilisateur normal. Certains
+détails, comme les connexions des processus d'autres utilisateurs ou les
+données SMART, demandent les droits root : lancez `sudo wtop` ou
+`wtop --sudo`. Une session root ne lit ni n'écrit votre configuration ou
+votre disposition personnelles.
 
-## 开发
+## Développement
 
-| 命令 | |
+| Commande | |
 |---|---|
-| `make run` | 编译并运行 |
-| `make test-fast` | 快速测试 |
-| `make test` | 单元测试、fixtures 测试和终端测试 |
-| `make test-all` | 全部测试,包括 LuaRocks 和打包 |
+| `make run` | Compiler et lancer |
+| `make test-fast` | Tests rapides |
+| `make test` | Tests unitaires, de fixtures et de terminal |
+| `make test-all` | Tout, y compris LuaRocks et les paquets |
 
-设计笔记(英文)见 [docs/](docs/):
-[架构](docs/ARCHITECTURE.md)、
-[跨平台](docs/CROSS_PLATFORM.md)、
-[界面](docs/UI.md)、[监控](docs/MONITORING.md)、
-[i18n](docs/I18N.md)、[打包](docs/PACKAGING.md)以及
-[agent JSON](docs/AGENT.md)。
+Les notes de conception (en anglais) sont dans [docs/](docs/) :
+[architecture](docs/ARCHITECTURE.md), [multiplateforme](docs/CROSS_PLATFORM.md),
+[interface](docs/UI.md), [surveillance](docs/MONITORING.md),
+[i18n](docs/I18N.md), [empaquetage](docs/PACKAGING.md) et le
+[JSON agent](docs/AGENT.md).
 
-## 许可
+## Licence
 
-采用 [EUPL-1.2](LICENSE) 许可证。
+[EUPL-1.2](LICENSE).
