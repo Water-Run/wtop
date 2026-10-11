@@ -50,11 +50,16 @@ equal(Layout.mode(200, 22), "wide-short",
 
 -- Persisted split ratios already encode subtree cardinality. Responsive
 -- reflow must translate that baseline once, not multiply it a second time.
--- The old solver turned three equal network panels into 72/72/36 columns.
+-- The Network page's panels must fit without letting one row eat another.
 local workspace = Workspace.new()
 assert(workspace:select("network"))
 local balanced_network = workspace:layout(180, 45)
-equal(#balanced_network.placements, 4)
+equal(#balanced_network.placements, 5)
+local softnet_placed = false
+for _, placement in ipairs(balanced_network.placements) do
+  if placement.id == "network_softnet" then softnet_placed = true end
+end
+assert(softnet_placed, "the Network page must place its softnet backlog panel")
 -- Panels on one row must stay visually balanced.  Widths are only comparable
 -- within a row, so group placements by their y origin before measuring.
 local rows_by_y = {}

@@ -30,6 +30,10 @@ local function status_file(spec)
     "Uid:\t" .. tostring(spec.uid or 1000) .. "\t" .. tostring(spec.uid or 1000),
     "NSpid:\t" .. tostring(spec.tid),
   }
+  if spec.cpus then
+    lines[#lines + 1] = "Cpus_allowed_list:\t" .. spec.cpus
+    lines[#lines + 1] = "Mems_allowed_list:\t" .. (spec.mems or "0")
+  end
   if spec.voluntary then
     lines[#lines + 1] = "voluntary_ctxt_switches:\t" .. tostring(spec.voluntary)
   end
@@ -58,7 +62,7 @@ assert(broken_tgid == nil and broken_tgid_error == "invalid_process_tgid",
   "a malformed Tgid line is rejected instead of being coerced")
 
 -- ---------------------------------------------------------------------------
--- The collector reads three files, and only for the selected TID.
+-- The collector reads one selected TID's files and FD directory.
 -- ---------------------------------------------------------------------------
 
 local function stat_line(spec)
@@ -77,30 +81,40 @@ local function stat_line(spec)
     spec.state or "S", table.concat(numbers, " "))
 end
 
-local reads = {}
+local reads, lists = {}, {}
 local files = {
   ["/proc/42/stat"] = stat_line({ pid = 42, comm = "server", threads = 3, starttime = 3 }),
   ["/proc/42/task/42/stat"] = stat_line({ pid = 42, comm = "server", starttime = 3 }),
   ["/proc/42/task/43/stat"] = stat_line({ pid = 43, comm = "worker", starttime = 3 }),
   ["/proc/42/task/44/stat"] = stat_line({ pid = 44, comm = "io-thread", starttime = 3 }),
-  ["/proc/42/status"] = status_file({ tid = 42, tgid = 42, name = "server" }),
+  ["/proc/42/status"] = status_file({ tid = 42, tgid = 42, name = "server",
+    cpus = "0-1", mems = "0-1" }),
   ["/proc/42/cgroup"] = "0::/system.slice/server.service\n",
+  ["/proc/42/wchan"] = "do_wait\n",
+  ["/proc/42/limits"] = "Max open files 1024 4096 files\n",
   ["/proc/42/task/43/status"] = status_file({ tid = 43, tgid = 42, name = "worker",
-    state = "R (running)", voluntary = 900, involuntary = 12 }),
+    state = "R (running)", voluntary = 900, involuntary = 12,
+    cpus = "0", mems = "0" }),
   ["/proc/42/task/43/cgroup"] = "0::/system.slice/server.service\n",
+  ["/proc/42/task/43/wchan"] = "0\n",
   ["/proc/42/task/43/io"] = "rchar: 4096\nwchar: 0\nsyscr: 3\nsyscw: 0\n" ..
     "read_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n",
   -- Thread 44 is the one an operator would ask about: it does the I/O.
   ["/proc/42/task/44/status"] = status_file({ tid = 44, tgid = 42, name = "io-thread",
-    state = "D (disk sleep)", voluntary = 5, involuntary = 900 }),
+    state = "D (disk sleep)", voluntary = 5, involuntary = 900,
+    cpus = "1", mems = "1" }),
   -- ...and it is the one that was moved out of the process' cgroup.
   ["/proc/42/task/44/cgroup"] = "0::/system.slice/latency.target\n",
+  ["/proc/42/task/44/wchan"] = "io_schedule\n",
   ["/proc/42/task/44/io"] = "rchar: 8192\nwchar: 2048\nsyscr: 6\nsyscw: 2\n" ..
     "read_bytes: 4096\nwrite_bytes: 0\ncancelled_write_bytes: 0\n",
 }
 local dirs = {
   ["/proc"] = { "42" },
   ["/proc/42/task"] = { "42", "43", "44" },
+  ["/proc/42/fd"] = { "0", "1", "2" },
+  ["/proc/42/task/43/fd"] = { "0", "1", "2", "7" },
+  ["/proc/42/task/44/fd"] = { "0", "1" },
 }
 
 local function fake_fs()
@@ -114,6 +128,7 @@ local function fake_fs()
       return value
     end,
     list = function(_, path, limit)
+      lists[#lists + 1] = path
       local values = dirs[path]
       if not values then
         return nil, { kind = "missing", message = "fixture_directory_missing", path = path }
@@ -139,9 +154,91 @@ local function context(thread_tid)
 end
 
 local collector = Process.new({ read_status = false })
+assert(next(TUI.thread_detail_request({ mode = "picker" },
+  { pid = 42 }, { tid = 43 })) == nil,
+  "moving through the thread picker must not request per-thread file reads")
+local task_request = TUI.thread_detail_request({ mode = "detail", tid = 43,
+  starttime_ticks = 3 }, { pid = 42 }, { tid = 43, starttime_ticks = 3 })[42]
+assert(task_request.tid == 43 and task_request.starttime_ticks == 3,
+  "opening the selected task requests its TID and start time")
+assert(next(TUI.thread_detail_request({ mode = "detail", tid = 43,
+  starttime_ticks = 3 }, { pid = 42 }, { tid = 43, starttime_ticks = 9 })) == nil,
+  "a recycled TID must not inherit the open thread detail")
+assert(next(TUI.thread_detail_request({ mode = "detail" },
+  { pid = 42 }, nil)) == nil,
+  "an exited thread cannot leave a stale detail request")
+
+reads, lists = {}, {}
+local picker_context = context(nil)
+picker_context.selected_process_ids = {}
+picker_context.selected_process_thread_list_ids = { ["42:3"] = true }
+local picker_sample = collector:sample(picker_context)
+local picker_process = picker_sample.data.by_id["42:3"]
+assert(picker_process.thread_rows and #picker_process.thread_rows == 3
+  and picker_process.thread_details == nil
+  and picker_process.fd_detail == nil,
+  "the thread picker updates the task rows without opening process or task detail")
+assert(picker_process.wait_site_status == nil,
+  "a closed process detail must not read its kernel wait site")
+for _, path in ipairs(reads) do
+  assert(not path:find("/io", 1, true)
+    and not path:find("/smaps_rollup", 1, true)
+    and not path:find("/wchan", 1, true)
+    and not path:find("/task/43/status", 1, true),
+    "picker-only sampling opened an unused detail file: " .. path)
+end
+for _, path in ipairs(lists) do
+  assert(path ~= "/proc/42/fd" and path ~= "/proc/42/task/43/fd",
+    "picker-only sampling must not enumerate an FD table")
+end
+
+-- The broad scan reads status once for a new identity. Later scans reuse the
+-- last observed allowed set; opening process detail refreshes it immediately.
+local affinity_collector = Process.new({ read_status = true })
+local function scan_context()
+  local value = context(nil)
+  value.selected_process_ids = {}
+  return value
+end
+reads = {}
+local affinity_first = affinity_collector:sample(scan_context())
+local affinity_process = affinity_first.data.by_id["42:3"]
+assert(affinity_process.affinity.cpus_allowed_list == "0-1"
+  and affinity_process.affinity.cpus_allowed_count == 2
+  and affinity_process.affinity.observed_ns == now,
+  "the leader mask is captured during its first status read")
+local first_status_reads = 0
+for _, path in ipairs(reads) do
+  if path == "/proc/42/status" then first_status_reads = first_status_reads + 1 end
+end
+assert(first_status_reads == 1, "one status read is enough for the first scan")
+files["/proc/42/status"] = status_file({ tid = 42, tgid = 42,
+  name = "server", cpus = "1", mems = "1" })
+now = now + 1000000000
+reads = {}
+local affinity_cached = affinity_collector:sample(scan_context(), affinity_first)
+assert(affinity_cached.data.by_id["42:3"].affinity.cpus_allowed_list == "0-1"
+  and affinity_cached.data.by_id["42:3"].affinity.observed_ns == now - 1000000000,
+  "a cached affinity retains its original observation time")
+for _, path in ipairs(reads) do
+  assert(path ~= "/proc/42/status", "the cached mask must not add a status read")
+end
+reads = {}
+local affinity_selected = affinity_collector:sample(context(43), affinity_cached)
+assert(affinity_selected.data.by_id["42:3"].affinity.cpus_allowed_list == "1"
+  and affinity_selected.data.by_id["42:3"].affinity.observed_ns == now,
+  "selected process detail refreshes its leader mask")
+local refreshed = false
+for _, path in ipairs(reads) do
+  if path == "/proc/42/status" then refreshed = true end
+end
+assert(refreshed, "selected detail must actually reread the leader's status")
+files["/proc/42/status"] = status_file({ tid = 42, tgid = 42, name = "server",
+  cpus = "0-1", mems = "0-1" })
+now = 1000000000
 
 -- No thread selected: the detail pass must not run at all.
-reads = {}
+reads, lists = {}, {}
 local base = collector:sample(context(nil))
 assert(base.status == "ok", "fixture sample failed")
 local base_process = base.data.by_id["42:3"]
@@ -153,27 +250,45 @@ for _, path in ipairs(reads) do
     and not path:find("/task/43/io", 1, true),
     "a per-thread file was read without a thread selection: " .. path)
 end
+for _, path in ipairs(lists) do
+  assert(not path:find("/task/43/fd", 1, true),
+    "an unselected thread must not enumerate its FD directory")
+end
 
--- Thread 43 selected: exactly its three files, and nothing of its siblings'.
-reads = {}
+-- Thread 43 selected: its files and FD directory, nothing of its siblings'.
+reads, lists = {}, {}
 local selected = collector:sample(context(43), base)
 local selected_process = selected.data.by_id["42:3"]
 local detail = selected_process.thread_details
 assert(type(detail) == "table" and detail[43],
   "the selected TID carries its own detail")
+assert(selected_process.wait_site == "do_wait"
+  and selected_process.wait_site_status == "ok"
+  and detail[43].wait_site == nil
+  and detail[43].wait_site_status == "not_reported",
+  "process and selected thread report distinct wait sites, including kernel 0")
 assert(detail[42] == nil and detail[44] == nil,
   "only the selected TID is read; a process with many threads must not scale")
 local read_set = {}
 for _, path in ipairs(reads) do read_set[path] = true end
-for _, suffix in ipairs({ "status", "cgroup", "io" }) do
+for _, suffix in ipairs({ "status", "cgroup", "io", "wchan" }) do
   assert(read_set["/proc/42/task/43/" .. suffix],
     "the selected thread's " .. suffix .. " must be read")
   assert(not read_set["/proc/42/task/44/" .. suffix],
     "a sibling thread's " .. suffix .. " must not be read")
 end
+local thread_fd_seen, sibling_fd_seen = false, false
+for _, path in ipairs(lists) do
+  if path == "/proc/42/task/43/fd" then thread_fd_seen = true end
+  if path == "/proc/42/task/44/fd" then sibling_fd_seen = true end
+end
+assert(thread_fd_seen and not sibling_fd_seen,
+  "only the selected TID's descriptor table is enumerated")
 
 assert(detail[43].tgid == 42,
   "the thread group names the owning process, got " .. tostring(detail[43].tgid))
+assert(detail[43].starttime_ticks == 3,
+  "the verified task generation must accompany its cgroup reading")
 assert(detail[43].state_text == "R (running)",
   "the status line spells the state out, got " .. tostring(detail[43].state_text))
 assert(detail[43].voluntary_switches == 900 and detail[43].involuntary_switches == 12,
@@ -184,12 +299,56 @@ assert(detail[43].cgroups and detail[43].cgroups[1].path == "/system.slice/serve
   "the thread's own cgroup line is parsed")
 assert(detail[43].source == "/proc/42/task/43",
   "the detail reports which files it came from")
+assert(detail[43].affinity.cpus_allowed_list == "0"
+  and detail[43].affinity.cpus_allowed_count == 1
+  and detail[43].affinity.mems_allowed_list == "0"
+  and detail[43].affinity.observed_ns == now,
+  "selected thread affinity comes from that TID's status")
+assert(selected_process.fd_detail.count == 3
+  and detail[43].fd_detail.count == 4
+  and detail[43].fd_detail.status == "ok"
+  and detail[43].fd_detail.observed_ns == now,
+  "a thread can report a different FD count from its leader")
 
 -- A selection naming a TID that is not in this process reads nothing, rather
 -- than attaching one process' thread detail to another.
 local stranger = collector:sample(context(9999), selected)
 assert(stranger.data.by_id["42:3"].thread_details == nil,
   "a thread id outside the process must not produce a detail entry")
+reads, lists = {}, {}
+local original_task_stat = files["/proc/42/task/43/stat"]
+files["/proc/42/task/43/stat"] = stat_line({ pid = 43,
+  comm = "replacement", starttime = 99 })
+local recycled_request = collector:sample(context({ tid = 43, starttime_ticks = 3 }),
+  selected)
+assert(recycled_request.data.by_id["42:3"].thread_details == nil,
+  "a task with the same TID but a different start time cannot satisfy the selection")
+for _, path in ipairs(reads) do
+  assert(not path:find("/task/43/status", 1, true)
+    and not path:find("/task/43/io", 1, true)
+    and not path:find("/task/43/wchan", 1, true),
+    "a generation mismatch must not read the new task's detail: " .. path)
+end
+files["/proc/42/task/43/stat"] = original_task_stat
+local racing_fs = fake_fs()
+local regular_read = racing_fs.read
+local task_stat_reads = 0
+racing_fs.read = function(self, path, limit)
+  if path == "/proc/42/task/43/stat" then
+    task_stat_reads = task_stat_reads + 1
+    if task_stat_reads == 2 then
+      return stat_line({ pid = 43, comm = "replacement", starttime = 99 })
+    end
+  end
+  return regular_read(self, path, limit)
+end
+local racing_context = context({ tid = 43, starttime_ticks = 3 })
+racing_context.fs = racing_fs
+local raced_detail = collector:sample(racing_context, selected).data.by_id["42:3"]
+assert(task_stat_reads == 2 and raced_detail.thread_details == nil
+  and raced_detail.thread_scan.races == 1
+  and #raced_detail.thread_rows == 2,
+  "a task recycled during supplemental reads is removed with its mixed detail")
 
 -- A denied read is reported for that file alone: the rest of the thread is
 -- still usable, and the sample is not thrown away over one permission.
@@ -212,7 +371,7 @@ local denied_context = {
   selected_process_ids = { ["42:3"] = true },
   selected_thread_ids = { [42] = 44 },
 }
-local denied = collector:sample(denied_context, moved_sample)
+local denied = collector:sample(denied_context, stranger)
 local denied_detail = denied.data.by_id["42:3"].thread_details[44]
 assert(denied.status == "ok" and denied_detail,
   "a denied per-thread file must not fail the sample")
@@ -269,6 +428,10 @@ end
 
 local process = {
   pid = 42, id = "42:3", name = "server", user = "root",
+  affinity = affinity_process.affinity,
+  wait_site = selected_process.wait_site,
+  wait_site_status = selected_process.wait_site_status,
+  fd_detail = selected_process.fd_detail,
   cgroups = { { hierarchy = 0, controllers = "", path = "/system.slice/server.service" } },
   thread_rows = {
     { tid = 42, name = "server", state = "S", nice = 0, priority = 20,
@@ -336,11 +499,21 @@ assert(find(lines, "线程组"):match("线程组%s+42$"),
   "the thread group is shown, got " .. tostring(find(lines, "线程组")))
 assert(find(lines, "R (running)"),
   "the spelled-out state is preferred over the single letter")
+assert(find(lines, "内核等待位置"):find("未报告休眠位置", 1, true),
+  "kernel 0 is described as unreported, not as a function")
+assert(find(lines, "允许的 CPU"):find("0", 1, true)
+  and find(lines, "允许的内存节点"):find("0", 1, true),
+  "thread details display its own allowed CPU and memory-node sets")
+assert(find(lines, "该线程打开的文件描述符"):find("4", 1, true)
+  and find(lines, "首线程打开的文件描述符"):find("3", 1, true),
+  "thread detail shows both observed counts without claiming shared tables")
 assert(find(lines, "系统调用读"):match("4 KiB$")
     and find(lines, "系统调用写"),
   "the syscall I/O pair is shown, not only the block-layer pair")
 assert(find(lines, "与所属进程相同"),
   "a thread in the process' cgroup says so")
+assert(find(lines, "g 打开此线程的工作负载"),
+  "the thread detail offers its own workload jump")
 assert(not find(lines, "latency.target"),
   "a matching thread does not print another unit's path")
 
@@ -353,6 +526,9 @@ local moved_process = moved_sample.data.by_id["42:3"]
 assert(moved_process.thread_details[44]
     and moved_process.thread_details[44].cgroups[1].path == "/system.slice/latency.target",
   "selecting the thread is what reads it")
+assert(moved_process.thread_details[44].wait_site == "io_schedule"
+  and moved_process.thread_details[44].wait_site_status == "ok",
+  "a sleeping thread displays its own kernel wait site")
 local moved = TUI.thread_detail_lines(
   { tid = 44, name = "io-thread", state = "D", nice = 0, priority = 20,
     cpu_ticks = 10, starttime_ticks = 3, cpu_percent = 0.0, quality = "fresh" },
@@ -361,6 +537,106 @@ assert(find(moved, "不在所属进程的控制组中"),
   "a thread outside the process' cgroup says so")
 assert(find(moved, "latency.target"),
   "the thread's own unit is named")
+assert(find(moved, "内核等待位置"):find("io_schedule", 1, true)
+  and find(moved, "不能据此诊断原因"),
+  "the selected thread shows a kernel function without calling it a diagnosis")
+assert(find(moved, "允许的 CPU"):find("1", 1, true)
+  and find(moved, "允许的内存节点"):find("1", 1, true),
+  "a sibling's different allowed sets remain visible")
+assert(moved_process.thread_details[44].fd_detail.count == 2
+  and find(moved, "该线程打开的文件描述符"):find("2", 1, true),
+  "the sibling's own descriptor count remains distinct")
+lists = {}
+local leader_sample = collector:sample(context(42), moved_sample)
+local leader_process = leader_sample.data.by_id["42:3"]
+assert(leader_process.thread_details[42].fd_detail == leader_process.fd_detail,
+  "selecting the leader reuses the already observed descriptor table")
+
+local denied_wait_fs = fake_fs()
+local original_read = denied_wait_fs.read
+denied_wait_fs.read = function(self, path, limit)
+  if path:match("/wchan$") then
+    return nil, { kind = "denied", message = "fixture_denied", path = path }
+  end
+  return original_read(self, path, limit)
+end
+local denied_wait_context = context(44)
+denied_wait_context.fs = denied_wait_fs
+local denied_wait_process = collector:sample(denied_wait_context, leader_sample)
+  .data.by_id["42:3"]
+assert(denied_wait_process.wait_site == nil
+  and denied_wait_process.wait_site_status == "denied"
+  and denied_wait_process.thread_details[44].wait_site_status == "denied",
+  "wchan permission failures do not become zeros or erase the process")
+assert(find(TUI.process_detail_lines(denied_wait_process, translator),
+  "内核等待位置"):find("无权限", 1, true),
+  "the process view reports a denied wait-site read")
+files["/proc/42/task/44/wchan"] = "unsafe\nsecond_line\n"
+local malformed_wait = collector:sample(context(44), denied_wait_process)
+  .data.by_id["42:3"].thread_details[44]
+assert(malformed_wait.wait_site == nil and malformed_wait.wait_site_status == "parse_error",
+  "a malformed symbol cannot inject another detail line")
+assert(find(TUI.thread_detail_lines(worker_detail, malformed_wait,
+  denied_wait_process, translator), "内核等待位置"):find("错误", 1, true),
+  "the thread view localizes a malformed wait-site reading")
+files["/proc/42/task/44/wchan"] = string.rep("x", 257)
+local oversized_wait = collector:sample(context(44), denied_wait_process)
+  .data.by_id["42:3"].thread_details[44]
+assert(oversized_wait.wait_site == nil and oversized_wait.wait_site_status == "parse_error",
+  "a wait-site symbol remains bounded even with a permissive filesystem adapter")
+files["/proc/42/task/44/wchan"] = ""
+local empty_wait = collector:sample(context(44), denied_wait_process)
+  .data.by_id["42:3"].thread_details[44]
+assert(empty_wait.wait_site == nil and empty_wait.wait_site_status == "parse_error",
+  "an empty read is malformed rather than the kernel's explicit zero")
+files["/proc/42/task/44/wchan"] = "io_schedule\n"
+for _, path in ipairs(lists) do
+  assert(path ~= "/proc/42/task/42/fd",
+    "the leader's task alias must not cause another directory walk")
+end
+
+local denied_fd_fs = fake_fs()
+local original_list = denied_fd_fs.list
+denied_fd_fs.list = function(self, path, limit)
+  if path == "/proc/42/task/43/fd" then
+    return nil, { kind = "denied", message = "fixture_denied", path = path }
+  end
+  return original_list(self, path, limit)
+end
+local denied_fd_context = context(43)
+denied_fd_context.fs = denied_fd_fs
+local denied_fd_process = collector:sample(denied_fd_context, leader_sample)
+  .data.by_id["42:3"]
+local denied_fd_detail = denied_fd_process.thread_details[43]
+assert(denied_fd_detail.fd_detail.count == nil
+  and denied_fd_detail.fd_detail.status == "denied"
+  and denied_fd_detail.io.rchar == 4096,
+  "a denied task FD directory does not turn into zero or erase readable thread I/O")
+local denied_fd_lines = TUI.thread_detail_lines(worker_detail,
+  denied_fd_detail, denied_fd_process, translator)
+assert(find(denied_fd_lines, "该线程打开的文件描述符"):find("无权限", 1, true),
+  "thread detail names an inaccessible FD directory")
+
+local truncated_fd_fs = fake_fs()
+local base_list = truncated_fd_fs.list
+truncated_fd_fs.list = function(self, path, limit)
+  if path == "/proc/42/task/43/fd" then
+    assert(limit == 4096)
+    return { "0", "1" }, nil, true
+  end
+  return base_list(self, path, limit)
+end
+local truncated_fd_context = context(43)
+truncated_fd_context.fs = truncated_fd_fs
+local truncated_fd_process = collector:sample(truncated_fd_context, leader_sample)
+  .data.by_id["42:3"]
+local truncated_fd_detail = truncated_fd_process.thread_details[43]
+assert(truncated_fd_detail.fd_detail.status == "truncated"
+  and truncated_fd_detail.fd_detail.count == 2,
+  "the task FD scan keeps its lower bound when capped")
+assert(find(TUI.thread_detail_lines(worker_detail, truncated_fd_detail,
+  truncated_fd_process, translator), "该线程打开的文件描述符"):find(">=2", 1, true),
+  "the displayed thread FD count marks a lower bound in ASCII")
 assert(find(moved, "进程所在："),
   "the process' own cgroup is printed next to it")
 assert(find(moved, "server.service"),
@@ -372,6 +648,8 @@ assert(find(moved, "server.service"),
 local pending = TUI.thread_detail_lines(worker_detail, nil, process, translator)
 assert(find(pending, "正在读取该线程"),
   "an unread thread is announced rather than rendered blank")
+assert(not find(pending, "g 打开此线程的工作负载"),
+  "a pending read does not offer the process workload as a thread target")
 assert(not find(pending, "系统调用读"),
   "nothing is invented before the read lands")
 
@@ -388,6 +666,12 @@ assert(find(lines, "/proc/42/task/43"),
 -- The process overlay and the picker must not disagree about thread order, or
 -- a row moves between the two views under the operator's cursor.
 local detail_lines = TUI.process_detail_lines(process, translator)
+assert(find(detail_lines, "首线程内核等待位置"):find("do_wait", 1, true)
+  and find(detail_lines, "不能据此诊断原因"),
+  "process detail shows the kernel function with its interpretation limit")
+assert(find(detail_lines, "首线程允许的 CPU"):find("0-1", 1, true)
+  and find(detail_lines, "首线程允许的内存节点"):find("0-1", 1, true),
+  "process detail labels the leader's allowed sets, not all threads' sets")
 local overlay_order = {}
 local in_table = false
 for _, line in ipairs(detail_lines) do

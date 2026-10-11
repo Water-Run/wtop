@@ -44,7 +44,7 @@ assert(makefile:find("tests/unit/test_*.lua", 1, true) ~= nil
 
 local claims = {
     { "docs/ARCHITECTURE.md", "现有的 " .. total .. " 个 Lua 单元/夹具测试文件覆盖" },
-    { "docs/CROSS_PLATFORM.md", total .. " 个 Lua 测试文件、Lua 5.4 子集" },
+    { "docs/CROSS_PLATFORM.md", "当前源码套件包含 " .. total .. " 个 Lua 测试文件" },
     { "docs/PACKAGING.md", "运行这 " .. total .. " 个 Lua 文件" },
     { "docs/PACKAGING.md", total .. " 个 Lua 5.5 单元与夹具测试文件" },
     { "docs/PACKAGING.md", "用系统 Lua 5.4 运行同样的 " .. total .. " 个文件" },
@@ -56,13 +56,6 @@ local claims = {
     -- "currently contains / runs N files" form, so both are pinned here.
     { "docs/PLAN.md", "目前包含 " .. total .. " 个 Lua 5.5 单元/夹具测试文件" },
     { "docs/UI.md", "运行 " .. total .. " 个 Lua 单元/夹具测试文件" },
-    -- The cross-libc section carried 90 for four increments after the suite
-    -- passed 94, and the reason is the one this file exists to prevent: it is
-    -- the same sentence as a current claim, in the same present tense, and it
-    -- was not in the enumeration.  The container runs this same tree, so the
-    -- number it reports is this number, and the phrase that qualifies it as the
-    -- container's is what makes it a current claim rather than a historical one.
-    { "docs/PACKAGING.md", "glibc 2.17 上 **通过 " .. total .. " 个测试文件**" },
     -- And this one sat in the *same table* as the row above, one line under a
     -- number this list already covered, carrying 89 while the container was
     -- passing 100.  It read as a current claim -- "the full 89-file Lua test
@@ -89,6 +82,7 @@ end
 local historical = {
     { "docs/CROSS_PLATFORM.md", "当时运行时为 50 个文件" },
     { "docs/MONITORING.md", "在此功能之前断言表格形状的 73 个单元测试" },
+    { "docs/PACKAGING.md", "2026-10-02 那次在 glibc 2.17 上 **通过 120 个测试文件**" },
     -- The count this section used to carry.  It is correct as written, and
     -- rewriting it to match the current suite would falsify the record of a run
     -- that really did stop at 89 and then pass at 90.
@@ -112,6 +106,15 @@ local matrix = platform_doc:match("## 验证矩阵(.-)\n## ")
     or platform_doc:match("## 验证矩阵(.-)$")
 assert(matrix ~= nil, "docs/CROSS_PLATFORM.md no longer has a validation matrix, so "
     .. "this clause has no table to read and would pass by examining nothing")
+assert(matrix:find("2026-10-09 核对", 1, true),
+    "the older matrix counts need their dated validation context")
+local historical_matrix_rows = {
+    ["Linux x86_64，CI"] = true,
+    ["Linux aarch64，CI"] = true,
+    ["Linux x86_64，2026-10-09 本地"] = true,
+    ["Linux x86_64"] = true,
+    ["Linux x86_64,旧 libc"] = true,
+}
 for line in (matrix .. "\n"):gmatch("[^\n]+") do
     -- Walked by position rather than with gmatch: a `(%d+)(.*)` pattern makes
     -- the second capture swallow the rest of the line, so gmatch would yield
@@ -136,7 +139,9 @@ for line in (matrix .. "\n"):gmatch("[^\n]+") do
             local words = 0
             for _ in between:gmatch("%S+") do words = words + 1 end
             if words <= 2 then
+                local row = line:match("^|%s*(.-)%s*|")
                 local guarded = number == tostring(total)
+                    or (number == "120" and historical_matrix_rows[row] == true)
                     or line:find("当时运行时为 50 个文件", 1, true) ~= nil
                 assert(guarded,
                     "the validation matrix states a suite size of " .. number ..

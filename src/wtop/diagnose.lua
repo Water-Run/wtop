@@ -28,6 +28,9 @@ local HELPERS = {
     "nvme",
     "perf",
     "systemctl",
+    "journalctl",
+    "loginctl",
+    "sshd",
 }
 
 local function probe_file(path)

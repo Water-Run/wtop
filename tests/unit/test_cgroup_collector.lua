@@ -497,4 +497,124 @@ local denied_context = {
 assert(collector:probe(denied_context).state == "denied")
 assert(collector:sample(denied_context).status == "denied")
 
+-- In a threaded subtree cgroup.procs is intentionally unreadable. The child
+-- still has TIDs, so an unreadable process count must not become zero or a
+-- partial-data complaint about a file the kernel does not support there.
+do
+  local Snapshot = require("wtop.model.snapshot")
+  local Export = require("wtop.export")
+  local ViewModel = require("wtop.view_model")
+  local I18n = require("wtop.i18n")
+  local base = "/cg-threaded"
+  local child = base .. "/workers"
+  local files = {
+    [base .. "/cgroup.controllers"] = "cpu pids\n",
+    [base .. "/cgroup.procs"] = "500\n",
+    [child .. "/cgroup.type"] = "threaded\n",
+    [child .. "/cgroup.threads"] = "44\n43\n44\n",
+  }
+  local directories = {
+    [base] = { "cgroup.controllers", "cgroup.procs", "workers" },
+    [child] = { "cgroup.type", "cgroup.threads", "cgroup.procs" },
+  }
+  local threaded_fs = fake_fs(files, directories, {}, {})
+  local normal_read = threaded_fs.read
+  threaded_fs.read = function(self, path, limit)
+    if path == child .. "/cgroup.procs" then
+      return nil, { kind = "io_error", errno = 95,
+        message = "Operation not supported", path = path }
+    end
+    return normal_read(self, path, limit)
+  end
+  local threaded_collector = Cgroup.new({ fs = threaded_fs, mount_path = base,
+    max_nodes = 8 })
+  assert(threaded_collector:probe({}).available)
+  local result = threaded_collector:sample({})
+  local worker = assert(result.data.by_id["/workers"])
+  assert(worker.cgroup_type == "threaded" and not worker.partial)
+  assert(worker.processes.count == nil and worker.processes.status == "unavailable")
+  assert(worker.threads.status == "ok" and worker.threads.count == 2)
+  assert(worker.threads.tids[1] == 43 and worker.threads.tids[2] == 44)
+  assert(result.data.summary.visible_process_count == 1)
+  assert(result.data.summary.unknown_process_nodes == 1)
+  local state = Snapshot.merge(nil, { cgroup = result }, 1, 1)
+  local out = Export.snapshot(state)
+  local exported
+  for _, item in ipairs(out.workloads.items) do
+    if item.id == "/workers" then exported = item end
+  end
+  assert(exported and exported.cgroup_type == "threaded")
+  assert(exported.processes.count == nil and exported.threads.count == 2)
+  assert(out.workloads.summary.unknown_process_nodes == 1)
+  local translator = assert(I18n.new({ locale = "en-US" }))
+  local models = ViewModel.build({ history_values = function() return {} end }, state,
+    translator, {}, "workloads", nil, nil, { workload_selected = "/workers" })
+  local row
+  for _, candidate in ipairs(models.workload_table.rows) do
+    if candidate.workload_ref.id == "/workers" then row = candidate end
+  end
+  assert(row and row.processes == "—" and row.threads == "2")
+  local detail_entries = models.workload_detail.entries
+  local thread_count, type_label
+  for _, entry in ipairs(detail_entries) do
+    if entry.label == "Threads" then thread_count = entry.value end
+    if entry.label == "Group type" then type_label = entry.value end
+  end
+  assert(thread_count == "2" and type_label == "Threaded subgroup")
+
+  files[base .. "/cgroup.procs"] = "0\n500\n0\n"
+  files[child .. "/cgroup.threads"] = "0\n43\n0\n"
+  local namespaced = threaded_collector:sample({})
+  local root_member = namespaced.data.by_id["/"]
+  local worker_member = namespaced.data.by_id["/workers"]
+  assert(root_member.processes.count == nil and root_member.processes.visible_count == 1)
+  assert(root_member.processes.hidden_entries == 2 and root_member.processes.status == "partial")
+  assert(worker_member.threads.count == nil and worker_member.threads.visible_count == 1)
+  assert(worker_member.threads.hidden_entries == 2 and worker_member.threads.status == "partial")
+  assert(not root_member.partial and not worker_member.partial,
+    "PID 0 entries describe namespace visibility, not a failed control-file read")
+  assert(namespaced.data.summary.visible_process_count == 1
+    and namespaced.data.summary.unknown_process_nodes == 2)
+  local namespaced_state = Snapshot.merge(nil, { cgroup = namespaced }, 1, 1)
+  local agent = Export.agent(namespaced_state)
+  local agent_worker
+  for _, item in ipairs(agent.top.workloads) do
+    if item.id == "/workers" then agent_worker = item end
+  end
+  assert(agent_worker and agent_worker.processes.count == nil)
+  assert(agent_worker.threads.visible_count == 1
+    and agent_worker.threads.hidden_entries == 2)
+  local namespaced_model = ViewModel.build({ history_values = function() return {} end },
+    namespaced_state, translator, {}, "workloads", nil, nil,
+    { workload_selected = "/workers" })
+  local unmapped
+  for _, item in ipairs(namespaced_model.workload_detail.entries) do
+    if item.label == "Unmapped TID entries" then unmapped = item.value end
+  end
+  assert(unmapped == "2")
+
+  local denied_threads = fake_fs(files, directories, {}, {})
+  denied_threads.read = function(self, path, limit)
+    if path == child .. "/cgroup.procs" then
+      return nil, { kind = "io_error", errno = 95,
+        message = "Operation not supported", path = path }
+    end
+    if path == child .. "/cgroup.threads" then
+      return nil, { kind = "denied", message = "permission denied", path = path }
+    end
+    return normal_read(self, path, limit)
+  end
+  local degraded = Cgroup.new({ fs = denied_threads, mount_path = base,
+    max_nodes = 8 }):sample({})
+  assert(degraded.data.by_id["/workers"].partial)
+  assert(degraded.data.by_id["/workers"].threads.count == nil
+    and degraded.data.by_id["/workers"].threads.status == "denied")
+  assert(degraded.data.by_id["/workers"].processes.count == nil)
+  files[child .. "/cgroup.type"] = "domain\n"
+  local inconsistent = threaded_collector:sample({})
+  assert(inconsistent.data.by_id["/workers"].partial
+    and inconsistent.data.by_id["/workers"].threads == nil,
+    "an unrelated cgroup.procs failure is not evidence of a threaded subtree")
+end
+
 return true

@@ -46,7 +46,7 @@ SOURCE = Path(__file__).resolve().parent / "pty_smoke.py"
 # the exception is a decision rather than a residue.
 NOT_SCENARIOS = frozenset({"run_session", "run_isolation"})
 
-EXPECTED_SCENARIOS = 18
+EXPECTED_SCENARIOS = 45
 
 
 def main() -> int:

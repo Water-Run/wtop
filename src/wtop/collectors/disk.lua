@@ -2,6 +2,9 @@ local Capability = require("wtop.core.capability")
 local Parsers = require("wtop.linux.parsers")
 local FS = require("wtop.linux.fs")
 local Common = require("wtop.collectors.common")
+local Sysfs = require("wtop.linux.sysfs")
+local NVMe = require("wtop.linux.nvme_diagnostics")
+local StackedBlock = require("wtop.linux.stacked_block")
 
 local Disk = {}
 Disk.__index = Disk
@@ -16,6 +19,11 @@ end
 local function finite_nonnegative(value)
   return type(value) == "number" and value == value
     and value ~= math.huge and value ~= -math.huge and value >= 0
+end
+
+local function sectors_to_bytes(value)
+  return type(value) == "number" and math.type(value) == "integer"
+    and value >= 0 and value <= math.maxinteger // 512 and value * 512 or nil
 end
 
 local function delta(current, previous, key)
@@ -50,8 +58,7 @@ local function read_identity(fs, device)
     model = optional("device/model", 64),
     vendor = optional("device/vendor", 64),
     firmware = optional("device/rev", 32),
-    size_bytes = type(sectors) == "number" and sectors >= 0
-      and sectors <= math.maxinteger // 512 and sectors * 512 or nil,
+    size_bytes = sectors_to_bytes(sectors),
     rotational = type(rotational) == "number" and rotational or nil,
     removable = fs:read_number(base .. "/removable") == 1,
     scheduler = scheduler,
@@ -63,6 +70,14 @@ local function read_identity(fs, device)
       or device.name:match("^loop%d") ~= nil
       or device.name:match("^zram%d") ~= nil,
   }
+end
+
+local function read_partition_identity(fs, device)
+  local base = "/sys/dev/block/" .. device.id
+  local size = sectors_to_bytes(fs:read_number(base .. "/size"))
+  local start = sectors_to_bytes(fs:read_number(base .. "/start"))
+  if size == nil and start == nil then return nil end
+  return { size_bytes = size, start_bytes = start }
 end
 
 local function read_sector_sizes(fs, device)
@@ -84,13 +99,44 @@ local function read_topology(fs, device)
     slaves_truncated = true
   end
   local stacked = type(slaves) == "table" and #slaves > 0
+  local slave_refs = {}
+  local refs_complete = type(slaves) == "table" and not slaves_truncated
+  if refs_complete then
+    local seen = {}
+    for _, name in ipairs(slaves) do
+      local safe = type(name) == "string" and #name > 0 and #name <= 255
+        and name ~= "." and name ~= ".." and not name:find("/", 1, true)
+        and not name:find("\0", 1, true) and not seen[name]
+      if not safe then refs_complete = false break end
+      seen[name] = true
+      local raw = fs:read(base .. "/slaves/" .. name .. "/dev", 64)
+      local major, minor
+      if type(raw) == "string" then
+        major, minor = raw:match("^%s*(%d+):(%d+)%s*$")
+      end
+      major, minor = major and tonumber(major), minor and tonumber(minor)
+      if not major or not minor or math.type(major) ~= "integer"
+          or math.type(minor) ~= "integer" or major < 0 or minor < 0
+          or major > 2147483647 or minor > 2147483647 then
+        refs_complete = false
+        break
+      end
+      slave_refs[#slave_refs + 1] = { name = name,
+        device_id = tostring(major) .. ":" .. tostring(minor) }
+    end
+  end
+  if not refs_complete then slave_refs = {} end
   return {
+    device_path = Sysfs.device_path(fs, base),
     partition = partition,
     diskseq = diskseq,
     stacked = stacked,
     slaves = type(slaves) == "table" and slaves or nil,
+    slave_refs = slave_refs,
+    slave_refs_complete = refs_complete == true,
     slaves_truncated = slaves_truncated == true,
-    partial = slaves_error ~= nil and slaves_error.kind ~= "missing"
+    partial = not refs_complete and stacked
+      or slaves_error ~= nil and slaves_error.kind ~= "missing"
       and slaves_error.kind ~= "unavailable",
   }
 end
@@ -115,6 +161,8 @@ function Disk.new(options)
     diskstats_path = Common.absolute_path(
       "diskstats_path", options.diskstats_path, "/proc/diskstats"),
     include = options.include,
+    max_nvme_diagnostics = Common.positive_integer(
+      "max_nvme_diagnostics", options.max_nvme_diagnostics, 128, 128),
     _method_style = true,
   }, Disk)
 end
@@ -152,11 +200,17 @@ function Disk:sample(context, previous)
   local elapsed_ns = previous_data and Common.elapsed_ns(now, previous.timestamp_ns) or nil
   local previous_map = previous_data
     and (previous_data.raw_by_identity or previous_data.raw_by_id) or {}
+  local previous_nvme = {}
+  local controller_batch = {}
+  for _, device in ipairs(previous_data and previous_data.devices or {}) do
+    if device.stable_id and device.nvme then previous_nvme[device.stable_id] = device.nvme end
+  end
   local devices = {}
   local raw_by_id = {}
   local raw_by_identity = {}
   local any_gap = false
   local any_partial = false
+  local nvme_count, nvme_truncated = 0, false
 
   for _, current in ipairs(raw) do
     local include_ok, included = true, true
@@ -178,10 +232,14 @@ function Disk:sample(context, previous)
         minor = current.minor,
         diskseq = topology.diskseq,
         identity_quality = topology.diskseq and "stable" or "major_minor",
+        source = "/sys/dev/block/" .. current.id,
+        device_path = topology.device_path,
         partition = topology.partition,
         is_partition = topology.partition ~= nil,
         stacked = topology.stacked,
         slaves = topology.slaves,
+        slave_refs = topology.slave_refs,
+        slave_refs_complete = topology.slave_refs_complete,
         topology_truncated = topology.slaves_truncated,
         partial = topology.slaves_truncated or topology.partial,
         -- Overview totals use one accounting layer. Partitions are already
@@ -193,11 +251,31 @@ function Disk:sample(context, previous)
         accounting_sector_size_bytes = 512,
         logical_sector_size_bytes = logical_sector_size,
         physical_sector_size_bytes = physical_sector_size,
-        identity = topology.partition == nil and read_identity(fs, current) or nil,
+        identity = topology.partition == nil and read_identity(fs, current)
+          or read_partition_identity(fs, current),
         in_flight = current.io_in_progress,
         counters = current,
         quality = "gap",
       }
+      if topology.partition == nil then
+        device.stack = StackedBlock.read(fs, current.name, now)
+        if device.stack and device.stack.status == "partial" then device.partial = true end
+      end
+      if NVMe.namespace_name(current.name) and topology.partition == nil then
+        nvme_count = nvme_count + 1
+        if nvme_count <= self.max_nvme_diagnostics then
+          -- A reused major:minor cannot establish a safe event baseline.
+          device.nvme = NVMe.read(fs, current.name, now,
+            topology.diskseq and previous_nvme[identity] or nil,
+            controller_batch, logical_sector_size,
+            device.identity and device.identity.size_bytes)
+          if device.nvme.status == "partial" then device.partial = true end
+        else
+          device.nvme = { status = "truncated", quality = "truncated",
+            source = "/sys/block/" .. current.name }
+          device.partial, nvme_truncated = true, true
+        end
+      end
       if old and elapsed_ns and elapsed_ns > 0 then
         local sectors_read, r1 = delta(current, old, "sectors_read")
         local sectors_written, r2 = delta(current, old, "sectors_written")
@@ -268,6 +346,7 @@ function Disk:sample(context, previous)
   end)
   return Common.result("ok", now, {
     devices = devices,
+    nvme_diagnostics_truncated = nvme_truncated,
     raw_by_id = raw_by_id,
     raw_by_identity = raw_by_identity,
   }, {

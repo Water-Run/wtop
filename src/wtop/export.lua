@@ -2,6 +2,9 @@ local native = require("wtop.native")
 local version = require("wtop.version")
 local json = require("wtop.format.json")
 local Privacy = require("wtop.privacy")
+local Hardware = require("wtop.model.hardware")
+local Quality = require("wtop.model.quality")
+local NVMe = require("wtop.linux.nvme_diagnostics")
 
 local M = {}
 
@@ -66,7 +69,7 @@ local function export_issues(issues)
     local result = json.array({})
     for index, issue in ipairs(issues or {}) do
         result[index] = copy_fields(issue, {
-            "field", "status", "reason", "source", "errno",
+            "field", "status", "reason", "source", "errno", "offset",
         })
     end
     return result
@@ -97,6 +100,7 @@ local function export_cpu_info(cpu_info)
     for index, cpu in ipairs(topology.logical_cpus or {}) do
         local output = copy_fields(cpu, {
             "id", "online", "package_id", "die_id", "cluster_id", "core_id", "core_key",
+            "package_id_known", "core_id_known", "online_known",
             "cpu_capacity", "kernel_core_type", "maximum_frequency_hz", "threads_in_core",
             "core_type_id", "source",
         })
@@ -219,13 +223,93 @@ local function export_pressure(pressure)
     return result
 end
 
+local function export_nvme(nvme)
+    if type(nvme) ~= "table" then return nil end
+    local result = copy_fields(nvme, {
+        "status", "quality", "source", "observed_ns", "ana_state", "ana_group_id",
+    })
+    result.counters = json.object({})
+    for _, specification in ipairs(NVMe.COUNTERS) do
+        local name = specification[1]
+        local counter = nvme.counters and nvme.counters[name]
+        if type(counter) == "table" then
+            result.counters[name] = copy_fields(counter,
+                { "status", "total", "new", "delta_quality" })
+        end
+    end
+    result.issues = export_issues(nvme.issues)
+    if type(nvme.nuse) == "table" then
+        result.nuse = copy_fields(nvme.nuse, {
+            "source", "observed_ns", "status", "quality",
+            "cached", "logical_block_size_bytes", "allocated_lbas",
+            "allocated_bytes",
+        })
+    end
+    if type(nvme.controller) == "table" then
+        local controller = nvme.controller
+        result.controller = copy_fields(controller, { "name", "source",
+            "observed_ns", "status", "quality", "state", "transport" })
+        result.controller.counters = json.object({})
+        for _, specification in ipairs(NVMe.CONTROLLER_COUNTERS) do
+            local name = specification[1]
+            local counter = controller.counters and controller.counters[name]
+            if type(counter) == "table" then
+                result.controller.counters[name] = copy_fields(counter,
+                    { "status", "total", "new", "delta_quality" })
+            end
+        end
+        result.controller.issues = export_issues(controller.issues)
+    end
+    if type(nvme.paths) == "table" then
+        local paths = nvme.paths
+        result.paths = copy_fields(paths, { "subsystem", "source", "observed_ns",
+            "status", "quality", "iopolicy", "total", "truncated" })
+        result.paths.items = json.array({})
+        for index, path in ipairs(paths.items or {}) do
+            if index > 32 then result.paths.truncated = true break end
+            result.paths.items[index] = copy_fields(path,
+                { "name", "controller", "controller_source", "source",
+                  "status", "quality", "controller_state", "transport",
+                  "ana_state", "ana_group_id" })
+        end
+        result.paths.issues = export_issues(paths.issues)
+    end
+    return result
+end
+
+local function export_stacked_block(stack)
+    if type(stack) ~= "table" then return nil end
+    local result = copy_fields(stack, {
+        "kind", "source", "observed_ns", "status", "quality", "name",
+        "suspended", "level", "raid_disks", "previous_raid_disks",
+        "degraded", "array_state", "sync_action", "sync_progress_status",
+        "sync_completed_sectors", "sync_total_sectors", "sync_percent",
+    })
+    result.issues = export_issues(stack.issues)
+    if type(stack.members) == "table" then
+        result.members = copy_fields(stack.members,
+            { "source", "status", "total", "truncated" })
+        result.members.items = json.array({})
+        for index, member in ipairs(stack.members.items or {}) do
+            if index > 64 then break end
+            result.members.items[index] = copy_fields(member,
+                { "name", "device_id", "source", "slot", "state", "quality" })
+        end
+        result.members.issues = export_issues(stack.members.issues)
+    end
+    return result
+end
+
 local function export_disks(disks)
-    local result = json.object({ devices = json.array({}) })
+    local result = json.object({ devices = json.array({}),
+        nvme_diagnostics_truncated = disks and disks.nvme_diagnostics_truncated == true or false })
     for index, device in ipairs(disks and disks.devices or {}) do
         result.devices[index] = copy_fields(device, {
             "id", "name", "major", "minor", "accounting_sector_size_bytes",
             "stable_id", "diskseq", "identity_quality", "partition", "is_partition",
+            "source", "device_path",
             "stacked", "slaves", "aggregate",
+            "slave_refs_complete",
             "logical_sector_size_bytes", "physical_sector_size_bytes",
             "in_flight", "read_bytes_per_second", "write_bytes_per_second",
             "read_iops", "write_iops", "busy_percent", "average_read_latency_ms",
@@ -241,9 +325,17 @@ local function export_disks(disks)
         -- showed, and "sdb" alone tells a reader nothing.
         if type(device.identity) == "table" then
             result.devices[index].identity = copy_fields(device.identity, {
-                "model", "vendor", "firmware", "size_bytes", "rotational",
+                "model", "vendor", "firmware", "size_bytes", "start_bytes", "rotational",
                 "removable", "scheduler", "queue_depth", "read_ahead_kib", "virtual",
             })
+        end
+        result.devices[index].nvme = export_nvme(device.nvme)
+        result.devices[index].stack = export_stacked_block(device.stack)
+        result.devices[index].slave_refs = json.array({})
+        for position, reference in ipairs(device.slave_refs or {}) do
+            if position > 4096 then break end
+            result.devices[index].slave_refs[position] = copy_fields(reference,
+                { "name", "device_id" })
         end
     end
     return result
@@ -251,14 +343,111 @@ end
 
 local function export_network(network)
     local result = json.object({ interfaces = json.array({}) })
+    if type(network) == "table" and type(network.routes) == "table" then
+        local routes = network.routes
+        result.routes = copy_fields(routes, { "total", "truncated", "partial",
+            "invalid_lines", "ipv4_status", "ipv6_status", "quality", "observed_ns" })
+        result.routes.source = json.array(routes.source or {})
+        result.routes.entries = json.array({})
+        for index, route in ipairs(routes.entries or {}) do
+            if index > 2048 then break end
+            result.routes.entries[index] = copy_fields(route, {
+                "family", "interface", "destination", "prefix_length",
+                "destination_cidr", "source_cidr", "gateway", "metric",
+                "flags", "up", "default", "selected_default", "source",
+            })
+        end
+    end
+    if type(network) == "table" and type(network.softnet) == "table" then
+        local softnet = network.softnet
+        result.softnet = copy_fields(softnet, {
+            "status", "quality", "reason", "source", "observed_ns", "interval_ns",
+            "cpu_count", "processed", "dropped", "time_squeeze",
+            "backlog_packets", "input_backlog_packets", "process_backlog_packets",
+            "hot_cpu", "hot_cpu_backlog", "new_processed", "new_dropped",
+            "new_time_squeeze", "processed_per_second", "dropped_per_second",
+            "time_squeeze_per_second",
+        })
+        result.softnet.per_cpu = json.array({})
+        for _, row in ipairs(softnet.per_cpu or {}) do
+            if #result.softnet.per_cpu >= 256 then break end
+            if type(row.cpu) == "number" then
+                result.softnet.per_cpu[#result.softnet.per_cpu + 1] = copy_fields(row, {
+                    "cpu", "processed", "dropped", "time_squeeze", "backlog_packets",
+                    "input_backlog_packets", "process_backlog_packets", "quality",
+                    "processed_per_second", "dropped_per_second",
+                    "time_squeeze_per_second",
+                })
+            end
+        end
+        result.softnet.exported = #result.softnet.per_cpu
+        result.softnet.truncated = #(softnet.per_cpu or {}) > 256
+    end
     for index, interface in ipairs(network and network.interfaces or {}) do
         local exported = copy_fields(interface, {
             "id", "ifindex", "name", "operstate", "mtu", "speed_mbps",
+            "source", "device_path",
             "iflink", "link_type", "carrier", "duplex", "address",
             "default_route", "aggregate", "quality", "reset_counter",
         })
         exported.rates = copy_object(interface.rates)
         exported.counters = copy_object(interface.counters)
+        if type(interface.link_events) == "table" then
+            exported.link_events = copy_fields(interface.link_events, {
+                "status", "observed_ns", "changes_total", "up_total", "down_total",
+                "changes_status", "up_status", "down_status",
+            })
+            exported.link_events.change = copy_fields(interface.link_events.change, {
+                "quality", "reason", "interval_ns", "new_changes", "new_up", "new_down",
+                "components_quality",
+            })
+        end
+        if type(interface.queues) == "table" then
+            exported.queues = copy_fields(interface.queues,
+                { "rx_count", "tx_count", "status",
+                  "tx_timeout_total", "timeout_status", "config_status" })
+            for _, specification in ipairs({
+                { "rx_details", { "id", "rps_cpus", "rps_flow_count" } },
+                { "tx_details", { "id", "xps_cpus", "xps_rxqs",
+                    "maxrate_mbps", "rate_limit_enabled" } },
+            }) do
+                local source = interface.queues[specification[1]]
+                if type(source) == "table" then
+                    local details = json.array({})
+                    for position, row in ipairs(source) do
+                        if position > 128 then break end
+                        details[position] = copy_fields(row, specification[2])
+                        if type(row.issues) == "table" then
+                            local issues = json.array({})
+                            for issue_index, issue in ipairs(row.issues) do
+                                if issue_index > 3 then break end
+                                issues[issue_index] = copy_fields(issue,
+                                    { "field", "status" })
+                            end
+                            details[position].issues = issues
+                        end
+                    end
+                    exported.queues[specification[1]] = details
+                end
+            end
+            if type(interface.queues.tx_timeouts) == "table" then
+                local timeouts = json.array({})
+                for position, counter in ipairs(interface.queues.tx_timeouts) do
+                    if position > 512 then break end
+                    timeouts[position] = copy_fields(counter, { "id", "total", "status" })
+                    if type(counter.change) == "table" then
+                        timeouts[position].change = copy_fields(counter.change,
+                            { "quality", "new_reports" })
+                    end
+                end
+                exported.queues.tx_timeouts = timeouts
+            end
+            if type(interface.queues.timeout_change) == "table" then
+                exported.queues.timeout_change = copy_fields(
+                    interface.queues.timeout_change,
+                    { "quality", "new_reports", "interval_seconds" })
+            end
+        end
         -- Interface addresses are local configuration, not remote endpoints,
         -- so they are not subject to the remote-address masking applied to the
         -- connection table.
@@ -315,7 +504,7 @@ local function export_connections(connections, limit, include_remote_addresses)
             or mask_remote_address(connection.remote_address)
         exported.owners = json.array({})
         for owner_index, owner in ipairs(connection.owners or {}) do
-            exported.owners[owner_index] = copy_fields(owner, { "pid", "fd", "name" })
+            exported.owners[owner_index] = copy_fields(owner, { "pid", "fd", "fd_count", "name" })
         end
         result.items[index] = exported
     end
@@ -327,6 +516,29 @@ local function export_connections(connections, limit, include_remote_addresses)
         "process_limit_reached", "link_limit_reached",
     })
     return result
+end
+
+local function export_process_affinity(affinity)
+    if type(affinity) ~= "table" then return nil end
+    local result = copy_fields(affinity, {
+        "cpus_allowed_list", "cpus_allowed_count",
+        "mems_allowed_list", "mems_allowed_count",
+        "status", "observed_ns",
+    })
+    result.issues = json.array({})
+    for index, issue in ipairs(affinity.issues or {}) do
+        if index > 2 then break end
+        result.issues[index] = copy_fields(issue, { "field", "status" })
+    end
+    return result
+end
+
+local function export_process_io(io)
+    if type(io) ~= "table" then return nil end
+    return copy_fields(io, {
+        "read_bytes", "write_bytes", "cancelled_write_bytes",
+        "rchar", "wchar", "syscr", "syscw",
+    })
 end
 
 local function export_processes(processes, limit)
@@ -344,17 +556,34 @@ local function export_processes(processes, limit)
     end)
     local result = copy_fields(processes, {
         "scanned", "races", "denied", "parse_errors", "process_candidates",
-        "process_limit", "truncated", "partial",
+        "process_limit", "clock_ticks_per_second", "uptime_seconds", "truncated", "partial",
     })
+    if processes and processes.io_scan then
+        result.io_scan = copy_fields(processes.io_scan, {
+            "status", "covered", "total", "rate_covered", "refresh_interval_ns",
+            "refreshed", "reused", "capped", "observed_ns",
+        })
+    end
     result.total = #(processes and processes.list or {})
     result.top = json.array({})
     for index = 1, math.min(#candidates, bounded_limit(limit, 50, 2048, 0)) do
         result.top[index] = copy_fields(candidates[index], {
             "id", "pid", "name", "command", "state", "parent_pid", "threads",
             "uid", "user", "priority", "nice", "processor", "cpu_percent",
+            "cpu_time_seconds",
+            "elapsed_seconds",
             "resident_bytes", "virtual_bytes", "io_read_bytes", "io_write_bytes",
+            "io_observed_ns", "io_status",
             "quality", "partial", "partial_reason",
         })
+        result.top[index].io = export_process_io(candidates[index].io)
+        if type(candidates[index].io_rate) == "table" then
+            result.top[index].io_rate = copy_fields(candidates[index].io_rate, {
+                "read_bytes_per_second", "write_bytes_per_second", "interval_ns",
+                "observed_ns", "reason", "quality",
+            })
+        end
+        result.top[index].affinity = export_process_affinity(candidates[index].affinity)
         -- Namespace nesting comes from the status file the base scan already
         -- reads, so it is identity rather than detail, and a consumer needs it
         -- to tell a container's init from a host process.  The chain is
@@ -538,11 +767,478 @@ local function export_cpu_frequency(cpu_frequency)
     return result
 end
 
+local function export_thermal_throttle(thermal)
+    local result = json.object({ source = thermal and thermal.source,
+        truncated = thermal and thermal.truncated == true or false,
+        cpus = json.array({}), issues = export_issues(thermal and thermal.issues) })
+    for index, cpu in ipairs(thermal and thermal.cpus or {}) do
+        local output = copy_fields(cpu, {
+            "id", "source", "core_count", "package_count", "core_new", "package_new",
+            "core_delta_quality", "package_delta_quality", "core_total_time_ms",
+            "package_total_time_ms", "core_max_time_ms", "package_max_time_ms",
+        })
+        output.issues = export_issues(cpu.issues)
+        result.cpus[index] = output
+    end
+    return result
+end
+
+local function export_cpuidle(cpuidle)
+    local result = json.object({ source = cpuidle and cpuidle.source,
+        driver = cpuidle and cpuidle.driver, governor = cpuidle and cpuidle.governor,
+        truncated = cpuidle and cpuidle.truncated == true or false,
+        cpus = json.array({}), issues = export_issues(cpuidle and cpuidle.issues) })
+    for index, cpu in ipairs(cpuidle and cpuidle.cpus or {}) do
+        local output = copy_fields(cpu, { "id", "source" })
+        output.issues = export_issues(cpu.issues)
+        output.states = json.array({})
+        for state_index, state in ipairs(cpu.states or {}) do
+            output.states[state_index] = copy_fields(state, {
+                "id", "name", "source", "usage", "time_us", "usage_delta", "new_time_us",
+                "usage_delta_quality", "time_delta_quality", "exit_latency_us",
+                "target_residency_us", "disabled", "rejected", "above", "below",
+                "rejected_delta", "above_delta", "below_delta",
+                "rejected_delta_quality", "above_delta_quality", "below_delta_quality",
+            })
+            output.states[state_index].issues = export_issues(state.issues)
+        end
+        result.cpus[index] = output
+    end
+    return result
+end
+
+local function export_numa(numa)
+    local result = copy_fields(numa, { "truncated" })
+    result.nodes = json.array({})
+    if numa and numa.online_nodes then result.online_nodes = copy_array(numa.online_nodes) end
+    result.issues = export_issues(numa and numa.issues)
+    for index, node in ipairs(numa and numa.nodes or {}) do
+        if index > 128 then result.truncated = true break end
+        local output = copy_fields(node, { "id", "online", "source", "quality" })
+        if node.cpu_ids then output.cpu_ids = copy_array(node.cpu_ids) end
+        if node.memory then
+            output.memory = copy_fields(node.memory, { "total_bytes", "free_bytes", "used_bytes",
+                "file_bytes", "anonymous_bytes", "shared_bytes" })
+        end
+        if node.allocations then
+            output.allocations = copy_fields(node.allocations, {
+                "numa_hit_pages", "numa_miss_pages", "numa_foreign_pages",
+                "interleave_hit_pages", "local_node_pages", "other_node_pages",
+                "rate_quality",
+            })
+            if node.allocations.rates then
+                output.allocations.rates = copy_fields(node.allocations.rates, {
+                    "local_pages_per_second", "other_pages_per_second",
+                })
+            end
+        end
+        if node.distances then
+            output.distances = json.array({})
+            for position, distance in ipairs(node.distances) do
+                if position > 128 then result.truncated = true break end
+                output.distances[position] = copy_fields(distance, { "node_id", "distance" })
+            end
+        end
+        output.issues = export_issues(node.issues)
+        result.nodes[index] = output
+    end
+    return result
+end
+
+local function export_memory_devices(memory)
+    local result = copy_fields(memory, { "source", "major", "minor", "docrev",
+        "partial", "truncated", "structure_count" })
+    result.arrays, result.devices = json.array({}), json.array({})
+    result.array_ranges, result.device_ranges = json.array({}), json.array({})
+    result.channels = json.array({})
+    for index, array in ipairs(memory and memory.arrays or {}) do
+        if index > 64 then result.truncated = true break end
+        result.arrays[index] = copy_fields(array, { "id", "handle", "location_code", "use_code",
+            "error_correction_code", "device_count", "maximum_capacity_bytes", "source", "quality", "ambiguous" })
+    end
+    for index, device in ipairs(memory and memory.devices or {}) do
+        if index > 256 then result.truncated = true break end
+        result.devices[index] = copy_fields(device, { "id", "handle", "array_id", "array_handle",
+            "locator", "bank", "manufacturer", "part_number", "firmware_version", "form_factor",
+            "form_factor_code", "memory_type", "memory_type_code", "type_detail", "size_bytes",
+            "logical", "populated", "rank", "total_width_bits", "data_width_bits", "speed_mts",
+            "configured_speed_mts", "minimum_voltage_mv", "maximum_voltage_mv", "configured_voltage_mv",
+            "source", "quality", "ambiguous" })
+    end
+    for index, range in ipairs(memory and memory.array_ranges or {}) do
+        if index > 256 then result.truncated = true break end
+        result.array_ranges[index] = copy_fields(range, { "id", "handle", "array_id",
+            "array_handle", "start_address_bytes", "end_address_bytes",
+            "address_span_bytes", "partition_width", "source", "quality", "ambiguous" })
+    end
+    for index, range in ipairs(memory and memory.device_ranges or {}) do
+        if index > 512 then result.truncated = true break end
+        result.device_ranges[index] = copy_fields(range, { "id", "handle", "device_id",
+            "device_handle", "array_range_id", "array_range_handle",
+            "start_address_bytes", "end_address_bytes", "address_span_bytes",
+            "partition_row_position", "interleave_position", "interleaved_data_depth",
+            "source", "quality", "ambiguous" })
+    end
+    for index, channel in ipairs(memory and memory.channels or {}) do
+        if index > 64 then result.truncated = true break end
+        local output = copy_fields(channel, { "id", "handle", "channel_type_code",
+            "channel_type", "maximum_load", "device_count", "total_load",
+            "source", "quality", "ambiguous" })
+        output.devices = json.array({})
+        for position, member in ipairs(channel.devices or {}) do
+            if position > 64 then result.truncated = true break end
+            output.devices[position] = copy_fields(member,
+                { "device_id", "device_handle", "load" })
+        end
+        result.channels[index] = output
+    end
+    result.issues = export_issues(memory and memory.issues)
+    return result
+end
+
+local function export_expansion_slots(slots)
+    local result = copy_fields(slots, { "source", "major", "minor", "docrev",
+        "partial", "truncated", "structure_count" })
+    result.slots = json.array({})
+    for index, slot in ipairs(slots and slots.slots or {}) do
+        if index > 128 then result.truncated = true break end
+        local output = copy_fields(slot, { "id", "handle", "designation",
+            "slot_type_code", "slot_type", "slot_width_code", "electrical_lanes",
+            "usage_code", "slot_length_code", "slot_id", "pci_bdf",
+            "base_width_code", "peer_count", "source", "quality", "ambiguous" })
+        output.peer_bdfs = json.array(slot.peer_bdfs or {})
+        result.slots[index] = output
+    end
+    result.issues = export_issues(slots and slots.issues)
+    return result
+end
+
+local function export_onboard_devices(onboard)
+    local result = copy_fields(onboard, { "source", "major", "minor", "docrev",
+        "partial", "truncated", "structure_count" })
+    result.devices = json.array({})
+    for index, device in ipairs(onboard and onboard.devices or {}) do
+        if index > 128 then result.truncated = true break end
+        result.devices[index] = copy_fields(device, { "id", "handle", "designation",
+            "device_type_code", "device_type", "type_instance", "enabled", "pci_bdf",
+            "structure_type", "device_index", "device_count",
+            "source", "quality", "ambiguous" })
+    end
+    result.issues = export_issues(onboard and onboard.issues)
+    return result
+end
+
+local function export_port_connectors(ports)
+    local result = copy_fields(ports, { "source", "major", "minor", "docrev",
+        "partial", "truncated", "structure_count" })
+    result.ports = json.array({})
+    for index, port in ipairs(ports and ports.ports or {}) do
+        if index > 128 then result.truncated = true break end
+        result.ports[index] = copy_fields(port, { "id", "handle",
+            "internal_designation", "internal_connector_code", "internal_connector",
+            "external_designation", "external_connector_code", "external_connector",
+            "port_type_code", "port_type", "source", "quality", "ambiguous" })
+    end
+    result.issues = export_issues(ports and ports.issues)
+    return result
+end
+
+local function export_firmware_batteries(firmware)
+    local result = copy_fields(firmware, { "source", "major", "minor", "docrev",
+        "partial", "truncated", "structure_count" })
+    result.batteries = json.array({})
+    for index, battery in ipairs(firmware and firmware.batteries or {}) do
+        if index > 64 then result.truncated = true break end
+        result.batteries[index] = copy_fields(battery, { "id", "handle",
+            "location", "name", "manufacturer", "chemistry_code", "chemistry",
+            "sbds_chemistry", "sbds_version", "design_capacity_raw_mwh",
+            "design_capacity_multiplier", "design_capacity_mwh",
+            "design_voltage_mv", "maximum_error_percent", "source", "quality",
+            "ambiguous" })
+    end
+    result.issues = export_issues(firmware and firmware.issues)
+    return result
+end
+
+local function export_firmware_power_supplies(firmware)
+    local result = copy_fields(firmware, { "source", "major", "minor", "docrev",
+        "partial", "truncated", "structure_count" })
+    result.supplies = json.array({})
+    for index, supply in ipairs(firmware and firmware.supplies or {}) do
+        if index > 64 then result.truncated = true break end
+        result.supplies[index] = copy_fields(supply, { "id", "handle",
+            "power_unit_group", "location", "name", "manufacturer", "part_number",
+            "revision", "max_power_capacity_raw", "max_power_watts",
+            "supply_type_code", "supply_type", "status_code", "status",
+            "range_switching_code", "range_switching", "present", "unplugged",
+            "hot_replaceable", "voltage_probe_id", "cooling_device_id",
+            "current_probe_id", "source", "quality", "ambiguous" })
+    end
+    result.issues = export_issues(firmware and firmware.issues)
+    return result
+end
+
+local function export_firmware_bmcs(firmware)
+    local result = copy_fields(firmware, { "source", "major", "minor", "docrev",
+        "partial", "truncated", "structure_count" })
+    result.devices = json.array({})
+    for index, device in ipairs(firmware and firmware.devices or {}) do
+        if index > 64 then result.truncated = true break end
+        result.devices[index] = copy_fields(device, { "id", "handle",
+            "interface_type_code", "interface_type", "ipmi_revision",
+            "i2c_target_address", "nv_storage_address", "base_address_field_hex",
+            "address_space", "base_address_hex", "register_spacing_code",
+            "register_spacing_bytes", "interrupt_specified", "interrupt_number",
+            "interrupt_polarity", "interrupt_trigger", "source", "quality",
+            "ambiguous" })
+    end
+    result.issues = export_issues(firmware and firmware.issues)
+    return result
+end
+
+local function export_firmware_tpms(firmware)
+    local result = copy_fields(firmware, { "source", "major", "minor", "docrev",
+        "partial", "truncated", "structure_count" })
+    result.devices = json.array({})
+    for index, device in ipairs(firmware and firmware.devices or {}) do
+        if index > 64 then result.truncated = true break end
+        result.devices[index] = copy_fields(device, { "id", "handle", "vendor_id",
+            "spec_major", "spec_minor", "spec_version", "firmware_version_1_hex",
+            "firmware_version_2_hex", "description", "characteristics_supported",
+            "family_configurable_firmware", "family_configurable_platform",
+            "family_configurable_oem", "source", "quality", "ambiguous" })
+    end
+    result.issues = export_issues(firmware and firmware.issues)
+    return result
+end
+
+local function export_firmware_components(firmware)
+    local result = copy_fields(firmware, { "source", "major", "minor", "docrev",
+        "partial", "truncated", "structure_count" })
+    result.components = json.array({})
+    for index, component in ipairs(firmware and firmware.components or {}) do
+        if index > 128 then result.truncated = true break end
+        local exported = copy_fields(component, { "id", "handle", "name", "version",
+            "version_format", "firmware_id", "firmware_id_format",
+            "release_date", "manufacturer", "lowest_supported_version",
+            "image_size_bytes", "image_size_hex", "updatable", "write_protected",
+            "state_code", "state", "associated_count", "association_complete",
+            "source", "quality", "ambiguous" })
+        exported.associated_handles = json.array({})
+        for position, handle in ipairs(component.associated_handles or {}) do
+            if position > 64 then break end
+            exported.associated_handles[position] = handle
+        end
+        result.components[index] = exported
+    end
+    result.issues = export_issues(firmware and firmware.issues)
+    return result
+end
+
+local function export_firmware_esrt(esrt)
+    local result = copy_fields(esrt, { "source", "partial", "truncated",
+        "scanned", "declared_count", "resource_version", "issues_truncated" })
+    result.entries = json.array({})
+    for index, entry in ipairs(esrt and esrt.entries or {}) do
+        if index > 128 then result.truncated = true break end
+        result.entries[index] = copy_fields(entry, { "id", "index", "guid",
+            "type_code", "type", "version", "lowest_supported_version",
+            "capsule_flags_hex", "last_attempt_version", "last_attempt_status",
+            "quality", "status", "ambiguous", "source" })
+    end
+    result.issues = export_issues(esrt and esrt.issues)
+    return result
+end
+
+local function export_tpm(tpm)
+    local result = copy_fields(tpm, { "source", "partial", "truncated" })
+    result.devices = json.array({})
+    for index, device in ipairs(tpm and tpm.devices or {}) do
+        if index > 16 then result.truncated = true break end
+        local output = copy_fields(device, { "id", "index", "version_major",
+            "version_minor", "version_source", "driver",
+            "active", "enabled", "temporarily_deactivated", "truncated",
+            "quality", "source" })
+        output.banks = json.array({})
+        for bank_index, bank in ipairs(device.banks or {}) do
+            if bank_index > 16 then result.truncated = true break end
+            output.banks[bank_index] = copy_fields(bank, { "algorithm", "pcr_count" })
+        end
+        output.issues = export_issues(device.issues)
+        result.devices[index] = output
+    end
+    result.issues = export_issues(tpm and tpm.issues)
+    return result
+end
+
+local function export_watchdog(watchdog)
+    local result = copy_fields(watchdog, { "source", "partial", "truncated" })
+    result.devices = json.array({})
+    for index, device in ipairs(watchdog and watchdog.devices or {}) do
+        if index > 16 then result.truncated = true break end
+        local output = copy_fields(device, { "id", "index", "identity", "driver",
+            "state", "timeout_seconds", "timeleft_seconds", "pretimeout_seconds",
+            "nowayout", "status", "bootstatus", "firmware_version",
+            "pretimeout_governor", "device_path", "quality", "source" })
+        output.issues = export_issues(device.issues)
+        result.devices[index] = output
+    end
+    result.issues = export_issues(watchdog and watchdog.issues)
+    return result
+end
+
+local function export_rfkill(rfkill)
+    local result = copy_fields(rfkill, { "source", "partial", "truncated" })
+    result.devices = json.array({})
+    for index, device in ipairs(rfkill and rfkill.devices or {}) do
+        if index > 64 then result.truncated = true break end
+        local output = copy_fields(device, { "id", "index", "name", "type",
+            "hard_blocked", "soft_blocked", "blocked", "persistent",
+            "state_source", "device_path", "quality", "source" })
+        output.issues = export_issues(device.issues)
+        result.devices[index] = output
+    end
+    result.issues = export_issues(rfkill and rfkill.issues)
+    return result
+end
+
+local function export_thermal_zones(thermal)
+    local result = copy_fields(thermal, { "source", "partial", "truncated" })
+    result.zones = json.array({})
+    result.cooling_devices = json.array({})
+    for index, zone in ipairs(thermal and thermal.zones or {}) do
+        if index > 64 then result.truncated = true break end
+        local output = copy_fields(zone, { "id", "index", "type",
+            "temperature_celsius", "mode", "policy", "device_path",
+            "truncated", "quality", "source" })
+        output.trips = json.array({})
+        for trip_index, trip in ipairs(zone.trips or {}) do
+            if trip_index > 32 then output.truncated = true break end
+            output.trips[trip_index] = copy_fields(trip,
+                { "index", "type", "temperature_celsius" })
+        end
+        output.bindings = json.array({})
+        for binding_index, binding in ipairs(zone.bindings or {}) do
+            if binding_index > 32 then output.truncated = true break end
+            output.bindings[binding_index] = copy_fields(binding,
+                { "slot", "cooling_id", "trip_index", "weight" })
+        end
+        output.issues = export_issues(zone.issues)
+        result.zones[index] = output
+    end
+    for index, device in ipairs(thermal and thermal.cooling_devices or {}) do
+        if index > 128 then result.truncated = true break end
+        local output = copy_fields(device, { "id", "index", "type",
+            "cur_state", "max_state", "device_path", "truncated",
+            "quality", "source" })
+        if type(device.stats) == "table" then
+            output.stats = copy_fields(device.stats,
+                { "total_transitions", "truncated", "quality", "source" })
+            output.stats.time_in_state_ms = json.array({})
+            for state_index, state in ipairs(device.stats.time_in_state_ms or {}) do
+                if state_index > 256 then output.stats.truncated = true break end
+                output.stats.time_in_state_ms[state_index] =
+                    copy_fields(state, { "state", "milliseconds" })
+            end
+        end
+        output.issues = export_issues(device.issues)
+        result.cooling_devices[index] = output
+    end
+    result.issues = export_issues(thermal and thermal.issues)
+    return result
+end
+
+local function export_host_interfaces(firmware)
+    local result = copy_fields(firmware, { "source", "major", "minor", "docrev",
+        "partial", "truncated", "structure_count" })
+    result.devices = json.array({})
+    for index, device in ipairs(firmware and firmware.devices or {}) do
+        if index > 64 then result.truncated = true break end
+        local output = copy_fields(device, { "id", "handle", "interface_type_code",
+            "interface_type", "interface_data_bytes", "oem_vendor_id",
+            "legacy_oem_format", "protocol_count", "source", "quality", "ambiguous" })
+        output.protocols = json.array({})
+        for protocol_index, protocol in ipairs(device.protocols or {}) do
+            if protocol_index > 64 then result.truncated = true break end
+            output.protocols[protocol_index] = copy_fields(protocol,
+                { "type_code", "type", "data_bytes" })
+        end
+        result.devices[index] = output
+    end
+    result.issues = export_issues(firmware and firmware.issues)
+    return result
+end
+
+local function export_processor_firmware(firmware)
+    local result = copy_fields(firmware, { "source", "major", "minor", "docrev",
+        "partial", "truncated", "structure_count" })
+    result.processors, result.caches = json.array({}), json.array({})
+    for index, processor in ipairs(firmware and firmware.processors or {}) do
+        if index > 128 then result.truncated = true break end
+        local output = copy_fields(processor, { "id", "handle", "designation",
+            "processor_type_code", "family_code", "manufacturer", "version", "part_number",
+            "external_clock_mhz", "max_speed_mhz", "boot_speed_mhz",
+            "populated", "status_code", "upgrade_code", "core_count",
+            "enabled_core_count", "thread_count", "enabled_thread_count",
+            "source", "quality", "ambiguous" })
+        output.cache_handles = copy_fields(processor.cache_handles, { "l1", "l2", "l3" })
+        result.processors[index] = output
+    end
+    for index, cache in ipairs(firmware and firmware.caches or {}) do
+        if index > 512 then result.truncated = true break end
+        result.caches[index] = copy_fields(cache, { "id", "handle", "designation",
+            "level", "enabled", "location_code", "write_mode_code",
+            "maximum_size_bytes", "installed_size_bytes", "speed_ns",
+            "error_correction_code", "cache_type_code", "cache_type",
+            "associativity_code", "source", "quality", "ambiguous" })
+    end
+    result.issues = export_issues(firmware and firmware.issues)
+    return result
+end
+
+local function export_edac(edac)
+    local result = json.object({ source = edac and edac.source,
+        truncated = edac and edac.truncated == true or false,
+        controllers = json.array({}), issues = export_issues(edac and edac.issues) })
+    for index, controller in ipairs(edac and edac.controllers or {}) do
+        if index > 64 then result.truncated = true break end
+        local output = copy_fields(controller, { "id", "index", "name", "source",
+            "correctable_errors", "uncorrectable_errors" })
+        output.issues = export_issues(controller.issues)
+        output.modules = json.array({})
+        for module_index, module in ipairs(controller.modules or {}) do
+            if module_index > 256 then result.truncated = true break end
+            output.modules[module_index] = copy_fields(module, { "id", "kind", "label",
+                "location", "correctable_errors", "uncorrectable_errors", "source" })
+            output.modules[module_index].issues = export_issues(module.issues)
+        end
+        result.controllers[index] = output
+    end
+    return result
+end
+
+local function export_spd(spd)
+    local result = json.object({ source = spd and spd.source,
+        truncated = spd and spd.truncated == true or false,
+        devices = json.array({}), issues = export_issues(spd and spd.issues) })
+    for index, device in ipairs(spd and spd.devices or {}) do
+        if index > 64 then result.truncated = true break end
+        local output = copy_fields(device, { "id", "driver", "source", "memory_type", "module_type",
+            "module_type_code", "revision", "minimum_cycle_ps", "part_number",
+            "crc_valid", "crc_base_valid", "checksum_valid", "bytes_read", "complete",
+            "temperature_sensor_present", "size_bytes", "rank", "module_banks",
+            "data_width_bits", "total_width_bits", "quality" })
+        output.issues = export_issues(device.issues)
+        result.devices[index] = output
+    end
+    return result
+end
+
 local function export_sensors(sensors)
     local result = json.object({ devices = json.array({}) })
     for device_index, device in ipairs(sensors and sensors.devices or {}) do
         local exported = copy_fields(device, {
-            "id", "class", "class_index", "name", "device_target",
+            "id", "class", "class_index", "name", "device_target", "device_path",
             "identity_quality", "quality", "truncated", "source",
         })
         exported.channels = json.array({})
@@ -554,6 +1250,12 @@ local function export_sensors(sensors)
             output.readings = copy_object(channel.readings)
             output.thresholds = copy_object(channel.thresholds)
             output.errors = copy_object(channel.errors)
+            if type(channel.session) == "table" then
+                output.session = copy_fields(channel.session, {
+                    "minimum", "maximum", "average", "samples",
+                    "first_timestamp_ns", "last_timestamp_ns",
+                })
+            end
             exported.channels[channel_index] = output
         end
         result.devices[device_index] = exported
@@ -611,7 +1313,8 @@ end
 
 local function export_workload_summary(summary)
     local result = copy_fields(summary, {
-        "root_id", "node_count", "visible_process_count", "partial_node_count",
+        "root_id", "node_count", "visible_process_count", "unknown_process_nodes",
+        "partial_node_count",
         "fresh_node_count", "gap_node_count", "reset_node_count", "issue_count",
         "denied_issue_count", "missing_issue_count", "parse_issue_count",
         "skipped_symlinks", "skipped_dot_entries", "skipped_unsafe_entries",
@@ -653,6 +1356,7 @@ local function export_workloads(workloads, limit)
         local workload = candidates[index]
         local exported = copy_fields(workload, {
             "id", "name", "parent_id", "depth", "accessible", "partial",
+            "cgroup_type",
             "issue_count", "rate_quality", "quality",
         })
         -- Identity derived from the cgroup path, not read from the kernel, so a
@@ -666,7 +1370,12 @@ local function export_workloads(workloads, limit)
                 "user_id", "user_slice", "label",
             })
         end
-        exported.processes = copy_fields(workload.processes, { "count" })
+        exported.processes = copy_fields(workload.processes,
+            { "count", "visible_count", "hidden_entries", "status" })
+        if workload.threads then
+            exported.threads = copy_fields(workload.threads,
+                { "count", "visible_count", "hidden_entries", "status" })
+        end
         exported.cpu = copy_fields(workload.cpu, { "utilization_percent", "weight" })
         if workload.cpu and workload.cpu.max then
             exported.cpu.max = copy_object(workload.cpu.max)
@@ -689,12 +1398,19 @@ local function export_workloads(workloads, limit)
     return result
 end
 
-local function export_quality(quality)
+local function export_quality(quality, captured_ns)
     local result = json.object({})
     for resource, value in pairs(quality or {}) do
-        result[resource] = copy_fields(value, {
+        local exported = copy_fields(value, {
             "status", "quality", "reason", "timestamp_ns", "duration_ns",
+            "value_timestamp_ns",
         })
+        local value_ns = value and value.value_timestamp_ns
+        if finite_number(value_ns) and value_ns >= 0
+            and finite_number(captured_ns) and captured_ns >= value_ns then
+            exported.value_age_ms = math.floor((captured_ns - value_ns) / 1000000)
+        end
+        result[resource] = exported
     end
     return result
 end
@@ -791,15 +1507,83 @@ local function export_power_supplies(supplies)
             "power_watts", "voltage_volts", "temperature_celsius",
             "time_remaining_seconds", "time_to_full_seconds", "capacity_level",
         }),
-        supplies = device_list(supplies.supplies, { "id", "name", "type", "online", "present" }),
+        supplies = device_list(supplies.supplies,
+            { "id", "name", "type", "online", "online_mode", "present" }),
         summary = copy_fields(supplies.summary, { "count", "capacity_percent", "power_watts", "state" }),
         on_ac_power = supplies.on_ac_power,
+        skipped_devices = supplies.skipped_devices,
         truncated = supplies.truncated,
     })
 end
 
-local function export_inventory(inventory)
-    if type(inventory) ~= "table" then return json.object({}) end
+local function export_pci_aer(aer)
+    if type(aer) ~= "table" then return nil end
+    local result = copy_fields(aer, { "status", "interval_seconds" })
+    for _, kind in ipairs({ "correctable", "nonfatal", "fatal" }) do
+        local stats = aer[kind]
+        if type(stats) == "table" then
+            result[kind] = json.object({ total = stats.total,
+                categories = json.array({}) })
+            if type(stats.change) == "table" then
+                result[kind].change = copy_fields(stats.change,
+                    { "new_reports", "quality" })
+            end
+            for index, category in ipairs(stats.categories or {}) do
+                if index > 32 then break end
+                result[kind].categories[index] = copy_fields(category, { "name", "count" })
+            end
+        end
+    end
+    if type(aer.rootport) == "table" then
+        result.rootport = copy_fields(aer.rootport,
+            { "correctable", "nonfatal", "fatal" })
+        result.rootport.changes = json.object({})
+        for _, kind in ipairs({ "correctable", "nonfatal", "fatal" }) do
+            local change = aer.rootport.changes and aer.rootport.changes[kind]
+            if type(change) == "table" then
+                result.rootport.changes[kind] = copy_fields(change,
+                    { "new_reports", "quality" })
+            end
+        end
+    end
+    result.issues = json.array({})
+    for index, issue in ipairs(aer.issues or {}) do
+        if index > 6 then break end
+        result.issues[index] = copy_fields(issue, { "field", "status" })
+    end
+    return result
+end
+
+local function export_pci_msi(msi)
+    if type(msi) ~= "table" then return nil end
+    local result = copy_fields(msi,
+        { "status", "source", "count_status", "affinity_status", "total" })
+    result.vectors = json.array({})
+    for index, vector in ipairs(msi.vectors or {}) do
+        if index > 256 then break end
+        result.vectors[index] = copy_fields(vector,
+            { "irq", "mode", "status", "count_status", "total",
+              "effective_affinity", "allowed_affinity", "affinity_status" })
+        result.vectors[index].top_cpus = json.array({})
+        for position, cpu in ipairs(vector.top_cpus or {}) do
+            if position > 4 then break end
+            result.vectors[index].top_cpus[position] =
+                copy_fields(cpu, { "cpu_id", "count" })
+        end
+        if type(vector.change) == "table" then
+            result.vectors[index].change = copy_fields(vector.change,
+                { "quality", "new_interrupts" })
+        end
+    end
+    if type(msi.change) == "table" then
+        result.change = copy_fields(msi.change,
+            { "quality", "new_interrupts", "interval_seconds" })
+    end
+    return result
+end
+
+local function export_inventory(snapshot)
+    local inventory = type(snapshot.inventory) == "table" and snapshot.inventory or {}
     local function devices(source, fields, limit)
         local result = json.array({})
         for index, device in ipairs(source or {}) do
@@ -810,21 +1594,103 @@ local function export_inventory(inventory)
     end
     local pci = type(inventory.pci) == "table" and inventory.pci or {}
     local usb = type(inventory.usb) == "table" and inventory.usb or {}
+    local pci_devices = devices(pci.devices, {
+        "address", "vendor_id", "device_id", "class_id", "revision",
+        "vendor_name", "device_name",
+        "parent_address", "source", "driver", "numa_node", "link_speed_gtps",
+        "link_width", "max_link_speed_gtps", "max_link_width", "iommu_group_id",
+    }, 256)
+    for index, device in ipairs(pci.devices or {}) do
+        if index > 256 then break end
+        pci_devices[index].aer = export_pci_aer(device.aer)
+        pci_devices[index].msi = export_pci_msi(device.msi)
+        if type(device.sriov) == "table" then
+            pci_devices[index].sriov = copy_fields(device.sriov, {
+                "role", "status", "total_vfs", "enabled_vfs",
+                "physical_function_address",
+            })
+        end
+    end
+    local iommu_groups = json.array({})
+    for index, group in ipairs(pci.iommu_groups or {}) do
+        if index > 256 then break end
+        iommu_groups[index] = copy_fields(group, { "id", "status", "source" })
+        if type(group.members) == "table" then
+            local members = json.array({})
+            for position, name in ipairs(group.members) do
+                if position > 256 then break end
+                members[position] = name
+            end
+            iommu_groups[index].members = members
+        end
+    end
+    local graph = Hardware.build(snapshot)
+    local nodes = json.array({})
+    for index, node in ipairs(graph.nodes) do
+        nodes[index] = copy_fields(node, { "id", "bus", "identifier", "parent_id", "depth",
+            "ambiguous", "resource", "resource_id", "kind", "membership_complete",
+            "memory_device_id", "edac_module_id", "match_method",
+            "pf_id", "sriov_membership_complete",
+            "iommu_group_id", "iommu_group_membership_confirmed" })
+        nodes[index].sensor_ids = json.array(node.sensor_ids)
+        if node.temperature then
+            nodes[index].temperature = copy_fields(node.temperature,
+                { "scope", "owner_id", "sensor_id", "channel_id", "celsius" })
+        end
+        nodes[index].gpu_ids = json.array(node.gpu_ids)
+        nodes[index].mount_ids = json.array(node.mount_ids)
+        nodes[index].cpu_ids = json.array(node.cpu_ids)
+        nodes[index].thermal_throttle_cpu_ids = json.array(node.thermal_throttle_cpu_ids)
+        nodes[index].cpuidle_cpu_ids = json.array(node.cpuidle_cpu_ids)
+        nodes[index].cooling_ids = json.array(node.cooling_ids)
+        nodes[index].thermal_zone_ids = json.array(node.thermal_zone_ids)
+        nodes[index].numa_node_ids = json.array(node.numa_node_ids)
+        nodes[index].cpufreq_ids = json.array(node.cpufreq_ids)
+        nodes[index].pci_ids = json.array(node.pci_ids)
+        nodes[index].vf_ids = json.array(node.vf_ids)
+        nodes[index].iommu_peer_ids = json.array(node.iommu_peer_ids)
+        nodes[index].slot_ids = json.array(node.slot_ids)
+        nodes[index].onboard_ids = json.array(node.onboard_ids)
+        nodes[index].redundant_peer_ids = json.array(node.redundant_peer_ids)
+        nodes[index].slave_ids = json.array(node.slave_ids)
+        nodes[index].holder_ids = json.array(node.holder_ids)
+        nodes[index].cache_ids = json.array(node.cache_ids)
+        nodes[index].firmware_socket_ids = json.array(node.firmware_socket_ids)
+        if #node.associated_ids > 0 then
+            nodes[index].associated_ids = json.array(node.associated_ids)
+        end
+        if #node.firmware_component_ids > 0 then
+            nodes[index].firmware_component_ids = json.array(node.firmware_component_ids)
+        end
+        if #node.esrt_ids > 0 then
+            nodes[index].esrt_ids = json.array(node.esrt_ids)
+        end
+        nodes[index].mapped_range_ids = json.array(node.mapped_range_ids)
+        nodes[index].channel_ids = json.array(node.channel_ids)
+        nodes[index].memory_device_ids = json.array(node.memory_device_ids)
+    end
     return json.object({
         pci = json.object({
-            devices = devices(pci.devices, {
-                "address", "vendor_id", "device_id", "class_id", "revision",
-                "vendor_name", "device_name",
-            }, 256),
+            devices = pci_devices,
+            iommu_groups = iommu_groups,
             total = pci.total, truncated = pci.truncated,
         }),
         usb = json.object({
             devices = devices(usb.devices, {
                 "id", "bus", "device", "vendor_id", "product_id",
                 "manufacturer", "product",
+                "parent_id", "source", "driver", "speed_mbps",
             }, 128),
-            total = usb.total, truncated = usb.truncated,
+            interfaces = devices(usb.interfaces, {
+                "id", "interface_number", "alternate_setting", "endpoint_count",
+                "class_id", "subclass_id", "protocol_id", "interface",
+                "parent_id", "source", "driver",
+            }, 256),
+            total = usb.total, interface_total = usb.interface_total,
+            truncated = usb.truncated, interfaces_truncated = usb.interfaces_truncated,
         }),
+        topology = json.object({ schema_version = 1, nodes = nodes,
+            truncated = graph.truncated, partial = graph.partial }),
     })
 end
 
@@ -842,7 +1708,7 @@ function M.snapshot(snapshot, options)
         captured_unix_ns = native.realtime_ns(),
         configuration = configuration,
         privilege = M.privilege(options.privilege),
-        quality = export_quality(snapshot.quality),
+        quality = export_quality(snapshot.quality, snapshot.timestamp_ns),
         cpu = export_cpu(snapshot.cpu),
         cpu_info = export_cpu_info(snapshot.cpu_info),
         memory = export_memory(snapshot.memory),
@@ -854,13 +1720,34 @@ function M.snapshot(snapshot, options)
         processes = export_processes(snapshot.processes, options.process_limit),
         gpus = export_gpus(snapshot.gpus),
         cpu_frequency = export_cpu_frequency(snapshot.cpu_frequency),
+        thermal_throttle = export_thermal_throttle(snapshot.thermal_throttle),
+        cpuidle = export_cpuidle(snapshot.cpuidle),
+        numa = export_numa(snapshot.numa),
+        memory_devices = export_memory_devices(snapshot.memory_devices),
+        expansion_slots = export_expansion_slots(snapshot.expansion_slots),
+        port_connectors = export_port_connectors(snapshot.port_connectors),
+        onboard_devices = export_onboard_devices(snapshot.onboard_devices),
+        firmware_batteries = export_firmware_batteries(snapshot.firmware_batteries),
+        firmware_power_supplies = export_firmware_power_supplies(snapshot.firmware_power_supplies),
+        firmware_bmcs = export_firmware_bmcs(snapshot.firmware_bmcs),
+        firmware_tpms = export_firmware_tpms(snapshot.firmware_tpms),
+        firmware_components = export_firmware_components(snapshot.firmware_components),
+        firmware_esrt = export_firmware_esrt(snapshot.firmware_esrt),
+        tpm = export_tpm(snapshot.tpm),
+        watchdog = export_watchdog(snapshot.watchdog),
+        rfkill = export_rfkill(snapshot.rfkill),
+        thermal_zones = export_thermal_zones(snapshot.thermal_zones),
+        host_interfaces = export_host_interfaces(snapshot.host_interfaces),
+        processor_firmware = export_processor_firmware(snapshot.processor_firmware),
+        edac = export_edac(snapshot.edac),
+        spd = export_spd(snapshot.spd),
         sensors = export_sensors(snapshot.sensors),
         power = export_power(snapshot.power),
         mounts = export_mounts(snapshot.mounts),
         workloads = export_workloads(snapshot.workloads, options.workload_limit),
         system = export_system(snapshot.system),
         power_supplies = export_power_supplies(snapshot.power_supplies),
-        inventory = export_inventory(snapshot.inventory),
+        inventory = export_inventory(snapshot),
     })
 end
 
@@ -918,6 +1805,56 @@ function M.agent(snapshot, options)
         configuration = options.configuration,
         privilege = options.privilege,
     })
+    local frequency_total, frequency_weight, frequency_source = 0, 0, nil
+    local frequency_estimated, frequency_incomplete = false, false
+    if Quality.current_source(full.quality, "cpu_frequency") then
+        local policies = full.cpu_frequency and full.cpu_frequency.policies or {}
+        frequency_incomplete = full.cpu_frequency and full.cpu_frequency.truncated == true or false
+        for _, policy in ipairs(policies) do
+            local reading = policy.frequencies or {}
+            if finite_number(reading.current_hz) and reading.current_hz > 0 then
+                local weight = math.max(1, #(policy.affected_cpus or {}))
+                frequency_total = frequency_total + reading.current_hz * weight
+                frequency_weight = frequency_weight + weight
+                if reading.current_quality == "estimated" then
+                    frequency_estimated = true
+                elseif reading.current_quality ~= "measured" then
+                    frequency_incomplete = true
+                end
+                local source = reading.current_source
+                if type(source) ~= "string" or source == "" then
+                    source = "unknown"
+                    frequency_incomplete = true
+                end
+                if frequency_source == nil then
+                    frequency_source = source
+                elseif frequency_source ~= source then
+                    frequency_source = "mixed"
+                end
+            else
+                frequency_incomplete = true
+            end
+        end
+    end
+    local frequency_metric = json.object({})
+    if frequency_weight > 0 then
+        frequency_metric.average_hz = frequency_total / frequency_weight
+        frequency_metric.source = frequency_source
+        frequency_metric.quality = frequency_incomplete and "partial"
+            or frequency_estimated and "estimated" or "measured"
+    end
+    local thermal_core_max, thermal_package_max
+    local thermal_quality = full.quality and full.quality.thermal_throttle
+    if thermal_quality and thermal_quality.status == "ok" then
+        for _, cpu in ipairs(full.thermal_throttle.cpus or {}) do
+            if cpu.core_delta_quality == "fresh" then
+                thermal_core_max = math.max(thermal_core_max or 0, cpu.core_new)
+            end
+            if cpu.package_delta_quality == "fresh" then
+                thermal_package_max = math.max(thermal_package_max or 0, cpu.package_new)
+            end
+        end
+    end
 
     local signals = json.array({})
     local highest = "ok"
@@ -932,7 +1869,15 @@ function M.agent(snapshot, options)
         })
         if severity_rank[severity] > severity_rank[highest] then highest = severity end
     end
-    local function threshold(resource, code, value, warning, critical, unit, message)
+    -- A failed collector leaves its last usable numbers in the snapshot for
+    -- context.  Those numbers must not create a new current-condition alarm.
+    -- A missing quality record is tolerated for direct, partial projections;
+    -- an explicit failed or stale record is never treated as current evidence.
+    local function current_source(source)
+        return Quality.current_source(full.quality, source)
+    end
+    local function threshold(resource, code, value, warning, critical, unit, message, source)
+        if not current_source(source or resource) then return end
         if not finite_number(value) then return end
         if value >= critical then
             add_signal(resource, code, "critical", value, unit, message)
@@ -977,9 +1922,9 @@ function M.agent(snapshot, options)
         local complete = pressure.full and pressure.full.avg10
         pressure_metrics[resource] = json.object({ some_avg10 = some, full_avg10 = complete })
         threshold(resource, "sustained_pressure", some, 5, 20, "percent",
-            resource .. " pressure stalls are elevated")
+            resource .. " pressure stalls are elevated", "pressure")
         threshold(resource, "full_pressure", complete, 1, 5, "percent",
-            resource .. " full stalls are elevated")
+            resource .. " full stalls are elevated", "pressure")
     end
 
     local disk_devices = full.disks and full.disks.devices or {}
@@ -996,8 +1941,54 @@ function M.agent(snapshot, options)
             "read_iops", "write_iops", "busy_percent", "average_read_latency_ms",
             "average_write_latency_ms", "in_flight", "quality",
         })
-        threshold("storage", "device_busy", device.busy_percent, 80, 95, "percent",
-            "A block device is saturated")
+    end
+    local busiest_current_disk
+    for _, device in ipairs(disk_devices) do
+        if finite_number(device.busy_percent)
+            and not Quality.UNUSABLE_FOR_ALERT[device.quality] then
+            busiest_current_disk = math.max(busiest_current_disk or device.busy_percent,
+                device.busy_percent)
+        end
+    end
+    threshold("storage", "device_busy", busiest_current_disk, 80, 95, "percent",
+        "A block device is saturated", "disks")
+    local nvme_no_path_failure = false
+    if current_source("disks") then
+        for _, device in ipairs(disk_devices) do
+            local nvme = type(device.nvme) == "table" and device.nvme or nil
+            local counters = nvme and type(nvme.counters) == "table" and nvme.counters or nil
+            local failure = counters and counters.io_failures_no_path
+            if type(failure) == "table" and failure.status == "ok"
+                and failure.delta_quality == "fresh"
+                and finite_number(failure.new) and failure.new > 0 then
+                nvme_no_path_failure = true
+                break
+            end
+        end
+    end
+    if nvme_no_path_failure then
+        add_signal("disks", "nvme_no_path_io_failure", "warning", nil, nil,
+            "NVMe no-path I/O failure counter increased")
+    end
+    local md_degraded = false
+    local active_md_states = { active = true, clean = true,
+        ["active-idle"] = true, readonly = true, ["read-auto"] = true }
+    if current_source("disks") then
+        for _, device in ipairs(disk_devices) do
+            local stack = type(device.stack) == "table" and device.stack or nil
+            if stack and stack.kind == "md" and stack.status == "ok"
+                and active_md_states[stack.array_state]
+                and finite_number(stack.raid_disks) and stack.raid_disks > 0
+                and finite_number(stack.degraded) and stack.degraded > 0
+                and stack.degraded <= stack.raid_disks then
+                md_degraded = true
+                break
+            end
+        end
+    end
+    if md_degraded then
+        add_signal("disks", "md_array_degraded", "warning", nil, nil,
+            "An active MD array reports missing devices")
     end
 
     local interfaces = full.network and full.network.interfaces or {}
@@ -1017,6 +2008,13 @@ function M.agent(snapshot, options)
             "tx_packets_per_second", "rx_errors_per_second", "tx_errors_per_second",
             "rx_dropped_per_second", "tx_dropped_per_second",
         })
+        if type(interface.link_events) == "table" then
+            exported.link_changes_total = interface.link_events.changes_total
+            local change = interface.link_events.change
+            if type(change) == "table" and change.quality == "fresh" then
+                exported.new_link_changes = change.new_changes
+            end
+        end
         top_interfaces[index] = exported
     end
 
@@ -1024,7 +2022,8 @@ function M.agent(snapshot, options)
     for index, process in ipairs(full.processes and full.processes.top or {}) do
         top_processes[index] = copy_fields(process, {
             "id", "pid", "name", "state", "user", "cpu_percent",
-            "resident_bytes", "threads", "io_read_bytes", "io_write_bytes",
+            "cpu_time_seconds", "elapsed_seconds", "resident_bytes", "threads",
+            "io_read_bytes", "io_write_bytes",
             "quality", "partial",
         })
     end
@@ -1032,10 +2031,17 @@ function M.agent(snapshot, options)
     local gpu_devices = full.gpus and full.gpus.devices or {}
     local gpu_summaries = json.array({})
     local maximum_gpu_utilization
+    local maximum_current_gpu_utilization
     for _, device in ipairs(gpu_devices) do
         local utilization = device.metrics and device.metrics.utilization_percent
         if finite_number(utilization) then
             maximum_gpu_utilization = math.max(maximum_gpu_utilization or utilization, utilization)
+            local quality = type(device.quality) == "table"
+                and device.quality.utilization or device.quality
+            if not Quality.UNUSABLE_FOR_ALERT[quality] then
+                maximum_current_gpu_utilization = math.max(
+                    maximum_current_gpu_utilization or utilization, utilization)
+            end
         end
     end
     local ranked_gpus = top_by(gpu_devices, device_limit, function(device)
@@ -1070,8 +2076,9 @@ function M.agent(snapshot, options)
         output.frequencies = export_gpu_frequencies(device.frequencies)
         gpu_summaries[index] = output
     end
-    threshold("gpu", "high_utilization", maximum_gpu_utilization, 85, 97, "percent",
-        "GPU utilization is elevated")
+    threshold("gpu", "high_utilization", maximum_current_gpu_utilization,
+        85, 97, "percent",
+        "GPU utilization is elevated", "gpus")
 
     local temperature_count, fan_count, sensor_power_count = 0, 0, 0
     local top_temperatures = json.array({})
@@ -1099,7 +2106,8 @@ function M.agent(snapshot, options)
                 elseif finite_number(warning) and temperature.temperature_celsius >= warning then
                     severity = "warning"
                 end
-                if severity and (not threshold_temperature
+                if severity and not Quality.UNUSABLE_FOR_ALERT[channel.quality]
+                    and (not threshold_temperature
                     or severity_rank[severity] > severity_rank[threshold_temperature.severity]
                     or (severity == threshold_temperature.severity
                         and temperature.temperature_celsius
@@ -1126,7 +2134,7 @@ function M.agent(snapshot, options)
         end
     end
     local hottest = top_temperatures[1]
-    if threshold_temperature then
+    if threshold_temperature and current_source("sensors") then
         local critical = threshold_temperature.severity == "critical"
         add_signal("sensors", "temperature_threshold", threshold_temperature.severity,
             threshold_temperature.temperature_celsius, "celsius",
@@ -1134,38 +2142,88 @@ function M.agent(snapshot, options)
                 or "A temperature sensor exceeded its maximum threshold")
     end
 
+    -- AER device and root-port counters can observe the same PCIe event, so
+    -- their changes are evidence of a report, not additive event totals.  One
+    -- signal per severity is enough to direct an operator to the reporting
+    -- links; the detailed counters remain in the full snapshot.  A retained
+    -- inventory or a first/reset sample cannot create a new-event signal.
+    local aer_fatal, aer_nonfatal = false, false
+    local function increased(change)
+        return type(change) == "table" and change.quality == "fresh"
+            and finite_number(change.new_reports) and change.new_reports > 0
+    end
+    if current_source("inventory") then
+        for _, device in ipairs(full.inventory and full.inventory.pci
+                and full.inventory.pci.devices or {}) do
+            local aer = type(device.aer) == "table" and device.aer or nil
+            if aer then
+                local root_changes = aer.rootport and aer.rootport.changes
+                aer_fatal = aer_fatal
+                    or increased(aer.fatal and aer.fatal.change)
+                    or increased(root_changes and root_changes.fatal)
+                aer_nonfatal = aer_nonfatal
+                    or increased(aer.nonfatal and aer.nonfatal.change)
+                    or increased(root_changes and root_changes.nonfatal)
+            end
+        end
+    end
+    if aer_fatal then
+        add_signal("inventory", "pcie_aer_fatal", "critical", nil, nil,
+            "New fatal PCIe AER reports were observed; the reporting link may not be the failing endpoint")
+    end
+    if aer_nonfatal then
+        add_signal("inventory", "pcie_aer_nonfatal", "warning", nil, nil,
+            "New nonfatal PCIe AER reports were observed; inspect the reporting links")
+    end
+
     local top_workloads = json.array({})
     for index, workload in ipairs(full.workloads and full.workloads.items or {}) do
         top_workloads[index] = copy_fields(workload, {
-            "id", "name", "depth", "quality", "partial",
+            "id", "name", "depth", "quality", "partial", "cgroup_type",
         })
         top_workloads[index].cpu = copy_fields(workload.cpu, { "utilization_percent" })
         top_workloads[index].memory = copy_fields(workload.memory, { "current_bytes", "max_bytes" })
-        top_workloads[index].processes = copy_fields(workload.processes, { "count" })
+        top_workloads[index].processes = copy_fields(workload.processes,
+            { "count", "visible_count", "hidden_entries", "status" })
+        if workload.threads then
+            top_workloads[index].threads = copy_fields(workload.threads,
+                { "count", "visible_count", "hidden_entries", "status" })
+        end
     end
 
     local data_quality = json.array({})
     local quality_keys = {}
+    -- An absent optional hardware provider is not a failing host.  Keep its
+    -- exact status in data_quality/unavailable_sources; reserve critical
+    -- source alarms for the measurements a top-like monitor needs to work.
     for resource in pairs(full.quality or {}) do quality_keys[#quality_keys + 1] = resource end
     table.sort(quality_keys)
     for _, resource in ipairs(quality_keys) do
         local quality = full.quality[resource]
-        data_quality[#data_quality + 1] = copy_fields(quality, { "status", "quality", "reason" })
+        data_quality[#data_quality + 1] = copy_fields(quality, {
+            "status", "quality", "reason", "value_timestamp_ns", "value_age_ms",
+        })
         data_quality[#data_quality].resource = resource
         local status = quality and quality.status
         local freshness = quality and quality.quality
-        if status == "error" or status == "denied" then
-            add_signal(resource, "data_unavailable", "critical", nil, nil,
-                "A required data source failed")
-        elseif status == "unavailable" then
-            add_signal(resource, "data_unavailable", "warning", nil, nil,
-                "A data source is unavailable")
-        elseif freshness == "stale" or freshness == "gap" or freshness == "reset"
-            or freshness == "estimated" or freshness == "partial"
-            or freshness == "unavailable"
-        then
+        local failure_severity = Quality.SOURCE_FAILURE_SEVERITY[resource]
+        if status and status ~= "ok" then
+            if failure_severity then
+                add_signal(resource, "data_unavailable", failure_severity, nil, nil,
+                    "A monitoring source could not be read")
+            end
+        elseif freshness == "stale" and failure_severity then
             add_signal(resource, "data_stale", "warning", nil, nil,
-                "A data source is not fresh")
+                "A monitoring source is showing a retained value")
+        elseif failure_severity == "critical" and (freshness == "gap"
+                or freshness == "reset") then
+            add_signal(resource, "data_gap", "warning", nil, nil,
+                "A core monitoring rate could not be calculated")
+        elseif failure_severity == "critical" and (freshness == "partial"
+                or freshness == "truncated" or freshness == "error"
+                or freshness == "denied" or freshness == "unavailable") then
+            add_signal(resource, "data_incomplete", "warning", nil, nil,
+                "Part of a core monitoring source is unavailable")
         end
     end
 
@@ -1224,6 +2282,11 @@ function M.agent(snapshot, options)
                 physical_cores = cpu_topology.physical_cores,
                 sockets = cpu_topology.sockets,
                 power_watts = full.power and full.power.total_power_watts,
+                frequency = frequency_metric,
+                thermal_throttle = json.object({
+                    maximum_core_new_events_per_cpu = thermal_core_max,
+                    maximum_package_new_events_per_cpu = thermal_package_max,
+                }),
             }),
             memory = json.object({
                 used_bytes = memory.used_bytes,
@@ -1244,6 +2307,16 @@ function M.agent(snapshot, options)
                 receive_bytes_per_second = sum_field(interfaces, "rx_bytes_per_second", "rates"),
                 transmit_bytes_per_second = sum_field(interfaces, "tx_bytes_per_second", "rates"),
                 interface_count = #interfaces,
+                softnet_status = full.network and full.network.softnet
+                    and full.network.softnet.status,
+                softnet_quality = full.network and full.network.softnet
+                    and full.network.softnet.quality,
+                softnet_backlog_packets = full.network and full.network.softnet
+                    and full.network.softnet.backlog_packets,
+                softnet_dropped_per_second = full.network and full.network.softnet
+                    and full.network.softnet.dropped_per_second,
+                softnet_budget_squeezes_per_second = full.network and full.network.softnet
+                    and full.network.softnet.time_squeeze_per_second,
             }),
             gpu = json.object({
                 device_count = #gpu_devices,

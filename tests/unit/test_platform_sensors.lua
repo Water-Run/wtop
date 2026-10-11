@@ -95,6 +95,8 @@ assert(policy0.boost.enabled == true)
 assert(policy0.frequencies.current_quality == "measured")
 assert(policy0.frequencies.current_source == "cpuinfo_cur_freq")
 assert(policy0.frequencies.current_hz == 2312345000)
+assert(policy0.frequencies.hardware_average_hz == 2280000000,
+  "a hardware feedback average is kept beside the instantaneous reading")
 assert(policy0.frequencies.scaling_current_hz == 2200000000)
 assert(policy0.frequencies.scaling_minimum_hz == 800000000)
 assert(policy0.frequencies.scaling_maximum_hz == 4200000000)
@@ -110,6 +112,86 @@ assert(policy2.frequencies.current_source == "scaling_cur_freq")
 assert(policy2.frequencies.current_hz == 1800000000)
 assert(policy2.boost == nil)
 assert(next(policy2.errors) == nil, "an unsupported optional cpuinfo_cur_freq is not a malformed field")
+
+-- The hardware feedback average is a measured value on kernels that expose
+-- it, even when cpuinfo_cur_freq is absent. EAGAIN on an idle CPU and a zero
+-- value are temporary absence, not a zero-hertz measurement or parse failure.
+cpu_files[cpufreq_base .. "/policy2/cpuinfo_avg_freq"] = "1750000\n"
+local averaged = cpufreq:sample(cpu_context)
+local averaged_policy = averaged.data.by_id["cpus:2,3"]
+assert(averaged.quality == "fresh" and averaged_policy.frequencies.current_quality == "measured")
+assert(averaged_policy.frequencies.current_source == "cpuinfo_avg_freq")
+assert(averaged_policy.frequencies.hardware_average_hz == 1750000000
+  and averaged_policy.frequencies.current_hz == 1750000000)
+local hardware_current_path = cpufreq_base .. "/policy0/cpuinfo_cur_freq"
+local hardware_current = cpu_files[hardware_current_path]
+cpu_files[hardware_current_path] = "0\n"
+local idle_policy = cpufreq:sample(cpu_context).data.by_id["cpus:0,1"]
+assert(idle_policy.frequencies.current_source == "cpuinfo_avg_freq"
+  and idle_policy.errors.cpuinfo_cur_freq == nil,
+  "a zero current value cannot replace valid hardware feedback")
+cpu_files[hardware_current_path] = hardware_current
+local Snapshot = require("wtop.model.snapshot")
+local ViewModel = require("wtop.view_model")
+local I18n = require("wtop.i18n")
+local state = Snapshot.merge(nil, { cpufreq = averaged }, 1, 1)
+local Export = require("wtop.export")
+local TUI = require("wtop.tui")
+local exported = Export.snapshot(state)
+assert(exported.cpu_frequency.policies[2].frequencies.hardware_average_hz == 1750000000)
+local agent_frequency = Export.agent(state).metrics.cpu.frequency
+near(agent_frequency.average_hz, (2312345000 * 2 + 1750000000) / 3, 1)
+assert(agent_frequency.source == "mixed" and agent_frequency.quality == "measured")
+local source_name = state.cpu_frequency.policies[2].frequencies.current_source
+state.cpu_frequency.policies[2].frequencies.current_source = nil
+local unknown_source = Export.agent(state).metrics.cpu.frequency
+assert(unknown_source.quality == "partial" and unknown_source.source == "mixed",
+  "a measured number without provenance cannot become a fully measured summary")
+state.cpu_frequency.policies[2].frequencies.current_source = source_name
+local stale = Snapshot.merge(state, { cpufreq = {
+  status = "error", quality = "error", reason = "read_failed",
+} }, 2, 2)
+assert(Export.agent(stale).metrics.cpu.frequency.average_hz == nil,
+  "a retained frequency after a failed read is not a current agent metric")
+local detail = table.concat(TUI.hardware_detail_lines(state, "cpufreq:cpus:2,3",
+  assert(I18n.new({ locale = "en-US" }))), "\n")
+assert(detail:find("cpuinfo_avg_freq", 1, true)
+  and detail:find("Scaling readout", 1, true),
+  "policy details distinguish hardware feedback from scaling readout")
+local view = ViewModel.build({ history_values = function() return {} end }, state,
+  assert(I18n.new({ locale = "en-US" })), {}, "compute")
+assert(view.cpufreq_table.rows[2].source == "HW average"
+  and view.cpufreq_table.rows[2].quality == "fresh")
+local has_source, has_quality = false, false
+for _, column in ipairs(view.cpufreq_table.columns) do
+  has_source = has_source or column.key == "source"
+  has_quality = has_quality or column.key == "quality"
+end
+assert(has_source and has_quality, "the Compute table states provenance and quality")
+
+local retry_fs = fake_fs(cpu_files, cpu_dirs)
+local regular_read = retry_fs.read
+function retry_fs:read(path, limit)
+  if path == cpufreq_base .. "/policy2/cpuinfo_avg_freq"
+      or path == hardware_current_path then
+    return nil, { kind = "io_error", errno = 11, message = "try again", path = path }
+  end
+  return regular_read(self, path, limit)
+end
+local retried = cpufreq:sample({ fs = retry_fs, now_ns = function() return now end })
+local retried_policy = retried.data.by_id["cpus:2,3"]
+local retried_hardware = retried.data.by_id["cpus:0,1"]
+assert(retried_hardware.frequencies.current_source == "cpuinfo_avg_freq"
+  and retried_hardware.errors.cpuinfo_cur_freq == nil)
+assert(retried_policy.frequencies.current_source == "scaling_cur_freq"
+  and retried_policy.frequencies.current_quality == "estimated")
+assert(retried_policy.errors.cpuinfo_avg_freq == nil and retried.quality == "estimated")
+cpu_files[cpufreq_base .. "/policy2/cpuinfo_avg_freq"] = "0\n"
+local zero_avg = cpufreq:sample(cpu_context).data.by_id["cpus:2,3"]
+assert(zero_avg.frequencies.hardware_average_hz == nil
+  and zero_avg.frequencies.current_source == "scaling_cur_freq"
+  and zero_avg.errors.cpuinfo_avg_freq == nil)
+cpu_files[cpufreq_base .. "/policy2/cpuinfo_avg_freq"] = nil
 
 local parsed = assert(CPUFreq.parse_cpu_list("0-2, 4 6-7", 16, 64))
 assert(table.concat(parsed, ",") == "0,1,2,4,6,7")
@@ -164,12 +246,19 @@ hwmon_reason_is(sensors, "the hwmon sample with one bad channel")
 -- A device that is whole: it has a name, a device target, and a channel with a
 -- readable input.  The fresh case is half the invariant, and a table that lists
 -- only the two degraded qualities would not notice a reason published here.
-local healthy_fs = build_hwmon({ { class = "hwmon0", fixture = "hwmon-healthy.txt" } })
+local healthy_fs, healthy_files, healthy_directories, healthy_links =
+  build_hwmon({ { class = "hwmon0", fixture = "hwmon-healthy.txt" } })
+local class_path = "../../devices/pci0000:00/0000:01:00.0/nvme/nvme0/hwmon0"
+healthy_links[hwmon_base .. "/hwmon0"] = class_path
 local healthy = Hwmon.new():sample({ fs = healthy_fs, now_ns = function() return now end })
 assert(healthy.status == "ok", "a whole hwmon device is sampled")
 assert(healthy.quality == "fresh", "a whole hwmon device is fresh, not estimated")
 assert(#healthy.data.devices == 1)
 local healthy_device = healthy.data.devices[1]
+assert(healthy_device.device_path == class_path,
+  "class symlink preserves ancestry when the device link is relative")
+assert(require("wtop.export").snapshot({ sensors = healthy.data }).sensors.devices[1].device_path
+  == class_path, "the exported sensor preserves its ancestry")
 assert(healthy_device.quality == "fresh"
   and healthy_device.identity_quality == "fresh",
   "a name and a device target are the whole identity")
@@ -180,6 +269,82 @@ assert(healthy_channel.id == "temperature:1" and healthy_channel.quality == "fre
 assert(healthy_channel.input_source == nil,
   "a value read from `input` is not a value derived from somewhere else")
 assert(healthy_channel.readings.average == nil)
+assert(healthy_channel.session and healthy_channel.session.samples == 1)
+near(healthy_channel.session.minimum, 42)
+near(healthy_channel.session.average, 42)
+near(healthy_channel.session.maximum, 42)
+local history_now = now + 1000000000
+local history_context = { fs = healthy_fs, now_ns = function() return history_now end }
+healthy_files[hwmon_base .. "/hwmon0/temp1_input"] = "45000"
+local warmer = Hwmon.new():sample(history_context, healthy)
+local warm_session = warmer.data.devices[1].channels[1].session
+assert(warm_session.samples == 2)
+near(warm_session.minimum, 42)
+near(warm_session.average, 43.5)
+near(warm_session.maximum, 45)
+assert(warm_session.first_timestamp_ns == now and warm_session.last_timestamp_ns == history_now)
+
+-- A failed direct read preserves the previous extrema but is not another
+-- sample. Recovery resumes only when the stable channel is directly measured.
+healthy_files[hwmon_base .. "/hwmon0/temp1_input"] = "bad"
+history_now = history_now + 1000000000
+local unreadable = Hwmon.new():sample(history_context, warmer)
+local held_session = unreadable.data.devices[1].channels[1].session
+assert(unreadable.data.devices[1].channels[1].input == nil)
+assert(held_session.samples == 2 and held_session.last_timestamp_ns == now + 1000000000)
+healthy_files[hwmon_base .. "/hwmon0/temp1_input"] = "39000"
+history_now = history_now + 1000000000
+local recovered = Hwmon.new():sample(history_context, unreadable)
+local recovered_channel = recovered.data.devices[1].channels[1]
+local recovered_session = recovered_channel.session
+assert(recovered_session.samples == 3)
+near(recovered_session.minimum, 39)
+near(recovered_session.average, 42)
+near(recovered_session.maximum, 45)
+local exported_session = require("wtop.export").snapshot({ sensors = recovered.data })
+  .sensors.devices[1].channels[1].session
+assert(exported_session.samples == 3 and exported_session.last_timestamp_ns == history_now,
+  "Snapshot JSON carries direct sample history and its time boundary")
+local translator = assert(require("wtop.i18n").new({ locale = "en-US" }))
+local detail = table.concat(require("wtop.tui").sensor_detail_lines(
+  { sensors = recovered.data }, translator, history_now), "\n")
+assert(detail:find("Session min / avg / max", 1, true)
+    and detail:find("Direct samples: 3", 1, true),
+  "sensor detail names session statistics separately from driver limits")
+
+healthy_files[hwmon_base .. "/hwmon0/temp1_max"] = "bad"
+healthy_directories[hwmon_base .. "/hwmon0"][#healthy_directories[hwmon_base .. "/hwmon0"] + 1] =
+  "temp1_max"
+history_now = history_now + 1000000000
+local partial_threshold = Hwmon.new():sample(history_context, recovered)
+assert(partial_threshold.data.devices[1].channels[1].quality == "partial")
+assert(partial_threshold.data.devices[1].channels[1].session.samples == 4,
+  "a failed threshold read does not discard a fresh direct input")
+
+healthy_files[hwmon_base .. "/hwmon0/temp1_label"] = "Different"
+history_now = history_now + 1000000000
+local relabeled = Hwmon.new():sample(history_context, partial_threshold)
+assert(relabeled.data.devices[1].channels[1].session.samples == 1,
+  "a changed channel label starts a new session history")
+healthy_files[hwmon_base .. "/hwmon0/temp1_input"] = "41000"
+local same_clock = Hwmon.new():sample(history_context, relabeled)
+assert(same_clock.data.devices[1].channels[1].session.samples == 1,
+  "a held monotonic clock cannot count another direct sample")
+healthy_files[hwmon_base .. "/hwmon0/name"] = "replacement"
+history_now = history_now + 1000000000
+local replaced_sensor = Hwmon.new():sample(history_context, same_clock)
+assert(replaced_sensor.data.devices[1].channels[1].session.samples == 1,
+  "a changed device identity cannot inherit old extrema")
+local saved_class_entries = healthy_directories[hwmon_base]
+healthy_directories[hwmon_base] = nil
+history_now = history_now + 1000000000
+local whole_failure = Hwmon.new():sample(history_context, replaced_sensor)
+assert(whole_failure.status ~= "ok")
+healthy_directories[hwmon_base] = saved_class_entries
+history_now = history_now + 1000000000
+local after_failure = Hwmon.new():sample(history_context, whole_failure)
+assert(after_failure.data.devices[1].channels[1].session.samples == 1,
+  "an entire collector failure starts a new verified statistics interval")
 hwmon_reason_is(healthy, "a hwmon sample with nothing wrong")
 
 -- And the fourth case, the one whose absence let a mutation through: a channel
@@ -214,6 +379,8 @@ near(average_channel.readings.average, 125)
 assert(average_channel.input == average_channel.readings.average)
 assert(average_channel.input_source == "average",
   "the channel itself must say which of its readings stood in for the input")
+assert(average_channel.session == nil,
+  "a driver average substituted for input is not a direct session sample")
 hwmon_reason_is(averaged, "a hwmon sample whose input came from an average")
 assert(#sensors.data.devices == 3)
 
@@ -273,6 +440,8 @@ near(mixed.by_id["power:1"].thresholds.cap, 180)
 near(mixed.by_id["voltage:1"].input, 1.2)
 near(mixed.by_id["current:1"].input, 4.5)
 near(mixed.by_id["energy:1"].input, 9.876543)
+assert(mixed.by_id["energy:1"].session == nil,
+  "cumulative energy is not given a level average")
 
 local fallback
 for _, device in ipairs(sensors.data.devices) do
@@ -280,6 +449,16 @@ for _, device in ipairs(sensors.data.devices) do
 end
 assert(fallback and fallback.identity_quality == "estimated")
 assert(fallback.id == "acpitz@class:hwmon12")
+local weak_fs, weak_files =
+  build_hwmon({ { class = "hwmon0", fixture = "hwmon-fallback.txt" } })
+local weak_now = now
+local weak_context = { fs = weak_fs, now_ns = function() return weak_now end }
+local weak_first = Hwmon.new():sample(weak_context)
+weak_files[hwmon_base .. "/hwmon0/temp1_input"] = "43000"
+weak_now = weak_now + 1000000000
+local weak_second = Hwmon.new():sample(weak_context, weak_first)
+assert(weak_second.data.devices[1].channels[1].session.samples == 1,
+  "class-only identity is too weak to carry statistics across samples")
 
 -- Renumbering class entries does not change identities derived from the
 -- device symlink target and driver-provided name.

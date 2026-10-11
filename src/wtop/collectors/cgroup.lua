@@ -17,6 +17,8 @@ local MAX_PIDS_PER_NODE = 65536
 
 local METRIC_FILES = {
   ["cgroup.procs"] = true,
+  ["cgroup.type"] = true,
+  ["cgroup.threads"] = true,
   ["cpu.stat"] = true,
   ["cpu.max"] = true,
   ["cpu.weight"] = true,
@@ -198,19 +200,40 @@ end
 local function parse_procs(content)
   local pids = {}
   local seen = {}
+  local hidden_entries = 0
   for line in tostring(content):gmatch("[^\r\n]+") do
     local pid, parse_error = parse_uint(line)
-    if pid == nil or pid <= 0 then
-      return nil, parse_error or "pid_must_be_positive"
+    if pid == nil then
+      return nil, parse_error
     end
-    if not seen[pid] then
+    if pid == 0 then
+      -- A cgroup mounted outside this PID namespace can contain tasks whose
+      -- IDs cannot be translated here. The kernel renders those entries as
+      -- zero; they are neither process 0 nor proof that the group is empty.
+      hidden_entries = hidden_entries + 1
+    elseif not seen[pid] then
       if #pids >= MAX_PIDS_PER_NODE then return nil, "process_limit_exceeded" end
       seen[pid] = true
       pids[#pids + 1] = pid
     end
   end
   table.sort(pids)
-  return pids
+  return { ids = pids, hidden_entries = hidden_entries }
+end
+
+local function parse_cgroup_type(content)
+  local value = trim(content)
+  if value == "domain" or value == "domain threaded"
+      or value == "domain invalid" or value == "threaded" then
+    return value
+  end
+  return nil, "invalid_cgroup_type"
+end
+
+local function unsupported_procs(err)
+  return type(err) == "table" and (err.errno == 95
+    or tostring(err.message or ""):lower():find("operation not supported", 1, true)
+      ~= nil)
 end
 
 local function parse_io_stat(content)
@@ -361,7 +384,7 @@ local function empty_workload(item, semantics)
     partial = false,
     issue_count = 0,
     issues = {},
-    processes = { count = 0, pids = {} },
+    processes = { count = nil, pids = {}, status = "unavailable" },
     cpu = { counters = {}, rates = {} },
     memory = { events = {}, event_rates = {} },
     io = { devices = {}, by_id = {}, totals = { counters = {}, rates = {} } },
@@ -405,7 +428,8 @@ local function absent_by_design(filename, present, error_value)
     and error_value.kind == "missing"
 end
 
-local function read_metric(fs, node, scan, present, filename, field, parser, limit, allow_empty)
+local function read_metric(fs, node, scan, present, filename, field, parser, limit,
+    allow_empty, defer_read_error)
   local path = node.path .. "/" .. filename
   local content, read_error = fs:read(path, limit or MAX_FILE_BYTES)
   -- Lua's fixed-size file:read() returns nil (without a distinct errno) for
@@ -415,6 +439,7 @@ local function read_metric(fs, node, scan, present, filename, field, parser, lim
     content = ""
   end
   if not content then
+    if defer_read_error then return nil, read_error end
     if not absent_by_design(filename, present, read_error) then
       add_issue(node, scan, field, read_error, "read_failed", path)
     end
@@ -479,9 +504,34 @@ local function derive_pressure_rates(node, kind, current, previous, elapsed_ns)
 end
 
 local function populate_metrics(fs, node, scan, present, previous_node, elapsed_ns)
-  local procs = read_metric(fs, node, scan, present, "cgroup.procs", "processes", parse_procs, nil, true)
+  local procs, procs_error = read_metric(fs, node, scan, present,
+    "cgroup.procs", "processes", parse_procs, nil, true, true)
   if procs then
-    node.processes = { count = #procs, pids = procs }
+    node.processes = { count = procs.hidden_entries == 0 and #procs.ids or nil,
+      visible_count = #procs.ids, pids = procs.ids,
+      hidden_entries = procs.hidden_entries,
+      status = procs.hidden_entries > 0 and "partial" or "ok" }
+  elseif procs_error then
+    local cgroup_type = unsupported_procs(procs_error)
+      and read_metric(fs, node, scan, present,
+        "cgroup.type", "cgroup_type", parse_cgroup_type, 128) or nil
+    node.cgroup_type = cgroup_type
+    if cgroup_type == "threaded" then
+      local tids, thread_error = read_metric(fs, node, scan, present,
+        "cgroup.threads", "threads", parse_procs, nil, true, true)
+      if thread_error and not absent_by_design("cgroup.threads", present, thread_error) then
+        add_issue(node, scan, "threads", thread_error,
+          "read_failed", node.path .. "/cgroup.threads")
+      end
+      node.threads = { count = tids and tids.hidden_entries == 0 and #tids.ids or nil,
+        visible_count = tids and #tids.ids or nil, tids = tids and tids.ids or {},
+        hidden_entries = tids and tids.hidden_entries or nil,
+        status = tids and (tids.hidden_entries > 0 and "partial" or "ok")
+          or FS.error_status(thread_error) }
+    elseif not absent_by_design("cgroup.procs", present, procs_error) then
+      add_issue(node, scan, "processes", procs_error,
+        "read_failed", node.path .. "/cgroup.procs")
+    end
   end
 
   local cpu_counters = read_metric(fs, node, scan, present, "cpu.stat", "cpu.counters", parse_key_values)
@@ -940,6 +990,7 @@ function Cgroup:sample(context, previous)
     root_id = self.root_id,
     node_count = #workloads,
     visible_process_count = 0,
+    unknown_process_nodes = 0,
     partial_node_count = 0,
     fresh_node_count = 0,
     gap_node_count = 0,
@@ -961,7 +1012,11 @@ function Cgroup:sample(context, previous)
   local pods = {}
   local service_count, container_count, user_session_count, pod_count = 0, 0, 0, 0
   for _, node in ipairs(workloads) do
-    summary.visible_process_count = summary.visible_process_count + node.processes.count
+    summary.visible_process_count = summary.visible_process_count
+      + (node.processes.visible_count or 0)
+    if type(node.processes.count) ~= "number" then
+      summary.unknown_process_nodes = summary.unknown_process_nodes + 1
+    end
     if node.partial then
       summary.partial_node_count = summary.partial_node_count + 1
     end

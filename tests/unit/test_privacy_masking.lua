@@ -74,6 +74,28 @@ equal(masked.connection_table.rows[2].remote_endpoint, "[2001:db8:…]:443",
   "masking on truncates the remote IPv6 address")
 equal(masked.connection_table.rows[1].local_endpoint, "10.0.0.1:51000",
   "local endpoints are never masked")
+local hidden_search = ViewModel.build(engine, snapshot, translator, {}, "network",
+  nil, nil, { mask_remote_addresses = true, connection_query = "203.0.113.9" })
+equal(#hidden_search.connection_table.rows, 0,
+  "masked address bytes cannot be found through the connection filter")
+local visible_search = ViewModel.build(engine, snapshot, translator, {}, "network",
+  nil, nil, { mask_remote_addresses = true, connection_query = "203.0.113.X" })
+equal(#visible_search.connection_table.rows, 1,
+  "the filter searches the masked endpoint that the table displays")
+local exact_search = ViewModel.build(engine, snapshot, translator, {}, "network",
+  nil, nil, { connection_query = "203.0.113.9" })
+equal(#exact_search.connection_table.rows, 1,
+  "the unmasked table can search its full visible endpoint")
+local structured_hidden = ViewModel.build(engine, snapshot, translator, {}, "network",
+  nil, nil, { mask_remote_addresses = true,
+    connection_query = "proto:tcp remote:203.0.113.9" })
+equal(#structured_hidden.connection_table.rows, 0,
+  "a remote field query cannot search bytes hidden by masking")
+local structured_visible = ViewModel.build(engine, snapshot, translator, {}, "network",
+  nil, nil, { mask_remote_addresses = true,
+    connection_query = "proto:tcp remote:203.0.113.x local:10.0.0.1" })
+equal(#structured_visible.connection_table.rows, 1,
+  "field queries combine visible remote and unmasked local endpoints")
 
 -- The config default keeps today's full-display behaviour; the file key only
 -- accepts booleans; snapshots keep masking by default regardless of config.

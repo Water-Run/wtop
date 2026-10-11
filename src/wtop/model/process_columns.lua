@@ -47,8 +47,14 @@ local CATALOGUE = {
   { key = "state", default_visible = true, label = "S" },
   { key = "cpu", default_visible = true, label = "CPU" },
   { key = "time", default_visible = true, label = "TIME+" },
+  { key = "elapsed", label = "ETIME" },
   { key = "threads", default_visible = true, label_id = "metrics.threads", label = "Thr" },
   { key = "name", required = true, label_id = "metrics.command", label = "Command" },
+  { key = "io_read_rate", label = "IO R/s" },
+  { key = "io_write_rate", label = "IO W/s" },
+  -- The leader task's kernel sleep location exists only on Linux. Keep it
+  -- opt-in: each drawn row costs a procfs read and an identity recheck.
+  { key = "wait_site", label = "WCHAN", linux_only = true },
   -- Hidden by default.  Run-queue wait is read only for the rows the viewport
   -- is showing, so a row that has just scrolled into view has no reading for a
   -- tick; adding this to the default set would therefore ship a column that is
@@ -115,20 +121,31 @@ end
 -- Every column the editor offers, in catalogue order, each carrying whether it
 -- is currently drawn.  The editor shows hidden columns too: a column the user
 -- cannot see is a column they cannot switch back on.
-function M.entries(visible)
+function M.entries(visible, linux_host)
   local state = M.normalize(visible)
+  if linux_host == false then
+    local portable = {}
+    for _, key in ipairs(state) do
+      if not CATALOGUE[INDEX[key]].linux_only then
+        portable[#portable + 1] = key
+      end
+    end
+    state = portable
+  end
   local shown = {}
   for _, key in ipairs(state) do shown[key] = true end
   local result = {}
   for _, entry in ipairs(CATALOGUE) do
-    result[#result + 1] = {
-      key = entry.key,
-      visible = shown[entry.key] == true,
-      required = entry.required == true,
-      position = shown[entry.key] and index_of(state, entry.key) or nil,
-      label_id = entry.label_id,
-      label = entry.label or entry.key,
-    }
+    if not entry.linux_only or linux_host ~= false then
+      result[#result + 1] = {
+        key = entry.key,
+        visible = shown[entry.key] == true,
+        required = entry.required == true,
+        position = shown[entry.key] and index_of(state, entry.key) or nil,
+        label_id = entry.label_id,
+        label = entry.label or entry.key,
+      }
+    end
   end
   return result
 end
@@ -170,11 +187,18 @@ end
 -- Moves a column one place left or right.  A move that would leave the list is
 -- refused rather than clamped silently, because a key that appears to do
 -- nothing should not report that it did.
-function M.move(visible, key, direction)
+function M.move(visible, key, direction, linux_host)
   local state = M.normalize(visible)
   local at = index_of(state, key)
   if not at then return state, "column_hidden" end
-  local target = direction < 0 and at - 1 or at + 1
+  local step = direction < 0 and -1 or 1
+  local target = at + step
+  if linux_host == false then
+    while target >= 1 and target <= #state
+        and CATALOGUE[INDEX[state[target]]].linux_only do
+      target = target + step
+    end
+  end
   if target < 1 or target > #state then return state, "column_edge" end
   state[at], state[target] = state[target], state[at]
   return state

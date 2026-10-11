@@ -74,6 +74,52 @@ assert(models.process_table.rows[2].name:find("  · ", 1, true))
 assert(models.process_table.status_text:find("needle", 1, true))
 assert(models.process_table.status_text:find("进程树", 1, true))
 
+-- PRI and NI are the values already printed in the table, so their headers
+-- must offer the same sort operation and the status line must name that sort.
+controller:set_query("")
+assert(controller:select_id("1:10") and select(1, controller:toggle_collapse()))
+models = ViewModel.build(engine, snapshot({ root, child, other }), translator, {},
+    "processes", controller)
+assert(#models.process_table.rows == 1)
+assert(models.process_table.rows[1].name:find("▸ ", 1, true))
+assert(models.process_table.status_text:find("折叠隐藏 2 行", 1, true))
+assert(not models.process_table.status.truncated,
+    "folded rows are not a collection or table-cap truncation")
+assert(select(1, controller:toggle_collapse()))
+controller:toggle_tree()
+root.priority, root.nice = 20, 0
+child.priority, child.nice = 10, -5
+other.priority, other.nice = nil, nil
+controller:set_sort("nice", false)
+models = ViewModel.build(engine, snapshot({ root, child, other }), translator, {},
+    "processes", controller)
+assert(models.process_table.rows[1].id == "2:20")
+assert(models.process_table.status_text:find("Nice 值", 1, true))
+local clickable = {}
+for _, column in ipairs(models.process_table.columns) do
+    clickable[column.key] = column.sort_key
+end
+assert(clickable.priority == "priority" and clickable.nice == "nice")
+controller:set_sort("time", true)
+models = ViewModel.build(engine, snapshot({ root, child, other }), translator, {},
+    "processes", controller)
+assert(models.process_table.status_text:find("CPU 时间", 1, true),
+    "sorting by time must not be labelled as sorting by CPU percentage")
+local english = assert(I18n.new({ locale = "en-US" }))
+assert(english:t("process.no_visible_child", { pid = 2 }):find("child", 1, true))
+assert(english:t("process.no_visible_parent", { pid = 2 }):find("parent", 1, true))
+assert(english:t("process.tree_navigation_disabled"):find("Press t", 1, true),
+    "the three tree-navigation messages must name the condition they render")
+for _, key in ipairs(ProcessTable.sort_order) do
+    assert(controller:set_sort(key, true))
+    local label = english:t("process.sort." .. key)
+    assert(label ~= "process.sort." .. key, "missing sort label for " .. key)
+    local current = ViewModel.build(engine, snapshot({ root, child, other }), english, {},
+        "processes", controller).process_table
+    assert(current.status_text:find("Sort: " .. label .. " ", 1, true),
+        "the status line names the actual sort key " .. key)
+end
+
 -- Search editing removes one Unicode codepoint, not one byte.
 assert(TUI.utf8_backspace("abc测试") == "abc测")
 assert(TUI.utf8_backspace("中") == "")

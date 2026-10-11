@@ -3,7 +3,28 @@ local Snapshot = {}
 local RESOURCE_KEYS = {
   cpu = true,
   cpu_info = true,
+  thermal_throttle = true,
+  cpuidle = true,
   memory = true,
+  numa = true,
+  memory_devices = true,
+  expansion_slots = true,
+  port_connectors = true,
+  onboard_devices = true,
+  firmware_batteries = true,
+  firmware_power_supplies = true,
+  firmware_bmcs = true,
+  firmware_tpms = true,
+  firmware_components = true,
+  firmware_esrt = true,
+  tpm = true,
+  watchdog = true,
+  rfkill = true,
+  thermal_zones = true,
+  host_interfaces = true,
+  processor_firmware = true,
+  edac = true,
+  spd = true,
   pressure = true,
   disks = true,
   network = true,
@@ -82,7 +103,28 @@ function Snapshot.new(sequence, timestamp_ns)
     timestamp_ns = timestamp_ns,
     cpu = {},
     cpu_info = {},
+    thermal_throttle = {},
+    cpuidle = {},
     memory = {},
+    numa = {},
+    memory_devices = {},
+    expansion_slots = {},
+    port_connectors = {},
+    onboard_devices = {},
+    firmware_batteries = {},
+    firmware_power_supplies = {},
+    firmware_bmcs = {},
+    firmware_tpms = {},
+    firmware_components = {},
+    firmware_esrt = {},
+    tpm = {},
+    watchdog = {},
+    rfkill = {},
+    thermal_zones = {},
+    host_interfaces = {},
+    processor_firmware = {},
+    edac = {},
+    spd = {},
     pressure = {},
     disks = {},
     network = {},
@@ -142,7 +184,19 @@ function Snapshot.merge(previous, results, sequence, timestamp_ns)
     if not VALID_STATUS[status] or not VALID_QUALITY[quality] then
       status, quality = "error", "error"
     end
-    if RESOURCE_KEYS[resource] and status == "ok" and result.data ~= nil then
+    local installed = RESOURCE_KEYS[resource] and status == "ok" and result.data ~= nil
+    local attempt_ns = type(result) == "table" and nonnegative_number(result.timestamp_ns)
+        and result.timestamp_ns or snapshot.timestamp_ns
+    local previous_value_ns = previous.quality and previous.quality[resource]
+        and previous.quality[resource].value_timestamp_ns
+    local value_timestamp_ns
+    if installed then
+      value_timestamp_ns = math.min(attempt_ns, snapshot.timestamp_ns)
+    elseif nonnegative_number(previous_value_ns)
+        and previous_value_ns <= snapshot.timestamp_ns then
+      value_timestamp_ns = previous_value_ns
+    end
+    if installed then
       snapshot[resource] = result.data
     elseif RESOURCE_KEYS[resource] and previous[resource] ~= nil then
       -- Preserve the last usable sample, but never preserve its freshness.
@@ -158,8 +212,10 @@ function Snapshot.merge(previous, results, sequence, timestamp_ns)
       status = status,
       quality = quality,
       reason = type(result) == "table" and result.reason or nil,
-      timestamp_ns = type(result) == "table" and nonnegative_number(result.timestamp_ns)
-          and result.timestamp_ns or snapshot.timestamp_ns,
+      timestamp_ns = attempt_ns,
+      -- Nil means no installed value has a known provenance.  A failed read
+      -- changes the attempt time, never the time of the retained value.
+      value_timestamp_ns = value_timestamp_ns,
       duration_ns = type(result) == "table" and nonnegative_number(result.duration_ns)
           and result.duration_ns or nil,
     }

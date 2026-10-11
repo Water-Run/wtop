@@ -172,6 +172,7 @@ equal(service.id, "10:" .. tostring(filetime - 100 * 10000000), "identity joins 
 equal(process_first.data.by_id[service.id], service, "processes are indexed by identity")
 equal(service.quality, "estimated", "first frame uses the lifetime average")
 close(service.cpu_percent, 20, 1e-6, "20 s of CPU over 100 s is 20%")
+close(service.elapsed_seconds, 100, 1e-3, "FILETIME creation produces process age")
 equal(process_first.data.by_pid[11].quality, "gap", "a denied process has no CPU value")
 equal(process_first.quality, "partial", "a denied process makes the sample partial")
 portable_reason_is(process_first, "a sample with a denied process")
@@ -180,6 +181,22 @@ equal(process_second.quality, "fresh", "a complete second sample is fresh")
 portable_reason_is(process_second, "a complete process sample")
 equal(process_second.data.by_pid[10].quality, "fresh", "interval CPU is fresh")
 close(process_second.data.by_pid[10].cpu_percent, 100, 1e-6, "50 ticks in 0.5 s is one full core")
+close(process_first.data.by_pid[10].cpu_time_seconds, 20, 1e-9,
+    "portable process CPU time is published in seconds")
+local unusual_ticks = collectors(fake_native({ collect_process = {
+    { clock_ticks_per_second = 250, list = {
+        { pid = 30, starttime_ticks = 1, cpu_ticks = 375 },
+    } },
+} })).process:sample(at(0))
+close(unusual_ticks.data.by_pid[30].cpu_time_seconds, 1.5, 1e-9,
+    "portable CPU time uses the provider's tick rate")
+local mac_age = collectors(fake_native({ realtime_ns = unix_ns,
+    collect_process = { { starttime_unit = "unix_us", list = {
+        { pid = 31, starttime_ticks = unix_ns // 1000 - 30000000, cpu_ticks = 0 },
+    } } },
+})).process:sample(at(0))
+close(mac_age.data.by_pid[31].elapsed_seconds, 30, 1e-3,
+    "microsecond Unix creation time produces process age")
 
 -- A reused PID with a new start time is a new process, not a CPU delta.
 local reused = collectors(fake_native({ collect_process = {
@@ -351,5 +368,135 @@ equal(ownerless.owner_scan.status, "unavailable", "pre-SP2 XP has no owner PIDs"
 equal(ownerless.connections[1].owners_quality, "unavailable", "row owner quality")
 equal(ownerless.connections[1].owner_count, nil,
   "a backend that could not look up owners does not report that there are none")
+
+-- Portable hwmon data has direct native inputs but no Linux readings.input
+-- table. Stable device IDs and channel labels allow the same session model.
+local function thermal(value, label, quality, source)
+  return { devices = { {
+    id = "acpi_thermal_zones", class = "acpi_thermal_zones",
+    name = "ACPI thermal zone", identity_quality = "fresh",
+    quality = "fresh", source = "pdh:Thermal Zone Information",
+    channels = { { id = "temp1", type = "temperature", unit = "celsius",
+      label = label or "TZ0", input = value, input_source = source or "pdh",
+      quality = quality or "fresh" } },
+  } } }
+end
+local portable_hwmon = collectors(fake_native({ collect_hwmon = {
+  thermal(40), thermal(44), thermal(47, nil, "estimated"),
+  thermal(50, "Another zone"), thermal(52, "Another zone", "fresh", "average"),
+} })).hwmon
+local thermal_first = portable_hwmon:sample(at(1000000000))
+local thermal_second = portable_hwmon:sample(at(2000000000), thermal_first)
+local session = thermal_second.data.devices[1].channels[1].session
+equal(session.samples, 2, "portable direct input accumulates across samples")
+close(session.minimum, 40, 1e-9, "portable session minimum")
+close(session.average, 42, 1e-9, "portable session average")
+close(session.maximum, 44, 1e-9, "portable session maximum")
+local portable_export = require("wtop.export").snapshot({ sensors = thermal_second.data })
+equal(portable_export.sensors.devices[1].channels[1].session.samples, 2,
+  "portable session statistics reach Snapshot JSON")
+local estimated_thermal = portable_hwmon:sample(at(3000000000), thermal_second)
+equal(estimated_thermal.data.devices[1].channels[1].session.samples, 2,
+  "an estimated native input does not enter direct statistics")
+local stale_payload = thermal(47)
+stale_payload.quality = "stale"
+local stale_thermal = collectors({
+  collect_hwmon = function() return stale_payload end,
+}).hwmon:sample(at(3000000000), thermal_second)
+equal(stale_thermal.data.devices[1].channels[1].session.samples, 2,
+  "a stale native collector value does not become another direct sample")
+local stale_device = thermal(47)
+stale_device.devices[1].quality = "stale"
+local held_native_device = collectors({
+  collect_hwmon = function() return stale_device end,
+}).hwmon:sample(at(3000000000), thermal_second)
+equal(held_native_device.data.devices[1].channels[1].session.samples, 2,
+  "a stale native device does not increment the session even if its channel says fresh")
+local relabeled_thermal = portable_hwmon:sample(at(4000000000), estimated_thermal)
+equal(relabeled_thermal.data.devices[1].channels[1].session.samples, 1,
+  "a changed native channel label starts a new series")
+local substituted_thermal = portable_hwmon:sample(at(5000000000), relabeled_thermal)
+equal(substituted_thermal.data.devices[1].channels[1].session.samples, 1,
+  "a native average substituted for input is not counted")
+
+local function hid(value)
+  return { devices = { { id = "hid:Thermal", class = "hid:Thermal",
+    name = "Thermal", source = "iohid", identity_quality = "fresh",
+    quality = "fresh",
+    channels = { { id = "temperature1", type = "temperature",
+      unit = "celsius", label = "Board", input = value, quality = "fresh" } },
+  } } }
+end
+local mac_hwmon = collectors(fake_native({ collect_hwmon = {
+  hid(32), hid(35),
+} })).hwmon
+local mac_first = mac_hwmon:sample(at(1000000000))
+local mac_second = mac_hwmon:sample(at(2000000000), mac_first)
+close(mac_second.data.devices[1].channels[1].session.average, 33.5, 1e-9,
+  "macOS HID-shaped direct readings use the shared session model")
+local function smc(value)
+  return { devices = { { id = "smc", class = "smc", name = "SMC",
+    source = "smc", identity_quality = "fresh", quality = "fresh",
+    channels = { { id = "power1", type = "power", unit = "watts",
+      label = "System total", input = value, input_source = "PSTR",
+      quality = "fresh" } },
+  } } }
+end
+local mac_power = collectors(fake_native({ collect_hwmon = {
+  smc(10), smc(20),
+} })).hwmon
+local power_first = mac_power:sample(at(1000000000))
+local power_second = mac_power:sample(at(2000000000), power_first)
+close(power_second.data.devices[1].channels[1].session.average, 15, 1e-9,
+  "a named macOS SMC source is still a direct measurement")
+
+local duplicate_native = collectors({
+  collect_hwmon = function()
+    return { devices = { { id = "acpi_thermal_zones",
+      class = "acpi_thermal_zones", name = "ACPI thermal zone",
+      source = "pdh:Thermal Zone Information", identity_quality = "fresh",
+      quality = "fresh",
+      channels = {
+        { id = "temp1", type = "temperature", unit = "celsius",
+          label = "TZ0", input = 46, input_source = "pdh", quality = "fresh" },
+        { id = "temp1", type = "temperature", unit = "celsius",
+          label = "TZ1", input = 49, input_source = "pdh", quality = "fresh" },
+      },
+    } } }
+  end,
+}).hwmon:sample(at(3000000000), thermal_second)
+equal(duplicate_native.data.devices[1].channels[1].session.samples, 1,
+  "duplicate native channel IDs cannot inherit another channel's extrema")
+local changed_source = thermal(46)
+changed_source.devices[1].source = "different-provider"
+local changed_source_result = collectors({
+  collect_hwmon = function() return changed_source end,
+}).hwmon:sample(at(3000000000), thermal_second)
+equal(changed_source_result.data.devices[1].channels[1].session.samples, 1,
+  "a changed native provider cannot inherit an old device series")
+local duplicated_devices = thermal(46)
+duplicated_devices.devices[2] = thermal(49).devices[1]
+local ambiguous_devices = collectors({
+  collect_hwmon = function() return duplicated_devices end,
+}).hwmon:sample(at(3000000000), thermal_second)
+equal(ambiguous_devices.data.devices[1].channels[1].session.samples, 1,
+  "duplicate native device IDs cannot inherit the first matching history")
+local duplicate_labels = thermal(46)
+duplicate_labels.devices[1].channels[2] = {
+  id = "temp2", type = "temperature", unit = "celsius",
+  label = "TZ0", input = 49, input_source = "pdh", quality = "fresh",
+}
+local ambiguous_labels = collectors({
+  collect_hwmon = function() return duplicate_labels end,
+}).hwmon:sample(at(3000000000), thermal_second)
+equal(ambiguous_labels.data.devices[1].channels[1].session.samples, 1,
+  "duplicate native labels of the same type cannot carry historical extrema")
+local unlabeled = thermal(46)
+unlabeled.devices[1].channels[1].label = nil
+local weak_label = collectors({
+  collect_hwmon = function() return unlabeled end,
+}).hwmon:sample(at(3000000000), thermal_second)
+equal(weak_label.data.devices[1].channels[1].session.samples, 1,
+  "a native channel without a stable label starts a new series")
 
 return true

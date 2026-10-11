@@ -6,7 +6,7 @@ it; the repository carries no other third-party runtime code.
 | Component | Version | License | Role |
 | --- | --- | --- | --- |
 | [PUC Lua](https://www.lua.org/) | 5.5.1 | MIT © 1994–2026 Lua.org, PUC-Rio | The runtime. Bundled with the onedir/onefile and platform development bundles |
-| [luainstaller](https://luarocks.org/modules/) | 1.3.0 | LGPL-3.0-or-later | Build-time packaging tool for the onedir/onefile bundles; not present in the produced executables |
+| [luainstaller](https://github.com/Water-Run/luainstaller/releases/tag/v1.5.0) | 1.5.0 | LGPL-3.0-or-later | Packaging tool; generated launchers and license notices ship in the onedir/onefile bundles |
 
 Throughout this file, a path in `backticks` is one the release actually
 contains. A path in quotes is being talked about, not shipped.
@@ -18,7 +18,7 @@ under lua-src/doc/", which was not true of any release: no bundle has ever
 contained a lua-src directory, and the sentence had never been checked against
 one. It is the same defect this file's neighbours had — a statement about the
 artifacts that no artifact agreed with. The luainstaller payload is locked by
-hash in `tools/luainstaller-1.3.0.sha256` and runs only during packaging.
+hash in `tools/luainstaller-1.5.0.sha256` and runs only during packaging.
 
 ## What a release actually carries
 

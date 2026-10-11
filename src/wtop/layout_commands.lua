@@ -1,6 +1,6 @@
 -- Layout import and export as explicit commands. Export writes the layout
 -- the TUI would load right now (persisted file or built-in defaults) as
--- schema-v2 YAML; import validates a file and installs it as the persisted
+-- layout YAML; import validates a file and installs it as the persisted
 -- layout, keeping the previous file as the one-generation backup; migrate
 -- rewrites the persisted file itself in the form the current encoder
 -- produces, without a session, so upgrading an old file is scriptable the
@@ -18,23 +18,25 @@ function M.export(output_path, layout_path)
     if type(output_path) ~= "string" or output_path == "" then
         return nil, "an output path is required"
     end
-    local orders, status, trees, workspaces, active, columns = LayoutStore.load(
+    local orders, status, trees, workspaces, active, columns, tabs, custom_pages = LayoutStore.load(
         Workspace.default_orders(), layout_path)
     if status.state == "error" then
         -- A broken persisted layout must not block the export: dumping the
         -- defaults is the recovery starting point, with the reason attached.
         orders = Workspace.default_orders()
-        trees, workspaces, active, columns = nil, nil, nil, nil
+        trees, workspaces, active, columns, tabs, custom_pages =
+            nil, nil, nil, nil, nil, nil
         status = { state = "default",
             reason = "persisted layout ignored: " .. tostring(status.reason) }
     end
     -- encode() falls back to the linear v1 form without trees; an empty tree
     -- table keeps the v2 branch, which fills each page from its default tree.
     -- A workspace set exports as v3 so a backup carries every arrangement, not
-    -- only the one that happened to be live; a column set makes it v4, so an
+    -- only the one that happened to be live; columns make it v4 and tabs or
+    -- removed widgets make it v5, so an
     -- export is a backup that can actually be restored.
     local encoded, content = pcall(LayoutStore.encode, orders, trees or {}, workspaces, active,
-        columns)
+        columns, tabs, Workspace.default_orders(custom_pages), custom_pages)
     if not encoded then return nil, tostring(content) end
     if native.available and type(native.atomic_write) == "function" then
         local written, write_error = native.atomic_write(output_path, content, 384)
@@ -60,7 +62,7 @@ function M.import(input_path, target_path)
             .. tostring(read_error and read_error.message or read_error)
     end
     local defaults = Workspace.default_orders()
-    local orders, trees_or_error, workspaces, active, columns =
+    local orders, trees_or_error, workspaces, active, columns, tabs, custom_pages =
         LayoutStore.parse(text, defaults, input_path)
     if not orders then
         return nil, "not a valid layout file: " .. tostring(trees_or_error)
@@ -70,7 +72,8 @@ function M.import(input_path, target_path)
     -- A v4 file carries the column set with the same intent: importing a backup
     -- restores the table the user had, not just the arrangement around it.
     local saved, save_error = LayoutStore.save(orders, target_path, trees_or_error,
-        workspaces, active, columns)
+        workspaces, active, columns, tabs,
+        Workspace.default_orders(custom_pages), custom_pages)
     if not saved then
         return nil, "cannot install the layout: " .. tostring(save_error)
     end
@@ -95,7 +98,7 @@ function M.migrate(layout_path)
     if not layout_path then
         return true, "no layout path (HOME is not set); nothing to migrate"
     end
-    local orders, status, trees, workspaces, active, columns = LayoutStore.load(
+    local orders, status, trees, workspaces, active, columns, tabs, custom_pages = LayoutStore.load(
         Workspace.default_orders(), layout_path)
     if status.state == "error" then
         return nil, "cannot migrate " .. layout_path .. ": "
@@ -107,7 +110,8 @@ function M.migrate(layout_path)
         return true, "no persisted layout at " .. layout_path .. "; nothing to migrate"
     end
     local encoded, content = pcall(LayoutStore.encode, orders, trees or {},
-        workspaces, active, columns)
+        workspaces, active, columns, tabs, Workspace.default_orders(custom_pages),
+        custom_pages)
     if not encoded then return nil, tostring(content) end
     local current = FS.default:read(layout_path, MAX_LAYOUT_BYTES)
     if current == content then
@@ -117,7 +121,8 @@ function M.migrate(layout_path)
         return true, layout_path .. " is already in the current form"
     end
     local saved, save_error = LayoutStore.save(orders, layout_path, trees,
-        workspaces, active, columns)
+        workspaces, active, columns, tabs, Workspace.default_orders(custom_pages),
+        custom_pages)
     if not saved then
         return nil, "cannot write the migrated layout: " .. tostring(save_error)
     end

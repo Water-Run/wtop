@@ -1,6 +1,9 @@
 package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
 
 local Export = require("wtop.export")
+local Report = require("wtop.report")
+local Snapshot = require("wtop.model.snapshot")
+local TUI = require("wtop.tui")
 local json = require("wtop.format.json")
 
 local private_connection_id = "tcp:127.0.0.1:8080:192.0.2.42:54321:01"
@@ -41,9 +44,21 @@ local result = Export.snapshot({
                 { pid = 2, fd = 7, name = "worker" },
             } },
     } },
-    processes = { list = {
+    processes = { io_scan = { status = "partial", covered = 1, total = 2,
+        rate_covered = 1, refreshed = 2, reused = 0, capped = 0,
+        observed_ns = 10, refresh_interval_ns = 2000000000,
+        private = "omit" }, list = {
         { id = "1:1", pid = 1, name = "init", cpu_percent = 1 },
-        { id = "2:1", pid = 2, name = "worker", cpu_percent = 10 },
+        { id = "2:1", pid = 2, name = "worker", cpu_percent = 10,
+          io = { read_bytes = 4096, write_bytes = 8192, rchar = 5000,
+            private = "omit" },
+          io_observed_ns = 10,
+          io_rate = { read_bytes_per_second = 1024,
+            write_bytes_per_second = 2048, interval_ns = 4000000000,
+            observed_ns = 10, quality = "fresh", private = "omit" },
+          affinity = { cpus_allowed_list = "0-1", cpus_allowed_count = 2,
+            mems_allowed_list = "0", mems_allowed_count = 1,
+            status = "ok", observed_ns = 9, issues = {}, private = "omit" } },
     } },
     gpus = {
         schema = "dev.waterrun.wtop.gpu/v2",
@@ -123,6 +138,22 @@ assert(result.disks.devices[1].logical_sector_size_bytes == 4096)
 assert(result.disks.devices[1].physical_sector_size_bytes == 4096)
 assert(result.processes.total == 2)
 assert(result.processes.top[1].pid == 2)
+assert(result.processes.io_scan.status == "partial"
+  and result.processes.io_scan.covered == 1
+  and result.processes.io_scan.private == nil)
+assert(result.processes.top[1].io.read_bytes == 4096
+  and result.processes.top[1].io.write_bytes == 8192
+  and result.processes.top[1].io.private == nil)
+assert(result.processes.top[1].io_observed_ns == 10
+  and result.processes.top[1].io_rate.read_bytes_per_second == 1024
+  and result.processes.top[1].io_rate.quality == "fresh"
+  and result.processes.top[1].io_rate.private == nil,
+  "snapshot exports the bounded process I/O readings and their sample quality")
+assert(result.processes.top[1].affinity.cpus_allowed_list == "0-1"
+  and result.processes.top[1].affinity.cpus_allowed_count == 2
+  and result.processes.top[1].affinity.observed_ns == 9
+  and result.processes.top[1].affinity.private == nil,
+  "snapshot exports only bounded, observed affinity fields")
 assert(result.connections.items[1].remote_address == "192.0.2.x")
 assert(result.connections.items[1].id:find("192.0.2.x", 1, true))
 assert(not result.connections.items[1].id:find("192.0.2.42", 1, true))
@@ -147,6 +178,15 @@ assert(encoded:find('"schema":"dev.waterrun.wtop.gpu/v2"', 1, true))
 assert(encoded:find('"stable_id":"pci:0000:03:00.0"', 1, true))
 assert(encoded:find('"process_scan":{', 1, true))
 assert(encoded:find('"hwmon_refs":[', 1, true))
+local report = Report.render(result)
+assert(report:find("# wtop hardware report", 1, true)
+    and report:find("Example CPU", 1, true)
+    and report:find("sda", 1, true)
+    and report:find("## Collection status", 1, true)
+    and report:find("| cpu | ok | fresh |", 1, true))
+assert(not report:find("192.0.2.42", 1, true)
+    and not report:find("worker", 1, true),
+    "a hardware report excludes connection endpoints and process identities")
 
 local mount_export = Export.snapshot({
     mounts = {
@@ -266,7 +306,9 @@ local agent = Export.agent({
     } },
     processes = { list = {
         { id = "2:1", pid = 2, name = "worker", command = "secret --token",
-            cpu_percent = 50, resident_bytes = 64 },
+            cpu_percent = 50, resident_bytes = 64,
+            io = { read_bytes = 1024 },
+            io_rate = { read_bytes_per_second = 128, quality = "fresh" } },
     } },
 }, {
     privilege = { mode = "user", uid = 1000, effective_uid = 1000,
@@ -301,6 +343,8 @@ assert(agent.metrics.sensors.maximum_temperature_celsius == 96)
 assert(agent.metrics.sensors.temperature_count == 1 and agent.metrics.sensors.fan_count == 1)
 assert(agent.overall.signal_count >= 3, "gap quality must produce an Agent warning")
 assert(agent.top.processes[1].pid == 2 and agent.top.processes[1].command == nil)
+assert(agent.top.processes[1].io == nil and agent.top.processes[1].io_rate == nil,
+  "the compact Agent projection does not inherit snapshot-only I/O details")
 assert(agent.top.disks[1].name == "sda")
 assert(agent.top.sensors[1].label == "Package")
 assert(agent.unavailable_sources[1].id == "gpu")
@@ -491,5 +535,331 @@ for _, field in ipairs({ "product_serial", "board_serial", "product_uuid",
         "host-identifying DMI member must never be exported: " .. field)
 end
 assert(leaky.system.firmware.product_name == "Example", "non-identifying members survive")
+leaky.system.firmware.product_name = "Example|<board>\27"
+local private_report = Report.render(leaky)
+assert(private_report:find("Example\\|&lt;board&gt;", 1, true)
+    and not private_report:find("SECRET", 1, true)
+    and not private_report:find("\27", 1, true),
+    "the readable report preserves Snapshot privacy and escapes terminal/Markdown input")
+assert(Report.render({}):find("No records in this snapshot", 1, true))
+local denied_report = Report.render({ quality = {
+    firmware_batteries = { status = "denied", quality = "denied",
+        reason = "permission denied" },
+} })
+assert(denied_report:find("| firmware_batteries | denied | denied | permission denied |", 1, true)
+    and denied_report:find("No records in this snapshot", 1, true),
+    "an inaccessible hardware source keeps its reason instead of a fabricated zero")
+
+-- The attempt can be new while the installed value is old.  Both export
+-- forms must carry the value's own time and age, never the failed retry's.
+local valued = Snapshot.merge(Snapshot.new(0, 0), {
+    cpu = { status = "ok", quality = "fresh", timestamp_ns = 1000000000,
+        data = { total = { utilization = 25 } } },
+}, 1, 1000000000)
+local retained = Snapshot.merge(valued, {
+    cpu = { status = "error", quality = "error", reason = "race",
+        timestamp_ns = 100000000000 },
+}, 2, 100000000000)
+local quality_out = Export.snapshot(retained).quality.cpu
+assert(quality_out.timestamp_ns == 100000000000
+    and quality_out.value_timestamp_ns == 1000000000
+    and quality_out.value_age_ms == 99000,
+    "snapshot distinguishes a fresh retry from a 99-second-old value")
+local agent_out = Export.agent(retained)
+local agent_cpu_quality
+for _, row in ipairs(agent_out.data_quality) do
+    if row.resource == "cpu" then agent_cpu_quality = row end
+end
+assert(agent_cpu_quality and agent_cpu_quality.value_timestamp_ns == 1000000000
+    and agent_cpu_quality.value_age_ms == 99000,
+    "agent context preserves the retained value's age")
+local unknown = Snapshot.merge(Snapshot.new(0, 0), {
+    cpu = { status = "error", quality = "error", timestamp_ns = 100000000000 },
+}, 1, 100000000000)
+local unknown_out = Export.snapshot(unknown).quality.cpu
+assert(unknown_out.value_timestamp_ns == nil and unknown_out.value_age_ms == nil,
+    "an absent value has no invented age")
+
+local function signal_named(document, code, resource)
+    for _, signal in ipairs(document.signals or {}) do
+        if signal.code == code and (resource == nil or signal.resource == resource) then
+            return signal
+        end
+    end
+end
+
+-- A failed collector preserves its previous values for context.  Those values
+-- remain in metrics/top with their age, but cannot assert a *current* alarm.
+local alarming = Snapshot.merge(Snapshot.new(0, 0), {
+    cpu = { status = "ok", quality = "fresh", timestamp_ns = 1000000000,
+        data = { total = { utilization = 98, iowait = 25 }, cores = {} } },
+    memory = { status = "ok", quality = "fresh", timestamp_ns = 1000000000,
+        data = { total_bytes = 100, used_bytes = 99 } },
+    pressure = { status = "ok", quality = "fresh", timestamp_ns = 1000000000,
+        data = { cpu = { some = { avg10 = 30 } } } },
+    disk = { status = "ok", quality = "fresh", timestamp_ns = 1000000000,
+        data = { devices = { { id = "8:0", name = "sda", busy_percent = 98,
+            quality = "fresh" } } } },
+    gpu = { status = "ok", quality = "fresh", timestamp_ns = 1000000000,
+        data = { devices = { { id = "card0", quality = { utilization = "fresh" },
+            metrics = { utilization_percent = 99 } } } } },
+    hwmon = { status = "ok", quality = "fresh", timestamp_ns = 1000000000,
+        data = { devices = { { id = "thermal", name = "Thermal", channels = {
+            { id = "temperature:1", type = "temperature", input = 105,
+                quality = "fresh", thresholds = { crit = 100 } },
+        } } } } },
+}, 1, 1000000000)
+local fresh_alerts = Export.agent(alarming)
+for _, code in ipairs({ "high_utilization", "high_usage", "sustained_pressure",
+    "device_busy", "temperature_threshold" }) do
+    assert(signal_named(fresh_alerts, code), "fixture did not exercise " .. code)
+end
+assert(signal_named(fresh_alerts, "high_utilization", "gpu"),
+    "the fixture did not exercise the GPU alarm")
+local retained_alerts = Snapshot.merge(alarming, {
+    cpu = { status = "error", quality = "error", timestamp_ns = 100000000000 },
+    memory = { status = "error", quality = "error", timestamp_ns = 100000000000 },
+    pressure = { status = "error", quality = "error", timestamp_ns = 100000000000 },
+    disk = { status = "error", quality = "error", timestamp_ns = 100000000000 },
+    gpu = { status = "error", quality = "error", timestamp_ns = 100000000000 },
+    hwmon = { status = "error", quality = "error", timestamp_ns = 100000000000 },
+}, 2, 100000000000)
+local stale_alerts = Export.agent(retained_alerts)
+assert(stale_alerts.metrics.cpu.utilization_percent == 98
+    and stale_alerts.data_quality[1].value_age_ms == 99000,
+    "the old values remain available with age and quality")
+for _, code in ipairs({ "high_utilization", "high_iowait", "high_usage",
+    "sustained_pressure", "device_busy", "temperature_threshold" }) do
+    assert(not signal_named(stale_alerts, code),
+        "a failed collector emitted a current threshold signal: " .. code)
+end
+assert(signal_named(stale_alerts, "data_unavailable"),
+    "failure still has to produce its own quality signal")
+local partly_recovered = Snapshot.merge(retained_alerts, {
+    cpu = { status = "ok", quality = "fresh", timestamp_ns = 101000000000,
+        data = { total = { utilization = 98 }, cores = {} } },
+    memory = { status = "ok", quality = "fresh", timestamp_ns = 101000000000,
+        data = { total_bytes = 100, used_bytes = 99 } },
+}, 3, 101000000000)
+local mixed_alerts = Export.agent(partly_recovered)
+assert(signal_named(mixed_alerts, "high_utilization")
+    and signal_named(mixed_alerts, "high_usage"),
+    "healthy sources must still alarm while other sources are unavailable")
+assert(not signal_named(mixed_alerts, "sustained_pressure"),
+    "CPU pressure comes from the failed pressure collector, not the healthy CPU collector")
+
+local rows = {}
+for index = 1, 5 do
+    rows[#rows + 1] = { id = "old" .. index, name = "old" .. index,
+        busy_percent = 98, quality = "stale" }
+end
+rows[#rows + 1] = { id = "current", name = "current", busy_percent = 97,
+    quality = "fresh" }
+local mixed_rows = Export.agent({
+    quality = {
+        disks = { status = "ok", quality = "partial" },
+        gpus = { status = "ok", quality = "fresh" },
+        sensors = { status = "ok", quality = "fresh" },
+    },
+    disks = { devices = rows },
+    gpus = { devices = {
+        { id = "old", metrics = { utilization_percent = 99 },
+            quality = { utilization = "stale" } },
+        { id = "current", metrics = { utilization_percent = 30 },
+            quality = { utilization = "fresh" } },
+    } },
+    sensors = { devices = { { id = "thermal", channels = {
+        { id = "old", type = "temperature", input = 105, quality = "stale",
+            thresholds = { crit = 100 } },
+        { id = "current", type = "temperature", input = 50, quality = "fresh",
+            thresholds = { crit = 100 } },
+    } } } },
+}, { device_limit = 5 })
+assert(signal_named(mixed_rows, "device_busy")
+    and signal_named(mixed_rows, "device_busy").value == 97,
+    "a current busy disk outside the stale top five must still alarm")
+assert(not signal_named(mixed_rows, "high_utilization")
+    and not signal_named(mixed_rows, "temperature_threshold"),
+    "stale device and channel values cannot trigger current alarms")
+
+local stale_quality = Export.agent({
+    quality = { cpu = { status = "ok", quality = "stale" } },
+    cpu = { total = { utilization = 98 } },
+})
+assert(not signal_named(stale_quality, "high_utilization")
+    and signal_named(stale_quality, "data_stale"),
+    "an explicit stale quality label is not current threshold evidence")
+local partial_quality = Export.agent({
+    quality = { memory = { status = "ok", quality = "partial" } },
+    memory = { total_bytes = 100, used_bytes = 99 },
+})
+assert(signal_named(partial_quality, "high_usage"),
+    "a current, partially measured resource still has usable present values")
+
+-- Root ports and endpoints may report the same PCIe event.  A current
+-- nonfatal/fatal increase is one clue per severity, not a sum of observers.
+local function aer_change(new_reports, quality)
+    return { change = { new_reports = new_reports, quality = quality or "fresh" } }
+end
+local aer_inventory = { pci = { devices = {
+    { address = "0000:00:01.0", vendor_id = 0x8086, device_id = 1,
+        aer = { status = "ok", correctable = aer_change(20),
+            nonfatal = aer_change(2), fatal = aer_change(1),
+            rootport = { changes = {
+                nonfatal = { new_reports = 2, quality = "fresh" },
+                fatal = { new_reports = 1, quality = "fresh" },
+            } } } },
+    { address = "0000:01:00.0", vendor_id = 0x8086, device_id = 2,
+        aer = { status = "partial", fatal = aer_change(3),
+            nonfatal = aer_change(0) } },
+} } }
+local aer_snapshot = Snapshot.merge(Snapshot.new(0, 0), {
+    inventory = { status = "ok", quality = "fresh", timestamp_ns = 1000000000,
+        data = aer_inventory },
+}, 1, 1000000000)
+local aer_agent = Export.agent(aer_snapshot)
+local fatal_signal = signal_named(aer_agent, "pcie_aer_fatal")
+local nonfatal_signal = signal_named(aer_agent, "pcie_aer_nonfatal")
+assert(fatal_signal and fatal_signal.resource == "inventory"
+    and fatal_signal.severity == "critical" and fatal_signal.value == nil,
+    "a fatal AER increase yields a clue without a double-counted event total")
+assert(nonfatal_signal and nonfatal_signal.severity == "warning"
+    and nonfatal_signal.value == nil,
+    "a nonfatal AER increase yields a warning without false attribution")
+local fatal_count, nonfatal_count = 0, 0
+for _, signal in ipairs(aer_agent.signals) do
+    if signal.code == "pcie_aer_fatal" then fatal_count = fatal_count + 1 end
+    if signal.code == "pcie_aer_nonfatal" then nonfatal_count = nonfatal_count + 1 end
+end
+assert(fatal_count == 1 and nonfatal_count == 1
+    and aer_agent.overall.state == "critical",
+    "device and root-port reports do not duplicate a signal")
+local retained_aer = Snapshot.merge(aer_snapshot, {
+    inventory = { status = "error", quality = "error", timestamp_ns = 100000000000 },
+}, 2, 100000000000)
+local retained_aer_agent = Export.agent(retained_aer)
+assert(not signal_named(retained_aer_agent, "pcie_aer_fatal")
+    and not signal_named(retained_aer_agent, "pcie_aer_nonfatal")
+    and not signal_named(retained_aer_agent, "data_unavailable", "inventory"),
+    "a retained AER delta is not a new event or a critical optional-source failure")
+local retained_inventory_quality
+for _, row in ipairs(retained_aer_agent.data_quality) do
+    if row.resource == "inventory" then retained_inventory_quality = row end
+end
+assert(retained_inventory_quality and retained_inventory_quality.status == "error",
+    "the optional inventory failure remains explicit in data_quality")
+local stale_aer_agent = Export.agent({
+    inventory = aer_inventory,
+    quality = { inventory = { status = "ok", quality = "stale" } },
+})
+assert(not signal_named(stale_aer_agent, "pcie_aer_fatal")
+    and not signal_named(stale_aer_agent, "data_stale", "inventory"),
+    "an explicitly stale optional inventory cannot replay an AER signal or mark host health")
+local gap_aer = Export.agent({ inventory = { pci = { devices = {
+    { address = "0000:00:01.0", aer = {
+        fatal = aer_change(nil, "gap"),
+        nonfatal = aer_change(nil, "reset"),
+        correctable = aer_change(100),
+    } },
+} } } })
+assert(not signal_named(gap_aer, "pcie_aer_fatal")
+    and not signal_named(gap_aer, "pcie_aer_nonfatal"),
+    "first/reset samples and new correctable reports do not assert hardware failure")
+local root_only = Export.agent({ inventory = { pci = { devices = {
+    { address = "0000:00:01.0", aer = { rootport = { changes = {
+        fatal = { new_reports = 1, quality = "fresh" },
+    } } } },
+} } } })
+assert(signal_named(root_only, "pcie_aer_fatal"),
+    "a root-port report is visible even when the endpoint reported none")
+
+-- Hardware diagnostics and elective providers can be missing on a healthy
+-- non-root host.  Their status belongs in data_quality, not in a critical
+-- overall verdict.  Core CPU/memory/process failures still need a signal.
+local optional_snapshot = {
+    cpu = { total = { utilization = 30 } },
+    memory = { total_bytes = 100, used_bytes = 40 },
+    quality = {
+        expansion_slots = { status = "denied", quality = "denied" },
+        memory_devices = { status = "denied", quality = "denied" },
+        processor_firmware = { status = "denied", quality = "denied" },
+        edac = { status = "unavailable", quality = "unavailable" },
+        gpus = { status = "ok", quality = "partial" },
+        cpu_frequency = { status = "ok", quality = "estimated" },
+        spd = { status = "ok", quality = "partial" },
+    },
+}
+local optional_only = Export.agent(optional_snapshot)
+assert(optional_only.overall.state == "ok" and #optional_only.signals == 0,
+    "missing optional hardware cannot make a healthy host critical or stale")
+assert(TUI.alert_count(optional_snapshot) == 0,
+    "the TUI header cannot alarm on the optional sources Agent calls healthy")
+assert(#optional_only.data_quality == 7
+    and optional_only.data_quality[1].resource == "cpu_frequency",
+    "optional-source quality remains machine-readable")
+local failed_core = Export.agent({
+    cpu = { total = { utilization = 98 } },
+    quality = { cpu = { status = "error", quality = "stale" } },
+})
+assert(failed_core.overall.state == "critical"
+    and signal_named(failed_core, "data_unavailable", "cpu")
+    and not signal_named(failed_core, "high_utilization"),
+    "failed core monitoring stays critical without alarming on retained numbers")
+assert(TUI.alert_count({
+    memory = { total_bytes = 100, used_bytes = 99 },
+    quality = { memory = { status = "error", quality = "stale" } },
+}) == 1,
+    "the TUI counts a core failure once, not again through its retained high value")
+assert(TUI.alert_count({
+    memory = { total_bytes = 100, used_bytes = 99 },
+    quality = { memory = { status = "ok", quality = "fresh" } },
+}) == 1, "a current high memory reading still reaches the header")
+for _, resource in ipairs({ "cpu", "memory", "processes" }) do
+    local failed = Export.agent({
+        quality = { [resource] = { status = "denied", quality = "denied" } },
+    })
+    local signal = signal_named(failed, "data_unavailable", resource)
+    assert(signal and signal.severity == "critical",
+        "core monitoring denial must remain critical: " .. resource)
+end
+for _, resource in ipairs({ "disks", "network", "mounts", "system" }) do
+    local failed = Export.agent({
+        quality = { [resource] = { status = "error", quality = "error" } },
+    })
+    local signal = signal_named(failed, "data_unavailable", resource)
+    assert(signal and signal.severity == "warning",
+        "supporting monitoring failure must remain a warning: " .. resource)
+end
+local failed_network = Export.agent({
+    cpu = { total = { utilization = 30 } },
+    quality = { network = { status = "denied", quality = "denied" } },
+})
+assert(failed_network.overall.state == "warning"
+    and signal_named(failed_network, "data_unavailable", "network").severity == "warning",
+    "a failed network source warns rather than claiming host-critical failure")
+assert(TUI.alert_count({
+    mounts = { mounts = { { kind = "local", quality = "stale",
+        capacity = { used_percent = 99 } } } },
+    quality = { mounts = { status = "ok", quality = "fresh" } },
+}) == 0, "a stale mount row cannot make an old capacity alarm current")
+assert(TUI.alert_count({
+    mounts = { mounts = { { kind = "local", quality = "fresh",
+        capacity = { used_percent = 99 } } } },
+    quality = { mounts = { status = "ok", quality = "fresh" } },
+}) == 1, "a current high local mount remains actionable")
+local missing_rate = Export.agent({
+    cpu = { total = { utilization = 30 } },
+    quality = { cpu = { status = "ok", quality = "gap" } },
+})
+assert(signal_named(missing_rate, "data_gap", "cpu")
+    and not signal_named(missing_rate, "data_stale", "cpu"),
+    "a missing core rate is a gap, not an old retained value")
+local partial_core = Export.agent({
+    cpu = { total = { utilization = 30 } },
+    quality = { cpu = { status = "ok", quality = "partial" } },
+})
+assert(signal_named(partial_core, "data_incomplete", "cpu")
+    and not signal_named(partial_core, "data_stale", "cpu"),
+    "current but incomplete core data is not mislabeled stale")
 
 return true

@@ -85,6 +85,14 @@ same_layout(moved_layout, capture(fresh), "the newly saved one is live")
 
 -- 4. Switching restores the other arrangement on every page, not just one.
 fresh:move_focused_direction("right")
+local live_before_switch = capture(fresh)
+local to_save = fresh:saved_workspaces().server
+for page, tree in pairs(to_save) do
+  local order = assert(Layout.to_order(tree,
+    { allowed_widgets = fresh.widget_orders[page] }))
+  equal(table.concat(order, ","), live_before_switch[page],
+    "the active workspace save includes edits made after it was named")
+end
 equal(fresh:switch_workspace("desktop"), true, "switching to a saved workspace works")
 equal(fresh.workspace, "desktop", "the active name follows")
 same_layout(default_layout, capture(fresh), "the saved arrangement came back")
@@ -327,5 +335,52 @@ local ascii = table.concat(TUI.workspace_lines({ names = { "a" }, active = "a",
   index = 1, draft = "", truncated = false }, translator, false), "\n")
 equal(ascii:find("▸", 1, true), nil, "the ASCII profile gets no block marker")
 equal(ascii:find("> a", 1, true) ~= nil, true, "it gets a plain one: " .. ascii)
+
+local per_workspace = Workspace.new({ active_tab = "overview" })
+assert(per_workspace:save_workspace("full"))
+assert(per_workspace:remove_focused_widget())
+assert(per_workspace:save_workspace("reduced"))
+local encoded_removed = Store.encode(per_workspace:orders(), per_workspace:trees(),
+  per_workspace:saved_workspaces(), per_workspace.workspace, nil, nil,
+  Workspace.default_orders())
+assert(encoded_removed:find("removed_workspaces:", 1, true))
+local _, _, loaded_sets = assert(Store.parse(encoded_removed, Workspace.default_orders()))
+local function count_widgets(tree)
+  return #assert(Layout.to_order(tree,
+    { allowed_widgets = Workspace.default_orders().overview }))
+end
+assert(count_widgets(loaded_sets.full.overview) == 11
+  and count_widgets(loaded_sets.reduced.overview) == 10,
+  "each named workspace keeps its own removed widgets")
+local mixed_workspaces = Workspace.new()
+assert(mixed_workspaces:save_workspace("base"))
+assert(mixed_workspaces:new_custom_page("cpu_overview", "Mixed"))
+assert(mixed_workspaces:add_focused_widget("process_table", "after"))
+assert(mixed_workspaces:save_workspace("mixed"))
+assert(mixed_workspaces:switch_workspace("base"))
+assert(#mixed_workspaces:orders().custom1 == 1)
+assert(mixed_workspaces:switch_workspace("mixed"))
+assert(#mixed_workspaces:orders().custom1 == 2)
+local definitions = mixed_workspaces:custom_page_definitions()
+local mixed_file = Store.encode(mixed_workspaces:orders(), mixed_workspaces:trees(),
+  mixed_workspaces:saved_workspaces(), mixed_workspaces.workspace, nil,
+  mixed_workspaces:custom_tab_order(), Workspace.default_orders(definitions),
+  definitions)
+local _, _, mixed_sets, _, _, _, mixed_defs = assert(Store.parse(mixed_file,
+  Workspace.default_orders()))
+assert(mixed_defs[1].id == "custom1"
+  and #Layout.to_order(mixed_sets.base.custom1) == 1
+  and #Layout.to_order(mixed_sets.mixed.custom1) == 2,
+  "custom pages keep separate widget layouts in named workspaces")
+local copy_sets = Workspace.new()
+assert(copy_sets:save_workspace("full"))
+assert(copy_sets:remove_focused_widget())
+assert(copy_sets:save_workspace("reduced"))
+assert(copy_sets:switch_workspace("full"))
+assert(copy_sets:duplicate_page("overview"))
+assert(#copy_sets:orders().custom1 == 11)
+assert(copy_sets:switch_workspace("reduced"))
+assert(#copy_sets:orders().custom1 == 10,
+  "duplicating a page copies each workspace's own source arrangement")
 
 print("ok: named layout workspaces")

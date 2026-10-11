@@ -10,9 +10,11 @@
 颜色的普通 `cmd.exe` 窗口。
 
 ```bash
-wtop                # interactive monitor
-wtop --snapshot     # one JSON snapshot, for scripts
-wtop --diagnose     # what wtop can see on this machine
+wtop                # 交互式监控
+wtop --snapshot     # 供脚本使用的 JSON 快照
+wtop --stream --count 60 > samples.jsonl  # 保存 60 份 JSON 快照
+wtop --report       # 英文 Markdown 硬件摘要
+wtop --diagnose     # 查看本机可读取的数据源
 ```
 
 ## 运行平台
@@ -46,10 +48,10 @@ Windows 构建是一个 32 位包，目标覆盖从 XP 到 Windows 11 的所有�
 
 ## 展示内容
 
-- 十个标签页：概览、进程、计算、内存、存储、网络、GPU、工作负载、
+- 十个内置标签页：概览、进程、计算、内存、存储、网络、GPU、工作负载、
   系统和洞察。
-- 进程列表支持搜索、排序、树形视图，以及带确认环节的信号菜单。
-- 主机上具备相应工具时，可选的深度检查（SMART/NVMe、内存带宽、sshd)。
+- 进程列表支持搜索、排序、进程树导航、跳转到所属工作负载，以及带确认环节的信号菜单。
+- 主机上具备相应工具时，可选的深度检查（SMART/NVMe、内存带宽、systemd 单元、sshd)。
 - 读取失败或不完整的指标会如实标注（例如 `denied` 或 `partial`)，
   不会显示为空白或零值。
 - 十种界面语言，运行时按 `L` 切换；五种配色主题。
@@ -102,8 +104,18 @@ make run
 
 | 按键 | 作用 |
 |---|---|
-| `1`–`8`、`Tab` | 切换标签页和焦点 |
+| `1`–`9`、`0`、`Tab` | 切换标签页和焦点 |
+| `e`，再按 `b` | 显示、隐藏、重排、新建或复制页面 |
+| `e`，再按 `a` | 向当前页面添加组件 |
+| 硬件表格中的 `j`/`k`、`Enter` | 选择设备并查看详情 |
+| 进程详情中的 `F` | 在 Linux 上查看打开的文件描述符及详情 |
+| `d` / `D` | 在 Linux 上查看 systemd 单元 / sshd |
+| 单元详情中的 `l` | 在 Linux 上查看近期日志 |
+| `u` | 在 Linux 上查看登录会话 |
+| 日志或 sshd 详情中的 `s` | 在 Linux 上查看日志摘要 |
 | `f` | 调整刷新频率 |
+| `B` | 切换块状图和盲文图 |
+| `z` / `Z` | 显示更长 / 更短的图表时间 |
 | `L` | 切换语言 |
 | `?` 或 `F1` | 查看全部按键 |
 | `q` 或 `Ctrl+C` | 退出 |
@@ -114,7 +126,10 @@ make run
 | 选项 | |
 |---|---|
 | `--snapshot` | 输出一份 JSON 快照并退出 |
-| `--unmask-remote-addresses` | 配合 `--snapshot`：导出完整的远端套接字地址 |
+| `--stream` | 持续输出逐行 JSON 快照，直到中断 |
+| `--count N` | 配合 `--stream`：输出 N 份后退出 |
+| `--report` | 输出英文 Markdown 硬件摘要 |
+| `--unmask-remote-addresses` | 配合 `--snapshot` 或 `--stream`：导出完整的远端套接字地址 |
 | `--agent` | 输出供脚本和 LLM 代理使用的紧凑 JSON 上下文 |
 | `--diagnose` | 显示本机哪些数据源可用 |
 | `--lang LOCALE` | 界面语言，例如 `zh-CN`、`fr-FR`、`ru-RU` |

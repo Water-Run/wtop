@@ -149,7 +149,11 @@ local drive_snapshot = function()
     network = { interfaces = {}, addresses_status = "fresh" },
     processes = { processes = { { pid = 1, name = "init", quality = "fresh",
                                   user = "root", cpu_percent = 0 } } },
-    cpu_frequency = { policies = {}, current_quality = "fresh" },
+    cpu_frequency = { policies = { {
+      id = "cpus:0", policy = "policy0", affected_cpus = { 0 }, quality = "fresh",
+      frequencies = { current_hz = 2100000000, current_quality = "measured",
+        current_source = "cpuinfo_avg_freq", hardware_average_hz = 2100000000 },
+    } }, current_quality = "fresh" },
     mounts = { mounts = mounts },
     workloads = { workloads = { { id = "c1", name = "probe", quality = "fresh",
                                   cgroup_path = "/probe", state = "running" } } },
@@ -500,8 +504,8 @@ end
 local names = {}
 for name in pairs(widest_by_model) do names[#names + 1] = name end
 table.sort(names)
-assert(#names == 8,
-  "the state columns found are " .. #names .. ", not the 8 this file was "
+assert(#names == 12,
+  "the state columns found are " .. #names .. ", not the 12 this file was "
   .. "measured against: " .. table.concat(names, ", "))
 
 for _, name in ipairs(names) do
@@ -529,6 +533,8 @@ end
 -- from.  This is the seventh time in this project a rule has had to be asked
 -- what it matched.
 assert(widest_by_model["mount_table.quality"] ~= nil
+  and widest_by_model["numa_table.state"] ~= nil
+  and widest_by_model["dimm_table.state"] ~= nil
   and widest_by_model["inspector_table.status"] ~= nil,
   "the state-column scan did not reach the tables it is supposed to cover")
 local measured_worst = 0

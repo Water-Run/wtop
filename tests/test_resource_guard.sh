@@ -45,6 +45,25 @@ contains "available=16384 MiB[host]"
 contains "swap-free=7168/8192 MiB[host]"
 contains "memory-full-psi10=0.25%[host]"
 
+# Benchmarking a prebuilt artifact is useful on an old target with less than
+# the test suite's 2 GiB floor. The lightweight guard still checks pressure.
+low_root=$(mktemp -d)
+trap 'rm -rf "$low_root"' EXIT
+mkdir -p "$low_root/pressure" "$low_root/self"
+printf 'MemTotal: 131072 kB\nMemAvailable: 98304 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' \
+    > "$low_root/meminfo"
+printf '0.10 0.10 0.10 1/1 1\n' > "$low_root/loadavg"
+printf 'some avg10=0.00\nfull avg10=0.00\n' > "$low_root/pressure/memory"
+printf '0::/\n' > "$low_root/self/cgroup"
+capture 0 env WTOP_RESOURCE_PROC_ROOT="$low_root" \
+    WTOP_RESOURCE_CGROUP_ROOT="$missing_cgroup" WTOP_RESOURCE_CPU_COUNT=1 \
+    "$guard" benchmark
+contains "available=96 MiB[host]"
+capture 1 env WTOP_RESOURCE_PROC_ROOT="$low_root" \
+    WTOP_RESOURCE_CGROUP_ROOT="$missing_cgroup" WTOP_RESOURCE_CPU_COUNT=1 \
+    "$guard" test
+contains "need at least 2048 MiB available memory"
+
 capture 0 env WTOP_RESOURCE_PROC_ROOT="$proc_root" \
     WTOP_RESOURCE_CGROUP_ROOT="$cgroup_root" WTOP_RESOURCE_CPU_COUNT=4 \
     "$guard" build

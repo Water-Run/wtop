@@ -7,12 +7,14 @@ import fcntl
 import os
 import pathlib
 import pty
+import pwd
 import sys
 import re
 import select
 import shlex
 import shutil
 import random
+import socket
 import signal
 import subprocess
 import stat
@@ -57,7 +59,7 @@ PROCESS_FILTER_MARKERS = (b"Filter:", "过滤：".encode())
 # carry the inspector's own title, so one marker per inspector covers them.
 SMART_PICKER_MARKERS = (b"SMART / NVMe", "SMART / NVMe".encode())
 BANDWIDTH_MARKERS = (b"RAM bandwidth", "RAM 带宽".encode())
-SIGNAL_MARKERS = (b"SIGTERM", "发送信号".encode())
+SIGNAL_MARKERS = (b"SIGTERM", b"SIGHUP", b"SIGINT", "发送信号".encode())
 # The layout palette picker that "a" and "r" open while editing a layout.
 WIDGET_PICKER_MARKERS = (b"Add widget", "添加组件".encode())
 WIDGET_REPLACE_MARKERS = (b"Replace widget", "替换组件".encode())
@@ -82,10 +84,10 @@ PAGE_KEYS = {1: "1", 2: "2", 3: "3", 4: "4", 5: "5", 6: "6", 7: "7", 8: "8", 9: 
 PAGE_MARKERS = {
     1: ("CPU", "内存", "主机"),
     2: ("进程", "命令"),
-    3: ("逻辑 CPU", "各核心 CPU"),
+    3: ("逻辑 CPU", "各核心 CPU", "逐 CPU 热节流"),
     4: ("内存构成", "分页与缺页"),
     5: ("块设备", "文件系统与挂载点"),
-    6: ("网络接口", "套接字与连接"),
+    6: ("网络接口", "链路变化", "接收积压", "套接字与连接"),
     7: ("图形设备", "GPU 进程"),
     8: ("cgroup v2 工作负载",),
     9: ("主机与操作系统", "内核与启动"),
@@ -261,7 +263,10 @@ def _assert_persisted_layout(config_home: pathlib.Path) -> None:
     assert mode == 0o600, f"layout permissions are {mode:#05o}, expected 0o600"
 
     contents = layout.read_text(encoding="utf-8")
-    assert "schema_version: 2\n" in contents, "layout has no supported schema version"
+    assert "schema_version: 5\n" in contents, "removed widgets need a v5 layout"
+    assert "removed_widgets:\n  memory:\n" in contents, (
+        "the widget removed on Memory was not recorded for the next session"
+    )
     assert "pages:\n" in contents, "layout has no pages mapping"
     assert "  overview:\n" in contents, "layout has no overview workspace"
     # The exercise starts focused on cpu_overview and moves it one place right.
@@ -275,6 +280,22 @@ def _assert_persisted_layout(config_home: pathlib.Path) -> None:
     assert "ratio_micros: 550000" in contents, (
         "overview split ratio edit/redo was not persisted:\n" + contents
     )
+
+
+def _markers_visible(markers, output: bytearray, columns: int, rows: int) -> bool:
+    if markers is None:
+        return True
+    if any(marker in output for marker in markers if isinstance(marker, bytes)):
+        return True
+    text_markers = [marker for marker in markers if isinstance(marker, str)]
+    if not text_markers:
+        return False
+    # A diff frame can write a label in several spans. String markers ask
+    # what is on the current screen rather than requiring contiguous bytes.
+    screen = VirtualScreen(columns, rows)
+    screen.feed(bytes(output))
+    text = screen.text()
+    return any(marker in text for marker in text_markers)
 
 
 def _run_session(
@@ -359,15 +380,17 @@ def _run_session(
             (b"\r", SEARCH_MARKERS), (b"\x1b", None),
             # A numeric filter, alone and combined with a text term, driven
             # through the real search editor.  The editor opens pre-filled with
-            # the current query and the cursor at the end, so each draft is
-            # killed to the start before typing rather than appended to.
+            # the current query and the cursor at the end. Ctrl-W replaces a
+            # single term; Ctrl-U clears the combined query before navigation.
             (b"/", None), (b"\x17", None), (b"threads>0", None),
             (b"\r", PROCESS_FILTER_MARKERS),
-            (b"/", None), (b"\x17", None), (b"user:root threads>0", None),
+            (b"/", None), (b"\x17", None),
+            (f"user:{pwd.getpwuid(os.getuid()).pw_name} threads>0".encode(), None),
             (b"\r", PROCESS_FILTER_MARKERS),
-            (b"/", None), (b"\x17", None), (b"\r", None),
+            (b"/", None), (b"\x15", None), (b"\r", None),
             # sort forward, reverse, tree, full paths, then keyboard paging
-            (b"o", None), (b"O", None), (b"t", None), (b"p", None),
+            (b"o", None), (b"O", None), (b"t", None),
+            (b"[", None), (b"]", None), (b"p", None),
             (b"\x1b[6~", None), (b"\x1b[H", None), (b"\x1b[F", None),
             (b"\x1b[B", None),
             # process details open, scroll and close; the close key is gated on
@@ -470,8 +493,7 @@ def _run_session(
                 and (
                     # Never act on an overlay before a slower collection or
                     # render turn has actually put it on screen.
-                    actions[action_index][1] is None
-                    or any(marker in output for marker in actions[action_index][1])
+                    _markers_visible(actions[action_index][1], output, columns, rows)
                 )
             ):
                 action = actions[action_index][0]
@@ -505,6 +527,11 @@ def _run_session(
                     os.kill(pid, action[1])
                 elif isinstance(action, tuple) and action[0] == "sleep":
                     pass
+                elif isinstance(action, tuple) and action[0] == "self_process":
+                    # The supervised child remains alive and readable for this
+                    # whole session. The busiest host PID may disappear or
+                    # legitimately expose no threads to the current user.
+                    os.write(master, ("/pid:%d\r" % pid).encode("ascii"))
                 else:
                     os.write(master, action)
                 action_index += 1
@@ -680,6 +707,10 @@ def run_ascii_profile() -> bytes:
             "LANG": "C",
         },
         cli_options=("--no-color", "--lang", "en-US"),
+        script=[(b"B", None), (("sleep", 0.3), None),
+                (b"z", None), (("sleep", 0.3), None),
+                (b"Z", None), (("sleep", 0.3), None),
+                (b"Z", None), (("sleep", 0.3), None), (b"q", None)],
     )
     assert all(value < 128 for value in output), (
         "ASCII terminal profile received non-ASCII bytes"
@@ -691,7 +722,327 @@ def run_ascii_profile() -> bytes:
     ), (
         "no-colour profile emitted coloured SGR"
     )
+    assert b"Braille charts need a Unicode terminal" in output, (
+        "the ASCII profile did not reject Braille chart mode"
+    )
+    assert all(message in output for message in (
+        b"Chart time: 2 s/cell", b"Chart time: 1 s/cell",
+        b"Chart time: 0.5 s/cell")), (
+        "the ASCII profile did not apply both time-axis zoom keys or reach 0.5 s/cell"
+    )
     return output
+
+
+def run_chart_zoom() -> None:
+    """A live chart shows the wider time span chosen with z."""
+    output = run_session(180, 45, exercise=False,
+        cli_options=("--lang", "zh-CN"),
+        script=[(("sleep", 0.5), None), (b"z", None),
+                (("sleep", 0.3), None), (b"z", None),
+                (("sleep", 0.3), None), (b"z", None),
+                (("sleep", 0.5), None), (b"q", None)])
+    assert all(f"图表时间：每格 {seconds} 秒".encode() in output
+               for seconds in (2, 4, 8)), (
+        "z did not step through the wider time scales"
+    )
+    screen = VirtualScreen(180, 45)
+    screen.feed(output)
+    assert re.search(r"-240s\s+0", screen.text()), (
+        "the zoomed chart did not label the capped four-minute window"
+    )
+
+
+def run_braille_chart() -> None:
+    """The live overview switches both ways without leaving stale glyphs."""
+    output = run_session(180, 45, exercise=False,
+        cli_options=("--lang", "zh-CN"),
+        script=[(("sleep", 0.5), None), (b"B", None),
+                (("sleep", 1.0), None), (b"B", None),
+                (("sleep", 0.4), None), (b"q", None)])
+    decoded = output.decode("utf-8", "replace")
+    assert "图表：盲文点阵" in decoded, "B did not select Braille charts"
+    assert "图表：块状" in decoded, "B did not restore block charts"
+    assert any(0x2801 <= ord(character) <= 0x28FF for character in decoded), (
+        "the overview's live metric history produced no Braille cells"
+    )
+    screen = VirtualScreen(180, 45)
+    screen.feed(output)
+    final = screen.text()
+    assert not any(0x2801 <= ord(character) <= 0x28FF for character in final), (
+        "returning to block charts left Braille cells on the screen"
+    )
+    assert all(marker in final for marker in ("CPU", "内存", "主机")), (
+        "switching chart mode damaged the overview layout"
+    )
+
+
+def run_ascii_tab_identity() -> None:
+    """Collapsed Chinese tab labels stay distinct on an ASCII-only terminal."""
+    output = run_session(200, 30, exercise=False,
+        terminal_environment={
+            "TERM": "dumb", "COLORTERM": None,
+            "LC_ALL": "C", "LC_CTYPE": "C", "LANG": "C",
+        },
+        cli_options=("--no-color", "--lang", "zh-CN"),
+        script=[(("sleep", 0.5), None), (b"q", None)])
+    assert all(byte < 128 for byte in output), "ASCII terminal received Unicode bytes"
+    screen = VirtualScreen(200, 30)
+    screen.feed(output)
+    header = screen.text().splitlines()[0]
+    assert "1 ??" in header and "2 ??" in header and "0 ??" in header, header
+    assert header.index("1 ??") < header.index("2 ??") < header.index("0 ??"), header
+
+
+def run_network_filter() -> None:
+    """The Network page applies and clears a connection-table search."""
+    script: list[tuple[object, object]] = [
+        (PAGE_KEYS[6].encode("ascii"), None),
+        (("sleep", 1.0), None),
+        (b"/", None), (b"wt0absent", None), (b"\r", None),
+        (("sleep", 0.8), None),
+    ]
+    filtered = VirtualScreen(160, 45)
+    filtered.feed(run_session(160, 45, exercise=False, script=script + [(b"q", None)]))
+    assert "筛选：wt0absent" in filtered.text() and "0/0" in filtered.text(), (
+        "the Network search did not reach the connection table"
+    )
+    cleared = VirtualScreen(160, 45)
+    cleared.feed(run_session(160, 45, exercise=False, script=script + [
+        (b"\x1b", None), (("sleep", 0.8), None), (b"q", None),
+    ]))
+    assert "筛选：wt0absent" not in cleared.text(), (
+        "Escape did not clear the Network connection filter"
+    )
+    masked = VirtualScreen(160, 45)
+    masked.feed(run_session(160, 45, exercise=False, script=script + [
+        (b"m", None), (("sleep", 0.8), None), (b"q", None),
+    ]))
+    assert "筛选：wt0absent" not in masked.text(), (
+        "enabling address masking left a query from the unmasked view on screen"
+    )
+
+
+def run_storage_filter() -> None:
+    """Storage search narrows the mount table and Escape clears the query."""
+    script: list[tuple[object, object]] = [
+        (PAGE_KEYS[5].encode("ascii"), None), (("sleep", 1.5), None),
+        (b"/", None), (b"wt0absent", None), (b"\r", None),
+        (("sleep", 0.8), None),
+    ]
+    filtered = VirtualScreen(200, 50)
+    filtered.feed(run_session(200, 50, exercise=False,
+        script=script + [(b"q", None)]))
+    assert "筛选：wt0absent" in filtered.text() and "0/0 个挂载点" in filtered.text(), (
+        "Storage search did not reach the mount table:\n" + filtered.text()
+    )
+    cleared = VirtualScreen(200, 50)
+    cleared.feed(run_session(200, 50, exercise=False, script=script + [
+        (b"\x1b", None), (("sleep", 0.8), None), (b"q", None),
+    ]))
+    assert "筛选：wt0absent" not in cleared.text(), (
+        "Escape did not clear the Storage mount search"
+    )
+
+
+def run_network_structured_filter() -> None:
+    """Two live UNIX sockets are selected by protocol and exact owner PID."""
+    if not sys.platform.startswith("linux"):
+        print("PTY Network structured filter: skipped (Linux procfs required)")
+        return
+    try:
+        left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError as error:
+        print(f"PTY Network structured filter: skipped (socketpair unavailable: {error})")
+        return
+    try:
+        pid = os.getpid()
+        output = run_session(200, 45, exercise=False, script=[
+            (PAGE_KEYS[6].encode("ascii"), None), (("sleep", 2.0), None),
+            (b"/", None), (f"proto:unix pid:{pid}".encode("ascii"), None),
+            (b"\r", None), (("sleep", 1.0), None), (b"q", None),
+        ])
+        screen = VirtualScreen(200, 45)
+        screen.feed(output)
+        frame = screen.text()
+        counts = re.search(r"显示 (\d+)/(\d+) 条匹配", frame)
+        assert (counts and int(counts.group(1)) >= 2
+            and int(counts.group(2)) >= 2 and frame.count("UNIX") >= 2), (
+            "protocol and exact PID conditions did not retain both live sockets:\n" + frame
+        )
+    finally:
+        left.close()
+        right.close()
+
+
+def run_network_routes() -> None:
+    """The Network route overlay states its procfs scope and both families."""
+    if not sys.platform.startswith("linux"):
+        print("PTY Network routes: skipped (Linux procfs required)")
+        return
+    output = run_session(160, 45, exercise=False, script=[
+        (PAGE_KEYS[6].encode("ascii"), None), (("sleep", 1.5), None),
+        (b"g", None), (("sleep", 0.8), None), (b"q", None), (b"q", None),
+    ]).decode("utf-8", "replace")
+    assert "策略路由表可能不同" in output and "IPv4" in output and "IPv6" in output, (
+        "the route overlay did not show its source scope and family statuses"
+    )
+
+
+def run_network_owner_drilldown() -> None:
+    """A live UNIX socket leads to its process; two processes get a picker."""
+    if not sys.platform.startswith("linux"):
+        print("PTY Network owner drill-down: skipped (Linux procfs required)")
+        return
+    try:
+        left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError as error:
+        print(f"PTY Network owner drill-down: skipped (socketpair unavailable: {error})")
+        return
+    duplicate = None
+    child = None
+    try:
+        pid = os.getpid()
+        name = pathlib.Path("/proc/self/comm").read_text().strip()
+        query = f"{name}({pid})".encode()
+        script: list[tuple[object, object]] = [
+            (PAGE_KEYS[6].encode("ascii"), None), (("sleep", 2.0), None),
+            (b"/", None), (query, None), (b"\r", None),
+            (("sleep", 1.0), None), (b"\r", None),
+            (("sleep", 1.5), None),
+        ]
+        direct = run_session(160, 45, exercise=False,
+            script=script + [(b"q", None), (b"q", None)]).decode("utf-8", "replace")
+        assert "进程详情" in direct and "PPID" in direct, (
+            "Enter did not open the verified owner of a live UNIX socket"
+        )
+        right.close()
+        duplicate = os.dup(left.fileno())
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+            pass_fds=(left.fileno(),), stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        time.sleep(0.2)
+        picked = run_session(160, 45, exercise=False, script=script + [
+            (b"\r", None), (("sleep", 1.5), None),
+            (b"q", None), (b"q", None),
+        ]).decode("utf-8", "replace")
+        assert ("连接属主" in picked and "(+1)" in picked
+            and "进程详情" in picked and "PPID" in picked), (
+            "two processes sharing one socket did not offer a distinct owner choice"
+        )
+    finally:
+        if child is not None:
+            child.terminate()
+            child.wait(timeout=5)
+        if duplicate is not None:
+            os.close(duplicate)
+        left.close()
+        right.close()
+
+
+def run_process_signal_menu() -> None:
+    """The Linux process menu offers HUP and INT without sending a signal."""
+    output = run_session(160, 45, exercise=False,
+        cli_options=("--lang", "en-US"), script=[
+            (b"2", None),
+            (("sleep", 1.0), None),
+            (b"k", None),
+            (("sleep", 0.7), (b"SIGTERM",)),
+            (b"\x1b", (b"SIGHUP", b"SIGINT")),
+            (b"q", None),
+        ])
+    assert all(marker in output for marker in (b"SIGTERM", b"SIGHUP", b"SIGINT")), (
+        "the process signal menu did not render its Linux choices"
+    )
+
+
+def run_process_socket_jump() -> None:
+    """A process detail opens only its live sockets; Escape removes the scope."""
+    if not sys.platform.startswith("linux"):
+        print("PTY process socket jump: skipped (Linux procfs required)")
+        return
+    try:
+        left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError as error:
+        print(f"PTY process socket jump: skipped (socketpair unavailable: {error})")
+        return
+    try:
+        pid = os.getpid()
+        search = [
+            (PAGE_KEYS[2].encode("ascii"), None), (("sleep", 1.0), None),
+            (b"/", None), (f"pid:{pid}".encode("ascii"), None),
+            (b"\r", None), (("sleep", 0.8), None),
+        ]
+        detail_output = run_session(160, 45, exercise=False, script=search + [
+            (b"\r", None), (("sleep", 0.8), None),
+            (b"n", None), (("sleep", 2.0), None), (b"q", None),
+        ])
+        detail_frame = VirtualScreen(160, 45)
+        detail_frame.feed(detail_output)
+        assert "进程详情" in detail_output.decode("utf-8", "replace"), (
+            "the selected process did not open before the socket jump"
+        )
+        assert f"PID {pid}：显示" in detail_frame.text() and "UNIX" in detail_frame.text(), (
+            "process detail did not reach a Network table scoped to its live socket:\n"
+            + detail_frame.text()
+        )
+
+        clear_output = run_session(160, 45, exercise=False, script=search + [
+            (b"n", None), (("sleep", 1.5), None),
+            (b"\x1b", None), (("sleep", 0.8), None), (b"q", None),
+        ])
+        clear_frame = VirtualScreen(160, 45)
+        clear_frame.feed(clear_output)
+        assert "PID " + str(pid) + "：显示" not in clear_frame.text(), (
+            "Escape did not clear the process socket scope"
+        )
+    finally:
+        left.close()
+        right.close()
+
+
+def run_process_fd_drilldown() -> None:
+    """The FD list and selected fdinfo both return to their parent view."""
+    if not sys.platform.startswith("linux"):
+        print("PTY process FD detail: skipped (Linux procfs required)")
+        return
+    pid = os.getpid()
+    # Hold a known regular file throughout the read. Standard streams can be
+    # replaced by the invoking harness; they are not a stable test fixture.
+    with tempfile.NamedTemporaryFile(prefix="wtop-pty-fd-") as target:
+        target.write(b"wtop-fd")
+        target.flush()
+        descriptor = target.fileno()
+        rank = sum(int(entry.name) < descriptor for entry in pathlib.Path(f"/proc/{pid}/fd").iterdir())
+        script = [
+            (PAGE_KEYS[2].encode("ascii"), None), (("sleep", 1.0), None),
+            (b"/", None), (f"pid:{pid}".encode("ascii"), None),
+            (b"\r", None), (("sleep", .7), None),
+            (b"\r", None), (("sleep", .3), ("Process details",)),
+            (b"F", None), (("sleep", .3), ("Listed descriptors",)),
+        ]
+        script += [(b"\x1b[B", None)] * rank
+        script += [
+            (b"\r", None), (("sleep", .3), ("Flags (octal)",)),
+            (b"\x1b", None), (("sleep", .3), ("Listed descriptors",)),
+            (b"\x1b", None), (("sleep", .3), ("Process details",)),
+            (b"F", None), (("sleep", .3), ("Listed descriptors",)),
+            (b"q", None), (b"q", None),
+        ]
+        output = run_session(160, 45, exercise=False, cli_options=("--lang", "en-US"), script=script)
+        # Reconstruct complete labels from diff spans. A byte substring is not
+        # evidence that the operator could read the row on the terminal.
+        screen = VirtualScreen(160, 45)
+        saw_list = saw_detail = False
+        for span in output.split(b"\x1b[0m"):
+            screen.feed(span + b"\x1b[0m")
+            visible = screen.text()
+            if "Listed descriptors" in visible and re.search(r"FD\s+\d+", visible):
+                saw_list = True
+            if f"FD {descriptor} · PID {pid}" in visible and "Flags (octal)" in visible:
+                assert "File offset" in visible and "Mount ID" in visible
+                saw_detail = True
+        assert saw_list, "the FD overlay did not show the selected process's descriptors"
+        assert saw_detail, "Enter did not open the selected stable FD's metadata"
 
 
 def run_resize_storm() -> bytes:
@@ -848,6 +1199,28 @@ def run_layout_drop_target() -> None:
         "the drop-target list never showed how to commit"
     )
 
+    # A removed widget must stay removed after a fresh process reads the file.
+    # Remove a second widget after restart: if the first silently returned,
+    # the final file will still list only one removal.
+    with tempfile.TemporaryDirectory(prefix="wtop-pty-removed-") as temporary:
+        home = pathlib.Path(temporary)
+        remove_script = [
+            (b"e", None), (("sleep", 0.6), None),
+            (b"d", None), (("sleep", 0.6), None),
+            (b"e", None), (b"q", None),
+        ]
+        run_session(160, 45, exercise=False, script=remove_script, config_home=home)
+        layout = home / "wtop" / "layout.yml"
+        first = layout.read_text(encoding="utf-8")
+        assert "schema_version: 5" in first and "removed_widgets:" in first
+        assert '    - "cpu_overview"' in first
+        run_session(160, 45, exercise=False, script=remove_script, config_home=home)
+        second = layout.read_text(encoding="utf-8")
+        removed = second.split("removed_widgets:\n", 1)[1]
+        assert '    - "cpu_overview"' in removed and '    - "memory_overview"' in removed, (
+            "a widget removed before restart returned to the page:\n" + second
+        )
+
 
 def run_workspace_unicode_name() -> None:
     """A workspace name typed in the user's own script, and kept across a restart.
@@ -969,8 +1342,117 @@ def run_workspace_manager() -> None:
     ), "the workspace list never rendered its title"
     assert b"ptycheck" in out, "the typed workspace name never reached the screen"
 
+    # Tab visibility is a saved layout choice. Hide Processes, restart, then
+    # show it again and move it so both directions cross the file boundary.
+    with tempfile.TemporaryDirectory(prefix="wtop-pty-tabs-") as temporary:
+        home = pathlib.Path(temporary)
+        hidden = run_session(160, 45, exercise=False, script=[
+            (b"e", None), (("sleep", 0.6), None),
+            (b"b", None), (("sleep", 0.6), None),
+            (b"\x1b[B", None), (b" ", None), (("sleep", 0.6), None),
+            (b"q", None), (b"e", None), (b"q", None),
+        ], config_home=home)
+        assert "管理标签页".encode() in hidden, "the tab editor did not open"
+        layout = home / "wtop" / "layout.yml"
+        text = layout.read_text(encoding="utf-8")
+        assert "schema_version: 5" in text and 'tabs:\n  - "overview"' in text
+        assert '  - "processes"' not in text.split("tabs:\n", 1)[1], (
+            "the hidden tab was not removed from the saved tab bar")
+        assert "  processes:\n" in text, "hiding a tab lost its page layout"
 
-def run_cgroup_cross_link() -> None:
+        restored = run_session(160, 45, exercise=False, script=[
+            (b"e", None), (("sleep", 0.6), None),
+            (b"b", None), (("sleep", 0.6), None),
+            (b"\x1b[B" * 9, None), (("sleep", 0.3), None),
+            (b" ", None), (("sleep", 0.3), None),
+            (b"\x1b[C", None), (("sleep", 0.3), None),
+            (b"q", None), (b"e", None), (b"q", None),
+        ], config_home=home)
+        assert "管理标签页".encode() in restored
+        text = layout.read_text(encoding="utf-8")
+        tab_lines = text.split("tabs:\n", 1)[1].splitlines()
+        assert tab_lines[:3] == [
+            '  - "overview"', '  - "compute"', '  - "processes"',
+        ], "re-added tab order did not survive the second session"
+
+    with tempfile.TemporaryDirectory(prefix="wtop-pty-custom-page-") as temporary:
+        home = pathlib.Path(temporary)
+        run_session(160, 45, exercise=False, config_home=home, script=[
+            (b"e", None), (("sleep", 0.4), None),
+            (b"b", None), (("sleep", 0.4), None),
+            (b"n", None), (("sleep", 0.4), None),
+            (b"q", None), (b"a", None), (("sleep", 0.4), None),
+            (b"\x1b[B" * 10, None), (("sleep", 0.4), None),
+            (b"\r", None), (("sleep", 0.4), None),
+            (b"e", None), (b"q", None),
+        ])
+        layout = home / "wtop" / "layout.yml"
+        contents = layout.read_text(encoding="utf-8")
+        custom_body = re.search(r"  custom1:\n(.*?)(?=\n  [a-z_]+:\n|\nprocess_columns:)",
+                                contents, re.S)
+        assert "schema_version: 6" in contents and custom_body
+        assert all(f'widget_id: "{widget}"' in custom_body.group(1)
+                   for widget in ("cpu_overview", "process_table")), (
+            "the new page did not save widgets from two source pages:\n" + contents
+        )
+        reopened = run_session(160, 45, exercise=False, config_home=home, script=[
+            (b"2", None), (("sleep", 0.8), None),
+            (b"\t", None), (("sleep", 0.4), None),
+            (b"\r", None), (("sleep", 0.7), None),
+            (b"q", None), (b"q", None),
+        ])
+        assert "进程详情".encode() in reopened, (
+            "the mixed page lost its process-table action after restart"
+        )
+        run_session(160, 45, exercise=False, config_home=home, script=[
+            (b"2", None), (("sleep", 0.4), None),
+            (b"e", None), (b"b", None), (("sleep", 0.4), None),
+            (b"r", None), (b"\x7f" * 5, None), (b"Ops", None),
+            (b"\r", None), (("sleep", 0.3), None),
+            (b"q", None), (b"e", None), (b"q", None),
+        ])
+        assert 'name: "Ops"' in layout.read_text(encoding="utf-8")
+        run_session(160, 45, exercise=False, config_home=home, script=[
+            (b"2", None), (("sleep", 0.4), None),
+            (b"e", None), (b"b", None), (("sleep", 0.4), None),
+            (b"x", None), (("sleep", 0.3), None),
+            (b"x", None), (("sleep", 0.3), None),
+            (b"q", None), (b"e", None), (b"q", None),
+        ])
+        assert "custom_pages:" not in layout.read_text(encoding="utf-8"), (
+            "confirmed deletion did not remove the custom page definition"
+        )
+
+    with tempfile.TemporaryDirectory(prefix="wtop-pty-copy-page-") as temporary:
+        home = pathlib.Path(temporary)
+        run_session(160, 45, exercise=False, config_home=home, script=[
+            (b"e", None), (("sleep", 0.4), None),
+            (b"b", None), (("sleep", 0.4), None),
+            (b"c", None), (("sleep", 0.4), None),
+            (b"q", None), (b"e", None), (b"q", None),
+        ])
+        layout = home / "wtop" / "layout.yml"
+        first = layout.read_text(encoding="utf-8")
+        assert 'name: "概览 副本"' in first, (
+            "copying Overview did not create a named custom page"
+        )
+        run_session(160, 45, exercise=False, config_home=home, script=[
+            (b"2", None), (("sleep", 0.4), None),
+            (b"e", None), (b"d", None), (("sleep", 0.4), None),
+            (b"e", None), (b"q", None),
+        ])
+        second = layout.read_text(encoding="utf-8")
+        def widget_count(page: str) -> int:
+            body = re.search(r"  " + page + r":\n(.*?)(?=\n  [a-z_]+:\n|\nprocess_columns:)",
+                             second, re.S)
+            assert body, f"the {page} page was not saved"
+            return body.group(1).count('widget_id: "')
+        assert widget_count("overview") == 11 and widget_count("custom1") == 10, (
+            "editing a copied page changed its source or failed to persist"
+        )
+
+
+def run_cgroup_cross_link() -> bool:
     """Reaching from a workload into its processes and back out again.
 
     The Workloads page already lists cgroup.procs for every node, so `Enter`
@@ -979,6 +1461,18 @@ def run_cgroup_cross_link() -> None:
     filter that silently hid rows would pass the same frame check, so both
     the presence and the absence are asserted.
     """
+    try:
+        membership = pathlib.Path("/proc/self/cgroup").read_text()
+        own_path = next(line[3:] for line in membership.splitlines()
+                        if line.startswith("0::"))
+        visible = (pathlib.Path("/sys/fs/cgroup") / own_path.lstrip("/")
+                   / "cgroup.procs").read_text().split()
+    except (OSError, StopIteration):
+        print("PTY cgroup cross-link: skipped (own cgroup membership unreadable)")
+        return False
+    if "0" in visible or str(os.getpid()) not in visible:
+        print("PTY cgroup cross-link: skipped (PID namespace hides cgroup members)")
+        return False
     script: list[tuple[object, object]] = [
         (PAGE_KEYS[8].encode("ascii"), None),
         (("sleep", 1.0), None),
@@ -1007,17 +1501,286 @@ def run_cgroup_cross_link() -> None:
         "Escape did not clear the cgroup filter"
     )
 
+    reverse = VirtualScreen(160, 45)
+    reverse.feed(run_session(160, 45, exercise=False, script=[
+        (PAGE_KEYS[2].encode("ascii"), None),
+        # The busiest host process can exit or have unreadable membership.
+        # Select the supervised child whose readable cgroup was checked above.
+        (("self_process",), None),
+        (("sleep", 1.5), None),
+        (b"g", None),
+        (("sleep", 2.0), None),
+        (b"q", None),
+    ]))
+    reverse_text = reverse.text()
+    assert "所属工作负载：" in reverse_text, (
+        "g on a process did not identify its workload"
+    )
+    assert "cgroup v2 工作负载" in reverse_text and "工作负载详情" in reverse_text, (
+        "g did not navigate to the workload table and its selected detail"
+    )
+    return True
+
+
+def run_inspector_dispatch() -> None:
+    """A singleton sshd entity stays with its inspector and title."""
+    out = run_session(160, 45, exercise=False,
+        cli_options=("--lang", "en-US", "--safe-mode"), script=[
+        (b"D", None), (("sleep", 0.4), (b"sshd service",)),
+        (b"q", None), (("sleep", 0.3), None), (b"q", None),
+    ])
+    screen = VirtualScreen(160, 45)
+    screen.feed(out)
+    assert b"sshd service" in out and b"SMART / NVMe" not in out, (
+        "singleton service enumeration dispatched to the storage inspector"
+    )
+
+
+def run_systemd_units() -> None:
+    """Unit search, main-process verification, return and workload navigation."""
+    tool = shutil.which("systemctl")
+    if not tool:
+        print("PTY systemd units: skipped (systemctl unavailable)")
+        return
+    selected = None
+    for candidate in ("dbus-broker.service", "dbus.service", "NetworkManager.service", "systemd-journald.service"):
+        shown = subprocess.run([tool, "--system", "show", "--no-pager",
+            "--property=Id,MainPID,ControlGroup,ActiveState", "--", candidate],
+            capture_output=True, text=True, timeout=3)
+        if shown.returncode != 0:
+            continue
+        fields = dict(line.split("=", 1) for line in shown.stdout.splitlines() if "=" in line)
+        if fields.get("ActiveState") == "active" and int(fields.get("MainPID", "0")) > 0:
+            try:
+                membership = pathlib.Path(f"/proc/{fields['MainPID']}/cgroup").read_text()
+            except OSError:
+                continue
+            if f"0::{fields.get('ControlGroup')}\n" in membership:
+                selected = fields.get("Id")
+                break
+    if not selected:
+        print("PTY systemd units: skipped (no readable stable service and manager)")
+        return
+    script = [
+        (b"d", None), (("sleep", 0.3), (b"systemd units",)),
+        (b"/", None), (("manager:system " + selected).encode(), None), (b"\r", None),
+        (("sleep", 0.2), None), (b"\r", None),
+        (("sleep", 0.4), ("Configured memory limit",)),
+        (b"p", None), (("sleep", 0.5), ("Process details",)),
+        (b"\x1b", None), (("sleep", 0.3), None),
+        (b"g", None), (("sleep", 0.6), None), (b"q", None),
+    ]
+    out = run_session(180, 50, exercise=False, cli_options=("--lang", "en-US"), script=script)
+    screen = VirtualScreen(180, 50)
+    screen.feed(out)
+    assert b"Process details" in out, "unit detail did not open its verified main process"
+    assert "Workload for " + selected in screen.text(), (
+        "return from the main process did not preserve the unit's workload navigation"
+    )
+    out = run_session(180, 50, exercise=False, cli_options=("--lang", "en-US"), script=[
+        (b"d", None), (("sleep", 0.3), (b"systemd units",)),
+        (b"/", None), (("manager:system " + selected).encode(), None),
+        (b"\r", None), (b"\r", None), (("sleep", 0.4), ("Configured memory limit",)),
+        (b"g", None), (("sleep", 0.5), None),
+        (b"d", None), (("sleep", 0.5), None), (("signal", signal.SIGTERM), None),
+    ])
+    detail = VirtualScreen(180, 50)
+    detail.feed(out)
+    assert "systemd units" in detail.text() and "Unit: " + selected in detail.text(), (
+        "Workloads did not open the selected unit directly"
+    )
+
+
+def run_unit_journal() -> None:
+    """An explicit unit-log read, message detail, refresh and return."""
+    tool = shutil.which("journalctl")
+    ctl = shutil.which("systemctl")
+    if not tool or not ctl:
+        print("PTY unit journal: skipped (journalctl or systemctl unavailable)")
+        return
+    selected = None
+    for candidate in ("dbus-broker.service", "dbus.service", "systemd-journald.service"):
+        meta = subprocess.run([ctl, "--system", "show", "--no-pager", "--property=Id,LoadState", "--", candidate],
+                              capture_output=True, text=True, timeout=3)
+        fields = dict(line.split("=", 1) for line in meta.stdout.splitlines() if "=" in line)
+        if meta.returncode != 0 or fields.get("LoadState") != "loaded":
+            continue
+        candidate = fields.get("Id")
+        records = subprocess.run([tool, "--system", "--boot", "--no-pager", "--lines=1",
+                                  "--output=json", "--unit=" + candidate],
+                                 capture_output=True, text=True, timeout=3)
+        if records.returncode == 0 and records.stdout.strip().startswith("{"):
+            selected = candidate
+            break
+    if not selected:
+        print("PTY unit journal: skipped (no readable current-boot unit records)")
+        return
+    script = [
+        (b"d", None), (("sleep", .3), ("systemd units",)),
+        (b"/", None), (("manager:system " + selected).encode(), None),
+        (b"\r", None), (("sleep", .2), None), (b"\r", None),
+        (("sleep", .3), ("Configured memory limit",)),
+        (b"l", None), (("sleep", .3), ("Journal · " + selected,)),
+        (b"\r", None), (("sleep", .3), ("Recorded sender PID",)),
+        (b"\x1b[B", None), (b"\x1b[F", None), (b"\x1b[H", None),
+        (b"s", None), (("sleep", .3), ("Journal priorities",)),
+        (b"r", None), (("sleep", .3), None),
+        (b"\x1b[F", None), (b"\x1b[H", None),
+        (b"s", None), (("sleep", .3), ("Recorded sender PID",)),
+        (b"r", None), (("sleep", .3), None), (("signal", signal.SIGTERM), None),
+    ]
+    output = run_session(180, 50, exercise=False, cli_options=("--lang", "en-US"), script=script)
+    screen = VirtualScreen(180, 50)
+    screen.feed(output)
+    assert "Journal · " + selected in screen.text() and "Recorded sender PID" in screen.text()
+    assert "historical journal data" in screen.text(), "log PIDs were presented as live process identities"
+    output = run_session(180, 50, exercise=False, cli_options=("--lang", "en-US"), script=script[:-1] + [
+        (b"\x1b", None), (("sleep", .2), None),
+        (b"\x1b", None), (("sleep", .2), None), (("signal", signal.SIGTERM), None),
+    ])
+    screen = VirtualScreen(180, 50)
+    screen.feed(output)
+    assert "Unit: " + selected in screen.text() and "Configured memory limit" in screen.text(), (
+        "journal detail/list did not return to its unit"
+    )
+
+
+def run_service_event_summary() -> None:
+    """sshd's actual journal source, summary refresh and parent navigation."""
+    ctl, journalctl = shutil.which("systemctl"), shutil.which("journalctl")
+    if not ctl or not journalctl:
+        print("PTY sshd event summary: skipped (systemctl or journalctl unavailable)")
+        return
+    shown = subprocess.run([ctl, "--system", "--no-pager", "show", "--property=Id,LoadState,Names", "--", "sshd.service"],
+                           capture_output=True, text=True, timeout=3)
+    fields = dict(line.split("=", 1) for line in shown.stdout.splitlines() if "=" in line)
+    if shown.returncode != 0 or fields.get("LoadState") != "loaded":
+        print("PTY sshd event summary: skipped (no loaded sshd service)")
+        return
+    queried = subprocess.run([journalctl, "--system", "--boot", "--no-pager", "--output=json", "--lines=101",
+                               "--unit=" + fields["Id"]], capture_output=True, text=True, timeout=5)
+    if queried.returncode != 0 or "No journal files" in queried.stderr:
+        print("PTY sshd event summary: skipped (journal unavailable)")
+        return
+    script = [
+        (b"D", None), (("sleep", .3), ("sshd service",)),
+        (b"s", None), (("sleep", .3), ("OpenSSH text matches",)),
+        (b"r", None), (("sleep", .3), ("OpenSSH text matches",)),
+        (b"\x1b[F", None), (b"\x1b[H", None), (("signal", signal.SIGTERM), None),
+    ]
+    output = run_session(180, 60, exercise=False, cli_options=("--lang", "en-US"), script=script)
+    screen = VirtualScreen(180, 60)
+    screen.feed(output)
+    assert "Log summary · " + fields["Id"] in screen.text() and "OpenSSH text matches" in screen.text()
+    assert "Failed authentication logs" in screen.text() and "not distinct attempts" in screen.text()
+    output = run_session(180, 60, exercise=False, cli_options=("--lang", "en-US"), script=script[:-1] + [
+        (b"\x1b", None), (("sleep", .3), ("sshd service",)), (("signal", signal.SIGTERM), None),
+    ])
+    screen = VirtualScreen(180, 60)
+    screen.feed(output)
+    assert "sshd service · sshd" in screen.text() and "recent_events" in screen.text(), "summary did not return to sshd"
+
+
+def run_service_configuration() -> None:
+    """The service's actual OpenSSH configuration source, including denial."""
+    sshd = shutil.which("sshd") or ("/usr/sbin/sshd" if os.path.isfile("/usr/sbin/sshd") else None)
+    if not sshd:
+        print("PTY sshd configuration: skipped (sshd unavailable)")
+        return
+    query = subprocess.run([sshd, "-G", "-f", "/etc/ssh/sshd_config"],
+                           capture_output=True, text=True, timeout=3)
+    if query.returncode and re.search(r"(?:unknown|illegal|invalid) option -- '?G'?", query.stderr):
+        query = subprocess.run([sshd, "-T", "-f", "/etc/ssh/sshd_config"],
+                               capture_output=True, text=True, timeout=3)
+    if query.returncode == 0:
+        expected = "Evaluates current files."
+    elif "permission denied" in query.stderr.lower() or "operation not permitted" in query.stderr.lower():
+        expected = "OpenSSH configuration or host keys are not readable"
+    else:
+        expected = "OpenSSH configuration evaluation failed or returned invalid output"
+    script = [
+        (b"D", None), (("sleep", .3), ("sshd service",)),
+        (b"\x1b[F", None), (("sleep", .3), (expected,)),
+        (b"\x1b[H", None), (b"r", None), (("sleep", .3), ("sshd service",)),
+        (b"\x1b[F", None), (("sleep", .3), (expected,)), (("signal", signal.SIGTERM), None),
+    ]
+    output = run_session(180, 50, exercise=False, cli_options=("--lang", "en-US"), script=script)
+    screen = VirtualScreen(180, 50)
+    screen.feed(output)
+    assert "configuration" in screen.text() and expected in screen.text()
+    if query.returncode:
+        assert "[denied]" in screen.text() or "[error]" in screen.text(), "failed configuration appeared fresh"
+    else:
+        assert "Global (no connection supplied)" in screen.text()
+    output = run_session(180, 50, exercise=False, cli_options=("--lang", "en-US"), script=script[:-1] + [
+        (b"\x1b", None), (("sleep", .2), None), (("signal", signal.SIGTERM), None),
+    ])
+    screen = VirtualScreen(180, 50)
+    screen.feed(output)
+    assert "sshd service · sshd" not in screen.text(), "configuration service detail did not close"
+
+
+def run_logind_sessions() -> None:
+    """Read a live login session and navigate through its verified scope."""
+    loginctl, systemctl = shutil.which("loginctl"), shutil.which("systemctl")
+    if not loginctl or not systemctl:
+        print("PTY login sessions: skipped (loginctl or systemctl unavailable)")
+        return
+    listed = subprocess.run([loginctl, "--no-pager", "--no-legend", "list-sessions"],
+                            capture_output=True, text=True, timeout=3)
+    if listed.returncode != 0:
+        print("PTY login sessions: skipped (logind unavailable)")
+        return
+    ids = [line.split()[0] for line in listed.stdout.splitlines()
+           if len(line.split()) >= 3 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", line.split()[0])]
+    ids = ids[:128]
+    selected = None
+    for index, session_id in enumerate(ids):
+        shown = subprocess.run([loginctl, "--no-pager", "--property=Scope", "--property=Leader",
+                                "show-session", "--", session_id], capture_output=True, text=True, timeout=3)
+        fields = dict(line.split("=", 1) for line in shown.stdout.splitlines() if "=" in line)
+        scope = fields.get("Scope")
+        leader = fields.get("Leader")
+        if shown.returncode != 0 or scope != "session-" + session_id + ".scope" or not leader or not leader.isdigit():
+            continue
+        unit = subprocess.run([systemctl, "--no-pager", "show", "--property=Leader,LoadState", "--", scope],
+                              capture_output=True, text=True, timeout=3)
+        unit_fields = dict(line.split("=", 1) for line in unit.stdout.splitlines() if "=" in line)
+        if unit.returncode == 0 and unit_fields.get("LoadState") == "loaded" and unit_fields.get("Leader", leader) == leader:
+            selected = index, session_id, scope
+            break
+    if selected is None:
+        print("PTY login sessions: skipped (no readable login session with a live scope)")
+        return
+    index, session_id, scope = selected
+    script = [(b"u", None), (("sleep", .3), ("Login session",))]
+    if len(ids) > 1:
+        script += [(b"\x1b[H", None)] + [(b"\x1b[B", None)] * index + [(b"\r", None)]
+    script += [
+        (("sleep", .3), ("PAM service",)), (b"r", None), (("sleep", .2), None),
+        (b"d", None), (("sleep", .3), ("Configured memory limit",)),
+        (b"r", None), (("sleep", .3), None), (("signal", signal.SIGTERM), None),
+    ]
+    output = run_session(180, 50, exercise=False, cli_options=("--lang", "en-US"), script=script)
+    screen = VirtualScreen(180, 50)
+    screen.feed(output)
+    assert "Unit: " + scope in screen.text() and "Configured memory limit" in screen.text()
+    output = run_session(180, 50, exercise=False, cli_options=("--lang", "en-US"), script=script[:-1] + [
+        (b"\x1b", None), (("sleep", .3), ("PAM service",)), (("signal", signal.SIGTERM), None),
+    ])
+    screen = VirtualScreen(180, 50)
+    screen.feed(output)
+    assert "Login session · " + session_id in screen.text() and "Session scope: " + scope in screen.text(), (
+        "unit refresh or back navigation lost its parent login session"
+    )
+
 
 def run_cgroup_health() -> None:
-    """The Workloads page must not report a healthy cgroup tree as partial.
+    """The Workloads page must not blame undelegated controllers for partial data.
 
     A controller that was never delegated to a subtree has no control files in
-    it, and that is the kernel's decision rather than a read that failed.  The
-    page used to open a "Why partial" section blaming undelegated controllers
-    and a denied read alike, so on an ordinary systemd host most cgroups were
-    flagged.  When the collector can enumerate the tree it can read, the count
-    is zero and no explanation is offered.  The stale wording is asserted absent
-    as well, because it is no longer true at any partial count.
+    it, and that is the kernel's decision rather than a read that failed. An
+    actual unreadable node can still make the current host's tree partial.
     """
     script: list[tuple[object, object]] = [
         (PAGE_KEYS[8].encode("ascii"), None),
@@ -1033,9 +1796,52 @@ def run_cgroup_health() -> None:
     assert "委派" not in text, (
         "the Workloads page still blames undelegated controllers for being partial"
     )
-    assert "为何是部分数据" not in text, (
-        "a cgroup tree with nothing unreadable still opens a partial explanation"
+
+
+def run_workload_search() -> None:
+    """Workloads search narrows the tree and Escape restores it."""
+    script: list[tuple[object, object]] = [
+        (PAGE_KEYS[8].encode("ascii"), None), (("sleep", 1.5), None),
+        (b"/", None), (b"wt0absent", None), (b"\r", None),
+        (("sleep", 0.8), None),
+    ]
+    filtered_output = run_session(160, 45, exercise=False,
+        script=script + [(b"c", None), (("sleep", 0.3), None), (b"q", None)])
+    filtered = VirtualScreen(160, 45)
+    filtered.feed(filtered_output)
+    assert "筛选：wt0absent" in filtered.text() and "匹配 0 项" in filtered.text(), (
+        "Workloads search did not reach the tree table:\n" + filtered.text()
     )
+    assert "先清除工作负载搜索" in filtered_output.decode("utf-8", "replace"), (
+        "folding a filtered tree did not explain why it was refused"
+    )
+    cleared = VirtualScreen(160, 45)
+    cleared.feed(run_session(160, 45, exercise=False, script=script + [
+        (b"\x1b", None), (("sleep", 0.8), None), (b"q", None),
+    ]))
+    assert "筛选：wt0absent" not in cleared.text(), (
+        "Escape did not clear the Workloads search"
+    )
+    try:
+        membership = pathlib.Path("/proc/self/cgroup").read_text().splitlines()
+        own_path = next(line[3:] for line in membership if line.startswith("0::"))
+        memory = (pathlib.Path("/sys/fs/cgroup") / own_path.lstrip("/")
+                  / "memory.current").read_text().strip()
+    except (OSError, StopIteration):
+        memory = ""
+    if memory.isdigit():
+        numeric = VirtualScreen(160, 45)
+        numeric.feed(run_session(160, 45, exercise=False, script=[
+            (PAGE_KEYS[8].encode("ascii"), None), (("sleep", 2.5), None),
+            (b"/", None), (b"mem>=0", None), (b"\r", None),
+            (("sleep", 0.8), None), (b"q", None),
+        ]))
+        assert re.search(r"匹配 [1-9]\d* 项", numeric.text()) and "筛选：mem>=0" in numeric.text(), (
+            "a measured memory condition did not reach the Workloads table:\n"
+            + numeric.text()
+        )
+    else:
+        print("PTY Workloads numeric search: skipped (cgroup memory.current unreadable)")
 
 
 def run_gpu_device_clocks() -> None:
@@ -1092,6 +1898,186 @@ def run_gpu_device_clocks() -> None:
         ), "a named clock did not say which source it was read from"
 
 
+def run_hardware_details() -> None:
+    """Device selection, live details and one-key closure on the System page."""
+    out = run_session(200, 45, exercise=False,
+        cli_options=("--lang", "en-US"), script=[
+        (PAGE_KEYS[9].encode("ascii"), None),
+        (("sleep", 1.2), None),
+        (b"j", None),
+        (b"\r", None),
+        (("sleep", 1.2), None),
+        (b"p", None),
+        (("sleep", 0.4), None),
+        (b"\x1b[F", None),
+        (b"\x1b", None),
+        (("sleep", 0.4), None),
+        (b"q", None),
+    ])
+    assert b"Device:" in out or b"current inventory" in out, (
+        "System Enter did not open device details or report an absent inventory"
+    )
+    assert b"Esc/Enter" in out, "hardware detail did not provide its close action"
+    if b"Device:" in out:
+        assert b"Driver" in out and b"Source" in out, (
+            "hardware detail did not show driver and data provenance"
+        )
+
+
+def run_hardware_search() -> None:
+    """System device search filters, refuses an empty detail and clears."""
+    script: list[tuple[object, object]] = [
+        (PAGE_KEYS[9].encode("ascii"), None), (("sleep", 1.5), None),
+        (b"/", None), (b"wt0absent", None), (b"\r", None),
+        (("sleep", 0.8), None),
+    ]
+    empty_output = run_session(200, 50, exercise=False, script=script + [
+        (b"\r", None), (("sleep", 0.4), None), (b"q", None),
+    ])
+    empty = VirtualScreen(200, 50)
+    empty.feed(empty_output)
+    assert "匹配 0 项" in empty.text() and "筛选：wt0absent" in empty.text(), (
+        "System search did not narrow the device tree:\n" + empty.text()
+    )
+    assert "没有可见的匹配设备" in empty_output.decode("utf-8", "replace"), (
+        "Enter on an empty hardware search opened an unrelated device"
+    )
+    cleared = VirtualScreen(200, 50)
+    cleared.feed(run_session(200, 50, exercise=False, script=script + [
+        (b"\x1b", None), (("sleep", 0.8), None), (b"q", None),
+    ]))
+    assert "筛选：wt0absent" not in cleared.text(), (
+        "Escape did not clear the System device search"
+    )
+    cpu = VirtualScreen(200, 50)
+    cpu.feed(run_session(200, 50, exercise=False, script=[
+        (PAGE_KEYS[9].encode("ascii"), None), (("sleep", 1.5), None),
+        (b"/", None), (b"bus:cpu", None), (b"\r", None),
+        (("sleep", 0.8), None), (b"q", None),
+    ]))
+    assert re.search(r"匹配 [1-9]\d* 项", cpu.text()) and "筛选：bus:cpu" in cpu.text(), (
+        "a bus field did not find the visible CPU device tree:\n" + cpu.text()
+    )
+
+
+def run_hardware_references() -> None:
+    """A NUMA node's related CPU opens, and b returns to the node detail."""
+    cpulist = pathlib.Path("/sys/devices/system/node/node0/cpulist")
+    if not cpulist.is_file() or not cpulist.read_text().strip():
+        print("PTY hardware references: skipped (no NUMA CPU list)")
+        return
+    out = run_session(200, 50, exercise=False,
+        cli_options=("--lang", "en-US"), script=[
+        (PAGE_KEYS[9].encode("ascii"), None),
+        (("sleep", 0.8), None),
+        (b"j", None),
+        (PAGE_KEYS[4].encode("ascii"), None),
+        (("sleep", 0.8), (b"NUMA nodes",)),
+        (b"\x1b[Z\x1b[Z", None),
+        (b"\r", None),
+        (("sleep", 0.8), (b"Esc/Enter",)),
+        (b"r", None), (("sleep", 0.6), None),
+        (b"\r", None), (("sleep", 0.6), None),
+        (b"b", None), (("sleep", 0.5), None),
+        (b"q", None), (b"q", None),
+    ]).decode("utf-8", "replace")
+    if "Device not in the current inventory" in out:
+        print("PTY hardware references: skipped (NUMA detail unavailable)")
+        return
+    first = out.find("Device: node")
+    cpu = out.find("Device: cpu")
+    returned = out.rfind("Device: node")
+    assert "Related devices" in out and "cpu:" in out, (
+        "r on a NUMA node did not open its related CPU picker"
+    )
+    assert first >= 0 and first < cpu < returned, (
+        "Enter did not open a related CPU, or b did not return to the NUMA node"
+    )
+    ascii_output = run_session(200, 50, exercise=False,
+        terminal_environment={
+            "TERM": "dumb", "COLORTERM": None,
+            "LC_ALL": "C", "LC_CTYPE": "C", "LANG": "C",
+        }, cli_options=("--no-color", "--lang", "en-US"), script=[
+        (PAGE_KEYS[9].encode("ascii"), None),
+        (("sleep", 0.8), None), (b"j", None),
+        (PAGE_KEYS[4].encode("ascii"), None),
+        (("sleep", 0.8), (b"NUMA nodes",)),
+        (b"\x1b[Z\x1b[Z", None), (b"\r", None),
+        (("sleep", 0.8), (b"Esc/Enter",)),
+        (b"r", None), (("sleep", 0.5), None),
+        (b"q", None), (b"q", None),
+    ])
+    assert all(byte < 128 for byte in ascii_output)
+    assert b"Related devices" in ascii_output
+
+
+def run_numa_details() -> None:
+    """Focus the NUMA table on Memory and inspect the selected node."""
+    out = run_session(200, 50, exercise=False,
+        cli_options=("--lang", "en-US"), script=[
+        (PAGE_KEYS[9].encode("ascii"), None),
+        (("sleep", 0.8), None),
+        (b"j", None),
+        (PAGE_KEYS[4].encode("ascii"), None),
+        (("sleep", 0.8), (b"NUMA nodes",)),
+        (b"\x1b[Z\x1b[Z", None),  # NUMA precedes memory devices in the default layout
+        (b"\r", None),
+        (("sleep", 0.8), (b"Esc/Enter",)),
+        (b"\x1b", None),
+        (b"q", None),
+    ])
+    frame = "\n".join(_screen_at_last_paint(out, (b"Esc/Enter",), 200, 50))
+    if "Device: node" in frame:
+        assert "Logical CPUs:" in frame and "Distance (relative):" in frame, frame
+        assert "Total:" in frame and "Free:" in frame, frame
+        node_id = re.search(r"Device: node(\d+)", frame)
+        numastat = pathlib.Path("/sys/devices/system/node") / f"node{node_id.group(1)}" / "numastat"
+        if numastat.is_file() and os.access(numastat, os.R_OK):
+            assert "Allocation locality (pages since boot)" in frame, frame
+            assert "not memory accesses" in frame, frame
+    else:
+        assert "Device not in the current inventory" in frame, frame
+        print("PTY NUMA data absent: explicit unavailable detail verified")
+
+
+def run_memory_device_details() -> None:
+    """Memory-device inventory and its explicit no-access/absent fallback."""
+    def capture(parent: bool = False) -> bytes:
+        script = [
+            (PAGE_KEYS[9].encode("ascii"), None),
+            (("sleep", 0.8), None),
+            (b"j", None),
+            (PAGE_KEYS[4].encode("ascii"), None),
+            (("sleep", 0.8), (b"Memory devices",)),
+            (b"\x1b[Z", None),
+            (b"\r", None),
+            (("sleep", 0.8), (b"Esc/Enter",)),
+        ]
+        if parent:
+            script += [
+                (b"p", None), (("sleep", 0.4), None),
+                (("resize", 49, 199), None), (("sleep", 0.3), None),
+                (("resize", 50, 200), None), (("sleep", 0.4), None),
+            ]
+        script += [(b"\x1b", None), (b"q", None)]
+        return run_session(200, 50, exercise=False, cli_options=("--lang", "en-US"), script=script)
+
+    out = capture()
+    frame = "\n".join(_screen_at_last_paint(out, (b"Esc/Enter",), 200, 50))
+    if "Device:" in frame:
+        assert "Part number:" in frame and "Configured rate:" in frame, frame
+        assert "Firmware report" in frame, frame
+        # The hint is a screen property; differential output can split its bytes.
+        if "p parent" in frame:
+            parent = "\n".join(_screen_at_last_paint(capture(True), (b"Esc/Enter",), 200, 50))
+            assert "Device positions:" in parent and "Error correction:" in parent, parent
+            assert "Firmware report" in parent, parent
+    else:
+        assert "Device not in the current inventory" in frame, frame
+        print("PTY memory inventory absent/denied: explicit fallback verified")
+
+
+
 def run_signal_shutdown() -> None:
     """SIGTERM, SIGHUP, and SIGINT must exit like `q`: status 0, alternate
     screen restored, never killed by the signal itself."""
@@ -1129,11 +2115,16 @@ def run_tmux_scenario() -> None:
     else:
         command_line = "%s %s" % (command, " ".join(shlex.quote(a) for a in arguments))
     try:
-        subprocess.run(
+        started = subprocess.run(
             ["tmux", "new-session", "-d", "-s", session, "-x", "120", "-y", "34",
              command_line],
-            check=True, env=environment, timeout=10,
+            capture_output=True, text=True, env=environment, timeout=10,
         )
+        if started.returncode != 0:
+            if "Operation not permitted" in started.stderr:
+                print("PTY tmux scenario: skipped (local socket access denied)")
+                return
+            raise AssertionError("tmux did not start: " + started.stderr.strip())
         deadline = time.monotonic() + 12.0
         pane_text = ""
         while time.monotonic() < deadline:
@@ -1172,6 +2163,30 @@ def run_tmux_scenario() -> None:
             capture_output=True, timeout=5)
 
 
+def run_process_numa_placement() -> None:
+    """Open this supervised process, whose numa_maps is readable on Linux."""
+    out = run_session(200, 70, exercise=False,
+        cli_options=("--lang", "en-US"), script=[
+        (PAGE_KEYS[2].encode("ascii"), None),
+        (("sleep", 0.8), None),
+        (("self_process",), None),
+        (("sleep", 0.5), None),
+        (b"\r", None),
+        (("sleep", 2.0), None),
+        (("resize", 71, 200), None),
+        (("resize", 70, 200), None),
+        (("sleep", 0.5), None),
+        (b"q", None),
+        (("sleep", 0.4), None),
+        (b"q", None),
+    ])
+    frame = "\n".join(_screen_at_last_paint(out,
+        (b"Mapped pages by NUMA node", b"Shared pages count here"), 200, 70))
+    assert "Mapped pages by NUMA node" in frame, frame
+    assert re.search(r"Node \d+\s+\d", frame), frame
+    assert "Shared pages count here" in frame, frame
+
+
 def run_thread_drilldown() -> None:
     """Processes -> a process -> one of its threads -> that thread's detail.
 
@@ -1188,6 +2203,8 @@ def run_thread_drilldown() -> None:
     script: list[tuple[object, object]] = [
         (PAGE_KEYS[2].encode("ascii"), None),   # processes page
         (("sleep", 1.0), None),
+        (("self_process",), None),
+        (("sleep", 0.6), None),
         (b"\r", None),                           # process detail
         (("sleep", 1.5), None),
         (b"i", None),                            # thread picker
@@ -1242,6 +2259,9 @@ def run_thread_drilldown() -> None:
         "Enter on a thread row did not open the thread detail"
     )
     assert "TID" in detail_text, "the thread detail does not name the TID"
+    assert "内核等待位置" in detail_text, (
+        "the thread detail did not show its on-demand wchan reading"
+    )
     assert "线程组" in detail_text, (
         "the thread detail does not report the thread group, which is the only "
         "place the owning process is confirmed from the thread's own data"
@@ -1347,7 +2367,132 @@ def run_thread_drilldown() -> None:
             "the memory section states whose memory it is but names no figure:\n"
             + "\n".join(rows)
         )
+    if pathlib.Path("/sys/fs/cgroup/cgroup.controllers").is_file():
+        jump = run_session(160, 45, exercise=False, script=script[:8] + [
+            (b"\r", None), (("sleep", 2.0), None),
+            (b"g", None), (("sleep", 1.4), None), (b"q", None),
+        ])
+        final = VirtualScreen(160, 45)
+        final.feed(jump)
+        screen = final.text()
+        assert "cgroup v2 工作负载" in screen, (
+            "g in a thread detail did not reach the Workloads page:\n" + screen
+        )
+        assert re.search(r"(?:TID \d+ 所属工作负载|没有可见工作负载匹配 TID \d+|正在查找 TID \d+)",
+                         screen), (
+            "the jump did not report the thread identity as its source:\n" + screen
+        )
     return None
+
+
+def run_process_tree_fold() -> None:
+    """Fold a controlled parent, then use ] to reveal and select its child."""
+    if not sys.platform.startswith("linux"):
+        print("process tree fold: Linux process tree unavailable; skipped")
+        return
+    parent_code = (
+        'import subprocess,sys,time; '
+        'child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"]); '
+        'print(child.pid,flush=True); time.sleep(60)'
+    )
+    parent = subprocess.Popen([sys.executable, "-c", parent_code],
+        stdout=subprocess.PIPE, text=True, start_new_session=True)
+    try:
+        child_pid = int(parent.stdout.readline().strip())
+        base = [
+            (PAGE_KEYS[2].encode("ascii"), None), (("sleep", 1.0), None),
+            (b"t", None), (b"/", None),
+            (f"pid={parent.pid}".encode("ascii"), None), (b"\r", None),
+            (("sleep", 0.7), None), (b"\x1b[F", None), (b"\x1b", None),
+            (("sleep", 0.7), None), (b"]", None), (b"[", None),
+            (b"c", None), (("sleep", 0.6), None),
+        ]
+        folded = VirtualScreen(180, 45)
+        folded.feed(run_session(180, 45, exercise=False,
+            script=base + [(b"q", None)]))
+        folded_text = folded.text()
+        assert "折叠隐藏 1 行" in folded_text, folded_text
+        assert any(str(parent.pid) in line and "▸" in line
+                   for line in folded_text.splitlines()), folded_text
+
+        unfolded = VirtualScreen(180, 45)
+        unfolded.feed(run_session(180, 45, exercise=False,
+            script=base + [(b"]", None), (("sleep", 0.6), None), (b"q", None)]))
+        unfolded_text = unfolded.text()
+        assert "折叠隐藏" not in unfolded_text, unfolded_text
+        assert any(re.search(rf"│\s+{child_pid}\s+", line)
+                   for line in unfolded_text.splitlines()), unfolded_text
+    finally:
+        try:
+            os.killpg(parent.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        parent.wait(timeout=3)
+
+
+def run_thread_picker_navigation() -> None:
+    """An arrow moves the thread identity, and Enter opens that same thread."""
+    if not sys.platform.startswith("linux"):
+        print("thread picker navigation: Linux task names unavailable; skipped")
+        return
+    # Build the names from bytes so they occur only in /proc/<tid>/comm, not
+    # in the process command line that the ordinary process table also paints.
+    worker_code = '''import ctypes, threading, time
+libc = ctypes.CDLL(None)
+def worker(name):
+    assert libc.prctl(15, ctypes.c_char_p(bytes(name)), 0, 0, 0) == 0
+    time.sleep(60)
+threading.Thread(target=worker, args=([119,116,111,112,45,97,108,112,104,97,0],), daemon=True).start()
+threading.Thread(target=worker, args=([119,116,111,112,45,98,101,116,97,0],), daemon=True).start()
+time.sleep(60)'''
+    child = subprocess.Popen([sys.executable, "-c", worker_code],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        alpha_tid = None
+        for _ in range(100):
+            task_dir = pathlib.Path(f"/proc/{child.pid}/task")
+            if task_dir.is_dir():
+                for task in task_dir.iterdir():
+                    if (task / "comm").read_text(encoding="ascii").strip() == "wtop-alpha":
+                        alpha_tid = int(task.name)
+                        break
+            if alpha_tid is not None:
+                break
+            time.sleep(0.02)
+        assert alpha_tid is not None, "the controlled worker thread did not start"
+
+        script = [
+            (b"2", None), (("sleep", 1.0), None),
+            (b"/", None), (f"pid:{child.pid}".encode("ascii"), None),
+            (b"\r", None), (("sleep", 0.5), None),
+            (b"\r", None), (("sleep", 1.0), None),
+            (b"i", None), (("sleep", 1.0), None),
+            (b"\x1b[B", None), (("sleep", 0.5), None),
+            (("resize", 46, 160), None), (("resize", 45, 160), None),
+            (("sleep", 0.4), None),
+            (b"\r", None), (("sleep", 1.2), None),
+            (("resize", 46, 160), None), (("resize", 45, 160), None),
+            (("sleep", 0.4), None),
+            (b"q", None), (("sleep", 0.3), None), (b"q", None),
+        ]
+        out = run_session(160, 45, exercise=False, script=script)
+        picker = _screen_at_last_paint(out, (b"wtop-beta",), 160, 45)
+        alpha_row = next((row for row in picker if "wtop-alpha" in row), None)
+        assert alpha_row and "▸" in alpha_row, (
+            "Down left the cursor on its old TID:\n" + "\n".join(picker)
+        )
+        detail = _screen_at_last_paint(out, ("线程组".encode(),), 160, 45)
+        assert any(f"线程详情 · TID {alpha_tid}" in row for row in detail), (
+            "Enter inspected a different thread from the highlighted row:\n"
+            + "\n".join(detail)
+        )
+    finally:
+        child.terminate()
+        try:
+            child.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
 
 
 def run_process_columns() -> None:
@@ -1386,7 +2531,7 @@ def run_process_columns() -> None:
         "layout, which is what it is: the next session opens with the same "
         "table"
     )
-    for column in ("PID", "TIME+", "命令"):
+    for column in ("PID", "TIME+", "ETIME", "命令"):
         assert column in editor_text, (
             f"the column editor does not list {column}"
         )
@@ -1418,6 +2563,31 @@ def run_process_columns() -> None:
     )
     assert "PID" in table_text and "CPU" in table_text, (
         "hiding one column emptied the header; the others must survive"
+    )
+
+    # The optional elapsed column must reach the real table after the editor
+    # enables it, not merely appear as an entry inside the picker.
+    elapsed_script: list[tuple[object, object]] = [
+        (PAGE_KEYS[2].encode("ascii"), None),
+        (("sleep", 1.0), None),
+        (b"C", None),
+        (("sleep", 0.8), None),
+    ]
+    for _ in range(9):
+        elapsed_script.append((b"\x1b[B", None))
+    elapsed_script.extend([
+        (b" ", None),
+        (("sleep", 0.8), None),
+        (("resize", 46, 160), None),
+        (("resize", 45, 160), None),
+        (("sleep", 0.8), None),
+    ])
+    elapsed_screen = VirtualScreen(160, 45)
+    elapsed_screen.feed(run_session(160, 45, exercise=False,
+        script=elapsed_script + [(b"q", None), (("sleep", 0.4), None), (b"q", None)]))
+    elapsed_text = elapsed_screen.text()
+    assert "进程列" not in elapsed_text and "ETIME" in elapsed_text, (
+        "enabling ETIME in the editor did not put it in the process table"
     )
 
 
@@ -1646,8 +2816,9 @@ def run_process_queued_column() -> None:
         "the column editor does not offer the run-queue column"
     )
 
-    # Two refreshes so the rate has an interval to divide by, then a resize to
-    # force a complete repaint of the header.
+    # Close the editor before waiting for samples: while it covers the table,
+    # no Queued cell is visible and the collector correctly skips schedstat.
+    script.append((b"q", None))
     script.append((("sleep", 1.6), None))
     script.append((("sleep", 1.6), None))
     script.append((("resize", 46, 160), None))
@@ -1655,7 +2826,7 @@ def run_process_queued_column() -> None:
     script.append((("sleep", 1.0), None))
     final = VirtualScreen(160, 45)
     final.feed(run_session(160, 45, exercise=False,
-                           script=script + [(b"q", None), (("sleep", 0.4), None), (b"q", None)]))
+                           script=script + [(b"q", None)]))
     # VirtualScreen.text() already reconstructs clean cells, so the header can be
     # matched directly.
     text = final.text()
@@ -1668,9 +2839,44 @@ def run_process_queued_column() -> None:
     )
     # At least one row must carry a figure with a per-second suffix; a header
     # with a column of nothing is the failure this guards against.
-    assert "/s" in text, (
+    assert any(re.search(r"│\s+\d+\s", line) and "/s" in line
+               for line in text.splitlines()), (
         "the run-queue column is in the header but no row carries a rate, so "
         "the viewport is either not being measured or the rate never appeared"
+    )
+
+
+def run_process_wait_site_column() -> None:
+    """The Linux-only WCHAN choice reaches the visible process table."""
+    script: list[tuple[object, object]] = [
+        (PAGE_KEYS[2].encode("ascii"), None),
+        (("sleep", 1.0), None),
+        (b"C", None),
+        (("sleep", 0.8), None),
+        (b"\x1b[F", None),  # queued is last; WCHAN is immediately before it
+        (b"\x1b[A", None),
+        (("sleep", 0.4), None),
+        (b" ", None),
+        (("sleep", 0.4), None),
+    ]
+    editor = run_session(200, 45, exercise=False,
+                         script=script + [(b"q", None), (("sleep", 0.3), None),
+                                          (b"q", None)])
+    assert b"WCHAN" in editor, "the column editor did not offer WCHAN"
+    script.extend([
+        (b"q", None),
+        (("sleep", 1.6), None),
+        (("resize", 46, 200), None),
+        (("resize", 45, 200), None),
+        (("sleep", 0.8), None),
+    ])
+    screen = VirtualScreen(200, 45)
+    screen.feed(run_session(200, 45, exercise=False,
+                            script=script + [(b"q", None)]))
+    header = next((line for line in screen.text().splitlines()
+                   if "PID" in line and "CPU" in line), "")
+    assert "WCHAN" in header, (
+        "the selected WCHAN column did not reach the process table: " + header
     )
 
 
@@ -1680,15 +2886,41 @@ def run_process_queued_column() -> None:
 # that passes, and the only way to see that is to run it first.
 SCENARIOS = (
     "run_ascii_profile",
+    "run_ascii_tab_identity",
+    "run_braille_chart",
+    "run_chart_zoom",
     "run_cgroup_cross_link",
     "run_cgroup_health",
+    "run_inspector_dispatch",
+    "run_systemd_units",
+    "run_unit_journal",
+    "run_service_event_summary",
+    "run_service_configuration",
+    "run_logind_sessions",
+    "run_workload_search",
     "run_gpu_client_drilldown",
     "run_gpu_device_clocks",
     "run_gpu_device_frequency",
+    "run_hardware_details",
+    "run_hardware_search",
+    "run_hardware_references",
+    "run_numa_details",
+    "run_memory_device_details",
+    "run_network_filter",
+    "run_storage_filter",
+    "run_network_structured_filter",
+    "run_network_owner_drilldown",
+    "run_process_socket_jump",
+    "run_process_fd_drilldown",
+    "run_network_routes",
     "run_layout_drop_target",
     "run_process_columns",
     "run_process_columns_persistence",
     "run_process_queued_column",
+    "run_process_wait_site_column",
+    "run_process_tree_fold",
+    "run_process_numa_placement",
+    "run_process_signal_menu",
     # `run_responsive` is here because the step that failed intermittently was
     # the 200x45 page-switch check *inside* it, and the isolation mode could not
     # reach it: a scenario list has to be checked against the code that runs the
@@ -1699,6 +2931,7 @@ SCENARIOS = (
     "run_resize_storm",
     "run_signal_shutdown",
     "run_thread_drilldown",
+    "run_thread_picker_navigation",
     "run_tmux_scenario",
     "run_workspace_manager",
     "run_workspace_rename",
@@ -1810,7 +3043,9 @@ def main() -> None:
         captures.append(run_session(80, 24, exercise=False))
         print("PTY 80x24 overview: ok")
         captures.append(run_session(180, 45, exercise=False, final_page=6))
-        print("PTY 180x45 GPU page: ok")
+        print("PTY 180x45 Network page: ok")
+        captures.append(run_session(180, 45, exercise=False, final_page=3))
+        print("PTY 180x45 Compute thermal page: ok")
         run_ascii_profile()
         print("PTY 100x30 ASCII/no-colour profile: ok")
         run_signal_shutdown()
@@ -1824,16 +3059,58 @@ def main() -> None:
         return
 
     run_responsive()
-    run_cgroup_cross_link()
-    print("PTY 160x45 workload to process cross-link: ok")
+    run_braille_chart()
+    print("PTY 180x45 Braille chart toggle: ok")
+    run_chart_zoom()
+    print("PTY 180x45 chart time-axis zoom: ok")
+    if run_cgroup_cross_link():
+        print("PTY 160x45 workload to process cross-link: ok")
     run_cgroup_health()
-    print("PTY 160x45 a healthy cgroup tree is not reported as partial: ok")
+    print("PTY 160x45 cgroup page and partial-data attribution: ok")
+    run_inspector_dispatch()
+    print("PTY 160x45 singleton inspector dispatch: ok")
+    run_systemd_units()
+    print("PTY 180x50 systemd unit search and resource navigation: ok")
+    run_unit_journal()
+    print("PTY 180x50 unit journal, message detail, refresh and return: ok")
+    run_service_event_summary()
+    run_service_configuration()
+    print("PTY 180x50 sshd configuration, scope or denial, refresh and close: ok")
+    print("PTY 180x60 sshd event source, query summary, refresh and return: ok")
+    run_logind_sessions()
+    print("PTY 180x50 login session, scope navigation, refresh and return: ok")
+    run_workload_search()
+    print("PTY 160x45 Workloads tree search and clear: ok")
     run_gpu_client_drilldown()
     print("PTY 160x45 GPU client drill-down: ok")
     run_gpu_device_frequency()
     print("PTY 240x40 GPU device frequency is never zero: ok")
     run_gpu_device_clocks()
     print("PTY 160x45 a GPU device's own clock domains, side by side: ok")
+    run_hardware_details()
+    print("PTY 200x45 hardware device details and parent navigation: ok")
+    run_hardware_search()
+    print("PTY 200x50 System device search and clear: ok")
+    run_hardware_references()
+    print("PTY 200x50 hardware references and back navigation: ok")
+    run_numa_details()
+    print("PTY 200x50 NUMA table selection and node details: ok")
+    run_memory_device_details()
+    print("PTY 200x50 memory devices and details: ok")
+    run_network_filter()
+    print("PTY 160x45 Network connection filter and clear: ok")
+    run_storage_filter()
+    print("PTY 200x50 Storage mount search and clear: ok")
+    run_network_structured_filter()
+    print("PTY 200x45 Network structured connection filter: ok")
+    run_network_owner_drilldown()
+    print("PTY 160x45 Network socket owner drill-down: ok")
+    run_process_socket_jump()
+    print("PTY 160x45 Process to live sockets and clear: ok")
+    run_process_fd_drilldown()
+    print("PTY 160x45 Process file descriptors and return: ok")
+    run_network_routes()
+    print("PTY 160x45 Network procfs routes: ok")
     run_workspace_manager()
     print("PTY 160x45 workspace manager: ok")
     run_workspace_unicode_name()
@@ -1844,12 +3121,22 @@ def main() -> None:
     print("PTY 160x45 layout drop target: ok")
     run_thread_drilldown()
     print("PTY 160x45 per-thread drill-down: ok")
+    run_thread_picker_navigation()
+    print("PTY 160x45 thread picker navigation: ok")
+    run_process_numa_placement()
+    print("PTY 200x70 process NUMA placement: ok")
+    run_process_signal_menu()
+    print("PTY 160x45 process signal menu: ok")
     run_process_columns()
     print("PTY 160x45 process column editor: ok")
     run_process_columns_persistence()
     print("PTY 160x45 process column choice survives a restart: ok")
     run_process_queued_column()
     print("PTY 160x45 process run-queue column: ok")
+    run_process_wait_site_column()
+    print("PTY 200x45 process WCHAN column: ok")
+    run_process_tree_fold()
+    print("PTY 180x45 process tree fold and child navigation: ok")
     for page in range(2, 11):
         captures.append(run_session(180, 45, exercise=False, final_page=page))
         print(f"PTY 180x45 page {page} final screen: ok")
@@ -1909,6 +3196,8 @@ def main() -> None:
 
     run_ascii_profile()
     print("PTY 100x30 ASCII/no-colour profile: ok")
+    run_ascii_tab_identity()
+    print("PTY 200x30 ASCII tab identities: ok")
     assert any("进程".encode() in capture or "概览".encode() in capture for capture in captures), (
         "zh-CN catalog was not visible in any PTY frame"
     )

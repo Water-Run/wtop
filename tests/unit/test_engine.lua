@@ -77,6 +77,9 @@ local collectors = {
     process = collector("process", { list = {} }),
     gpu = collector("gpu", { devices = { { metrics = { utilization_percent = 50 } } } }),
     hwmon = collector("hwmon", { devices = {} }),
+    numa = collector("numa", { nodes = {} }),
+    memory_devices = collector("memory_devices", { devices = {} }),
+    cpuidle = collector("cpuidle", { cpus = {} }),
 }
 
 local engine = Engine.new({ clock = clock, collectors = collectors, history_capacity = 4 })
@@ -101,6 +104,9 @@ assert(engine.scheduler:task("cpu").interval_ms == 100)
 assert(engine.scheduler:task("network").interval_ms == 100)
 assert(engine.scheduler:task("process").interval_ms == 1000,
     "high-cardinality collector floor must survive very-high UI updates")
+assert(engine.scheduler:task("cpuidle").interval_ms == 5000
+    and engine.scheduler:task("cpuidle").background_interval_ms == 30000,
+    "CPUIdle sysfs walks must keep their foreground and background budgets")
 assert(engine.scheduler:task("network").background_interval_ms == 3000)
 assert(engine:set_interval(8000))
 assert(engine.scheduler:task("cpu").interval_ms == 8000)
@@ -125,12 +131,30 @@ assert(engine.scheduler:task("connections").visible == true)
 assert(engine.context.scan_connection_owners == true)
 assert(engine.scheduler:task("network").next_due_ns <= network_due,
     "showing a page must make its collectors immediately eligible")
+assert(engine.context.scan_routes == false,
+    "the ordinary Network page does not decode the full route inventory")
+engine.scheduler:task("network").next_due_ns = clock:now_ns() + 5000000000
+assert(engine:set_active_tab("network", { network_summary = true },
+    { network = true, route_detail = true }))
+assert(engine.context.scan_routes == true
+    and engine.scheduler:task("network").next_due_ns <= clock:now_ns(),
+    "opening route detail makes one full network sample due immediately")
+assert(engine:set_active_tab("network", { network_summary = true }))
+assert(engine.context.scan_routes == false,
+    "closing route detail returns to the cheap default-route scan")
 assert(engine:set_active_tab("gpu"))
 assert(engine.context.scan_gpu_processes == true)
 assert(engine.scheduler:task("hwmon").visible == true)
 assert(engine:set_active_tab("gpu", { gpu_summary = true }))
 assert(engine.scheduler:task("gpu").visible == true)
 assert(engine.scheduler:task("hwmon").visible == false)
+assert(engine.scheduler:task("process").visible == false)
+assert(engine:set_active_tab("gpu", { gpu_summary = true }, { process = true }))
+assert(engine.scheduler:task("process").visible == true,
+    "an open host-process detail from GPU keeps process sampling in the foreground")
+assert(engine:set_active_tab("gpu", { gpu_summary = true }))
+assert(engine.scheduler:task("process").visible == false,
+    "closing that detail returns process sampling to the background")
 assert(engine.context.scan_gpu_processes == false,
     "a collapsed GPU process table must disable fdinfo scans")
 assert(engine:set_active_tab("gpu", { gpu_process_table = true }))
@@ -141,7 +165,65 @@ assert(engine.context.scan_connection_owners == false)
 assert(engine:set_active_tab("network", { connection_table = true }))
 assert(engine.scheduler:task("connections").visible == true)
 assert(engine.context.scan_connection_owners == true)
+assert(engine:set_active_tab("custom1", {
+    cpu_overview = true, process_table = true }))
+assert(engine.scheduler:task("cpu").visible and engine.scheduler:task("process").visible)
+assert(not engine.scheduler:task("network").visible
+    and not engine.context.scan_connection_owners
+    and not engine.context.scan_gpu_processes)
+assert(engine:set_active_tab("custom1", {
+    gpu_process_table = true, connection_table = true }))
+assert(engine.scheduler:task("gpu").visible and engine.scheduler:task("connections").visible)
+assert(engine.context.scan_gpu_processes and engine.context.scan_connection_owners)
+assert(not engine:set_active_tab("custom1"),
+    "custom pages need their actual visible widgets to set collector budgets")
+local mixed_snapshot = {}
+for key, value in pairs(engine.snapshot) do mixed_snapshot[key] = value end
+mixed_snapshot.processes = { list = { { id = "42:1", pid = 42,
+    starttime_ticks = 1, name = "worker", cpu_percent = 20 } } }
+local mixed_models = require("wtop.view_model").build(engine, mixed_snapshot,
+    assert(require("wtop.i18n").new({ locale = "en-US" })), {}, "custom1",
+    require("wtop.model.process_table").new(),
+    { cpu_overview = true, process_table = true })
+assert(mixed_models.cpu_overview.value == 42
+    and #mixed_models.process_table.rows == 1,
+    "a custom page builds visible widgets from different source pages")
 assert(engine:set_active_tab("not-a-tab") == false)
+
+assert(engine:set_active_tab("system", { system_devices = true }))
+assert(engine.scheduler:task("disk").visible and engine.scheduler:task("network").visible,
+    "the device tree needs storage and interface discovery on first entry")
+assert(engine.scheduler:task("hwmon").visible,
+    "a visible device tree needs current sensor readings")
+assert(engine.scheduler:task("cpuidle").visible,
+    "a visible device tree needs current CPU idle-state reports")
+assert(not engine.scheduler:task("connections").visible,
+    "device discovery must not enable process/socket ownership scans")
+assert(engine:set_active_tab("system", { system_identity = true }))
+assert(not engine.scheduler:task("disk").visible and not engine.scheduler:task("network").visible,
+    "a hidden device tree returns its collectors to their background cadence")
+assert(not engine.scheduler:task("hwmon").visible)
+assert(engine:set_active_tab("compute", { cpufreq_table = true }))
+assert(engine.scheduler:task("hwmon").visible,
+    "a visible frequency policy table needs current temperature readings")
+assert(engine:set_active_tab("compute", { cpu_total = true }))
+assert(not engine.scheduler:task("hwmon").visible)
+assert(not engine.scheduler:task("cpuidle").visible)
+assert(engine:set_active_tab("compute", { cpuidle_table = true }))
+assert(engine.scheduler:task("cpuidle").visible)
+assert(engine:set_active_tab("compute", { cpu_total = true }))
+assert(not engine.scheduler:task("cpuidle").visible)
+assert(engine:set_active_tab("memory", { numa_table = true }))
+assert(engine.scheduler:task("numa").visible and engine.scheduler:task("numa").interval_ms == 2000,
+    "NUMA reads keep their floor even with a 100 ms UI interval")
+assert(engine:set_active_tab("memory", { memory_total = true }))
+assert(not engine.scheduler:task("numa").visible and engine.scheduler:task("numa").background_interval_ms == 10000)
+assert(engine:set_active_tab("memory", { dimm_table = true }))
+assert(engine.scheduler:task("memory_devices").visible and engine.scheduler:task("memory_devices").interval_ms == 60000,
+    "firmware discovery must keep its static-data sampling floor")
+assert(engine:set_active_tab("memory", { memory_total = true }))
+assert(not engine.scheduler:task("memory_devices").visible
+    and engine.scheduler:task("memory_devices").background_interval_ms == 300000)
 
 -- A CPU-only completion must not manufacture duplicate memory/history samples.
 local memory_samples = engine:history_values("memory").n

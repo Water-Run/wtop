@@ -660,9 +660,11 @@ static int l_run(lua_State *L) {
     lua_Integer max_output_value = 1024 * 1024;
     const char *environment_lang = NULL;
     const char *environment_lc_all = NULL;
+    const char *environment_runtime_dir = NULL;
     char *lang_assignment = NULL;
     char *lc_all_assignment = NULL;
-    char *child_environment[4] = {NULL, NULL, NULL, NULL};
+    char *runtime_dir_assignment = NULL;
+    char *child_environment[5] = {NULL, NULL, NULL, NULL, NULL};
     int cancel_index = 0;
     pid_t child = -1;
     int wait_status = 0;
@@ -707,6 +709,16 @@ static int l_run(lua_State *L) {
                 environment_lc_all = luaL_checklstring(L, -1, &length);
                 if (strlen(environment_lc_all) != length || length > 4096) {
                     return luaL_argerror(L, 2, "LC_ALL must contain at most 4096 non-NUL bytes");
+                }
+            }
+            lua_pop(L, 1);
+            lua_getfield(L, -1, "XDG_RUNTIME_DIR");
+            if (!lua_isnil(L, -1)) {
+                size_t length;
+                environment_runtime_dir = luaL_checklstring(L, -1, &length);
+                if (strlen(environment_runtime_dir) != length || length > 4096
+                    || environment_runtime_dir[0] != '/') {
+                    return luaL_argerror(L, 2, "XDG_RUNTIME_DIR must be an absolute non-NUL path of at most 4096 bytes");
                 }
             }
             lua_pop(L, 1);
@@ -788,7 +800,9 @@ static int l_run(lua_State *L) {
 
     lang_assignment = make_environment_assignment("LANG", environment_lang ? environment_lang : "C");
     lc_all_assignment = make_environment_assignment("LC_ALL", environment_lc_all ? environment_lc_all : "C");
-    if (!lang_assignment || !lc_all_assignment) {
+    if (environment_runtime_dir)
+        runtime_dir_assignment = make_environment_assignment("XDG_RUNTIME_DIR", environment_runtime_dir);
+    if (!lang_assignment || !lc_all_assignment || (environment_runtime_dir && !runtime_dir_assignment)) {
         close_fd(&stdout_pipe[0]);
         close_fd(&stdout_pipe[1]);
         close_fd(&stderr_pipe[0]);
@@ -798,11 +812,13 @@ static int l_run(lua_State *L) {
         free(arguments);
         free(lang_assignment);
         free(lc_all_assignment);
+        free(runtime_dir_assignment);
         return luaL_error(L, "malloc: out of memory");
     }
     child_environment[0] = lang_assignment;
     child_environment[1] = lc_all_assignment;
     child_environment[2] = (char *)"PATH=/usr/sbin:/usr/bin:/sbin:/bin";
+    child_environment[3] = runtime_dir_assignment;
 
     child = fork();
     if (child < 0) {
@@ -816,6 +832,7 @@ static int l_run(lua_State *L) {
         free(arguments);
         free(lang_assignment);
         free(lc_all_assignment);
+        free(runtime_dir_assignment);
         errno = saved_errno;
         return push_errno(L, "fork");
     }
@@ -862,12 +879,14 @@ static int l_run(lua_State *L) {
         free(arguments);
         free(lang_assignment);
         free(lc_all_assignment);
+        free(runtime_dir_assignment);
         errno = saved_errno;
         return push_errno(L, "setpgid");
     }
     free(arguments);
     free(lang_assignment);
     free(lc_all_assignment);
+    free(runtime_dir_assignment);
     close_fd(&stdout_pipe[1]);
     close_fd(&stderr_pipe[1]);
     stdout_pipe[0] = -1;
@@ -1424,6 +1443,46 @@ static int l_readfile(lua_State *L) {
     return 1;
 }
 
+/* Read a bounded slice of a regular file. Some sysfs binary attributes can
+ * return a usable first page while a later page fails; one whole-file read
+ * would discard the good page along with the failure. */
+static int l_readfile_at(lua_State *L) {
+    size_t path_length;
+    const char *path = check_path(L, 1, &path_length);
+    lua_Integer offset_value = luaL_checkinteger(L, 2);
+    lua_Integer length_value = luaL_checkinteger(L, 3);
+    io_guard *guard;
+    struct stat metadata;
+    char buffer[4096];
+    ssize_t count;
+
+    if (offset_value < 0 || offset_value > 64 * 1024 * 1024)
+        return luaL_argerror(L, 2, "offset must be in 0..67108864");
+    if (length_value < 1 || length_value > (lua_Integer)sizeof(buffer))
+        return luaL_argerror(L, 3, "length must be in 1..4096");
+    guard = push_io_guard(L);
+    guard->descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW);
+    if (guard->descriptor < 0) return push_errno(L, "open");
+    if (fstat(guard->descriptor, &metadata) != 0) return push_errno(L, "fstat");
+    if (!S_ISREG(metadata.st_mode)) {
+        errno = EINVAL;
+        return push_errno(L, "readfile_not_regular");
+    }
+    do {
+        count = pread(guard->descriptor, buffer, (size_t)length_value, (off_t)offset_value);
+    } while (count < 0 && errno == EINTR);
+    if (count < 0) return push_errno(L, "pread");
+    if (close(guard->descriptor) != 0) {
+        int saved_errno = errno;
+        guard->descriptor = -1;
+        errno = saved_errno;
+        return push_errno(L, "close");
+    }
+    guard->descriptor = -1;
+    lua_pushlstring(L, buffer, (size_t)count);
+    return 1;
+}
+
 /* Batch /proc reader: one Lua->C crossing for a whole process sample.
  * The per-process stat fetch is the collector's floor (open+read+close per
  * PID, ~11 us each through the guarded single-file reader); doing it from Lua
@@ -1433,16 +1492,144 @@ static int l_readfile(lua_State *L) {
  * distinguishing "denied" from "process raced away".
  *
  * Arguments: pids array (positive integers), file name ([a-z_]{1,31}),
- * optional byte limit per file (default 64 KiB, max 1 MiB).
- * Returns: contents array (string, or false for any failure) and a parallel
- * denied array (true where the failure was a permission error). */
+ * optional byte limit per file (default 64 KiB, max 1 MiB). The special
+ * stat_parsed name reads stat and returns validated field tables on its fast
+ * path; unusual records remain strings for the Lua parser to classify.
+ * Returns: contents array (string/table, or false for any failure) and a
+ * parallel denied array (true where the failure was a permission error). */
 #define PROC_BATCH_MAX_ENTRIES 8192
+
+static int proc_stat_space(unsigned char value) {
+    return value == ' ' || value == '\t' || value == '\n'
+        || value == '\r' || value == '\v' || value == '\f';
+}
+
+static int proc_stat_integer(const char *first, const char *end, lua_Integer *output) {
+    uint64_t value = 0;
+    int negative = first < end && *first == '-';
+    uint64_t limit = (uint64_t)LUA_MAXINTEGER + (negative ? 1u : 0u);
+    if (negative) ++first;
+    if (first == end) return 0;
+    for (; first < end; ++first) {
+        unsigned char digit = (unsigned char)*first;
+        if (digit < '0' || digit > '9') return 0;
+        digit = (unsigned char)(digit - '0');
+        if (value > (limit - digit) / 10u) return 0;
+        value = value * 10u + digit;
+    }
+    *output = negative && value == (uint64_t)LUA_MAXINTEGER + 1u
+        ? LUA_MININTEGER : negative ? -(lua_Integer)value : (lua_Integer)value;
+    return 1;
+}
+
+/* Fast path for the regular /proc/<pid>/stat shape. Malformed or unusual
+ * records stay as their raw string so the Lua parser keeps its exact reason
+ * codes. The numeric range checks match that parser's published fields. */
+static int push_proc_stat_fields(lua_State *L, const char *data, size_t length) {
+    static const unsigned char needed[37] = {
+        [1] = 1, [2] = 1, [3] = 1, [4] = 1, [6] = 1, [7] = 1,
+        [9] = 1, [11] = 1, [12] = 1, [15] = 1, [16] = 1, [17] = 1,
+        [19] = 1, [20] = 1, [21] = 1,
+    };
+    static const unsigned char nonnegative[] = {
+        1, 2, 3, 6, 7, 9, 11, 12, 17, 19, 20,
+    };
+    lua_Integer values[37] = { 0 };
+    const char *end = data + length;
+    const char *open = memchr(data, '(', length);
+    const char *close = NULL;
+    const char *pid_end;
+    const char *cursor;
+    const char *state;
+    lua_Integer pid;
+    int field = 0;
+    int have_processor = 0;
+    char id[80];
+    int written;
+    if (!open || open == data) return 0;
+    for (cursor = end; cursor > open + 1; --cursor) {
+        if (cursor[-1] == ')') { close = cursor - 1; break; }
+    }
+    if (!close || close <= open + 1) return 0;
+    pid_end = open;
+    while (pid_end > data && proc_stat_space((unsigned char)pid_end[-1])) --pid_end;
+    if (pid_end == open || data[0] < '0' || data[0] > '9'
+        || !proc_stat_integer(data, pid_end, &pid)
+        || pid <= 0 || pid > 2147483647) return 0;
+    for (cursor = pid_end; cursor < open; ++cursor) {
+        if (!proc_stat_space((unsigned char)*cursor)) return 0;
+    }
+    cursor = close + 1;
+    while (cursor < end && proc_stat_space((unsigned char)*cursor)) ++cursor;
+    if (cursor == end) return 0;
+    state = cursor++;
+    while (cursor < end && field < 36) {
+        const char *first;
+        while (cursor < end && proc_stat_space((unsigned char)*cursor)) ++cursor;
+        if (cursor == end) break;
+        first = cursor;
+        while (cursor < end && !proc_stat_space((unsigned char)*cursor)) ++cursor;
+        ++field;
+        if (needed[field] && !proc_stat_integer(first, cursor, &values[field])) return 0;
+        if (field == 36) {
+            if (!proc_stat_integer(first, cursor, &values[36]) || values[36] < 0) return 0;
+            have_processor = 1;
+        }
+    }
+    if (field < 21) return 0;
+    for (size_t index = 0; index < sizeof(nonnegative); ++index) {
+        if (values[nonnegative[index]] < 0) return 0;
+    }
+    if (values[11] > LUA_MAXINTEGER - values[12]) return 0;
+    written = snprintf(id, sizeof(id), "%lld:%lld", (long long)pid,
+        (long long)values[19]);
+    if (written <= 0 || (size_t)written >= sizeof(id)) return 0;
+
+    lua_createtable(L, 0, 22);
+#define STAT_FIELD(key, position)                 \
+    do { lua_pushinteger(L, values[position]); lua_setfield(L, -2, key); } while (0)
+    STAT_FIELD("ppid", 1);
+    STAT_FIELD("pgrp", 2);
+    STAT_FIELD("session", 3);
+    STAT_FIELD("tty_nr", 4);
+    STAT_FIELD("flags", 6);
+    STAT_FIELD("minflt", 7);
+    STAT_FIELD("majflt", 9);
+    STAT_FIELD("utime_ticks", 11);
+    STAT_FIELD("stime_ticks", 12);
+    STAT_FIELD("priority", 15);
+    STAT_FIELD("nice", 16);
+    STAT_FIELD("threads", 17);
+    STAT_FIELD("starttime_ticks", 19);
+    STAT_FIELD("vsize_bytes", 20);
+    STAT_FIELD("rss_pages", 21);
+#undef STAT_FIELD
+    lua_pushinteger(L, pid); lua_setfield(L, -2, "pid");
+    lua_pushlstring(L, open + 1, (size_t)(close - open - 1));
+    lua_setfield(L, -2, "comm");
+    lua_pushlstring(L, state, 1); lua_setfield(L, -2, "state");
+    lua_pushinteger(L, values[11] + values[12]); lua_setfield(L, -2, "cpu_ticks");
+    if (have_processor) {
+        lua_pushinteger(L, values[36]); lua_setfield(L, -2, "processor");
+    }
+    lua_pushstring(L, id); lua_setfield(L, -2, "id");
+    return 1;
+}
+
+static int l_process_stat_fields(lua_State *L) {
+    size_t length;
+    const char *data = luaL_checklstring(L, 1, &length);
+    if (!push_proc_stat_fields(L, data, length)) lua_pushnil(L);
+    return 1;
+}
 
 static int l_proc_batch(lua_State *L) {
     luaL_checktype(L, 1, LUA_TTABLE);
     const char *name = luaL_checkstring(L, 2);
     lua_Integer limit_value = luaL_optinteger(L, 3, 64 * 1024);
     size_t name_length = strlen(name);
+    int parsed_stat = strcmp(name, "stat_parsed") == 0;
+    const char *filename = parsed_stat ? "stat" : name;
     if (name_length == 0 || name_length > 31) {
         return luaL_argerror(L, 2, "name must be 1..31 bytes");
     }
@@ -1489,7 +1676,7 @@ static int l_proc_batch(lua_State *L) {
         if (pid <= 0 || pid > 2147483647) {
             failed = 1;
         } else {
-            int written = snprintf(path, sizeof(path), "/proc/%lld/%s", pid, name);
+            int written = snprintf(path, sizeof(path), "/proc/%lld/%s", pid, filename);
             if (written <= 0 || (size_t)written >= sizeof(path)) {
                 failed = 1;
             } else {
@@ -1523,7 +1710,7 @@ static int l_proc_batch(lua_State *L) {
         }
         if (failed) {
             lua_pushboolean(L, 0);
-        } else {
+        } else if (!parsed_stat || !push_proc_stat_fields(L, buffer, length)) {
             lua_pushlstring(L, buffer, length);
         }
         lua_rawseti(L, guard_index + 1, entry);
@@ -1845,7 +2032,8 @@ static int l_signal_process(lua_State *L) {
     if (pid_value <= 0 || (lua_Integer)pid != pid_value) {
         return luaL_argerror(L, 1, "pid must be a positive pid_t value");
     }
-    if (signal_value != 0 && signal_value != SIGKILL && signal_value != SIGTERM
+    if (signal_value != 0 && signal_value != SIGHUP && signal_value != SIGINT
+        && signal_value != SIGKILL && signal_value != SIGTERM
         && signal_value != SIGCONT && signal_value != SIGSTOP) {
         return luaL_argerror(L, 2, "signal is not allowed");
     }
@@ -1974,7 +2162,9 @@ static const luaL_Reg functions[] = {
     {"atomic_write", l_atomic_write},
     {"listdir", l_listdir},
     {"readfile", l_readfile},
+    {"readfile_at", l_readfile_at},
     {"proc_batch", l_proc_batch},
+    {"process_stat_fields", l_process_stat_fields},
     {"readlink", l_readlink},
     {"path_type", l_path_type},
     {"statvfs", l_statvfs},

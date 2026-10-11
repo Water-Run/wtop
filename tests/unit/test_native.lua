@@ -51,7 +51,7 @@ assert(not pcall(FS.new, { read_file = "invalid" }))
 
 -- An option `FS.new` does not know.  It used to ignore one, and the cost was
 -- measured in a test file rather than in a report: two doubles spelled their
--- readlink implementation `readlink`, which is not one of the four accessor
+-- readlink implementation `readlink`, which is not one of the accessor
 -- names, so the key was accepted, stored in the options table, and never read --
 -- and `FS.new` substituted the *real* readlink for it.  A double that believes
 -- it is hermetic and is not is worse than one that knows it is not, because the
@@ -75,7 +75,7 @@ assert(not ok_unknown and tostring(err_unknown):find("readlink", 1, true),
 -- And the refusal must not be a blanket: every option the constructor does
 -- accept still has to be accepted, or the requirement above is one nothing can
 -- meet and every caller is broken instead of one.
-for _, key in ipairs({ "root", "read_file", "list_dir", "read_link", "path_type" }) do
+for _, key in ipairs({ "root", "read_file", "read_file_at", "list_dir", "read_link", "path_type" }) do
   local options = { [key] = (key == "root") and "/prefix" or function() end }
   local accepted, err = pcall(FS.new, options)
   assert(accepted, "FS.new refuses its own option `" .. key .. "`: " .. tostring(err))
@@ -87,6 +87,13 @@ local spelled_right = FS.new({
 })
 assert(spelled_right:readlink("/anything") == "/elsewhere",
   "a correctly spelled read_link implementation is not being used")
+local ranged = FS.new({ read_file_at = function(path, offset, length)
+  assert(path == "/fixture/eeprom" and offset == 128 and length == 128)
+  return string.rep("x", length)
+end })
+assert(#assert(ranged:read_at("/fixture/eeprom", 128, 128)) == 128)
+assert(ranged:read_at("/fixture/eeprom", -1, 128) == nil)
+assert(ranged:read_at("/fixture/eeprom", 0, 4097) == nil)
 
 assert(not pcall(function() injected_fs:read("") end))
 local number_fs = FS.new({ root = "/fixture", read_file = function() return "12 trailing" end })
@@ -145,6 +152,14 @@ assert(type(assert(native.readlink("/proc/self/exe"))) == "string")
 assert(type(assert(native.readfile("/proc/self/stat", 65536))) == "string")
 assert(type(assert(native.readfile("/sys/devices/system/cpu/online", 256))) == "string",
     "bounded reader must use generated sysfs content instead of its synthetic st_size")
+assert(native.readfile_at("VERSION", 0, 3) == declared_version:sub(1, 3))
+assert(native.readfile_at("VERSION", 3, 2) == declared_version:sub(4, 5))
+assert(not pcall(native.readfile_at, "VERSION", -1, 1))
+assert(not pcall(native.readfile_at, "VERSION", 0, 4097))
+local ranged_special, _, ranged_special_errno = native.readfile_at("/dev/null", 0, 16)
+assert(ranged_special == nil and ranged_special_errno == 22)
+local ranged_link, _, ranged_link_errno = native.readfile_at("/proc/self/exe", 0, 16)
+assert(ranged_link == nil and ranged_link_errno == 40)
 local special_content, special_error, special_errno = native.readfile("/dev/null", 16)
 assert(special_content == nil and type(special_error) == "string" and special_errno == 22,
     "bounded reader must reject devices/FIFOs instead of blocking")
@@ -158,6 +173,79 @@ local batch_contents, batch_denied = native.proc_batch(
     { native.pid(), 4194304 }, "stat")
 assert(type(batch_contents[1]) == "string" and batch_contents[1]:find(native.pid(), 1, true),
     "batch reader returns the process stat content")
+local parsed_batch = native.proc_batch({ native.pid(), 4194304 }, "stat_parsed")
+assert(type(parsed_batch[1]) == "table" and parsed_batch[1].pid == native.pid()
+    and parsed_batch[1].starttime_ticks > 0 and parsed_batch[2] == false,
+    "the parsed batch keeps identity and failed-slot semantics")
+local requested_stat_mode
+local batch_spy = { available = true, system_constants = native.system_constants,
+    process_stat_fields = native.process_stat_fields,
+    proc_batch = function(pids, mode, limit)
+        if mode:match("^stat") then requested_stat_mode = mode end
+        return native.proc_batch(pids, mode, limit)
+    end }
+local live_processes = require("wtop.collectors.process").new({
+    native = batch_spy, read_status = false, max_processes = 128 }):sample({})
+assert(live_processes.status == "ok" and requested_stat_mode == "stat_parsed",
+    "the real process collector must use parsed stat batches")
+local legacy_mode
+local legacy_native = { available = true, system_constants = native.system_constants,
+    proc_batch = function(pids, mode, limit)
+        if mode:match("^stat") then legacy_mode = mode end
+        return native.proc_batch(pids, mode, limit)
+    end }
+local legacy_processes = require("wtop.collectors.process").new({
+    native = legacy_native, read_status = false, max_processes = 128 }):sample({})
+assert(legacy_processes.status == "ok" and legacy_mode == "stat",
+    "an older native module without parsed stat support keeps the string path")
+local source_stat = assert(Parsers.process_stat(batch_contents[1]))
+local fast_stat = assert(native.process_stat_fields(batch_contents[1]))
+for _, key in ipairs({ "id", "pid", "comm", "state", "ppid", "pgrp", "session",
+    "tty_nr", "flags", "minflt", "majflt", "priority", "nice", "threads",
+    "starttime_ticks", "vsize_bytes", "rss_pages" }) do
+    assert(fast_stat[key] == source_stat[key], "native stat field differs: " .. key)
+end
+local fields = {}
+for index = 1, 44 do fields[index] = "0" end
+fields[11], fields[12], fields[15], fields[16] = "1", "2", "-10", "-5"
+fields[17], fields[19], fields[20], fields[21], fields[36] =
+    "1", "5", "4096", "1", "3"
+local tricky_stat = "123 (worker ) with space) S " .. table.concat(fields, " ")
+local tricky_lua = assert(Parsers.process_stat(tricky_stat))
+local tricky_native = assert(native.process_stat_fields(tricky_stat))
+for key, value in pairs(tricky_lua) do
+    assert(tricky_native[key] == value, "native parser differs on comm or signed field: " .. key)
+end
+assert(native.process_stat_fields("invalid") == nil)
+assert(native.process_stat_fields("123 (worker) S nope " .. table.concat(fields, " ")) == nil,
+    "a malformed field must fall back to Lua's parser and reason code")
+for sample = 1, 300 do
+    local changed = {}
+    for index, value in ipairs(fields) do changed[index] = value end
+    changed[1] = tostring(sample % 17)
+    changed[7] = tostring(sample * 7)
+    changed[11] = tostring(sample * 23)
+    changed[12] = tostring(sample % 29)
+    changed[15] = tostring(sample % 41 - 20)
+    changed[16] = tostring(sample % 40 - 20)
+    changed[19] = tostring(sample + 100)
+    changed[21] = tostring(sample % 5 - 1)
+    changed[36] = tostring(sample % 16)
+    local comm = sample % 3 == 0 and "name ) with space" or "worker"
+    local body = string.format("%d (%s) S %s", sample + 1000, comm,
+        table.concat(changed, " "))
+    local slow = assert(Parsers.process_stat(body))
+    local fast = assert(native.process_stat_fields(body),
+        "normal process stat missed native fast path")
+    for key, value in pairs(slow) do
+        assert(fast[key] == value, "native stat parser drifted on " .. key)
+    end
+end
+local overflowing = {}
+for index, value in ipairs(fields) do overflowing[index] = value end
+overflowing[20] = "9223372036854775808"
+assert(native.process_stat_fields("123 (worker) S " .. table.concat(overflowing, " ")) == nil,
+    "an integer beyond Lua's exact range must use the Lua fallback")
 assert(batch_contents[2] == false and not (batch_denied and batch_denied[2]),
     "a missing pid reports failure without a permission flag")
 local batch_missing = native.proc_batch({ native.pid() }, "no_such_file")
@@ -239,6 +327,12 @@ else
         "and it must report ENOSYS, not a signal failure: " .. tostring(probe_errno))
 end
 assert(not pcall(native.signal_process, native.pid(), 4294967296, self_stat.starttime_ticks))
+for _, signal_number in ipairs({ 1, 2 }) do
+    local called, sent, reason = pcall(native.signal_process,
+        2147483647, signal_number, self_stat.starttime_ticks)
+    assert(called and sent == nil and type(reason) == "string" and reason ~= "",
+        "native HUP/INT allowlist must accept the signal before rejecting a nonexistent PID")
+end
 
 local temporary_directory = "/tmp/wtop-native-test-" .. native.pid()
 assert(native.mkdir(temporary_directory, 448)) -- 0700
@@ -292,6 +386,21 @@ local environment = native.run(
 )
 assert(environment.status == "ok")
 assert(environment.stdout == "C\n")
+
+local runtime_environment = native.run(
+    { "/usr/bin/printenv", "XDG_RUNTIME_DIR" },
+    { timeout_ms = 5000, max_output_bytes = 1024,
+      env = { XDG_RUNTIME_DIR = "/run/user/1000" } }
+)
+assert(runtime_environment.status == "ok" and runtime_environment.stdout == "/run/user/1000\n")
+local no_runtime_environment = native.run(
+    { "/usr/bin/printenv", "XDG_RUNTIME_DIR" },
+    { timeout_ms = 5000, max_output_bytes = 1024 }
+)
+assert(no_runtime_environment.status == "error" and no_runtime_environment.stdout == "")
+for _, invalid in ipairs({ "relative", "", "/run/user/1000\0bad", "/" .. string.rep("x", 4096) }) do
+    assert(not pcall(native.run, { "/usr/bin/true" }, { env = { XDG_RUNTIME_DIR = invalid } }))
+end
 
 local inherited_home = native.run(
     { "/usr/bin/printenv", "HOME" },

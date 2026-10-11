@@ -105,6 +105,66 @@ assert(first_processes["10:5"].thread_scan.total == 3
   and first_processes["10:5"].thread_scan.scanned == 3
   and first_processes["10:5"].thread_scan.truncated == false,
   "the scan summary echoes the NLWP and the scanned count")
+assert(first_processes["10:5"].elapsed_seconds == nil,
+  "unreadable uptime leaves process age unknown")
+
+-- The runtime's clock rate is not necessarily 100 Hz. The table, details,
+-- filter and export must use the same elapsed CPU seconds as the collector.
+local age_files = {}
+for path, content in pairs(files) do age_files[path] = content end
+age_files["/proc/uptime"] = "100.00 0.00\n"
+age_files["/proc/20/stat"] = stat_line({ pid = 20, comm = "single", state = "S",
+  utime = 5, starttime = 12500, threads = 1 })
+local unusual_collector = Process.new({ read_status = false, clock_ticks_per_second = 250 })
+local unusual = unusual_collector:sample(context(fake_fs(age_files, dirs), { ["10:5"] = true }))
+local unusual_process = unusual.data.by_id["10:5"]
+assert(unusual.data.clock_ticks_per_second == 250)
+assert(math.abs(unusual_process.cpu_time_seconds - 0.36) < 1e-9)
+assert(math.abs(unusual_process.thread_rows[2].cpu_time_seconds - 0.12) < 1e-9)
+assert(math.abs(unusual_process.elapsed_seconds - 99.98) < 1e-9)
+assert(math.abs(unusual.data.by_pid[20].elapsed_seconds - 50) < 1e-9)
+assert(math.abs(unusual_process.thread_rows[2].elapsed_seconds - 99.98) < 1e-9)
+age_files["/proc/uptime"] = "101.00 0.00\n"
+local aged = unusual_collector:sample({ fs = fake_fs(age_files, dirs),
+  now_ns = function() return now + 1000000000 end,
+  selected_process_ids = { ["10:5"] = true },
+}, unusual)
+assert(math.abs(aged.data.by_id["10:5"].elapsed_seconds - 100.98) < 1e-9,
+  "age is refreshed on later samples, not frozen at startup")
+local english = assert(I18n.new({ locale = "en-US" }))
+local process_details = table.concat(TUI.process_detail_lines(unusual_process, english), "\n")
+assert(process_details:find("CPU time", 1, true)
+  and process_details:find("360 ms", 1, true)
+  and process_details:find("Elapsed", 1, true))
+local thread_details = table.concat(TUI.thread_detail_lines(
+  unusual_process.thread_rows[2], nil, unusual_process, english), "\n")
+assert(thread_details:find("120 ms", 1, true))
+assert(thread_details:find("Elapsed", 1, true))
+local Controller = require("wtop.model.process_table")
+local controller = Controller.new({ sort_key = "time", descending = true })
+controller:update(unusual.data.list)
+controller:set_query("time>0.3")
+assert(#controller:rows() == 1 and controller:rows()[1].pid == 10)
+controller:set_query("time<0.1")
+assert(#controller:rows() == 1 and controller:rows()[1].pid == 20)
+controller:set_sort("elapsed", true)
+controller:set_query("elapsed>90")
+assert(#controller:rows() == 1 and controller:rows()[1].pid == 10)
+controller:set_query("age<60")
+assert(#controller:rows() == 1 and controller:rows()[1].pid == 20)
+local ViewModel = require("wtop.view_model")
+local state = { processes = unusual.data, cpu = {}, memory = {}, pressure = {},
+  disks = {}, network = {}, gpus = {}, cpu_frequency = {}, sensors = {},
+  mounts = {}, workloads = {}, quality = {} }
+controller:set_query("")
+local model = ViewModel.build({ history_values = function() return {} end },
+  state, english, {}, "processes", controller).process_table
+assert(model.rows[1].time == "360 ms")
+assert(model.rows[1].elapsed == english.format:duration(99.98))
+local unusual_export = Export.snapshot(state, { process_limit = 2 })
+assert(unusual_export.processes.clock_ticks_per_second == 250
+  and math.abs(unusual_export.processes.top[1].cpu_time_seconds - 0.36) < 1e-9)
+assert(math.abs(unusual_export.processes.top[1].elapsed_seconds - 99.98) < 1e-9)
 
 -- Second sample one second later: per-thread CPU rates appear.
 files["/proc/10/stat"] = stat_line({ pid = 10, comm = "multi", state = "S",

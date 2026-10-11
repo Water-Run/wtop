@@ -15,6 +15,8 @@ jusqu'à une simple fenêtre `cmd.exe` sans couleur.
 ```bash
 wtop                # moniteur interactif
 wtop --snapshot     # un instantané JSON, pour les scripts
+wtop --stream --count 60 > samples.jsonl  # 60 instantanés JSON
+wtop --report       # résumé matériel Markdown en anglais
 wtop --diagnose     # ce que wtop peut lire sur cette machine
 ```
 
@@ -53,12 +55,12 @@ vraie machine XP.
 
 ## Ce qu'il affiche
 
-- Dix onglets : Vue d'ensemble, Processus, Calcul, Mémoire, Stockage,
+- Dix onglets intégrés : Vue d'ensemble, Processus, Calcul, Mémoire, Stockage,
   Réseau, GPU, Charges de travail, Système et Analyses.
-- Une liste de processus avec recherche, tri, vue arborescente et menu de
-  signaux avec confirmation.
+- Une liste de processus avec recherche, tri, navigation dans l'arbre, accès aux
+  charges de travail et menu de signaux avec confirmation.
 - Des inspections approfondies facultatives (SMART/NVMe, bande passante
-  mémoire, sshd) quand les outils sont présents sur la machine.
+  mémoire, unités systemd, sshd) quand les outils sont présents sur la machine.
 - Une mesure qui a échoué ou qui est incomplète est signalée comme telle
   (par exemple `denied` ou `partial`) au lieu d'apparaître vide ou à zéro.
 - Dix langues d'interface, à changer en cours de route avec `L`, et cinq
@@ -115,8 +117,18 @@ silicon et 10.13 sur Intel.
 
 | Touche | Action |
 |---|---|
-| `1`–`8`, `Tab` | Changer d'onglet et de focus |
+| `1`–`9`, `0`, `Tab` | Changer d'onglet et de focus |
+| `e`, puis `b` | Afficher, masquer, réordonner, créer ou copier des pages |
+| `e`, puis `a` | Ajouter un widget à la page active |
+| `j`/`k`, `Entrée` dans les tableaux du matériel | Choisir un appareil et ouvrir ses détails |
+| `F` dans les détails d’un processus | Afficher les descripteurs ouverts et leurs détails sous Linux |
+| `d` / `D` | Inspecter les unités systemd / sshd sous Linux |
+| `l` dans les détails d’une unité | Lire les messages récents du journal sous Linux |
+| `u` | Examiner les sessions de connexion sous Linux |
+| `s` dans le journal ou les détails de sshd | Afficher un résumé du journal sous Linux |
 | `f` | Changer la fréquence de rafraîchissement |
+| `B` | Basculer entre graphiques en blocs et en braille |
+| `z` / `Z` | Afficher plus / moins de temps dans les graphiques |
 | `L` | Changer de langue |
 | `?` ou `F1` | Toutes les touches |
 | `q` ou `Ctrl+C` | Quitter |
@@ -127,7 +139,10 @@ silicon et 10.13 sur Intel.
 | Option | |
 |---|---|
 | `--snapshot` | Affiche un instantané JSON puis quitte |
-| `--unmask-remote-addresses` | Avec `--snapshot` : exporte les adresses de socket distantes complètes |
+| `--stream` | Émet des instantanés JSON ligne par ligne jusqu'à l'interruption |
+| `--count N` | Avec `--stream`, s'arrête après N instantanés |
+| `--report` | Affiche un résumé matériel Markdown en anglais |
+| `--unmask-remote-addresses` | Avec `--snapshot` ou `--stream` : exporte les adresses de socket distantes complètes |
 | `--agent` | JSON compact pour les scripts et les agents LLM |
 | `--diagnose` | Indique quelles sources de données fonctionnent ici |
 | `--lang LOCALE` | Langue de l'interface, par ex. `fr-FR`, `zh-CN`, `ru-RU` |

@@ -2,6 +2,8 @@ package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
 
 local Connections = require("wtop.collectors.connections")
 local SocketTables = require("wtop.linux.socket_tables")
+local ConnectionOwner = require("wtop.linux.connection_owner")
+local Export = require("wtop.export")
 
 local function fixture(name)
   local file = assert(io.open("tests/fixtures/sockets/" .. name, "rb"))
@@ -219,13 +221,47 @@ equal(inode111.owner_count, 1, "a socket the scan attributed reports its count")
 equal(inode111.owners_quality, "estimated", "and the scan's own quality travels with it")
 equal(inode111.owners[1].pid, 100, "listener PID")
 equal(inode111.owners[1].fd, 3, "listener fd")
-equal(inode111.owners[1].name, "worker-a?", "sanitized process name")
+equal(inode111.owners[1].name, "worker-a", "procfs newline is not part of the process name")
 local inode222 = assert(owned.data.by_inode["222"])[1]
 equal(#inode222.owners, 2, "shared socket owners")
 equal(inode222.owners[1].pid, 100, "stable owner order first")
 equal(inode222.owners[2].pid, 300, "stable owner order second")
 local inode555 = assert(owned.data.by_inode["555"])[1]
 equal(inode555.owners[1].fd, 0, "fd zero is scanned")
+
+local duplicate_dirs, duplicate_links = {}, {}
+for path, values in pairs(directories) do
+  if type(values) == "table" and not values.error then
+    duplicate_dirs[path] = {}
+    for index, value in ipairs(values) do duplicate_dirs[path][index] = value end
+  else duplicate_dirs[path] = values end
+end
+for path, value in pairs(links) do duplicate_links[path] = value end
+duplicate_dirs["/proc/100/fd"][#duplicate_dirs["/proc/100/fd"] + 1] = "7"
+duplicate_links["/proc/100/fd/7"] = "socket:[111]"
+local duplicated = Connections.new({
+  fs = fake_fs(table_files, duplicate_dirs, duplicate_links), little_endian = true,
+  scan_owners = true, max_owners_per_socket = 2,
+}):sample(context)
+local duplicated_owner = assert(duplicated.data.by_inode["111"])[1].owners[1]
+equal(#assert(duplicated.data.by_inode["111"])[1].owners, 1,
+  "two descriptors in one process are one socket owner")
+equal(duplicated_owner.fd_count, 2, "all matching descriptors are counted")
+equal(duplicated_owner.fds[1], 3, "first descriptor kept for display")
+equal(duplicated_owner.fds[2], 7, "second descriptor kept for revalidation")
+equal(duplicated.data.owner_scan.owners_attached, 4,
+  "duplicating an fd does not consume another owner slot")
+local exported_duplicate
+for _, exported in ipairs(Export.snapshot({ connections = duplicated.data }).connections.items) do
+  if exported.inode == "111" then
+    exported_duplicate = exported
+    break
+  end
+end
+assert(exported_duplicate, "duplicated socket reaches export")
+equal(exported_duplicate.owner_count, 1, "export counts distinct processes")
+equal(exported_duplicate.owners[1].fd_count, 2, "export reports duplicate fd count")
+equal(exported_duplicate.owners[1].fds, nil, "export keeps the bounded fd list internal")
 
 local bounded_collector = Connections.new({
   fs = base_fs,
@@ -307,5 +343,102 @@ equal(largest_read, 0, "invalid limits must not trigger filesystem reads")
 local real = Connections.new():sample({})
 equal(real.status, "ok", "real procfs socket tables")
 assert(real.data.total >= 0 and real.data.owner_scan.status == "disabled")
+
+-- A row's PID and fd are observations, not an identity. Opening its owner
+-- checks the live descriptor between two reads of the same process generation.
+local stat_file = assert(io.open("tests/fixtures/proc/100.stat.1", "rb"))
+local stat = assert(stat_file:read("*a"))
+stat_file:close()
+local changed_stat = stat:gsub(" 1000 10485760 ", " 1001 10485760 ")
+local target_files = {}
+for path, value in pairs(table_files) do target_files[path] = value end
+target_files["/proc/100/stat"] = stat
+local target_context = { now_ns = context.now_ns,
+  scan_connection_owners = true,
+  connection_owner_target = { pid = 100, id = "100:1000" } }
+local target_collector = Connections.new({ fs = fake_fs(target_files, directories, links),
+  little_endian = true, max_processes = 10, max_fds_per_process = 10 })
+local targeted = target_collector:sample(target_context)
+equal(targeted.data.owner_scan.target_status, "ok", "selected generation verified")
+equal(targeted.data.by_inode["111"][1].owners[1].id, "100:1000",
+  "only the selected process generation gains an exact owner identity")
+equal(targeted.data.by_inode["222"][1].owners[2].id, nil,
+  "another process owner is not assigned the selected identity")
+local omitted_dirs = {}
+for path, value in pairs(directories) do omitted_dirs[path] = value end
+omitted_dirs["/proc"] = { "200", "300" }
+local prioritized = Connections.new({
+  fs = fake_fs(target_files, omitted_dirs, links), little_endian = true,
+  max_processes = 1, max_fds_per_process = 10,
+}):sample(target_context)
+equal(prioritized.data.owner_scan.target_status, "ok",
+  "the selected process is checked even when the bounded directory listing omits it")
+equal(prioritized.data.by_inode["111"][1].owners[1].id, "100:1000",
+  "the selected process gets the first bounded owner-scan slot")
+assert(prioritized.data.owner_scan.process_limit_reached,
+  "reserving the target slot still reports omitted background processes")
+target_context.connection_owner_target = { pid = 100, id = "100:1001" }
+local stale_target = target_collector:sample(target_context)
+equal(stale_target.data.owner_scan.target_status, "changed", "reused PID rejected")
+equal(stale_target.data.by_inode["111"][1].owners[1].id, nil,
+  "a stale PID cannot add exact ownership to a socket")
+target_context.connection_owner_target = { pid = 100, id = "100:1000" }
+local racing_fs = fake_fs(target_files, directories, links)
+local base_target_read = racing_fs.read
+local stat_reads_for_scan = 0
+function racing_fs:read(path, limit)
+  if path == "/proc/100/stat" then
+    stat_reads_for_scan = stat_reads_for_scan + 1
+    return stat_reads_for_scan == 1 and stat or changed_stat
+  end
+  return base_target_read(self, path, limit)
+end
+local raced_target = Connections.new({ fs = racing_fs,
+  little_endian = true, scan_owners = true }):sample(target_context)
+equal(raced_target.data.owner_scan.target_status, "changed",
+  "PID replacement during fd enumeration is rejected")
+equal(raced_target.data.by_inode["111"][1].owners[1].id, nil,
+  "a raced owner is never exported as the old process")
+local stat_reads, link_reads = 0, 0
+local owner_fs = {}
+function owner_fs:read(path, limit)
+  assert(path == "/proc/100/stat" and limit == 65536)
+  stat_reads = stat_reads + 1
+  return stat_reads == 2 and self.reused and changed_stat or stat
+end
+function owner_fs:readlink(path)
+  assert(path == "/proc/100/fd/3" or path == "/proc/100/fd/4")
+  link_reads = link_reads + 1
+  if self.targets then return self.targets[path] end
+  return self.target or "socket:[111]"
+end
+local owner = { pid = 100, fd = 3 }
+local process = { id = "100:1000", pid = 100 }
+equal(ConnectionOwner.resolve(owner_fs, { inode = "111" }, owner, { process }), process,
+  "same live socket and process generation resolve to the sampled process")
+equal(stat_reads, 2, "identity checked around the fd read")
+equal(link_reads, 1, "selected fd checked once")
+owner_fs.targets = { ["/proc/100/fd/3"] = "socket:[222]",
+  ["/proc/100/fd/4"] = "socket:[111]" }
+stat_reads, link_reads = 0, 0
+equal(ConnectionOwner.resolve(owner_fs, { inode = "111" },
+  { pid = 100, fd = 3, fds = { 3, 4 } }, { process }), process,
+  "a second live descriptor can validate a deduplicated owner")
+equal(link_reads, 2, "alternate descriptor was checked")
+owner_fs.targets = nil
+stat_reads = 0
+owner_fs.target = "socket:[222]"
+local _, reason = ConnectionOwner.resolve(owner_fs, { inode = "111" }, owner, { process })
+equal(reason, "owner_changed", "reused descriptor does not navigate")
+owner_fs.target, owner_fs.reused, stat_reads = nil, true, 0
+_, reason = ConnectionOwner.resolve(owner_fs, { inode = "111" }, owner, { process })
+equal(reason, "owner_changed", "reused PID does not navigate")
+owner_fs.reused, stat_reads = nil, 0
+local _, observed
+_, reason, observed = ConnectionOwner.resolve(owner_fs, { inode = "111" }, owner, {})
+equal(reason, "process_not_sampled", "an absent process row is not guessed by PID")
+equal(observed.id, "100:1000", "live generation returned for an on-demand process sample")
+_, reason = ConnectionOwner.resolve(owner_fs, { inode = "111" }, { pid = 100, fd = -1 }, { process })
+equal(reason, "owner_unavailable", "invalid fd rejected before filesystem access")
 
 return true

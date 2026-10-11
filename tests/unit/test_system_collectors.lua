@@ -2,6 +2,9 @@ package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
 
 local FS = require("wtop.linux.fs")
 local PowerSupply = require("wtop.collectors.power_supply")
+local ViewModel = require("wtop.view_model")
+local I18n = require("wtop.i18n")
+local Export = require("wtop.export")
 local SystemInfo = require("wtop.collectors.system_info")
 local Users = require("wtop.linux.users")
 
@@ -336,6 +339,117 @@ assert(math.abs(battery.time_remaining_seconds - (31 / 10 * 3600)) < 0.001,
   "runtime is only computed while discharging")
 equal(supplies.data.summary.state, "discharging", "summary state")
 equal(supplies.data.on_ac_power, false, "offline mains means no AC power")
+
+-- A driver may omit a property. Missing online/present must not become false
+-- or true, respectively, and a USB value of 2 is online and programmable.
+local unknown_ac = PowerSupply.new({
+  fs = fake_fs({ ["/sys/class/power_supply/AC/type"] = "Mains\n" },
+    { ["/sys/class/power_supply"] = { "AC" } }),
+}):sample({})
+equal(unknown_ac.status, "ok", "an adapter with no online file is still inventoried")
+equal(unknown_ac.quality, "partial", "its missing live state degrades the sample")
+equal(unknown_ac.reason, "power_supply_data_incomplete", "the degradation has a reason")
+equal(unknown_ac.data.supplies[1].online, nil, "missing online remains unknown")
+equal(unknown_ac.data.supplies[1].present, nil, "missing present remains unknown")
+equal(unknown_ac.data.on_ac_power, nil, "unknown adapter state is not offline")
+local i18n = assert(I18n.new({ locale = "en-US" }))
+local bars = ViewModel.build({ history_values = function() return {} end },
+  { power_supplies = unknown_ac.data }, i18n, {}, "system").battery_bars.items
+equal(bars[1].value, nil, "an unknown adapter does not draw a zero bar")
+equal(bars[1].display_value, "unknown", "the UI says unknown")
+local unknown_export = Export.snapshot({ sequence = 1, timestamp_ns = 1,
+  power_supplies = unknown_ac.data })
+equal(unknown_export.power_supplies.supplies[1].online, nil,
+  "snapshot does not turn missing online into false")
+equal(unknown_export.power_supplies.on_ac_power, nil,
+  "snapshot does not turn unknown AC into offline")
+
+local usb = PowerSupply.new({ fs = fake_fs({
+  ["/sys/class/power_supply/USB0/type"] = "USB_PD\n",
+  ["/sys/class/power_supply/USB0/online"] = "2\n",
+  ["/sys/class/power_supply/USB0/present"] = "0\n",
+}, { ["/sys/class/power_supply"] = { "USB0" } }) }):sample({})
+equal(usb.quality, "fresh", "programmable USB online is a valid reading")
+equal(usb.data.supplies[1].online, true, "USB online value 2 means online")
+equal(usb.data.supplies[1].online_mode, "programmable", "USB mode is retained")
+equal(usb.data.supplies[1].present, false, "explicit present zero stays false")
+equal(usb.data.on_ac_power, true, "programmable USB powers the host")
+local usb_bars = ViewModel.build({ history_values = function() return {} end },
+  { power_supplies = usb.data }, i18n, {}, "system").battery_bars.items
+equal(usb_bars[1].display_value, "online (programmable)",
+  "the UI distinguishes programmable online power")
+local invalid_online = PowerSupply.new({ fs = fake_fs({
+  ["/sys/class/power_supply/AC/type"] = "Mains\n",
+  ["/sys/class/power_supply/AC/online"] = "3\n",
+  ["/sys/class/power_supply/AC/present"] = "maybe\n",
+}, { ["/sys/class/power_supply"] = { "AC" } }) }):sample({})
+equal(invalid_online.quality, "partial", "unsupported online values are incomplete")
+equal(invalid_online.data.supplies[1].online, nil, "unsupported online is unknown")
+equal(invalid_online.data.supplies[1].present, nil, "invalid present is unknown")
+local mixed_ac = PowerSupply.new({ fs = fake_fs({
+  ["/sys/class/power_supply/AC/type"] = "Mains\n",
+  ["/sys/class/power_supply/AC/online"] = "0\n",
+  ["/sys/class/power_supply/USB/type"] = "USB\n",
+}, { ["/sys/class/power_supply"] = { "AC", "USB" } }) }):sample({})
+equal(mixed_ac.data.on_ac_power, nil,
+  "a known offline adapter does not hide another adapter's unknown state")
+
+local ups = PowerSupply.new({ fs = fake_fs({
+  ["/sys/class/power_supply/UPS0/type"] = "UPS\n",
+  ["/sys/class/power_supply/UPS0/status"] = "Discharging\n",
+  ["/sys/class/power_supply/UPS0/capacity"] = "70\n",
+}, { ["/sys/class/power_supply"] = { "UPS0" } }) }):sample({})
+equal(#ups.data.batteries, 1, "a UPS with capacity belongs in the battery list")
+equal(ups.data.batteries[1].capacity_percent, 70, "UPS capacity reaches the bar")
+equal(ups.data.batteries[1].present, nil,
+  "a UPS does not inherit the battery-only missing-present rule")
+equal(ups.data.on_ac_power, nil, "a UPS is not an AC adapter")
+local unknown_battery_state = PowerSupply.new({ fs = fake_fs({
+  ["/sys/class/power_supply/BAT0/type"] = "Battery\n",
+  ["/sys/class/power_supply/BAT0/capacity"] = "80\n",
+}, { ["/sys/class/power_supply"] = { "BAT0" } }) }):sample({})
+equal(unknown_battery_state.data.summary.state, nil,
+  "missing battery status does not become idle")
+equal(unknown_battery_state.data.batteries[1].present, true,
+  "a missing battery present file follows the kernel ABI default")
+local denied_presence = PowerSupply.new({ fs = fake_fs({
+  ["/sys/class/power_supply/BAT0/type"] = "Battery\n",
+  ["/sys/class/power_supply/BAT0/capacity"] = "80\n",
+}, { ["/sys/class/power_supply"] = { "BAT0" } },
+  { ["/sys/class/power_supply/BAT0/present"] = true }) }):sample({})
+equal(denied_presence.data.batteries[1].present, nil,
+  "a denied read is not the ABI's missing-property case")
+local absent_battery = PowerSupply.new({ fs = fake_fs({
+  ["/sys/class/power_supply/BAT0/type"] = "Battery\n",
+  ["/sys/class/power_supply/BAT0/present"] = "0\n",
+  ["/sys/class/power_supply/BAT0/status"] = "Discharging\n",
+  ["/sys/class/power_supply/BAT0/capacity"] = "70\n",
+}, { ["/sys/class/power_supply"] = { "BAT0" } }) }):sample({})
+equal(absent_battery.data.batteries[1].present, false,
+  "explicitly absent battery remains in the inventory")
+equal(absent_battery.data.batteries[1].capacity_percent, nil,
+  "stale capacity from an absent battery is not reported")
+equal(absent_battery.data.summary.count, 0,
+  "an absent battery does not count as installed")
+equal(absent_battery.data.summary.state, nil,
+  "an absent battery cannot make the host discharging")
+local absent_bar = ViewModel.build({ history_values = function() return {} end },
+  { power_supplies = absent_battery.data }, i18n, {}, "system").battery_bars.items[1]
+equal(absent_bar.value, nil, "an absent battery draws no charge bar")
+equal(absent_bar.display_value, "absent", "the UI names the absent battery")
+
+local missing_type = PowerSupply.new({ fs = fake_fs({},
+  { ["/sys/class/power_supply"] = { "BROKEN" } }) }):sample({})
+equal(missing_type.status, "unavailable", "a present but unreadable device is unavailable")
+equal(missing_type.reason, "power_supply_data_incomplete",
+  "an unreadable type is not mistaken for an empty directory")
+local mixed = PowerSupply.new({ fs = fake_fs({
+  ["/sys/class/power_supply/AC/type"] = "Mains\n",
+  ["/sys/class/power_supply/AC/online"] = "0\n",
+}, { ["/sys/class/power_supply"] = { "AC", "BROKEN" } }) }):sample({})
+equal(mixed.quality, "partial", "a skipped device degrades a mixed list")
+equal(mixed.reason, "power_supply_data_incomplete", "a skipped device has a reason")
+equal(mixed.data.skipped_devices, 1, "the missing entry is counted")
 
 -- Absence must be reported the same way every other collector reports it, so
 -- the UI can distinguish "nothing to read" from "read successfully, empty".

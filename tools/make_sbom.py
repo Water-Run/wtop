@@ -41,7 +41,7 @@ import uuid
 # libc is not a release tool for that libc.
 
 LUA_VERSION = "5.5.1"
-LUAINSTALLER_VERSION = "1.3.0"
+LUAINSTALLER_VERSION = "1.5.0"
 def declared_version(root: pathlib.Path) -> str:
     """The version the project writes down, from the one file that holds it.
 

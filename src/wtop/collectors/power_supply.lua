@@ -40,6 +40,20 @@ local function integer(fs, path)
   return value
 end
 
+local function presence(fs, path, battery)
+  local content, failure = fs:read(path, MAX_SMALL_FILE)
+  if type(content) == "string" then
+    local value = Common.trim(content)
+    if value == "0" then return false end
+    if value == "1" then return true end
+  elseif battery and type(failure) == "table" and failure.kind == "missing" then
+    -- The power-supply ABI defines a missing battery `present` attribute as
+    -- present. A failed read or an invalid value does not have that meaning.
+    return true
+  end
+  return nil
+end
+
 local function first(...)
   for index = 1, select("#", ...) do
     local value = select(index, ...)
@@ -57,13 +71,17 @@ local function read_device(fs, base, name)
     id = name,
     name = name,
     type = kind,
-    present = text(fs, path .. "/present") ~= "0",
+    present = presence(fs, path .. "/present", kind == "Battery"),
     source = path,
   }
 
-  if kind == "Mains" or kind == "USB" or kind == "Wireless" then
-    device.online = text(fs, path .. "/online") == "1"
-    device.quality = "fresh"
+  if kind == "Mains" or kind == "USB" or kind:match("^USB_")
+      or kind == "Wireless" or kind == "Apple Brick ID" then
+    local online = integer(fs, path .. "/online")
+    if online == 0 then device.online = false
+    elseif online == 1 or online == 2 then device.online = true end
+    if online == 2 then device.online_mode = "programmable" end
+    device.quality = device.online == nil and "partial" or "fresh"
     return device
   end
 
@@ -72,6 +90,10 @@ local function read_device(fs, base, name)
   device.manufacturer = text(fs, path .. "/manufacturer")
   device.model = text(fs, path .. "/model_name")
   device.serial_present = text(fs, path .. "/serial_number") ~= nil
+  if device.present == false then
+    device.quality = "fresh"
+    return device
+  end
   device.cycle_count = integer(fs, path .. "/cycle_count")
   device.voltage_volts = micro(fs, path .. "/voltage_now")
   device.voltage_design_volts = micro(fs, path .. "/voltage_min_design")
@@ -175,7 +197,7 @@ function PowerSupply:sample(context)
   end
 
   local batteries, supplies = {}, {}
-  local partial = 0
+  local partial, unreadable = 0, 0
   for _, name in ipairs(entries) do
     if #batteries + #supplies >= MAX_DEVICES then
       truncated = true
@@ -184,40 +206,54 @@ function PowerSupply:sample(context)
     local device = read_device(fs, self.base_path, name)
     if device then
       if device.quality == "partial" then partial = partial + 1 end
-      if device.type == "Battery" then
+      if device.type == "Battery" or device.type == "UPS" then
         batteries[#batteries + 1] = device
       else
         supplies[#supplies + 1] = device
       end
-    end
+    else unreadable = unreadable + 1 end
   end
 
   local summary
   if #batteries > 0 then
-    local percent_sum, percent_count, power_sum = 0, 0, nil
-    local charging, discharging = false, false
+    local percent_sum, percent_count, power_sum, present_count = 0, 0, nil, 0
+    local charging, discharging, all_idle = false, false, true
     for _, battery in ipairs(batteries) do
-      if battery.capacity_percent then
-        percent_sum = percent_sum + battery.capacity_percent
-        percent_count = percent_count + 1
+      if battery.present ~= false then
+        present_count = present_count + 1
+        if battery.capacity_percent then
+          percent_sum = percent_sum + battery.capacity_percent
+          percent_count = percent_count + 1
+        end
+        if battery.power_watts then power_sum = (power_sum or 0) + battery.power_watts end
+        if battery.status == "Charging" then charging = true end
+        if battery.status == "Discharging" then discharging = true end
+        if battery.status ~= "Full" and battery.status ~= "Not charging" then
+          all_idle = false
+        end
       end
-      if battery.power_watts then power_sum = (power_sum or 0) + battery.power_watts end
-      if battery.status == "Charging" then charging = true end
-      if battery.status == "Discharging" then discharging = true end
+    end
+    local state
+    if present_count > 0 then
+      if charging then state = "charging"
+      elseif discharging then state = "discharging"
+      elseif all_idle then state = "idle" end
     end
     summary = {
-      count = #batteries,
+      count = present_count,
       capacity_percent = percent_count > 0 and percent_sum / percent_count or nil,
       power_watts = power_sum,
-      state = charging and "charging" or (discharging and "discharging" or "idle"),
+      state = state,
     }
   end
 
-  local on_ac
+  local on_ac, unknown_ac, known_offline = nil, false, false
   for _, supply in ipairs(supplies) do
     if supply.online then on_ac = true break end
-    on_ac = on_ac or false
+    if supply.online == nil then unknown_ac = true
+    else known_offline = true end
   end
+  if on_ac ~= true and known_offline and not unknown_ac then on_ac = false end
 
   local finished = Common.now_ns(context)
   -- A host with no battery and no adapter must report the same way every other
@@ -228,13 +264,13 @@ function PowerSupply:sample(context)
   if #batteries == 0 and #supplies == 0 then
     return Common.result("unavailable", finished, nil, {
       quality = "unavailable",
-      reason = "no_power_supplies",
+      reason = #entries > 0 and "power_supply_data_incomplete" or "no_power_supplies",
       duration_ns = Common.elapsed_ns(finished, started) or 0,
       source = self.base_path,
     })
   end
   local quality = "fresh"
-  if partial > 0 or truncated then
+  if partial > 0 or unreadable > 0 or truncated then
     quality = truncated and "truncated" or "partial"
   end
   return Common.result("ok", finished, {
@@ -242,6 +278,7 @@ function PowerSupply:sample(context)
     supplies = supplies,
     summary = summary,
     on_ac_power = on_ac,
+    skipped_devices = unreadable,
     truncated = truncated == true,
   }, {
     quality = quality,
@@ -251,10 +288,10 @@ function PowerSupply:sample(context)
     -- was published with no reason at all, which left the quality saying the
     -- list was short and nothing saying why -- and this collector publishes
     -- `partial` too, so the two degradation words sat on the same result with
-    -- only the word to tell them apart.  The `partial` case stays without a
-    -- reason: its cause is per-device read degradation rather than one condition,
-    -- and `partial` without a reason is what thirteen other collectors do.
-    reason = truncated and "device_enumeration_truncated" or nil,
+    -- only the word to tell them apart.  A missing key reading or unreadable
+    -- device type now gets a stable reason without inventing an offline state.
+    reason = truncated and "device_enumeration_truncated"
+      or ((partial > 0 or unreadable > 0) and "power_supply_data_incomplete" or nil),
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = self.base_path,
   })

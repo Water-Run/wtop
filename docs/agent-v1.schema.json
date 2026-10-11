@@ -112,7 +112,9 @@
           "resource": { "$ref": "#/$defs/boundedString" },
           "status": { "$ref": "#/$defs/boundedString" },
           "quality": { "$ref": "#/$defs/boundedString" },
-          "reason": { "type": "string", "maxLength": 4096 }
+          "reason": { "type": "string", "maxLength": 4096 },
+          "value_timestamp_ns": { "type": "number", "minimum": 0 },
+          "value_age_ms": { "type": "integer", "minimum": 0 }
         },
         "additionalProperties": true
       }

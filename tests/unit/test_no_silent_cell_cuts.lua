@@ -215,6 +215,9 @@ local function snapshot()
       governor = "schedutil", driver = "intel_pstate", quality = "fresh",
     }
   end
+  policies[1].affected_cpus = { 0 }
+  policies[1].related_cpus = { 0 }
+  policies[1].frequencies = { current_hz = 1890000000 }
   local cores = {}
   for index = 0, 127 do
     cores[index + 1] = { name = "cpu" .. index, utilization = 0, user = 0, system = 0,
@@ -268,7 +271,11 @@ local function snapshot()
                available_bytes = 8 * 1024 * 1024 * 1024, quality = "fresh" },
     pressure = { cpu = { some = { avg10 = 1.2 } }, memory = { some = { avg10 = 0.4 } },
                  io = { some = { avg10 = 0.1 } }, quality = "fresh" },
-    cpu_info = { logical_cores = 128, model = "probe cpu" },
+    cpu_info = { logical_cores = 128, model = "probe cpu",
+      topology = { quality = "fresh", logical_cpus = {
+        { id = 0, package_id = 0, package_id_known = true,
+          core_id = 0, core_id_known = true, core_key = "0:-:0" },
+      } } },
     disks = { devices = { { id = "sda", model = LONG:sub(1, 60), size = 1024,
                             medium = "SSD", quality = "fresh", read_bytes_per_second = 1,
                             write_bytes_per_second = 1, busy_percent = 3,
@@ -278,13 +285,40 @@ local function snapshot()
                   total = #processes, process_candidates = #processes },
     cpu_frequency = { policies = policies, current_quality = "fresh",
                       current_hz = 1890000000 },
+    thermal_throttle = { cpus = {
+      { id = 0, core_count = 12600, package_count = 1796508,
+        core_new = 2, package_new = 1, core_total_time_ms = 0, package_total_time_ms = 0 },
+      { id = 1, core_count = 12600, package_count = 1796508,
+        core_new = 2, package_new = 1, core_total_time_ms = 0, package_total_time_ms = 0 },
+    } },
+    cpuidle = { cpus = { { id = 0, states = {
+      { id = 0, name = "POLL", usage_delta = 12, new_time_us = 440,
+        exit_latency_us = 0, target_residency_us = 0,
+        rejected_delta = 123456, above_delta = 12345678, below_delta = 98765432,
+        rejected_delta_quality = "fresh", above_delta_quality = "fresh",
+        below_delta_quality = "fresh",
+        time_delta_quality = "fresh", usage_delta_quality = "fresh", disabled = false },
+      { id = 1, name = "C1", usage_delta = 81, new_time_us = 99500,
+        exit_latency_us = 1, target_residency_us = 1,
+        rejected_delta = 0, above_delta = 34, below_delta = 56,
+        rejected_delta_quality = "fresh", above_delta_quality = "fresh",
+        below_delta_quality = "fresh",
+        time_delta_quality = "fresh", usage_delta_quality = "fresh", disabled = false },
+    } } } },
     -- Four of the same card, which is what a four-GPU box is: one model, one
     -- driver, one clock, all idle.  Every column but the card's own name reads
     -- the same, so the device table and the process table are both asked the
     -- question they exist to answer.  `gpus = { devices = {} }` was here
     -- instead, and two tables had nothing in them for the life of this file.
     gpus = { devices = gpus, process_scan = { status = "ok", quality = "partial" } },
-    sensors = { devices = { { class = "hwmon0", name = "probe",
+    sensors = { devices = { { id = "coretemp@probe", name = "coretemp",
+                             channels = {
+                               { type = "temperature", label = "Package id 0", input = 65,
+                                 quality = "fresh" },
+                               { type = "temperature", label = "Core 0", input = 69.8,
+                                 quality = "fresh" },
+                             } },
+                           { class = "hwmon0", name = "probe",
                              channels = { { type = "temperature", input = 69.8,
                                             quality = "fresh" } } } } },
     power = { zones = { { name = "package-0", power_watts = 12.5, quality = "fresh" } } },
@@ -302,6 +336,15 @@ local function snapshot()
     -- gets wrong silently.
     inventory = { pci = { devices = pci_devices, total = #pci_devices },
                   usb = { devices = {}, total = 0 } },
+    numa = { nodes = {
+      { id = 0, cpu_ids = { 0, 1 }, memory = { total_bytes = 128 * 1024^4, free_bytes = 32 * 1024^4 }, quality = "fresh" },
+      { id = 2, cpu_ids = {}, quality = "partial" },
+    } },
+    memory_devices = { devices = {
+      { id = "1100", locator = "DIMM_A1", size_bytes = 64 * 1024^3, memory_type = "DDR5",
+        configured_speed_mts = 6400, manufacturer = "Fixture Vendor", quality = "fresh" },
+      { id = "1101", locator = "DIMM_A2", populated = false, size_bytes = 0, quality = "fresh" },
+    } },
   }
 end
 

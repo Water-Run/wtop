@@ -1534,7 +1534,52 @@ static int l_collect_inventory(lua_State *L) {
     return 1;
 }
 
+/* Raw SMBIOS is decoded by the same bounded Lua parser as Linux sysfs.
+ * Resolve this Vista / Server 2003 SP1 API at runtime for the XP target. */
+typedef UINT (WINAPI *firmware_table_function)(DWORD, DWORD, PVOID, DWORD);
+
+static int smbios_failure(lua_State *L, const char *reason, const char *status) {
+    lua_pushnil(L);
+    lua_pushstring(L, reason);
+    lua_pushstring(L, status);
+    return 3;
+}
+
+static int l_read_smbios(lua_State *L) {
+    HMODULE kernel = GetModuleHandleA("kernel32.dll");
+    firmware_table_function read_table = kernel ? (firmware_table_function)(void *)
+        GetProcAddress(kernel, "GetSystemFirmwareTable") : NULL;
+    UINT needed, written;
+    DWORD length;
+    unsigned char *buffer;
+    if (!read_table) return smbios_failure(L, "smbios_unavailable", "unavailable");
+    SetLastError(ERROR_SUCCESS);
+    needed = read_table(0x52534D42u, 0, NULL, 0); /* RSMB */
+    if (!needed) return smbios_failure(L, "smbios_unavailable",
+        GetLastError() == ERROR_ACCESS_DENIED ? "denied" : "unavailable");
+    if (needed < 8 || needed > 4u * 1024u * 1024u + 8u)
+        return smbios_failure(L, "smbios_invalid", "error");
+    /* Lua owns this allocation even if allocating the result string fails. */
+    buffer = (unsigned char *)lua_newuserdatauv(L, (size_t)needed, 0);
+    SetLastError(ERROR_SUCCESS);
+    written = read_table(0x52534D42u, 0, buffer, needed);
+    if (!written) return smbios_failure(L, "smbios_unavailable",
+        GetLastError() == ERROR_ACCESS_DENIED ? "denied" : "unavailable");
+    if (written < 8 || written > needed) return smbios_failure(L, "smbios_invalid", "error");
+    length = (DWORD)buffer[4] | (DWORD)buffer[5] << 8
+        | (DWORD)buffer[6] << 16 | (DWORD)buffer[7] << 24;
+    if (length > written - 8u) return smbios_failure(L, "smbios_invalid", "error");
+    lua_newtable(L);
+    integer_field(L, "major", (lua_Integer)buffer[1]);
+    integer_field(L, "minor", (lua_Integer)buffer[2]);
+    integer_field(L, "dmi_revision", (lua_Integer)buffer[3]);
+    lua_pushlstring(L, (const char *)buffer + 8, (size_t)length);
+    lua_setfield(L, -2, "data");
+    return 1;
+}
+
 static const luaL_Reg hardware_functions[] = {
+    {"read_smbios", l_read_smbios},
     {"collect_gpu", l_collect_gpu},
     {"collect_cpufreq", l_collect_cpufreq},
     {"collect_power_supply", l_collect_power_supply},

@@ -156,4 +156,79 @@ assert(suppress_page:set_suppressed({}), "clearing the set must relayout")
 assert(#suppress_page:layout(160, 44).placements == before,
     "widgets must return as soon as their resource reports again")
 
+-- The tab bar is an ordered subset of the ten registered pages. Hidden pages
+-- keep their layouts and can be restored without losing edits.
+local tabs = Workspace.new({ active_tab = "system",
+    tab_order = { "processes", "system", "overview" } })
+assert(table.concat(tabs:tab_ids(), ",") == "processes,system,overview")
+assert(tabs.active == "system" and not tabs:select(4))
+assert(tabs:hide_tab("system") and tabs.active == "overview")
+assert(not tabs:select("system") and tabs.pages.system and tabs.layout_trees.system)
+assert(tabs:show_tab("system"))
+assert(table.concat(tabs:tab_ids(), ",") == "processes,overview,system")
+assert(tabs:move_tab("system", -1))
+assert(table.concat(tabs:tab_ids(), ",") == "processes,system,overview")
+assert(not tabs:move_tab("processes", -1))
+assert(tabs:select("system") and tabs.active == "system")
+assert(tabs.dirty and #tabs:tab_entries() == 10)
+assert(table.concat(tabs:custom_tab_order(), ",") == "processes,system,overview")
+local restored_tabs = Workspace.new({ tab_order = tabs:tab_ids(),
+    active_tab = "system", layout_trees = tabs:trees() })
+assert(restored_tabs.active == "system")
+assert(table.concat(restored_tabs:tab_ids(), ",") == "processes,system,overview")
+local last = Workspace.new({ tab_order = { "overview" }, active_tab = "system" })
+assert(last.active == "overview" and not last:hide_tab("overview"))
+assert(last:custom_tab_order()[1] == "overview")
+assert(Workspace.new({ tab_order = { "bogus" } }):custom_tab_order() == nil)
+local tab_lines = require("wtop.tui").tab_manager_lines({ index = 2,
+    entries = tabs:tab_entries() },
+    assert(require("wtop.i18n").new({ locale = "zh-CN" })), false)
+local tab_text = table.concat(tab_lines, "\n")
+assert(tab_text:find("管理标签页", 1, true)
+    and tab_text:find("> *", 1, true)
+    and tab_text:find("-", 1, true),
+    "the tab editor names visible and hidden pages in the ASCII profile")
+
+local dashboard = Workspace.new({ active_tab = "overview" })
+local created, custom_id = dashboard:new_custom_page("cpu_overview")
+assert(created and custom_id == "custom1" and dashboard.active == "custom1")
+assert(dashboard:content_page() == "overview")
+assert(dashboard:add_focused_widget("process_table", "after"),
+    "a custom page can mix widgets from different built-in pages")
+assert(table.concat(dashboard:orders().custom1, ",") == "cpu_overview,process_table")
+assert(dashboard:content_page() == "processes")
+assert(dashboard:focus_cycle(1) == "cpu_overview"
+    and dashboard:content_page() == "overview")
+assert(dashboard:rename_custom_page("custom1", "  My dashboard  "))
+assert(dashboard:tab_entries()[2].label == "My dashboard")
+local definitions = dashboard:custom_page_definitions()
+local reloaded_dashboard = Workspace.new({ custom_pages = definitions,
+    tab_order = dashboard:tab_ids(), layout_trees = dashboard:trees(),
+    active_tab = "custom1" })
+assert(table.concat(reloaded_dashboard:orders().custom1, ",")
+    == "cpu_overview,process_table")
+assert(reloaded_dashboard:remove_custom_page("custom1")
+    and reloaded_dashboard.pages.custom1 == nil
+    and reloaded_dashboard:custom_page_definitions() == nil)
+local custom_only = Workspace.new({ custom_pages = definitions,
+    tab_order = { "custom1" }, active_tab = "custom1" })
+assert(not custom_only:remove_custom_page("custom1"))
+local bounded_pages = Workspace.new()
+for _ = 1, 8 do assert(bounded_pages:new_custom_page("cpu_overview")) end
+assert(not bounded_pages:new_custom_page("cpu_overview"),
+    "custom page count is bounded")
+local source = Workspace.new({ active_tab = "overview" })
+local source_order = table.concat(source:orders().overview, ",")
+local copied, copy_id = source:duplicate_page("overview")
+assert(copied and copy_id == "custom1")
+assert(table.concat(source:orders().custom1, ",") == source_order,
+    "duplication copies the whole page, not just its focused widget")
+assert(source:remove_focused_widget())
+assert(table.concat(source:orders().overview, ",") == source_order,
+    "editing the copy must not mutate its source")
+local copied_again, second_copy = source:duplicate_page("custom1")
+assert(copied_again and second_copy == "custom2"
+    and table.concat(source:orders().custom2, ",")
+        == table.concat(source:orders().custom1, ","))
+
 return true

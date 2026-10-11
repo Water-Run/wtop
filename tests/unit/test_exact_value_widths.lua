@@ -218,6 +218,16 @@ local function snapshot()
   return {
     cpu = { usage_percent = 12, quality = "fresh" },
     memory = { quality = "fresh" },
+    memory_devices = { devices = {
+      { id = "1100", locator = "Controller0-ChannelA-DIMM0", size_bytes = 128 * 1024^3, memory_type = "DDR5",
+        configured_speed_mts = 2147483647, manufacturer = "Fixture", quality = "fresh" },
+      { id = "1101", locator = "Controller1-ChannelA-DIMM0", size_bytes = 128 * 1024^3, memory_type = "DDR5",
+        configured_speed_mts = 2147483647, manufacturer = "Fixture", quality = "fresh" },
+    } },
+    numa = { nodes = {
+      { id = 65534, cpu_ids = { 0, 1 }, memory = { total_bytes = 128 * 1024^4, free_bytes = 64 * 1024^4 }, quality = "fresh" },
+      { id = 65535, cpu_ids = { 2, 3 }, memory = { total_bytes = 128 * 1024^4, free_bytes = 64 * 1024^4 }, quality = "fresh" },
+    } },
     pressure = { quality = "fresh" },
     disks = { devices = {} },
     network = network_snapshot(),
@@ -237,6 +247,28 @@ local function snapshot()
           memory_summary = { resident_bytes = 8192 } },
       } } } }, process_scan = { status = "ok", quality = "fresh" } },
     cpu_frequency = { policies = {}, current_quality = "fresh" },
+    thermal_throttle = { cpus = {
+      { id = 0, core_count = 12600, package_count = 1796508,
+        core_new = 2, package_new = 1, core_total_time_ms = 0, package_total_time_ms = 0 },
+      { id = 1, core_count = 12600, package_count = 1796508,
+        core_new = 2, package_new = 1, core_total_time_ms = 0, package_total_time_ms = 0 },
+    } },
+    cpuidle = { driver = "intel_idle", cpus = {
+      { id = 0, states = {
+        { id = 0, name = "POLL", usage_delta = 43, new_time_us = 1200,
+          exit_latency_us = 0, target_residency_us = 0,
+          rejected_delta = 123456, above_delta = 12345678, below_delta = 98765432,
+          rejected_delta_quality = "fresh", above_delta_quality = "fresh",
+          below_delta_quality = "fresh",
+          time_delta_quality = "fresh", usage_delta_quality = "fresh", disabled = false },
+        { id = 1, name = "C1_ACPI", usage_delta = 510, new_time_us = 187000,
+          exit_latency_us = 1, target_residency_us = 1,
+          rejected_delta = 0, above_delta = 34, below_delta = 56,
+          rejected_delta_quality = "fresh", above_delta_quality = "fresh",
+          below_delta_quality = "fresh",
+          time_delta_quality = "fresh", usage_delta_quality = "fresh", disabled = false },
+      } },
+    } },
     sensors = { devices = {} },
     quality = { mounts = { status = "ok", quality = "fresh" } },
     connections = { connections = {}, owner_scan = { status = "ok", quality = "fresh" } },
@@ -291,6 +323,13 @@ local function worst_case_snapshot()
                  reserved = 0, available = 90 }, quality = "fresh" }
   end
   base.cpu = { usage_percent = 0, cores = cores, quality = "fresh" }
+  local thermal_cpus = {}
+  for index = 0, 127 do
+    thermal_cpus[index + 1] = { id = index, core_count = 12600,
+      package_count = 1796508, core_new = 0, package_new = 0,
+      core_total_time_ms = 0, package_total_time_ms = 0 }
+  end
+  base.thermal_throttle = { cpus = thermal_cpus }
   base.disks = { devices = disks }
   base.mounts = { mounts = mounts }
   base.power = { zones = zones }
@@ -372,8 +411,15 @@ local function worst_case_snapshot()
       { type = "temperature", index = 0, label = "Package id 0", input = 45, quality = "fresh" },
       { type = "temperature", index = 1, label = "Core 0", input = 45, quality = "fresh" },
       { type = "temperature", index = 2, label = "Core 1", input = 45, quality = "fresh" } } } } }
+  base.cpu_info = { topology = { quality = "fresh", logical_cpus = {
+    { id = 0, package_id = 0, package_id_known = true,
+      core_id = 0, core_id_known = true, core_key = "0:-:0" },
+    { id = 1, package_id = 0, package_id_known = true,
+      core_id = 1, core_id_known = true, core_key = "0:-:1" },
+  } } }
   base.cpu_frequency = { current_quality = "fresh", policies = {
-    { policy = "performance", affected_cpus = { 0, 1 },
+    { id = "cpus:0,1", policy = "performance", affected_cpus = { 0, 1 },
+      related_cpus = { 0, 1 },
       frequencies = { current_hz = 1890000000, scaling_minimum_hz = 800000000,
                       scaling_maximum_hz = 3900000000 }, quality = "fresh" } } }
   return base

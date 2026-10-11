@@ -58,6 +58,7 @@ function Page:render(columns, rows, state)
     i18n = state.i18n,
     capabilities = capabilities,
     chart_mode = capabilities.unicode == false and "ascii" or state.chart_mode,
+    chart_column_ns = state.chart_column_ns,
   })
   local background = theme:style("text.primary", "surface.base")
   local grid = Grid.new(columns, rows, {

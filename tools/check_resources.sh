@@ -11,6 +11,14 @@ if [ "${WTOP_SKIP_RESOURCE_CHECK:-0}" = "1" ]; then
 fi
 
 case "$wtop_profile" in
+    benchmark)
+        # A prebuilt artifact must be measurable on a small target machine.
+        # Keep pressure/load checks, but do not impose the build/test floors.
+        wtop_default_available_kib=65536
+        wtop_default_swap_free_kib=0
+        wtop_default_psi_full=5
+        wtop_default_load_per_cpu=1.5
+        ;;
     build)
         wtop_default_available_kib=1048576
         wtop_default_swap_free_kib=262144

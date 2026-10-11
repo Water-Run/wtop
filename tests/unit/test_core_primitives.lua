@@ -174,17 +174,42 @@ equal(young.quality.cpu.quality, "stale",
   "a retained value that is ten nanoseconds old is no longer `stale`")
 equal(young.cpu.total.utilization, 25,
   "and the retained value is still the one being shown")
--- The other half, and the one that makes the trap reachable from outside: the
--- record's own timestamp is the *attempt*, so a consumer computing staleness from
--- it gets the age of the failed read rather than of the value.
+-- A manually supplied old snapshot has no provenance for the retained value;
+-- reporting its snapshot time as the value time would make up evidence.
 equal(young.quality.cpu.timestamp_ns, 20,
   "the quality record's timestamp is no longer the time of the attempt")
-assert(young.quality.cpu.timestamp_ns - young.timestamp_ns == 0,
-  "a consumer computing `now - quality[resource].timestamp_ns` on a `stale` record "
-    .. "measures how long ago the last read was tried, not how old the value is: "
-    .. "measured, a value 99 s old retried just now reports an age of 0 s.  See "
-    .. "docs/MONITORING.md §9 and the open item in docs/PLAN.md -- nothing in the "
-    .. "record states the value's own age, and a consumer cannot derive it.")
+equal(young.quality.cpu.value_timestamp_ns, nil,
+  "a retained value with no recorded successful read has no known value time")
+
+local measured = Snapshot.merge(Snapshot.new(0, 0), {
+  cpu = { status = "ok", quality = "fresh", data = { total = { utilization = 25 } },
+    timestamp_ns = 1000000000 },
+}, 1, 1000000000)
+equal(measured.quality.cpu.value_timestamp_ns, 1000000000)
+local old_value = Snapshot.merge(measured, {
+  cpu = { status = "error", quality = "error", reason = "race",
+    timestamp_ns = 100000000000 },
+}, 2, 100000000000)
+equal(old_value.quality.cpu.timestamp_ns, 100000000000)
+equal(old_value.quality.cpu.value_timestamp_ns, 1000000000,
+  "a failed retry cannot make a 99-second-old value appear newly collected")
+equal(old_value.cpu.total.utilization, 25)
+local failed_again = Snapshot.merge(old_value, {
+  cpu = { status = "denied", quality = "denied", timestamp_ns = 101000000000 },
+}, 3, 101000000000)
+equal(failed_again.quality.cpu.value_timestamp_ns, 1000000000,
+  "another failed attempt still refers to the same retained value")
+local recovered = Snapshot.merge(failed_again, {
+  cpu = { status = "ok", quality = "fresh", data = { total = { utilization = 30 } },
+    timestamp_ns = 102000000000 },
+}, 4, 102000000000)
+equal(recovered.quality.cpu.value_timestamp_ns, 102000000000,
+  "a newly installed value gets its own collection time")
+local never_measured = Snapshot.merge(Snapshot.new(0, 0), {
+  cpu = { status = "error", quality = "error", timestamp_ns = 100000000000 },
+}, 1, 100000000000)
+equal(never_measured.quality.cpu.value_timestamp_ns, nil,
+  "a first failure cannot date the snapshot's empty placeholder")
 local monitoring_handle = assert(io.open("docs/MONITORING.md", "rb"),
   "docs/MONITORING.md is missing, so the quality vocabulary this file is measured "
     .. "against cannot be read")
@@ -197,8 +222,9 @@ assert(monitoring:find("它是在第一个无法安装的结果上重新标注�
     .. "assertion above is what the sentence has to match.")
 assert(monitoring:find("上一次*尝试*的时间,不是该记录所限定的值", 1, true) ~= nil,
   "docs/MONITORING.md §9 no longer says that a quality record's timestamp_ns is "
-    .. "the time of the last attempt rather than of the value it qualifies, which "
-    .. "is what makes a `stale` record's age read as zero")
+    .. "the time of the last attempt rather than of the value it qualifies")
+assert(monitoring:find("value_timestamp_ns", 1, true) ~= nil,
+  "docs/MONITORING.md does not explain the retained value's own timestamp")
 equal(merged.memory.total_bytes, 10)
 assert(merged.quality.memory.reason == nil)
 
@@ -462,6 +488,12 @@ for _, invalid_policy in ipairs({ "1", math.huge, 0 / 0, 1.5, 0, 60001 }) do
 end
 equal(runner:run({ "/usr/bin/example" }, { env = "invalid" }).reason,
   "invalid_runner_policy")
+for _, invalid in ipairs({ "relative", "", "/run/user/1000\0bad", "/" .. string.rep("x", 4096), false }) do
+  equal(runner:run({ "/usr/bin/example" }, { env = { XDG_RUNTIME_DIR = invalid } }).reason,
+    "invalid_runner_policy")
+end
+runner:run({ "/usr/bin/example" }, { env = { XDG_RUNTIME_DIR = "/run/user/1000" } })
+equal(observed.policy.env.XDG_RUNTIME_DIR, "/run/user/1000")
 
 local raw_result = {
   status = "ok", quality = "fresh", timestamp_ns = math.huge, duration_ns = -1,

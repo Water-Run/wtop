@@ -23,16 +23,58 @@ wtop --agent
 | --- | --- |
 | `overall` | `ok`、`warning`、`critical` 或 `unknown`,以及信号计数 |
 | `metrics`(object)| CPU 标识/核心类型/拓扑、内存、PSI、存储、网络、GPU、分离的 CPU/平台功耗、传感器和进程的紧凑原始值 |
-| `signals`(array)| 由确定性阈值产生的异常线索,按严重程度排序;这些并非自动给出的诊断结论 |
-| `top`(object)| 进程、块设备、网络接口、工作负载、GPU 和最热有效传感器的有界摘要 |
-| `data_quality`(array)| 每个采集器的资源、新鲜度、状态和原因;解释缺失数值时应始终先查看此字段 |
+| `signals`(array)| 阈值、数据质量和本轮新增 AER 报告产生的异常线索，按严重程度排序；这些并非自动给出的诊断结论 |
+| `top`(object)| 进程、块设备、网络接口、工作负载、GPU 和最热有效传感器的有界摘要；线程化工作负载保留可见 TID 数、不可映射条目数与未知的进程数 |
+| `data_quality`(array)| 每个采集器的资源、新鲜度、状态、原因，以及有已安装值时的 `value_timestamp_ns` 和 `value_age_ms`;解释缺失数值时应先查看此字段 |
 | `unavailable_sources`(array)| 当前主机上不支持或不可访问的数据源 |
 | `privacy`(object)| 报告中有意省略的信息类别 |
 | `privilege`(object)| 实际身份,以及本次是普通调用、直接 sudo 调用还是显式提升权限调用 |
 
-数值保留机器单位:容量和速率使用字节与字节每秒,延迟使用毫秒,功耗使用瓦特,利用率和 PSI 使用百分比。`metrics.power.total_watts` 仅在选定的 CPU 封装/socket 后端完整时才输出;单独选定的平台/`psys` 代表值报告为 `platform_watts`。未知的根来源和存在歧义的 CPU 后端保持不聚合。缺失数据用字段缺省或 JSON `null` 表示;绝不能当作零处理。无效的硬件哨兵读数在导出前会被过滤,而不会作为极端物理量发出。
+数值保留机器单位:容量和速率使用字节与字节每秒,延迟使用毫秒,功耗使用瓦特,利用率和 PSI 使用百分比。Linux 主机的 `metrics.cpu.thermal_throttle` 给出相邻样本中单个逻辑 CPU 报告的最大核心及封装热节流新增次数；封装次数不会跨 CPU 求和。`metrics.network` 还给出每 CPU 接收栈聚合后的积压包数、丢弃与处理预算耗尽次数的每秒速率，并携带独立的 `softnet_status`/`softnet_quality`；这些数值不归属到单个接口。Linux 的 `top.interfaces[]` 另带接口自身的 `link_changes_total`，有可比的前后样本时才带 `new_link_changes`；它与 softnet 计数不相加。`metrics.power.total_watts` 仅在选定的 CPU 封装/socket 后端完整时才输出;单独选定的平台/`psys` 代表值报告为 `platform_watts`。未知的根来源和存在歧义的 CPU 后端保持不聚合。缺失数据用字段缺省或 JSON `null` 表示;绝不能当作零处理。无效的硬件哨兵读数在导出前会被过滤,而不会作为极端物理量发出。
 
-每条 `signals` 条目使用稳定的 `resource`、`code`、`severity`、`value` 和 `unit` 字段;`message` 仅供展示。当前阈值为保守提示,例如 CPU 75/90%、内存 85/95%、设备忙 80/95%、PSI `some avg10` 5/20%。智能体在下结论前应考虑持续时间、工作负载特征和 `data_quality`。
+`metrics.cpu.frequency` 按各策略已知的在线 CPU 数加权给出平均 Hz；缺少成员列表的策略按一个读数计。它携带来源与 measured/estimated/partial 质量，混用来源时标为 `mixed`。CPUFreq 采集失败或数据过期时不把保留值作为当前频率输出。
+
+`data_quality.value_timestamp_ns` 是该资源当前所持值的单调时钟时间；
+`value_age_ms` 是它距本次捕获的毫秒数。采集失败而保留旧值时，两者继续
+指向旧值；从未成功采到值或来源时间不明时，这两个字段缺席。
+完整快照的 `quality[resource].timestamp_ns` 仍是最近一次采集尝试的时间，
+不能用它计算保留值的年龄。
+
+每条 `signals` 条目使用稳定的 `resource`、`code`、`severity` 字段；
+有数值时再提供 `value` 和 `unit`，`message` 仅供展示。当前阈值为
+保守提示，例如 CPU 75/90%、内存 85/95%、设备忙 80/95%、PSI
+`some avg10` 5/20%。智能体在下结论前应考虑持续时间、工作负载特征
+和 `data_quality`。
+
+阈值信号只使用当前可用的来源读数。采集失败后保留的旧值仍会出现在
+`metrics` 或 `top` 中供对照，但不会再次生成利用率、压力、设备繁忙或
+温度阈值信号。CPU、内存和进程这三项核心来源无法读取时给出严重的
+`data_unavailable`；磁盘、网络、挂载和系统来源失败时给出警告。
+读取失败即使保留旧值也给出 `data_unavailable`；状态仍为 `ok` 但
+质量为 `stale` 时给出 `data_stale`。核心来源的速率缺口与部分数据
+分别标为 `data_gap` 和 `data_incomplete`。可选硬件来源缺失、权限不足或只有估算值时，
+状态保留在 `data_quality`；能力不可用时另列 `unavailable_sources`，
+不把健康主机判作故障。
+同一来源的局部故障不会阻止其他当前读数生成阈值信号。
+
+`pcie_aer_fatal` 和 `pcie_aer_nonfatal` 只在本轮 PCIe AER 计数增加时
+分别给出严重和警告线索。设备与根端口可能报告同一事件，因此每种严重度
+最多一条信号，不把计数相加，也不把报告错误的链路认定为故障端点。
+可纠正错误、启动以来的累计计数和具体 PCI 地址请查看完整 Snapshot 的
+`inventory.pci.devices[].aer`。调用期间没有新增报告时不会凭历史非零
+计数生成这两种信号。
+
+`nvme_no_path_io_failure` 仅在本轮 NVMe 无可用路径 I/O 失败计数
+增加时给出一条警告线索。首次样本、计数器回退、盘符身份无法以
+`diskseq` 核对或磁盘来源陈旧时不报警；多个设备同时报告也不把累计计数
+相加。内核允许管理员改写这些计数器，增加量是观察到的差值，不单凭它
+断言发生了多少次真实故障。完整 Snapshot 的 `disks.devices[].nvme` 保留
+各计数器状态和来源。
+
+`md_array_degraded` 只在当前磁盘样本中看到活动 MD 阵列明确报告缺失设备
+时给出一条警告。来源陈旧、阵列未激活或 MD 字段部分损坏时不报警；多个
+阵列也不合并成一个缺失设备数。具体级别、状态和计数保留在完整快照的
+`disks.devices[].stack`。
 
 ## 完整快照
 
@@ -43,6 +85,8 @@ wtop --snapshot
 ```
 
 它返回 `dev.waterrun.wtop.snapshot/v1`,包含额外的采集器字段和更长的列表。除 `--agent` 所汇总的资源外,快照还携带 `system`(主机名、内核、发行版、固件、虚拟化、安全模块、内核限制与计数器、Swap 设备、时区)和 `power_supplies`(电池的电量、相对设计容量的健康度与剩余续航,以及市电适配器)。网络接口额外携带其 IPv4/IPv6 `addresses` 和原始 `counters`。
+
+Linux 快照会对进程集合额外读取两次 `/proc/<pid>/io`。`processes.top[].io` 给出累计计数，`io_rate` 给出按实际两次读取间隔计算的存储层读写字节每秒速率及 `quality`；首读后消失、权限不足或计数回退的进程不会被填成零速率。`processes.io_scan` 报告整个有界扫描的覆盖数，而 `top` 只保留最多 50 行。`--agent` 不请求这项全进程 I/O 扫描。
 
 `system.kernel.command_line` 会对命名了密钥或标识主机的参数——如 `root`、`resume`、`cryptdevice`、`rd.luks.key`、`systemd.machine_id`、`ip`、`nfsroot` 等——做脱敏:仅将值替换为 `<redacted>`,普通参数和裸开关保持原样。`/proc/cmdline` 本身是世界可读的,所以这并非访问控制;它只是避免磁盘加密密钥或根文件系统 UUID 出现在被粘贴进工单的导出内容里。
 
@@ -57,7 +101,7 @@ wtop --snapshot
 - `unavailable` 条目不意味着系统故障。可选硬件和缺失权限是分开报告的。
 - 进程、设备和工作负载列表均有界。未出现在 Top 列表中的对象,不一定不存在于主机。
 - 运行 `sudo wtop --agent` 或使用显式的 `--sudo`/`--elevate` 可能暴露需要权限的数据源。消费方应检查 `privilege` 并继续使用 `data_quality`;提升权限执行并不保证每个数据源都存在或成功。
-- 每次调用采样两次以计算速率。两次采样之间等待 `min(--interval, 250 ms)`——250 ms 是**该延迟的上限,而不是整个调用的耗时**。在开发主机上实测(16 核 Fedora 44 容器,wtop 0.1.0,**n=16** 次调用、跨两个负载水平,1.16–1.38 s,中位数 ≈1.23 s):`wtop --agent` 在默认 interval 下耗时约 **1.2 s**,在 `--interval 100` 下约少 150 ms,这正是 250→100 ms 的延迟缩减,仅此而已。其余时间是一次完整采样轮,`wtop --snapshot` 同样要付出这一轮——1.26–1.33 s——尽管它完全不等待。上述绝对数值是共享的、负载波动宿主机的特性,此处引用是为了说明比例,不供复现:站得住脚的结论是调用耗时约为 250 ms 上限的五倍,而区间较宽是因为宿主机如此,并非因为代码不清楚。这句话过去写的是整个调用"normally takes about 250 ms",那是把上限当成了总量,误差约五倍;中间某版改成了 1.22–1.25 s 的区间,宽度只有 30 ms,排除了十六个样本中的两个,会让照着复现的读者误以为行为发生了变化。该上限现在位于 `src/wtop/application.lua` 的 `AGENT_SAMPLE_DELAY_CAP_MS`,`tests/unit/test_agent_schema.lua` 会将本文档与它比对,并且要求此处引用的实测耗时必须带样本数——一个来自共享机器却不带样本数的数字不是任何人可以核验的测量。需要持续监控的调用方应只在必要时轮询,通过 `captured_unix_ns` 和 `sequence` 标识样本,并避免无界的高频调用——这里的速率是真实的差值,而非缓存值,这正是两次采样所换来的。
+- `--agent` 与 `--snapshot` 每次调用都采样两次以计算速率，两次采样之间等待 `min(--interval, 250 ms)`。250 ms 是该延迟的上限,而不是整个调用的耗时。在 16 核 Fedora 44 共享开发主机上，`--agent` 的 **n=16** 次调用耗时 1.16–1.38 s，中位数约 1.23 s；这些数字是共享的、负载波动宿主机的特性，不构成其他机器的性能预算。`--snapshot` 使用相同的双采样路径，并在第二次采样时重读 Linux 进程 I/O。持续监控可用 `--stream` 接收逐行 Snapshot/v1 JSON；它先建立速率基线，此后遵守各采集器的刷新周期，不是 Agent/v1 格式。消费方通过 `captured_unix_ns`、`sequence` 和各来源的 `value_age_ms` 标识样本与保留的旧读数。间隔速率来自两次读数的差值，而非缓存值。
 - 成功时退出码为 `0`,stdout 恰好包含一个以换行结尾的 JSON 文档。诊断信息只写入 stderr。调用方必须同时检查退出码和模式,且不得解析被截断的输出。
 
 示例:

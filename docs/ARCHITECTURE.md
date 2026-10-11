@@ -1,11 +1,11 @@
 # 当前架构
 
-本文档描述的是 `0.1.0` 的实际结构。文中不会把规划中的插件、Insight Engine 或厂商 GPU 提供方当作已实现的能力来介绍。
+本文档描述当前开发树的实际结构。0.1.0 标签和 LuaRocks 包仅 Linux，macOS、Windows 是源码开发构建。已交付的 PCI/USB 拓扑与后续硬件扩展分别说明，产品方向见 [实现计划](PLAN.md)。
 
 ## 1. 数据流
 
 ```text
-/proc · /sys · cgroup v2 · DRM
+Linux /proc · /sys / macOS / Windows native APIs
               │
               ▼
         bounded collectors ──────────────┐
@@ -18,13 +18,13 @@
          ViewModel                  text overlay
               │
               ▼
-      8-page Workspace + widgets
+      10-page Workspace + widgets
               │
               ▼
       virtual cell grid → diff renderer → terminal
 ```
 
-默认的连续采集路径不依赖任何外部 CLI。`smartctl`、`perf`、`sleep` 和 `systemctl` 仅由按需运行的检查器（Inspector）使用，并通过受限的 Runner 启动。唯一的厂商 GPU 库是 NVML：`libnvidia-ml.so.1` 在运行时发现即加载，安全模式下则跳过。目前没有 AMD SMI 或 Level Zero 提供方。
+默认连续采集不依赖外部 CLI。`smartctl`、`perf`、`sleep`、`systemctl`、`journalctl` 和 `loginctl` 由按需检查器通过受限 Runner 启动。Linux 的 NVML、AMD SMI、Level Zero 提供方在运行时发现即动态加载，安全模式下跳过；macOS、Windows 使用各自的原生硬件后端。
 
 UI 状态目前由 `tui.lua`、`workspace.lua` 和进程控制器直接协调，尚未形成完整的 Action → Reducer → 单一 AppState 架构。既有的边界仍然成立：采集器不向终端绘制内容，控件（widget）也不直接读取 procfs 或 sysfs。
 
@@ -41,7 +41,7 @@ src/wtop/
   core/                 clocks, scheduler, Runner, JSON, and other infrastructure
   linux/                procfs/sysfs readers and parsers
   collectors/           bounded continuous collectors
-  inspectors/           SMART, RAM bandwidth, and sshd on-demand Inspectors
+  inspectors/           SMART, RAM bandwidth, systemd units, sshd, and logind Inspectors
   model/                Snapshot, rings, and layout tree
   ui/
     backend/            native terminal interface adapter
@@ -54,7 +54,7 @@ src/wtop/
   i18n/                  catalogs, restricted YAML, formatting, and plurals
   generated/locales/    generated built-in locale Lua modules
   config.lua             `config.yml` schema v1
-  layout_store.lua       `layout.yml` schema v1-v3 reader, v4 layout-and-columns writer
+  layout_store.lua       `layout.yml` schema v1-v6 reader and content-based writer
   workspace.lua          tabs, the edit-mode tree, named workspaces, the edit banner
   actions.lua            process-identity revalidation and pidfd signal actions
 native/wtop_native.c     libc-only Lua C module
@@ -63,7 +63,7 @@ tools/                   locale, toolchain, build, and checking tools
 tests/                   unit/fixture and real-PTY smoke tests
 ```
 
-十个固定页面按顺序为 `overview`、`processes`、`compute`、`memory`、`storage`、`network`、`gpu`、`workloads`、`system` 和 `insights`。目前页面和控件不能新增或删除。
+十个固定页面按顺序为 `overview`、`processes`、`compute`、`memory`、`storage`、`network`、`gpu`、`workloads`、`system` 和 `insights`。页面集合固定；编辑模式可添加、移除或替换页面已定义的控件。
 
 ## 3. 运行时
 
@@ -71,13 +71,14 @@ tests/                   unit/fixture and real-PTY smoke tests
 
 - 发布工具链以 PUC Lua 5.5.1 为目标，不使用 LuaJIT。纯 Lua 测试继续覆盖与 Lua 5.4 兼容的子集。
 - `wtop_native.so` 必须与其加载的 Lua 运行时保持一致的 major.minor ABI。
-- 交互式 TUI 需要 Linux、原生模块以及 TTY 标准输入/输出。没有 TTY 时，请使用 `--snapshot` 输出 JSON。
+- 交互式 TUI 使用相应平台的原生模块，需要 TTY 或原生 Windows 控制台。非交互环境可使用 `--snapshot`、`--stream`、`--report`、`--agent` 或 `--diagnose`。
 
 原生模块目前提供：原始/备用屏幕（alternate-screen）的终端生命周期管理、终端尺寸、`poll(2)`、信号与窗口尺寸变化处理、单调/实时时钟、睡眠、文件系统辅助函数、`statvfs`、`wcwidth`、原子写入、受限的 argv Runner、身份查询、`execve` 以及 pidfd 信号发送。原生 `readfile` 采用非阻塞、不跟随符号链接的打开方式，仅接受普通文件，默认上限 4 MiB、显式上限 64 MiB，并拒绝符号链接、设备文件、FIFO 和超大内容；以普通文件形式呈现的 procfs/sysfs 伪文件仍可读取。该模块不包含任何控件、布局、翻译、采集器或厂商 GPU 库。
 
 ### 3.2 事件循环
 
 TUI 使用单线程调度器；Lua UI 状态与采集器都运行在主线程上。每次迭代中，事件循环最多等待 100 ms，以获取终端输入或到达下一个采样截止时刻。仅当发生输入、窗口尺寸变化、采样完成或显式失效时 UI 才会被标记为脏（dirty），此后渲染器只输出与上一帧相比发生变化的单元格序列。这里没有固定的“10–15 FPS”承诺。
+页面切换先用现有快照画出新页，再运行刚转为前台的采集器；同轮取得的新读数由差分帧补上。这样一次慢的硬件读取不会挡在页面切换的首帧之前。
 
 同步的外部检查器可以在其超时预算内占用主线程。目前没有基于厂商 API 的工作线程池，也没有后台检查器队列。
 
@@ -86,8 +87,9 @@ TUI 使用单线程调度器；Lua UI 状态与采集器都运行在主线程上
 引擎（Engine）按固定顺序注册采集器，包括：
 
 ```text
-cpu, cpu_info, memory, pressure, disk, network, connections,
-process, gpu, cpufreq, hwmon, powercap, mounts, cgroup
+cpu, cpu_info, thermal_throttle, thermal_zones, cpuidle, memory, numa, memory_devices, expansion_slots, port_connectors, onboard_devices, firmware_batteries, firmware_power_supplies, firmware_bmcs, firmware_tpms, tpm, watchdog, rfkill, host_interfaces, processor_firmware, edac, spd, pressure, disk, network, connections,
+process, gpu, cpufreq, hwmon, powercap, mounts, cgroup,
+system_info, power_supply, inventory
 ```
 
 采集器返回 `ok|unavailable|denied|error` 状态，以及 `fresh|stale|gap|estimated|unavailable|denied|error` 质量。调度器（Scheduler）捕获异常、记录耗时，并对失败按指数退避，最长 30 秒。基于计数器差值的采集器把首次采样、回绕、复位和消失都表示为 gap 或 unavailable 值，而不是产生速率尖峰。
@@ -121,19 +123,268 @@ Snapshot = {
 
 ### 4.1 高基数扫描
 
-- 进程采集器默认最多枚举 8192 个 PID 的基本 `/proc` 字段。只有 TUI 中当前选中的进程才会触发更深入的读取，例如命令行、I/O 和 cgroup。进程模型最多保留 2048 行。
+- 进程采集器默认最多枚举 8192 个 PID 的基本 `/proc` 字段。Linux 原生批量读取器直接解析常规 `stat` 行；非常规或畸形行保留原文交给 Lua 解析器，以维持同样的错误分类。旧原生模块没有解析能力时沿用字符串批量读取。命令行在枚举时按身份缓存；更深入的内存、线程、FD、OOM 分数、I/O 与 cgroup 读取按所选进程或明确的排序/过滤需求触发。进程模型最多保留 2048 行。
+- 进程树的折叠状态绑定 `(PID, starttime)`，进程消失或 PID 复用后丢弃旧状态。搜索和 cgroup 过滤会临时展开命中项的祖先，清除条件后恢复折叠；折叠隐藏的行数单独计入状态，不冒充采集或视图上限截断。按 `]` 从折叠节点进入子进程时先展开该节点。
+- 进程表按 `g` 时，`linux/process_cgroup.lua` 只读取所选进程的 cgroup，并在两侧核对 `(PID,starttime)`。归属无需预先打开详情，也不复用旧快照中的路径；失败时保留原页面。默认进程刷新不增加这项读取。
 - 线程详情是第二个、更窄的选中项，随采样上下文携带，记为 `selected_thread_ids[pid] = tid`，与进程选中项并列。采集器随后读取该 TID 的 `status`、`cgroup`、`io`、`schedstat` 和 `sched`，共五个文件；读取量由选中项限定，而不受线程数量影响，因此一个拥有一千个线程的进程仍然只花五个文件的代价。该映射以 pid 而不是进程 id 作为键，因为 TID 只有与其所属进程放在一起才有意义，而已不存在的进程所对应的条目永远不会被匹配到。线程级的读取在选中后的下一个 tick 落地，因此浮层在此之前渲染为挂起（pending）状态。
 - 运行队列相关数字读取 `schedstat` 而不是 `sched`，因为前者是固定的三个数字的 ABI，而后者是调试转储，其键随内核版本和编译配置变化；`sched` 仅按白名单解析调度策略，其余一概不用。每个已打开线程的上一次 `schedstat` 读数保存在采集器上而不是样本中，因此缓存量只取决于操作者实际检查过的线程数；其速率跨度是该线程自上次的真实间隔，而不是被重新缩放成单个 tick。
+- 进程与线程的累计 `cpu_ticks` 在采集时按该平台的 `clock_ticks_per_second` 换算为 `cpu_time_seconds`。进程表时间列、详情、`time` 排序/比较和 JSON 使用同一秒数；旧快照缺少该字段时才用随快照提供的频率或兼容默认值换算。`schedstat` 的纳秒运行时间在选中线程详情中仍优先于 tick 换算。
+- 进程已运行时间与累计 CPU 时间分开。Linux 每次采样读取一次 `/proc/uptime`，减去进程/线程 `starttime_ticks / clock_ticks_per_second`；Windows 的 FILETIME 与 macOS 的 Unix 微秒启动时间由可移植采集器用实时时钟换算。读取失败或时间来源缺失时 `elapsed_seconds` 保持未知，`elapsed`/`age` 比较不会把它当作零。进程表的 ETIME 列默认隐藏，可在列编辑器中开启。
 - 采样上下文在进程和线程选中项之外还携带 `visible_process_ids`，采集器恰好为这些 PID 读取 `/proc/<pid>/schedstat`。该集合在渲染阶段、滚动偏移稳定之后发布，因此测量到的就是绘制出的内容；其上限为 256 个条目，超出上限的集合会被拒绝而不是被采纳，这样畸形的上下文就无法把视口测量变回对整个 procfs 的扫描。进程级和线程级速率共用一份备忘录（memo）和同一个求差辅助函数，键是携带 pid 与 starttime 的身份标识，因此两种粒度不会互相矛盾，而一个被回收复用的 id 根本不会产生速率。
 - 进程表的列集合是纯模型层的事务（`model/process_columns`）：一份目录、一个规范化器、两个操作。视图模型持有列的*定义*，并向模型询问顺序，因此一列不可能在一个文件里描述、却在另一个文件里排序。渲染器不受影响：`priority` 和 `full_only` 仍决定小面板丢弃哪些列，这与用户的决定是两回事。
-- 仅当网络页上的连接表具有实际的可见位置（placement）时，连接属主扫描才会跟随进程 fd 链接。标准的 JSON 快照不执行属主扫描。
+- 仅当网络页上的连接表具有实际的可见位置（placement）时，连接属主扫描才会跟随进程 fd 链接。相同 PID 的多个匹配 fd 合并成一个属主；打开其进程详情时按需复核 fd→socket inode 与两次进程启动时间，详情随后只跟随相同进程身份。反向从进程跳到连接时，目标携带 `(PID,starttime)` 与请求时间；采集器只给两次 stat 读取之间身份稳定的目标属主写入内部 id，ViewModel 等到本次连接样本安装后才按 id 筛选。标准的 JSON 快照不执行属主扫描。
+- 进程详情的 `F` 下钻按需有界扫描至多 4096 个 `/proc/<pid>/fd` 名字，按数字排序后读取至多 128 个链接目标。选择一个 FD 后才读取其 `fdinfo` 前缀，显示原始偏移、八进制标志、挂载 ID 和 inode；进程身份或链接目标变化就丢弃该次详情。列表扫描前后也复核 `(PID,starttime)`，身份变化就丢弃整份路径列表。不打开链接所指文件，结果不进入 Snapshot 或 Agent。
+- Network 查询由 `model/connection_filter.lua` 编译一次再筛选完整连接集合，之后才选最多 512 行。没有结构化条件的查询保留整句字面匹配；字段条件按 AND 组合。远端字段和普通文本都使用 ViewModel 已遮蔽的端点，缺失队列值不参加数值比较。
+- 网络采集器平常只在两份 procfs 文件中轻量扫描最低 metric 的已启用默认路由，维持接口汇总的前台刷新；Network 页 `g` 浮层或一次性 Snapshot 显式请求时才解码完整的有界 IPv4/IPv6 路由清单。打开浮层会让 network 任务立即到期；保持打开时十秒重读一次，默认路由变化则立即重读；关闭后保留的清单标为 stale。收集上限与展示上限分开，超限时仍遍历剩余有效行以选择默认路由。此来源不代表全部策略路由表。
 - 仅当 GPU 页上的 `gpu_process_table` 具有实际的可见位置时，GPU 采集器才会扫描标准 DRM fdinfo 以构建逐客户端/逐进程数据。仅仅打开 GPU 页或 Insights 页并不会触发它。概览页和后台采样只收集设备摘要。GPU 页最多显示 512 条进程级摘要，完整的客户端/区域细节仍保留在快照/JSON 模型中。非交互式快照会显式执行完整扫描。
-- cgroup 采集器有深度和节点数限制。它暴露原始的 cgroup v2 层级结构和内核统计信息，不解读 systemd 单元或容器的语义。
+- cgroup 采集器有深度和节点数限制。它保留原始的 cgroup v2 层级结构和内核统计信息，systemd/容器标签由独立的 `cgroup_semantics` 层补充。`cgroup.procs` 返回不支持时才检查 `cgroup.type`；确认是线程化子组后读取 `cgroup.threads`，不把未知进程数改写为零。PID 命名空间不能映射的成员以 `0` 出现在列表时，仅保存可见 ID 与零条目数，总数仍未知。用户按 `Enter` 时才有界核对 `/proc/<tid>` 并找出所属进程，常规采样不增加这项读取。
 - 它也是唯一一个必须在向下深入之前先知道*路径是什么*的采集器：cgroup 树内部的符号链接可能指回树内，而扫描是一次有界行走而不是遍历，因此回答为 `symlink` 的条目计为跳过，无法回答的条目则不下探。所以 `Cgroup.new` 会拒绝一个不能回答 `read`、`list`、`readlink` 和 `kind` 的文件系统，并指出缺的是哪一个。这里没有兜底回答。这个理由值得记录下来，因为兜底回答正是代码过去的行为：一个没有 `kind` 的对象会被当作“每个条目都是目录”来读取，而这恰好是唯一会让符号链接规避机制失效的答案；它过去只可能被一个不完整的测试替身触及——`FS.default` 总是全部回答。`test_cgroup_collector.lua` 中有两个替身依赖了这一点，于是节点和广度预算断言穿过的其实是产品代码写死的一个常量，而不是文件系统，而建立在其上的有界行走断言，实际断言的是那个常量。
 
-连接、挂载、工作负载和 GPU 进程的视图模型行预算均为 512。达到上限的采集器会把资源标记为 `partial`/`truncated`；仅影响显示的限额不会改写采集器的质量。进程/GPU 进程和连接状态会提供总数线索，而挂载表和工作负载表目前没有单独的视图模型容量指示。因此，一个对象没有被显示，绝不能解读为它不存在。布局求解器把位置（placement）传给视图模型，因此隐藏的表不会构建高基数的行数组。
+连接、挂载、工作负载、系统设备、CPU 空闲态和 GPU 进程的视图模型行预算均为 512。达到上限的采集器会把资源标记为 `partial`/`truncated`；仅影响显示的限额不会改写采集器的质量。表格状态报告视图模型截断，不把未显示的对象当作不存在。Storage 的 `model/mount_filter.lua` 在伪文件系统开关和重复路径归并之后、行数上限之前筛选挂载点；缺失容量不参加数值比较。Workloads 查询由 `model/workload_filter.lua` 编译一次，在完整节点集合中匹配文字和实测数值，再补祖先并应用显示上限；缺失数值不参与肯定或否定比较。System 的 `model/hardware_filter.lua` 在完整共享设备图中只检查白名单身份字段，补上已有父节点后再应用显示上限。折叠状态在工作负载搜索期间保留但暂不遮挡命中路径。布局求解器把位置（placement）传给视图模型，因此隐藏的表不会构建高基数的行数组。
 
 精确的限额和隐私边界见 [MONITORING.md](MONITORING.md)。
+
+### 4.2 共享硬件拓扑
+
+`model/hardware.lua` 从快照建立有界的 PCI/USB 设备及 USB 接口、块设备和网卡树，
+并关联挂载、GPU 和传感器。
+Linux 采集器读取设备/驱动链接和可用链路元数据；模型自身不读取文件。
+hwmon 同时保留设备链接与类链接的完整路径，后者用于解析 NVMe 等相对链接的归属。
+系统设备表、设备详情和 `inventory.topology` 导出使用同一模型。
+缺少父设备信息的平台仍显示清单；未知 USB 子设备和 I2C 传感器不归到
+上层 PCI 控制器。模型对重复身份、循环与上限分别记录状态。
+详情中的 `r` 从图里已解析的跨设备引用和子节点构建有界目的地列表；
+不存在或身份有歧义的节点不会成为跳转目标。一个目标直接打开，多个目标
+先选择，`b` 返回上一设备。列表上限为 256，超出时报告总数。
+
+Linux 磁盘和网络采集器将类链接解析为 `/sys/devices` 下的路径；
+磁盘/网卡关联到路径中的 PCI/USB 设备；已列出的 USB 接口优先作为
+具体函数的父节点，分区关联到祖先块设备。接口级驱动、类别与端点数
+来自 USB sysfs，不把未列出的接口误归到上层 PCI 控制器。
+虚拟设备或没有路径的平台保留独立节点，不按设备名称猜测父设备。
+挂载通过 `device_id`（major:minor）关联具体块设备，因此别名和 bind
+mount 均可保留。节点的 `resource`/`resource_id` 指向原始快照资源；
+块设备节点优先使用含 `diskseq` 的身份，网卡使用 ifindex。
+分区从 `/sys/dev/block/<major>:<minor>/{size,start}` 读取 512 字节扇区数，
+换算成容量与相对父盘起点；缺失、非整数及溢出值保持未知。分区仍不计入
+整盘 I/O 合计，也不借父盘容量补自己的缺失值。
+堆叠块设备从 `slaves` 链接读取每个底层设备的 major:minor，再与本轮
+唯一的块设备清单核对；整组引用完整时建立双向 `slave_ids`/`holder_ids`。
+这是一条依赖关系，不改变 PCI/USB/分区的物理父节点。缺失、歧义、截断
+或来源陈旧时不建立未经证实的引用。
+`linux/stacked_block.lua` 在存在时读取 device-mapper 的名称/暂停位，以及
+MD 的级别、阵列状态、预期与缺失设备数、同步动作和扇区进度。同步进度
+读取前后复核动作，变化时不发布不对应的分数。它不读取映射器 UUID、MD UUID、
+设备映射表或元数据镜像。缺失的可选字段保持未知，解析/权限错误标为部分
+数据；卷名仅是可读标签，不作为跨采样身份键。
+MD 的 `dev-*` 成员目录另以 `block/dev` 核对设备号，读取 `slot` 位置和
+`state` 标志。成员清单最多 64 项；无效设备号、重复设备号与截断各有
+独立状态，不据名称推断物理身份。成员清单质量与阵列级告警分开。
+Linux 块设备采集器仅对 NVMe 命名空间读取 `/sys/block/*/diag` 的可选
+计数与 ANA 状态，不读取序列号或 WWID；单轮最多 128 个。累计值与样本差值
+分开保存，只有相同 `diskseq` 的相邻样本能产生差值。缺少可选文件不
+影响普通磁盘 I/O 质量，解析/权限错误和上限则显式标记部分数据。
+命名空间的真实 sysfs 路径若落在已核对的控制器类链接
+之下，还读取该控制器的状态、传输方式及命令错误、重置、重连计数。
+同一轮的多个命名空间共享一次控制器读取，各自保留独立的计数差值和
+质量；多路径聚合命名空间不猜测单一控制器。序列号、NQN 和传输地址
+不进入结果。
+多路径聚合命名空间的真实路径还要与 NVMe subsystem 类链接核对；其
+目录里的路径命名空间链接逐条指向真实控制器，再读取各路径的 ANA 状态、
+控制器状态和传输方式。单个聚合设备最多扫描 256 个目录项、保留 32 条
+路径；链接缺失、控制器不符及截断各自有质量状态，不从名称推断关系。
+`nuse` 读取会触发 Identify Namespace。具有相同 `diskseq` 的命名空间在
+60 秒内复用该读数，保留首次读取时间和 `cached` 标志；身份不足时不借用
+上一设备的值。逻辑块数只在块大小有效且换算不溢出时转为字节，
+这表示命名空间已分配量，不是文件系统已用空间。
+USB 设备最多 128 个、接口最多 256 个，目录扫描最多 1024 项。
+磁盘最多 256 个、网卡最多 128 个、挂载关联最多 512 条；系统表最多
+512 行，各自触及上限时报告截断。父设备驱动仍显示在父设备详情中，
+路径处理依据 [Linux sysfs 规则](https://docs.kernel.org/admin-guide/sysfs-rules.html)。
+
+CPU 节点按实测插槽和核心分组；采集器以 `package_id_known` 和
+`core_id_known` 区分实测 ID 与兼容旧模型的推断值，`online_known`
+区分已知与推断的在线状态。插槽/核心是由 CPU 清单分组得到的节点，
+逻辑 CPU、NUMA 和策略节点的 `resource_id` 对应各自原始记录。NUMA 节点和频率策略
+通过 `cpu_ids`、`numa_node_ids`、`cpufreq_ids` 关联，保留它们跨插槽的情况。
+只有成员完整且都属于同一实测插槽时，频率策略才放在该插槽下。
+CPU 最多 512 个、频率策略最多 128 个；NUMA 采集最多 128 个节点，
+每节点 CPU 列表默认最多 4096 项。共享图中的 CPU 关联列表最多 512 项。
+CPUFreq 读数依次选硬件当前值、硬件反馈短时平均值和调频读数；最后一种
+保留估算质量。策略详情同时显示来源与备用读数，不把策略读数宣称为
+独立测出的每个物理核心瞬时频率。
+NUMA 独立采集器使用 2 秒前台下限和 10 秒后台间隔，内存页或设备详情
+可见时启用；没有原生提供方的平台报告 unavailable。
+每节点的 `numastat` 按内核页分配计数解析；本地/跨节点速率只在连续样本
+均有效时计算，计数器回退记为 reset。缺失该可选接口不抹掉节点拓扑。
+`coretemp` 的温度通道仅按驱动发布的包号归属；核心编号还需在该包内
+唯一。重复的包传感器或没有明确标签的通道保持未归属。
+CPUFreq 策略从这些已归属的通道取得温度引用：全部成员在同一核心时
+关联核心通道，否则只有全部成员在同一封装时关联封装通道。引用包含
+传感器、通道和归属节点，Compute 表与 System 策略详情共用设备图的
+判断；传感器、CPU 身份或频率策略来源过期时不建立新关联。
+热节流读数只按逻辑 CPU ID 连接对应线程节点，并沿已知父子关系列出
+核心和封装的 `thermal_throttle_cpu_ids`；重复 ID 不归属。封装上的列表
+仍是逐 CPU 引用，不把重复公布的封装计数相加。设备详情逐 CPU 显示
+累计与相邻采样新增次数，快照拓扑导出相同引用。
+CPUIdle 状态同样按逻辑 CPU ID 连接线程节点；核心和封装上的
+`cpuidle_cpu_ids` 只表示哪些 CPU 有报告，不汇总各状态的内核报告时间。
+使用、时间及可选的拒绝/过短/可更深状态计数各自计算增量，留在逻辑 CPU
+详情与 Snapshot；失败采样的旧报告不进入当前设备图。
+
+`collectors/smbios_source.lua` 从 Linux 固件 sysfs 或 Windows 动态解析的
+`GetSystemFirmwareTable` 读取 SMBIOS，供内存、扩展槽、端口连接器、板载设备、固件电池、固件电源和处理器固件采集器共用。
+同一轮调度中，来源、基路径和读取后端相同的采集器共用一次成功读取与
+解码；各采集器取得独立的记录副本，下一轮重新读取。直接调用采集器时
+不保留缓存。
+`format/smbios.lua` 校验入口校验和、记录长度和字符串终止符，解码
+Type 4/7/9/16/17/19/20/22/37/39/41，使用句柄关联内存阵列、设备、固件地址范围
+及内存通道。
+读取上限 4 MiB，遍历最多 4096 条结构，输出最多 128 个处理器插槽、
+512 条缓存、128 个扩展槽、128 个端口连接器、64 块固件电池、64 台固件电源、64 个内存阵列、256 个内存设备、64 个内存通道、
+256 条阵列地址范围和 512 条设备地址范围。
+旧记录的缺失字段保持未知，空槽与未知容量分开；速率使用 MT/s。
+内存设备采集的前台下限为 60 秒，后台间隔为 5 分钟。
+Type 19/20 的旧地址以 KiB 为单位，扩展地址以字节为单位；解析器转换为
+精确的闭区间，并拒绝倒置、混用哨兵值或超出整数范围的地址。
+设备树以 Type 19 → Type 16、Type 20 → Type 19 的句柄为父子关系，
+再以 Type 20 → Type 17 的句柄作反向引用；不把交错设备的重叠范围
+相加推断容量。
+Type 37 只按其声明的 Type 17 句柄建立通道与内存设备的双向引用；
+设备仍以 Type 16 阵列为父节点。计数、负载和句柄任一处不完整时，
+保留固件记录但不建立该通道的引用。通道负载不是带宽读数。
+
+`collectors/expansion_slots.lua` 从同一 SMBIOS 表独立采集 Type 9 物理
+槽位，保留旧版短记录与空槽。`format/smbios.lua` 对 Peer 组按声明长度和
+数量设界；共享图仅在固件说“在用”、BDF 唯一命中当前 PCI 清单且记录
+无歧义时建立双向引用。引用不成为父子关系，因为固件报告的地址在真机
+上可能指向上游端口而非插入卡。前台下限与后台间隔为 60 秒 / 5 分钟。
+
+`collectors/onboard_devices.lua` 独立采集 Type 10/41 板载功能。Type 10 的
+设备条目使用结构句柄和条目序号区分，保留声明的类型、启用状态与公开名称；
+没有 PCI 地址，不按名称与 Type 41 或操作系统设备合并。两类来源共用 128 条上限。
+Type 45 的句柄引用只有在 Type 10 结构恰含一个设备、记录完整且清单未截断时
+才能解析到该设备。Type 41 启用的固件记录
+只有在 PCI 地址唯一命中当前清单时才与 PCI 节点互相引用；禁用、缺少地址、
+截断及歧义记录仍可单独查看，但不建立引用。固件引用不改变 PCI 父子树。
+`collectors/port_connectors.lua` 采集 Type 8 的内部/外部标识、连接器类型和
+端口用途。固件没有给出当前操作系统设备的身份，因此端口保留独立节点，
+不按名称猜测 PCI、USB 或网络接口的关系。
+前台下限与后台间隔为 60 秒 / 5 分钟。
+
+`collectors/firmware_batteries.lua` 独立采集 Type 22 便携电池设计值。
+旧结构的容量倍率默认为 1，新结构按固件倍率换算 mWh；未知容量、电压和
+误差不编造数值。日期、序列号及 OEM 字段不进入解析结果，固件电池不凭名称
+猜测操作系统实时电池的归属。前台下限与后台间隔为 60 秒 / 5 分钟。
+
+`collectors/firmware_power_supplies.lua` 独立采集 Type 39 电源配置。
+非零电源组只有在清单完整、记录无歧义且同组至少两台时建立同伴引用。
+额定容量和固件状态保持静态声明，不参与实时功耗或主机健康告警；
+序列号与资产标签不出解析器。前台下限与后台间隔为 60 秒 / 5 分钟。
+
+`collectors/firmware_bmcs.lua` 独立采集 Type 38 IPMI BMC 接口声明。
+解码接口类型、规范版本、I²C 目标地址及可选的寄存器地址、间距和中断；
+16 字节旧记录不猜测缺失的地址修饰位。记录在硬件图中保持独立，
+不据此判断 BMC 当前可用性。前台下限与后台间隔为 60 秒 / 5 分钟。
+
+`collectors/firmware_tpms.lua` 独立采集 Type 43 TPM 固件声明。
+读取厂商 ID、规范版本、固件版本字段、描述和公开特征位；OEM 字段不进入
+解析结果。TPM 记录保持独立，不据此推断操作系统中的可用性或安全状态。
+前台下限与后台间隔为 60 秒 / 5 分钟。
+
+`collectors/firmware_components.lua` 独立采集 Type 45 固件组件清单。
+解析器按记录中的关联数量读取有界句柄列表，不用记录总长度推测数量；
+只公开标准格式的 GUID，不输出可能含资产标识的自由格式 Firmware ID。
+共享设备图把无歧义的关联句柄建为双向导航引用，不变成父子关系；
+未建模的句柄保留在固件记录中；重复句柄标记部分质量，不猜测设备。
+前台下限与后台间隔为
+60 秒 / 5 分钟。
+
+`collectors/firmware_esrt.lua` 在 Linux 上只读 UEFI ESRT sysfs。
+目录发现与字段读取分开：属性为 root-only 时保留可见条目及权限状态，
+不为缺失的 GUID 建设备节点。已读取的版本和上次尝试状态保留 UEFI
+原始数值；状态 `0` 也可能表示没有尝试。共享图只在 Type 45 的标准
+Firmware ID GUID 与 ESRT 类别 GUID 各自唯一时建立双向引用，既不猜测
+固件更新服务的可用性，也不建立物理父子关系。前台下限与后台间隔为
+60 秒 / 5 分钟。
+Snapshot 的设备拓扑仅在实际建立引用的节点上导出 `associated_ids`、
+`firmware_component_ids` 与 `esrt_ids`，与 TUI 的 `r` 导航使用同一份图。
+
+`collectors/tpm.lua` 读取 Linux `/sys/class/tpm` 的 OS 注册设备、规范主版本、
+驱动及可选的状态位。PCR 库只列目录名与条目数，不打开 PCR 值文件；
+密钥和安全姿态不在采集范围内。该节点与 Type 43 固件声明分别保留，
+没有可信身份键时不建立同一设备引用。前台下限与后台间隔为 60 秒 / 5 分钟。
+
+`collectors/watchdog.lua` 只读 Linux `/sys/class/watchdog`，显示设备标识、
+活动状态、配置超时及可选状态位。仅在 active 时读取剩余倒计时；设备的
+sysfs 链接明确经过当前 PCI 功能时才建立父子关系。采集器不打开
+`/dev/watchdog`，不启动或保活硬件。前台下限与后台间隔为 5 秒 / 30 秒。
+
+`collectors/rfkill.lua` 只读 Linux `/sys/class/rfkill`。优先使用可分别表示
+硬件、软件阻断的 `hard`/`soft` 字段，旧内核两者均缺席时才回退到
+信息较少的 `state`。设备路径明确归属当前 PCI/USB 节点时才建立父子
+关系；未阻断不代表网络已连接。前台下限与后台间隔为 2 秒 / 10 秒。
+
+`collectors/thermal_zones.lua` 只读 Linux `/sys/class/thermal`，采集热区温度、
+模式、策略、阈值及冷却设备原始状态。可用时读取冷却状态转换累计次数和
+各状态累计驻留毫秒数，不读取 `stats/reset`，也不推断变化速率。低于绝对
+零度的阈值占位值留空；
+`cdevN` 链接明确命中当前冷却设备时才建立双向引用。冷却状态不换算成
+风扇转速或百分比，阈值不推断关机倒计时。前台下限与后台间隔为
+2 秒 / 10 秒。
+
+`collectors/host_interfaces.lua` 独立采集 Type 42 管理控制器主机接口。
+按固件结构长度逐条解析接口与协议类别；SMBIOS 3.2 之前的 OEM 结构按
+入口版本使用旧布局。接口和协议专属负载可能包含管理网络配置，只保留
+类别、长度与 OEM 企业编号，不导出原始负载。Type 42 与 Type 38 可能
+描述同一硬件，但缺少可靠身份键时保留独立节点。前台下限与后台间隔为
+60 秒 / 5 分钟。
+
+`collectors/processor_firmware.lua` 独立采集 Type 4 插槽和 Type 7 缓存。
+共享图只按 Type 4 明确给出的 L1/L2/L3 句柄关联级别匹配、无歧义的
+Type 7 记录；未被引用或被多个插槽引用的缓存保持独立。固件插槽不按
+名称或数量映射 Linux 实测 CPU 包，固件缓存也不替代 sysfs 缓存清单。
+前台下限与后台间隔为 60 秒 / 5 分钟。
+
+解析结果和 JSON 只保留白名单字段，不包含序列号、资产标签、UUID 或原始
+固件表。Linux 普通用户读表受限时报告 denied；Windows API 缺席时报告
+unavailable，不访问物理内存或调用外部工具。固件记录不用于推断实际
+ECC 健康、当前内存时钟、NUMA 归属或通道绑定。
+
+Linux EDAC 独立采集器读取 `mc*` 控制器和 `dimm*`/`rank*` 的累计纠错
+计数；目录与数值均有上限，字段读取失败保留来源和问题记录。它以 5 秒
+前台下限、30 秒后台间隔运行。共享图中 EDAC 模块只挂在自己的控制器下。
+两份列表未截断、来源当前可用，且非占位标签在两侧各唯一时，SMBIOS 已
+填充槽位与 EDAC DIMM 模块建立双向标签引用。重复标签、rank 或空槽不参与
+匹配；引用不改变父子关系，也不证明物理身份。
+
+SPD 采集器读取 `spd`(SDR/DDR/DDR2/DDR3)、`ee1004`(DDR4)和
+`spd5118`(DDR5) I²C 设备的 EEPROM。旧内核的通用 `eeprom` 驱动还可
+暴露 SDR/DDR/DDR2：采集器先检查有界的 SPD 头部，再把符合条件的设备
+纳入，避免把同地址的普通 EEPROM 当作内存。每次至多 64 个设备，按
+128 字节分段读取至 128/256/512/1024 字节。
+内核属性有时只让前 128 字节可读；分段接口保留该页的类型、修订版、
+封装和最短周期，后续页失败则报告 partial。DDR4 基础块 CRC 可在
+128 字节时核验，第二块在 256 字节时核验；DDR3 配置 CRC 也可在
+128 字节时核验，SDR/DDR/DDR2 校验和只覆盖前 63 字节，DDR5 主 CRC 需 512 字节。
+SDR/DDR/DDR2 的容量、位宽、Rank 和最短周期在校验和有效时解码；仅前
+64 字节可读时仍保留这些基础字段并报告 partial。
+SDR 的混合大小双行模块按两个密度位求和；更多行的混合密度不猜容量。
+DDR4 非堆叠模块在基础块 CRC 有效时按颗粒密度、位宽和 Rank 推出
+标称容量；3DS 编码留作未知。
+共享图按 I²C 地址把 `spd5118` 连到同一 DDR5 SPD 设备；DDR4 的 `jc42`
+使用 `ee1004` 驱动声明的同总线地址关系，并要求基础块 CRC 与温度
+存在位有效(SPD 1.0 的驱动例外亦可)。该地址不映射 SMBIOS 插槽名。
+DDR3 的 `jc42` 使用 `at24` 驱动的同总线地址规则，并要求基础 CRC
+与温度存在位有效。
+原始 EEPROM 和序列号不会复制到快照或 JSON。
+
+EDO/更早代 SPD、SMBIOS 插槽与 SPD 的可信归属、更多固件结构和复杂
+存储栈仍待扩展。
+
+静态身份低频发现，实时遥测按独立预算采样，昂贵的硬件检查按需执行。
+平台公开接口与厂商提供方分别扩展；新增字段需要同时验证旧系统降级、
+热插拔身份和采样开销。现有 Snapshot/Agent 导出契约继续作为兼容边界。
 
 ## 5. 调度与历史
 
@@ -152,7 +403,7 @@ TUI 先用真实终端尺寸求解当前页面，再根据存活下来的控件�
 
 ## 6. GPU 数据边界
 
-GPU 采集器只使用 DRM、sysfs、procfs 和有界的本地 `pci.ids` 查询：
+Linux GPU 采集器以 DRM、sysfs、procfs 和有界的本地 `pci.ids` 查询为基础：
 
 - 它从 card/render 节点、PCI/sysfs、驱动链接和 PCI 名称构建设备身份。有 PCI BDF 时以 BDF 作为稳定 ID；否则使用估算的 DRM/sysfs 标识符。
 - 它支持 AMD `gpu_busy_percent`、显存/可见显存/GTT、AMD DPM 频率，以及 Intel i915/xe 的 sysfs 频率路径。
@@ -160,7 +411,15 @@ GPU 采集器只使用 DRM、sysfs、procfs 和有界的本地 `pci.ids` 查询�
 - 在暴露时，它记录 PCI 类别、修订版、正确嵌套的 `pci.ids` 子系统名称、boot-VGA、NUMA、PCIe 链路、运行时电源管理（runtime-PM）和 modalias 元数据。
 - 它发现关联的 hwmon 路径并存储 `hwmon_refs`，但不会在 GPU 采集器内部重复读取温度、功耗或风扇。
 
-视图模型通过 `hwmon_refs`、hwmon `class` 和规范化后的 `device_target` 把全局 hwmon 快照连接进来。多个通道匹配时，它取最高温度和最高功耗，而不是把重叠的电源轨相加；原生 GPU 指标优先。GPU 页还有一个有界的进程表。没有匹配的传感器时，温度/功耗显示为 `—`，风扇目前也不在 GPU 表中显示。NVML 存在时按 PCI 地址连接：它填补 DRM 未提供的利用率、显存、时钟、温度、功耗、厂商 UUID 和逐进程 GPU 显存，并列出没有 DRM 节点的 NVIDIA GPU。目前仍然没有 AMD SMI/Level Zero 提供方、MIG、AMD `gpu_metrics` 或厂商操作。
+视图模型通过 `hwmon_refs`、hwmon `class` 和规范化的 `device_target`
+联接传感器。GPU 表和传感器浮层共用关联函数；温度取最热通道，
+功率取来源明确的最大通道，风扇取最快通道，避免重叠功率域求和。
+设备、客户端、引擎、显存区域和频率域可下钻，GPU 进程可跳转到主机进程详情。
+
+Linux 厂商提供方按设备身份补充通用 DRM 信息：NVML 提供 NVIDIA
+遥测与进程显存，AMD SMI 补充 AMD 遥测，Level Zero 补充 Intel
+温度、时钟和功率。后两项已有假库测试，真机覆盖仍待补齐。
+MIG、多 tile、完整厂商健康信息和厂商控制操作仍是规划项。
 
 ## 7. 检查器
 
@@ -169,14 +428,56 @@ GPU 采集器只使用 DRM、sysfs、procfs 和有界的本地 `pci.ids` 查询�
 - `storage.smart`：选择一个 `/sys/class/block` 设备，然后调用 `smartctl`；结果缓存 60 秒；
 - `memory.bandwidth`：枚举一组有限的 PMU 名称，并通过外部 `perf stat` 执行一次实验性的全系统采样；
 - `service.sshd`：结合 `systemctl show`、进程快照和 `/proc/net/tcp*`。
+- `session.logind`：按需查询登录会话的公开属性，以启动 ID、会话 ID、UID 与创建单调时间区分身份；sshd 的登记会话以 PAM 服务字段精确筛选。
+- `service.systemd`：只在按键时枚举/查询系统与当前有效用户的 unit；名称、管理器和 UID 共同标识实体。unit 选择器在完整有界集合上搜索，详情可核对进程身份与当前 cgroup 后下钻，或跳到 Workloads。枚举只有一个实体时仍使用原检查器和标题。
 
-当前检查器的输出是通用文本浮层，而不是完整的统一实体 UI。DIMM/EDAC、PCI/USB、RAID/LVM、服务日志/会话等类似来源没有注册为默认检查器。精确的能力与失败语义见 [DEEP_INSPECTION.md](DEEP_INSPECTION.md)。
+Linux argv 执行器默认只给子进程固定 PATH 和 C locale。systemd 用户查询可显式
+传入绝对路径 `XDG_RUNTIME_DIR`，取值由有效 UID 推导；它不会继承父进程的
+用户总线地址、HOME 或加载器变量。缺失、无穷上限与读取失败分别保留自己的含义。
+
+检查器使用文本浮层；systemd unit 与登录会话有专门的字段标签、样本年龄和跨资源导航，其他来源沿用通用显示。DIMM/EDAC、PCI/USB、RAID/LVM 等来源没有注册为默认检查器。精确的能力与失败语义见 [DEEP_INSPECTION.md](DEEP_INSPECTION.md)。
+
+`inspectors/journal.lua` 是 unit 详情按 `l` 打开的子视图，不新增后台采集器。
+每次显式读取或刷新都先重新核对 unit，再以当前启动 ID、管理器和 canonical
+名称调用有界的 `journalctl`。只保留消息、时间、优先级和发送者等公开字段，
+区分 unit 发出、slice 成员和引用消息；原始 journal 对象、主机/机器 ID 与命令行
+不进入共享模型。记录中的 PID 保持历史意义，不反向绑定当前进程。
+
+`inspectors/journal_stats.lua` 汇总已经有界的查询，显示优先级与来源关系。
+sshd 另按 unit 直接记录的 OpenSSH 文本格式分类，使用系统管理器确认的
+canonical 名称/别名；保留未知格式与查询覆盖状态。分类样本只含种类、已知
+方法、时间和优先级，用户名、地址、指纹和原始消息不进入结果，也不加入
+默认 Snapshot/Agent。它不推算独立连接数、全启动总量或速率。
+
+`inspectors/sshd_config.lua` 按需让 OpenSSH 解析当前配置，优先使用 `-G`，
+只在模式不受支持时改用 `-T`；连接范围保留 `-C` 参数。单次命令限
+500 ms、128 KiB，输出还有行数、单行长度和重复值上限。结果仅保留配置
+白名单与查询范围，不保存密钥、命令、原始输出或连接参数。
+查询不能证明守护进程采用了同样的文件内容和启动选项，因此配置为估算
+质量；失败配置保持 nil。默认快照和报告不执行该查询。
 
 ## 8. 布局与状态
 
-工作区（Workspace）为每个页面存储一棵二分分裂树。叶子引用一个固定控件；分裂节点有一个 `horizontal|vertical` 轴、一个比例、一个间隙，以及恰好两个子节点。编辑模式支持选中叶子、按方向移动它、调整最近的父分裂比例，以及每页最多 50 步撤销/重做。
+工作区为每个页面存储一棵二分分裂树。叶子引用页面定义的控件，
+分裂节点包含方向、比例和两个子节点。编辑模式支持移动、比例调整、
+添加/移除/替换、指定目标与侧边的键盘拖放，以及每页最多 50 步撤销/重做。
+命名工作区支持保存、切换、重命名和删除。
 
-`$XDG_CONFIG_HOME/wtop/layout.yml`（或 `~/.config/wtop/layout.yml`）可以读取旧版 schema v1 的有序列表、schema v2 的分裂树、schema v3——它在完整的逐页树集合之外新增了命名工作区，并带有 `active` 标记——以及 schema v4，它在文件已有的三种主体之旁新增顶层 `process_columns` 列表。布局本身没有改变：v4 是同样的三种形态只多了一个键，读取时按主体区分，因此页面是分裂树的 v4 文件按树读取，页面是扁平 id 的按 id 读取。v4 保持 v1、v2、v3 可读，且处在任一版本的文件都不报告列集合，因此进程表从默认列开始。一个从未打开过列编辑器的会话，会继续写入其主体一直写入的版本；版本号说明的是文件能装什么，而不是会话如何走到这一步。空的工作区集合不是损坏的集合：一个从未命名过工作区的会话仍写 v2，一旦列集合存在则写 v4。列集合属于会话而不属于某个工作区，因为用户关掉的一列不该在工作区切换时复活。列集合的读取是严格的——一串已知的稠密键，必须包含 `pid` 和 `name`——未知的键、重复的键、空洞或缺少标识列都会带着状态栏中的原因拒绝整个文件，而不是被修复，这样拼写错误就不会悄悄恢复用户已关闭的列。编码器则做规范化，因为它的契约是：它这次写入的，加载器必须能读回来，保存绝不能因为一个外观上的视图设置而失败。布局在 TUI 中被编辑后，通过 `q`、`Ctrl+C` 或被捕获的退出信号有序地退出事件循环时，会以 `0600` 模式原子保存。崩溃、`SIGKILL` 或断电没有恢复日志。校验限制包括 1 MiB、深度 32、511 个节点、间隙 0–16、`ratio_micros` 1–999999、已知的页面/控件、唯一的叶子，以及最多 16 个工作区，其名称长度 1–64 个字符，由字母、数字、空格、点、短横线和下划线组成。工作区名称写成**带引号**的 YAML 键，因为读取器的非引号键规则不接受空格：一个名为 `my setup` 的工作区曾被写成裸键，然后在下次启动时被同一个加载器拒绝，于是退出保存把一个好文件替换成了谁也读不了的文件，而单代备份里保存的同样是那段坏文本。命名规则写在两个文件中——`workspace.lua` 和这个存储模块——有一个测试断言两者一致，因为模型接受而存储拒绝的名称是一种静默丢失，而不是表面上的分歧。`rename_workspace` 移动一个名称并携带其存储的树，它刻意不用实时树覆盖目标重新保存——那正是“以新名称保存、再删除旧名称”会做的事——并且拒绝使用已占用的名称，而不是把两套布局合并到一个键下。每个版本都有精确的键集合，因此版本未定义的键会让整个文件被拒绝，而不是读了再忽略。缺失的固定控件会被追加，缺失的页面使用默认树。未知字段会拒绝整个文件——随后会先尝试 `layout.yml.bak`，其中保存着上一份可读的旧内容，每次成功加载后和每次保存前都会刷新它，然后才回退到默认布局；`config.yml` 遵循同样的备份与恢复契约，对应 `config.yml.bak`。恢复出的文件会在状态栏中报告，而不是静默切换到默认。这是单代的尽力备份，不是版本历史。
+`layout.yml` 支持 v1 有序列表、v2 树布局、v3 命名工作区、v4 进程列和 v5 可见标签顺序及用户移除的控件。v5 只列出标签栏可见的内置页面；所有页面的布局树仍保存，因此隐藏后重新显示不会丢掉控件安排。移除控件的名单让加载器区分用户选择与新版本添加的默认控件，命名工作区各有自己的名单。标签集合是全局选择，各命名工作区继续保存自己的页面树。导出、导入和迁移都保留这些信息。
+v6 另存最多八个自定义页面的 ID、名称和初始控件。每个页面的布局树可放入不同内置页的控件，也可从现有页面完整复制；副本与源页独立，各命名工作区按自己的源树复制。控件 ID 在全局唯一，ViewModel 按当前可见控件构建模型，Engine 以同一集合决定前台采集器。页面聚焦控件决定详情和键盘操作的语义，已存在的内置页逻辑不因标签顺序改变。新建、复制、重命名和删除的定义与布局一并经过 CLI 导入、导出和迁移。
+编码器按实际内容选择版本；旧布局兼容读取。进程列选择是整份布局的设置，
+切换工作区时保留。列集合必须包含 PID 和 Command，未知、重复或缺失身份列
+会拒绝该文件并报告原因。
+
+布局在有序退出时原子保存，权限为 `0600`。文件损坏时先尝试单代
+`.bak`，恢复结果显示在状态栏；无可用备份时回退默认布局。
+`--export-layout`、`--import-layout` 和 `--migrate-layout`
+提供无需启动 TUI 的布局操作。
+
+命名工作区最多 16 个；名称最多 64 字节，允许合式 UTF-8，
+拒绝控制字符和结构性 ASCII。写出时使用带引号的 YAML 键，
+模型和存储共同使用名称校验函数。重命名保留已存的树并拒绝重名。
+其余限额和按键见 [UI.md](UI.md)。
 
 不要把布局版本与主配置混淆：`config.yml` 仍然使用 schema v1。模式定义与按键绑定见 [UI.md](UI.md)。
 
@@ -186,7 +487,7 @@ CLI/配置中的主题值只接受五个确切的内置名称。未知的 CLI �
 
 ## 9. 身份、安全与隐私
 
-- 进程操作使用 `(pid, starttime_ticks)` 身份。Lua 层重新校验 `/proc/<pid>/stat`；原生层随后持有 pidfd，再次校验，并且只发送白名单内的信号。TUI 当前的 `k` 操作只发送 SIGTERM，且需要确认。
+- 进程操作使用 `(pid, starttime_ticks)` 身份。Lua 层重新校验 `/proc/<pid>/stat`；原生层随后持有 pidfd，再次校验，并且只发送白名单内的信号。TUI 的 `k` 菜单提供 TERM、HUP、INT、KILL、STOP 和 CONT，发送前需要确认。
 - GPU 优先使用 PCI BDF。没有 BDF 时身份质量记为 estimated。目前没有厂商 UUID。
 - 外部程序必须使用绝对可执行路径，argv 不得经过 shell 拼接。Runner 控制文件描述符、环境变量、进程组、超时和输出大小。
 - `--sudo`/`--elevate` 通过固定的系统 `sudo` 路径、以精简消毒后的环境变量重新执行当前调用；直接使用 `sudo wtop` 也会被识别。不存在常驻的特权守护进程，也没有可变的 shell 命令辅助函数。
@@ -195,6 +496,8 @@ CLI/配置中的主题值只接受五个确切的内置名称。未知的 CLI �
 - 默认的 JSON 导出于遮蔽后的远程端点重建稳定的连接 ID，使完整地址无法经由内部 ID 泄露。只有显式的内部选项 `include_remote_addresses=true` 才保留原始 ID。
 - 严格 JSON 解码器默认 4 MiB、深度 64、100000 个值节点，并以线性方式扫描数字 token。编码器会把字符串值和对象键中无效的 UTF-8 替换为 U+FFFD。该节点预算独立于布局/YAML 各自的节点限制。
 - 快照导出包含一个 `configuration` 对象，其中只有配置 `state` 和可选的 `reason`；内部的配置状态 `path` 不导出。
+- `--report` 复用快照的脱敏白名单，以 Markdown 汇总硬件身份、当前读数、设备关系及所用来源质量。报告只调度其实际展示的硬件采集器，Linux GPU 不做逐进程 fdinfo 扫描；生成器不读取原始采集器表或文件。缺失来源保留状态与原因，不以零填充。当前报告标签为英文。
+- `--stream` 先建立一次速率基线，之后逐行输出与 `--snapshot` 同模式的 JSON。持续采样遵守采集器各自的刷新间隔，不反复强制低频固件来源；每行写完即刷新 stdout。输出时刻更新每行的 `captured_monotonic_ns` 与来源年龄，未到期的来源保留自己的采样时间和序列。下游关闭管道的 EPIPE 正常结束并清理引擎，其他写入错误仍失败。`--count` 可限定输出行数。
 - `--safe-mode` 用一个不执行任何命令的 Runner 替代默认实现，防止被注入的执行器绕过策略。它不会禁用普通的 procfs/sysfs 读取。
 
 挂载采集器默认不会对网络文件系统、autofs、FUSE/`fuse.*`、`fuseblk` 或 `virtiofs` 调用同步的 `statvfs`，以避免远程或用户态守护进程停滞拖垮单线程事件循环。其他原生 statvfs 调用共享 50 ms 的准入预算。每次返回后和下一次调用前都会检查已耗时间；预算耗尽后，剩余的挂载会被跳过。这不是系统调用超时，进行中的调用无法被抢占，因此它仍可能超过 50 ms 或发生阻塞。被跳过的挂载保留身份，但容量/inode 变为 unavailable 或 partial，整体质量变为 estimated。这不能作为容量为零或挂载离线的证据。
@@ -203,7 +506,7 @@ CLI/配置中的主题值只接受五个确切的内置名称。未知的 CLI �
 
 ## 10. 当前测试边界
 
-- 现有的 120 个 Lua 单元/夹具测试文件覆盖：平台门控、procfs、sysfs、连接、cgroup v2、DRM fdinfo、GPU 频率/hwmon 连接、磁盘/挂载与 hwmon 的设备拓扑联接、异构 CPU 清单、powercap、SMART、PMU、布局、i18n、输入、渲染器、Runner 隔离、资源预检、权限处理、pidfd 操作、JSON 边界、导出隐私、无硬件环境下的驱动树、离线检查器重放、进程采集的规模限制、sudo 文件访问策略、主机或显卡必须提供的最小 GPU 能力、Lua 代码树内的版本收敛、原生模块与 SBOM、内存带宽能力声明、Insights 的 Collectors 表中采集器与槽位的对应关系、`truncated` 结果质量及其原因，以及发布证据——glibc 基线、内嵌 ELF 下限、构建身份和发布 SBOM。
+- 现有的 132 个 Lua 单元/夹具测试文件覆盖：平台门控、procfs、sysfs、连接、cgroup v2、DRM fdinfo、GPU 频率/hwmon 连接、磁盘/挂载与 hwmon 的设备拓扑联接、异构 CPU 清单、powercap、SMART、PMU、布局、i18n、输入、渲染器、Runner 隔离、资源预检、权限处理、pidfd 操作、JSON 边界、导出隐私、无硬件环境下的驱动树、离线检查器重放、进程采集的规模限制、sudo 文件访问策略、主机或显卡必须提供的最小 GPU 能力、Lua 代码树内的版本收敛、原生模块与 SBOM、内存带宽能力声明、Insights 的 Collectors 表中采集器与槽位的对应关系、`truncated` 结果质量及其原因，以及发布证据——glibc 基线、内嵌 ELF 下限、构建身份和发布 SBOM。
 - PTY 冒烟测试覆盖 `40×10`、`60×20`、`80×24/25`、`80×50`、`160×24`、`200×22`、`180×45`、窗口缩放、CJK、按键路径、备用屏幕恢复和布局持久化。
 - onedir/onefile 构建后有针对 CLI、快照和 PTY 的目标。
 - `tests/support/` 下三个共享测试辅助模块各有自己的测试，因为一个被十几个调用方使用、自身却没有测试的辅助模块，其正确性只是碰巧由哪些调用方使用它而决定的意外。`test_makefile_readers.lua` 在一个合成本地 Makefile 上固定了 Makefile 读取器的行为，该 Makefile 带有本项目并不使用的形态——本项目的 Makefile 正是那些它所钉住的缺陷处于蛰伏状态的原因。`test_fixture_fs.lua` 钉住的是“合并不得改变夹具所声明的内容”这一性质，而不是声明种类的清单，因为清单会成为同一事实的第三份副本；`merge` 曾经把 `errors` 整个丢掉，于是一个回答 `ENODATA` 的驱动被变成了一份“文件不存在”的记录。`test_hardware_fixtures.lua` 是第三个，它那里的缺口更糟：另外两个模块是在构建东西，而这个模块本身*就是*证据——每个需要本项目没有的硬件的采集器测试都从它那里取一棵树并采信它，因此一个自相矛盾的夹具不会让测试失败，反而会让读到它的测试通过。它按性质审计全部十二个夹具，并且不点名任何路径。

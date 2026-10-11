@@ -29,12 +29,12 @@ wtop `0.1.0` 附带一套可用的 Lua 5.5.1 引导、C17 原生模块、确定�
 - 首次下载需要 `tar`、`sha256sum` 以及 `curl` 或 `wget`；
 - Python 3 用于 PTY 冒烟测试，以及 `tools/elf_floors.py` 和 `tools/make_sbom.py`。这两个脚本按 **Python 3.6 或更高版本**编写，不使用更新的特性。这不是苦行主义：本项目进行测量的最旧镜像是 manylinux2014，其自带解释器是 3.6；一个无法在用于验证最旧 libc 的环境中启动的发布工具，就不是面向该 libc 的发布工具。这两个文件的最初版本使用了 `capture_output=`/`text=` 和 `from __future__ import annotations` 头，容器运行时报 `python3: command not found`，波及三个测试文件——而这次运行恰恰是用来判定旧 libc 构建产物是否可用的。
 
-LuaRocks 源码安装与打包要求 LuaRocks 3.13 或更高版本：Lua 5.5 不是 3.12 之前的 LuaRocks 认识的目标，而 Ubuntu 24.04 仍只带 3.8。因此 `tools/bootstrap_luarocks.sh` 把锁定的 3.13.0 版本针对项目自带的 Lua 5.5.1 构建到 `.tools/luarocks`，按记录的 SHA-256 校验下载的归档；每个打包目标都使用该二进制，而不是 `PATH` 上随便哪个 `luarocks`。`tools/bootstrap_luainstaller.sh` 默认从 LuaRocks 把 luainstaller `1.3.0-1` 安装到项目本地的 `.tools/rocks-5.5`，并按 `tools/luainstaller-1.3.0.sha256` 校验固定载荷。仅当既有安装的版本、载荷哈希和 `luai -h` 全部校验通过时才会复用。相邻的 `../luainstaller` 工作树不再被自动选中。
+LuaRocks 源码安装与打包引导使用项目锁定的 LuaRocks 3.13.0 和 Lua 5.5.1。`tools/bootstrap_luainstaller.sh` 从正式发行下载 luainstaller `1.5.0-1` 源 rock，先校验源包 SHA-256，再安装到 `.tools/rocks-5.5`，最后按 `tools/luainstaller-1.5.0.sha256` 校验 29 份模块、命令源和 rockspec。每次打包都会重新检查安装版本、载荷和 `luai -h`；损坏的安装会从已校验源包修复。
 
 本地集成需要显式的绝对路径：
 
 ```bash
-WTOP_LUAINSTALLER_ROCKSPEC=/absolute/path/luainstaller-1.3.0-1.rockspec \
+WTOP_LUAINSTALLER_ROCKSPEC=/absolute/path/luainstaller-1.5.0-1.rockspec \
   make luainstaller
 ```
 
@@ -65,6 +65,41 @@ make test-luarocks
 `make test-luarocks` 引导项目的 Lua 5.5.1，把 rock 安装到 `.tools/wtop-rocks-5.5`，然后通过 LuaRocks 生成的包装脚本运行 `--version` 和 `--diagnose`。该 rock 包含 Lua 模块、`wtop_native.so`、`wtop` 命令，以及根目录下的许可证、英文 README、中文 README 和配置示例。`rock-build`/`rock-install` 是 rockspec 后端的入口点，不是面向最终用户的独立安装命令。
 
 权限重执行保留真实进程 argv（包括 LuaRocks 生成的包装脚本），只把 argv[0] 替换为当前可执行文件路径，然后调用固定的系统 `sudo`。它不构造 shell 命令，也不信任 PATH 上任意一个 `sudo`。
+
+### 3.2 luainstaller 1.5.0 升级评估
+
+当前默认打包器已迁移到 `1.5.0-1`。
+[luainstaller 1.5.0](https://github.com/Water-Run/luainstaller/releases/tag/v1.5.0)
+提供原生 Windows 桥、依赖诊断与可复现构建改进。
+升级与完整 top、旧系统兼容和硬件后端分发一起推进。
+
+| 上游变化 | 对 wtop 的价值 |
+| --- | --- |
+| Windows 安装/打包改用原生 Win32 桥，不再需要 PowerShell | 减少旧 Windows 构建环境的前置条件；仍需配套的 XP 编译器、CRT 和 Lua DLL |
+| 打包器使用内置 Lua API 声明，支持无 LuaRocks 的离线安装 | 简化打包工具部署；wtop 自己的原生模块编译仍需要 Lua 头文件 |
+| Linux/macOS 报告原生模块的缺失及传递库依赖 | 为增加硬件后端提供依赖诊断；外部系统库仍由目标系统提供 |
+| MinGW 去除构建时间戳，onefile 可用 Lua 计算 SHA-256 | 改善可复现构建和旧系统上的载荷再生成 |
+
+评估使用正式源 rock，发布提交为
+`a289a1bed6c6dcf8ad4f11a1d9e28f2f2989adbf`。
+下载的 `luainstaller-1.5.0-1.src.rock` 已按发布清单验证，SHA-256 为
+`5d57d07e539107cc13e171e2b0a5919be692898c2627acfda4bcd12694055545`。
+初期候选在独立目录评估；默认 Linux 打包入口已完成迁移，结果见
+[跨平台验证记录](CROSS_PLATFORM.md)。
+
+迁移按交付平台分别验证：
+
+- Linux bootstrap 的默认/本地版本检查、安装复用、缓存失效、
+  来源与载荷锁、SBOM 和第三方声明已经同步。
+- 对两个 wtop 产物运行完整 PTY、CLI/JSON、干净目标环境与许可证检查，
+  重新测量实际 ELF 的 libc 下限及性能。
+- 在 Windows、macOS 的原生构建主机验证迁移，保留现有 x86 交叉构建路径。
+  luainstaller 按目标平台原生打包；现有 Windows x86 开发包已在交叉构建后检查 PE 导入闭包，luainstaller 的原生 Windows 打包依赖分析仍未完成。
+- XP 支持的运行结论由 XP 主机测试给出；上游的 API/PE 审计与
+  Server 2008 测试继续作为构建证据。
+
+上游平台与模块约束见
+[1.5.0 平台说明](https://github.com/Water-Run/luainstaller/blob/v1.5.0/docs/PLATFORMS-NATIVE-LIMITS.adoc)。
 
 ## 4. 可复现的 Lua 工具链
 
@@ -135,9 +170,9 @@ CI/评审还可以额外验证生成输出是否为最新：
 | `make diagnose` | 输出能力诊断 |
 | `make snapshot` | 输出一份 JSON 快照 |
 | `make check` | 校验 Lua、POSIX shell 和 Python，解析 Agent JSON schema，并**将其应用到一次实时的 `--agent` 采集** |
-| `make test-fast` | 运行 120 个 Lua 文件和一个有代表性的三用例 PTY 配置 |
-| `make test-55` | 120 个 Lua 5.5 单元与夹具测试文件 |
-| `make test-54` | 用系统 Lua 5.4 运行同样的 120 个文件，验证纯 Lua 兼容子集 |
+| `make test-fast` | 运行 121 个 Lua 文件和一个有代表性的三用例 PTY 配置 |
+| `make test-55` | 132 个 Lua 5.5 单元与夹具测试文件 |
+| `make test-54` | 用系统 Lua 5.4 运行同样的 132 个文件，验证纯 Lua 兼容子集 |
 | `make test-fuzz` | 用随机按键、鼠标报告、非法转义、无效 UTF-8 和尺寸变化，针对真实终端循环测试 |
 | `make test-pty` | 场景台账，然后针对响应式尺寸、翻页切换和四种颜色/字符能力配置运行真实 PTY 冒烟测试。台账（`tests/pty_scenario_ledger.py`）是静态检查：套件运行的每个场景都必须在 `SCENARIOS` 中命名，因此矩阵中的任何失败都可以单独用 `--scenario` 重跑；它存在的原因，是一个没有自己名字、藏在 `main` 内部的步骤，正是一个失败场景变得不可诊断的方式 |
 | `make test-pty-isolation` | 18 个 PTY 场景各自独立进程单独运行——这是套件无法回答的问题，因为一个从上一个场景继承了“热”主机的场景并没有真正被测试。列表是 `SCENARIOS` 中的数据，一个没名字的步骤进不了它：八种尺寸的响应式矩阵及其翻页检查变成 `run_responsive`，正是为了这个原因 |
@@ -202,6 +237,9 @@ Linux 模块构建三次：常规一次，更严格的警告集下一次，ASan 
 
 - 插桩模块写到 `build/native-san/`，不覆盖 `build/native/wtop_native.so`。覆盖会让模块比它自己的前置更新，下一次 `make native` 便拒绝重建，之后每个套件都会加载一个它没要过的插桩构建。
 - `make test-sanitized` **不**在 `test-all` 里。它需要 ASan 和 UBSan 运行时，而构建主机不被要求安装它们；一道不能到处运行的门，只会在有人记得的地方报告。它还按名排除 `tests/unit/test_benchmark_record.lua`：那个文件断言一个三秒的首帧窗口，插桩之下它会成为整次运行里唯一一个通过与否取决于插桩开销、而不是代码的地方。开发主机没有装 sanitizer 运行时，所以那里引入的 flake 要到 CI 才看得见。
+- `make benchmark-check` 按目标机器的预算文件检查预构建产物，不进入通用
+  `test-all`。预算中的 `subject_path` 指定被测包入口，防止目录包和单文件包
+  共用一份限值；当前开发主机的临时数字不能充当旧硬件或典型硬件的发布阈值。
 
 ## 7. 产物结构
 
@@ -216,7 +254,7 @@ onedir 是当前的诊断基线，包含：
 
 `bundle-dir` 在构建之前先删除 `dist/wtop`，而不是在旧输出上叠建。两个原因，都实测过：一个会合并进自己上一次输出的伪目标，可能发布陈旧文件；luainstaller 用所有权标记校验输出树、在任意深度拒绝非自有内容——所以把复制进去的 `LICENSE` 留在原地，会让第二次 `make bundle-dir` 以 `Generated output contains an unexpected top-level entry` 失败。从空目录构建，这个目标才可重复。
 
-luainstaller 1.3.0 的 `.luai/generated-output.txt` 是生成产物清单。其 `output_dir=` 有意记录构建时使用的 onedir 输出目录，可能包含绝对构建路径。启动器在运行时不依赖该目录。这个字段仍要作为构建溯源来审查，但不能误当作 ELF 运行时依赖，也不能被一条过宽的"载荷里任何地方都不得出现私有路径"的规则拒绝。
+luainstaller 的 `.luai/generated-output.txt` 记录生成产物。`output_dir=` 是构建时的 onedir 路径，启动器不依赖它；它属于构建记录，需要与 ELF 的运行时依赖分别检查。
 
 onefile 把同一载荷包进一个自解压可执行文件。它仍依赖目标机的 Linux ELF loader/libc，并可能受不可写或 `noexec` 的临时目录策略影响。onefile 的启动问题先用 onedir 复现。
 
@@ -228,7 +266,7 @@ onefile 把同一载荷包进一个自解压可执行文件。它仍依赖目标
 
 ### 8.1 源码与 PTY
 
-先确认资源余量，然后运行这 120 个 Lua 文件：
+先确认资源余量，然后运行这 132 个 Lua 文件：
 
 ```bash
 make check
@@ -236,11 +274,11 @@ make test
 make test-54
 ```
 
-`make test-54` 用系统 Lua 5.4 运行同样的 120 个文件，验证纯 Lua 兼容子集。
+`make test-54` 用系统 Lua 5.4 运行同样的 132 个文件，验证纯 Lua 兼容子集。
 
 PTY 矩阵目前覆盖 `40×10`、`60×20`、`80×24/25`、`80×50`、`160×24`、`200×22`、`180×45` 和 `200×45` 翻页切换，检查中文帧、交互路径、备用屏幕进入/恢复、完整帧和干净退出。额外的配置断言 truecolor、256 色、16 色和无色 ASCII 输出，覆盖 Water Light、High Contrast 和 Colorblind。第 2–8 页各自作为带页面专属语义标记的最终完整帧校验。
 
-Lua 测试还覆盖 JSON 的 4 MiB/深度/100000 节点预算、线性数值解析冒烟、无效 UTF-8 值与键的 U+FFFD 替换、连接导出 ID 的默认脱敏、有界常规文件读取、异构 CPU 标识/拓扑/缓存夹具、powercap 能量差值/回绕/重置/约束、GPU PCI ID/PCIe/fdinfo 利用率、hwmon 哨兵过滤、感知 cgroup 的资源预检，以及 sudo 特权元数据。通过 120 个夹具文件并不是形式化证明——它不覆盖内核、硬件或恶意输入类别。
+Lua 测试还覆盖 JSON 的 4 MiB/深度/100000 节点预算、线性数值解析冒烟、无效 UTF-8 值与键的 U+FFFD 替换、连接导出 ID 的默认脱敏、有界常规文件读取、异构 CPU 标识/拓扑/缓存夹具、powercap 能量差值/回绕/重置/约束、GPU PCI ID/PCIe/fdinfo 利用率、hwmon 哨兵过滤、感知 cgroup 的资源预检，以及 sudo 特权元数据。通过 132 个夹具文件并不是形式化证明——它不覆盖内核、硬件或恶意输入类别。
 
 ### 8.2 打包后的 PTY
 
@@ -361,7 +399,7 @@ onefile 包无法与在它旁边构建的模块做字节比较：luainstaller �
 | Fedora 44，glibc 2.43（开发） | 2.38 | 2.34 | **2.38** |
 | manylinux2014，glibc 2.17 | 2.14 | 2.17 | **2.17** |
 
-相差二十一个版本，出自同一棵树。`libdl` 的预测精确成立：glibc 2.17 上，模块的 `DT_NEEDED` 列出 `libdl.so.2`，`dlopen`/`dlsym` 在 `GLIBC_2.2.5` 解析；glibc 2.43 上，同一条 `-ldl` 链接从 `libc.so.6` 以 `GLIBC_2.34` 解析，`libdl.so.2` 完全不出现。加上 `suite` 还会在容器里运行整个单元套件：在 glibc 2.17 上 **通过 120 个测试文件**，并且 `wtop 0.1.0 (rev v0.1.0-43-g9cebfad-dirty)` 能回答 `--version`——所以 2.17 的产物是能用，而不只是能编译。
+相差二十一个版本，出自同一棵树。`libdl` 的预测精确成立：glibc 2.17 上，模块的 `DT_NEEDED` 列出 `libdl.so.2`，`dlopen`/`dlsym` 在 `GLIBC_2.2.5` 解析；glibc 2.43 上，同一条 `-ldl` 链接从 `libc.so.6` 以 `GLIBC_2.34` 解析，`libdl.so.2` 完全不出现。加上 `suite` 还会在容器里运行整个单元套件：2026-10-02 那次在 glibc 2.17 上 **通过 120 个测试文件**，并且 `wtop 0.1.0 (rev v0.1.0-43-g9cebfad-dirty)` 能回答 `--version`——所以 2.17 的产物是能用，而不只是能编译。
 
 计数随测试增加而移动，上面的数字是 2026-10-02 那次运行报告的，而且是容器的，不是宿主机的。跑通这次运行不是走过场：这段话上次写 90 时它不是 89，有一阵它还错向另一头。那次运行曾在四个文件上失败了两个 increment 而无人重跑，原因不是 libc：manylinux2014 带 `python2` 不带 `python3`，四个失败里的三个，是 shell 出去调 `tools/elf_floors.py` 和 `tools/make_sbom.py` 的测试报 `python3: command not found`；第四个是 `tools/cross_libc_build.sh` 在容器里编译模块时没有 `build/native/build_revision.h`，模块没有构建身份，`test_build_identity.lua` 正确地拒绝在一个无法与之比较任何东西的模块上通过。两者都已处理——脚本安装 `python3`、暂存宿主机生成的头文件——并且暴露了第三件事：它失败所*穿过*的那道门。`record_baseline.sh` 正确地非零退出，但它已经写出的报告说 `status: within the promised floor`。那就是上一小节。
 

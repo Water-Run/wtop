@@ -284,6 +284,10 @@ local RELEASE_EVIDENCE = {
 local NOT_RELEASE_EVIDENCE = {
     "bootstrap_luainstaller.sh", "bootstrap_luarocks.sh", "bootstrap_lua.sh",
     "build_macos.sh", "build_windows_x86.sh", "check_digest_agreement.py",
+    -- Host-specific performance verdict, not a universal release document;
+    -- no target-machine budget has been fixed for test-all yet.
+    "check_perf_budget.py",
+    "check_windows_x86.py",
     "check_resources.sh",
     "compile_locales.lua", "cross_libc_build.sh", "elf_floors.py",
     "perf_benchmark.py", "write_build_id.sh",
@@ -701,6 +705,20 @@ assert(("\n" .. table.concat(notices_list, "\n") .. "\n"):find("\nsbom\n", 1, tr
     "`make test-release-notices` does not depend on `sbom`, so the comparison "
         .. "would run against whatever document happened to be in dist/ -- or "
         .. "against none at all")
+local sbom_position, checksums_position
+for index, prerequisite in ipairs(notices_list) do
+    if prerequisite == "sbom" then sbom_position = index end
+    if prerequisite == "checksums" then checksums_position = index end
+end
+assert(sbom_position and checksums_position and sbom_position < checksums_position,
+    "`make test-release-notices` must finish rebuilding both bundles through "
+        .. "sbom before checksums hashes them; otherwise the two integrity "
+        .. "documents can describe different onefile builds")
+local sbom_list = assert(makefile_api.prerequisites_of("sbom"))
+local sbom_dependencies = {}
+for _, prerequisite in ipairs(sbom_list) do sbom_dependencies[prerequisite] = true end
+assert(sbom_dependencies["bundle-dir"] and sbom_dependencies["bundle-file"],
+    "`make sbom` must finish both artifact forms before the release manifest is made")
 
 -- 5b. The bundle is asked to carry them, and the aggregate gate runs that
 --     question.  `test-release-notices` is the target; without it in test-all

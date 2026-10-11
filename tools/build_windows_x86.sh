@@ -89,4 +89,5 @@ export WTOP_ANSI_PTY=1
 "$root/lua.exe" "$root_win\\src\\wtop.lua" "$@"
 EOF
 chmod 755 "$output_dir/wtop.sh"
+python3 "$project_dir/tools/check_windows_x86.py" --bundle "$output_dir"
 echo "wtop: Windows x86 bundle ready: $output_dir"

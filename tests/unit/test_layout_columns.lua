@@ -178,7 +178,7 @@ assert(sparse_reason:find("dense", 1, true),
 refuse(LayoutStore.encode(DEFAULTS, nil, { alpha = default_trees() }, "alpha")
   .. "process_columns:\n  - pid\n  - name\n", "unknown layout key: process_columns",
   "v3 carrying a column list")
-refuse("schema_version: 5\npages: {}\n", "unsupported layout schema_version: 5",
+refuse("schema_version: 7\npages: {}\n", "unsupported layout schema_version: 7",
   "a version from a newer build")
 
 -- 5. Nothing changes for a session that never opens the editor.  The encoder

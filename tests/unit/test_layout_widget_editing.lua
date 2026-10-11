@@ -7,6 +7,7 @@ local Workspace = require("wtop.workspace")
 local TUI = require("wtop.tui")
 local I18n = require("wtop.i18n")
 local Technical = require("wtop.i18n.technical")
+local LayoutStore = require("wtop.layout_store")
 
 -- Each scenario gets its own workspace: the behaviour under test is a single
 -- edit, and sharing one workspace across scenarios made the expectations
@@ -37,7 +38,7 @@ end
 -- The default layout places every widget the page defines.
 local default_order = order(memory_page())
 assert(default_order == "memory_total,memory_segments,memory_detail,swap_detail,"
-  .. "memory_pressure,memory_counters")
+  .. "memory_pressure,memory_counters,numa_table,dimm_table")
 assert(#memory_page():palette() == 0,
   "the default layout leaves nothing in the palette")
 
@@ -48,7 +49,7 @@ do
   local title = workspace.widgets.memory.memory_detail.panel_title
   assert(workspace:remove_focused_widget())
   assert(order(workspace) == "memory_total,memory_segments,swap_detail,"
-    .. "memory_pressure,memory_counters", "got " .. order(workspace))
+    .. "memory_pressure,memory_counters,numa_table,dimm_table", "got " .. order(workspace))
   assert(workspace.focus.memory == "swap_detail",
     "focus falls to the widget that inherited the slot, got "
       .. tostring(workspace.focus.memory))
@@ -213,5 +214,29 @@ do
   assert(Technical.reason(zh, "layout_rejected") == "布局拒绝了该更改")
 end
 
-print("ok: layout add/remove/replace widgets (palette, focus, undo, refusals, picker)")
+-- A removed widget must remain removed across a file round trip. The loader
+-- still adds genuinely new widgets from a later build.
+local removed_session = memory_page()
+local removed_id = removed_session.focus.memory
+assert(removed_session:remove_focused_widget())
+local encoded_removed = LayoutStore.encode(removed_session:orders(),
+  removed_session:trees(), nil, nil, nil, nil, Workspace.default_orders())
+assert(encoded_removed:find("schema_version: 5", 1, true)
+  and encoded_removed:find("removed_widgets:", 1, true))
+local restored_orders = assert(LayoutStore.parse(encoded_removed,
+  Workspace.default_orders()))
+assert(table.concat(restored_orders.memory, ",") == order(removed_session),
+  "the layout reader restored a widget the user removed")
+local newer_defaults = Workspace.default_orders()
+newer_defaults.memory[#newer_defaults.memory + 1] = "future_widget"
+local upgraded = assert(LayoutStore.parse(encoded_removed, newer_defaults))
+local seen_removed, seen_new = false, false
+for _, id in ipairs(upgraded.memory) do
+  seen_removed = seen_removed or id == removed_id
+  seen_new = seen_new or id == "future_widget"
+end
+assert(not seen_removed and seen_new,
+  "a new default widget joins without resurrecting a user-removed widget")
+
+print("ok: layout add/remove/replace widgets (palette, focus, undo, refusals, persistence)")
 return true

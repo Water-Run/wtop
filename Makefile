@@ -20,6 +20,7 @@ $(error wtop build supports Linux and macOS (detected $(HOST_OS)))
 endif
 
 LUA_VERSION := 5.5.1
+WTOP_VERSION := $(strip $(shell cat VERSION))
 LUA_PREFIX := $(CURDIR)/.tools/lua-$(LUA_VERSION)
 LUA := $(LUA_PREFIX)/bin/lua
 LUAC := $(LUA_PREFIX)/bin/luac
@@ -90,11 +91,13 @@ CFLAGS_NATIVE ?= -O2 -g0
 CFLAGS_NATIVE += -std=c17 -fPIC -Wall -Wextra -Werror
 
 .NOTPARALLEL: all native locales check test test-all test-fast test-54 test-55 test-pty test-pty-quick test-luarocks \
+	benchmark-check \
 	toolchain luainstaller luarocks-bootstrap luarocks-install bundle-dir bundle-file \
 	test-bundle-dir test-bundle-file test-release-notices check-native-warnings \
 	sanitize-native test-sanitized
 
-.PHONY: all resource-check resource-check-full toolchain luainstaller native locales check test test-all test-fast \
+.PHONY: all resource-check resource-check-full resource-check-benchmark toolchain luainstaller native locales check test test-all test-fast \
+	benchmark-check \
 	test-54 test-55 test-pty test-pty-quick benchmark test-fuzz run \
 	diagnose snapshot bundle-dir bundle-file test-bundle-dir test-bundle-file checksums build-id sbom baseline \
 	cross-libc release-baseline rock-build rock-install rockspec-check luarocks-bootstrap luarocks-install test-luarocks
@@ -107,11 +110,15 @@ resource-check:
 resource-check-full:
 	@./tools/check_resources.sh full
 
+resource-check-benchmark:
+	@./tools/check_resources.sh benchmark
+
 toolchain: $(LUA_STAMP)
 
 luarocks-bootstrap: $(LUAROCKS_STAMP)
 
 luainstaller: $(LUAI_STAMP)
+	@./tools/bootstrap_luainstaller.sh >/dev/null
 
 native: resource-check $(NATIVE_MODULE)
 
@@ -123,7 +130,7 @@ $(LUAROCKS_STAMP): tools/bootstrap_luarocks.sh $(LUA_STAMP)
 	@./tools/bootstrap_luarocks.sh >/dev/null
 	@touch $@
 
-$(LUAI_STAMP): tools/bootstrap_luainstaller.sh $(LUA_STAMP)
+$(LUAI_STAMP): tools/bootstrap_luainstaller.sh tools/luainstaller-1.5.0.sha256 $(LUA_STAMP)
 	@./tools/bootstrap_luainstaller.sh >/dev/null
 	@touch $@
 
@@ -282,6 +289,8 @@ check: resource-check native locales
 	@# this step existed the middle word was doing no work.
 	@WTOP_LUA='$(LUA)' WTOP_NATIVE_DIR='$(NATIVE_DIR)' \
 		$(LUA) tools/check_agent_schema.lua
+	@python3 tests/test_luainstaller_bootstrap.py
+	@python3 tests/test_windows_x86_artifact.py
 
 test: resource-check-full test-55 test-pty
 
@@ -333,16 +342,34 @@ test-54: resource-check
 # appears in no document.  The tool records which subject it used in both its
 # output and its JSON, so a result cannot be mistaken for the other kind.
 #
-#   make benchmark
+#   make native locales && make benchmark
 #   make benchmark BENCH_EXECUTABLE=dist/wtop/wtop
 #   make benchmark BENCH_EXECUTABLE=dist/wtop-onefile
+# A prebuilt bundle is measured without a compiler or Lua source-tree artifacts;
+# the benchmark resource profile also works on low-memory target hosts.
 BENCH_EXECUTABLE ?=
 BENCH_ARGS ?=
+BENCH_PROFILE ?= unprofiled
+BENCH_BUDGET ?=
+BENCH_RESULT ?= build/perf/current.json
 
-benchmark: resource-check native locales
+benchmark: resource-check-benchmark
 	@WTOP_LUA='$(LUA)' WTOP_ROOT='$(CURDIR)' \
 		WTOP_BENCH_EXECUTABLE='$(BENCH_EXECUTABLE)' \
 		python3 tools/perf_benchmark.py $(BENCH_ARGS)
+
+# Hardware-profile budgets are supplied by the machine that can actually run
+# them. There is deliberately no release threshold copied from this build host.
+benchmark-check: resource-check-benchmark
+	@test -n '$(BENCH_EXECUTABLE)' || { echo 'benchmark-check requires BENCH_EXECUTABLE' >&2; exit 1; }
+	@test -n '$(BENCH_BUDGET)' || { echo 'benchmark-check requires BENCH_BUDGET' >&2; exit 1; }
+	@test '$(BENCH_PROFILE)' != 'unprofiled' || { echo 'benchmark-check requires BENCH_PROFILE' >&2; exit 1; }
+	@mkdir -p '$(dir $(BENCH_RESULT))'
+	@WTOP_LUA='$(LUA)' WTOP_ROOT='$(CURDIR)' \
+		WTOP_BENCH_EXECUTABLE='$(BENCH_EXECUTABLE)' \
+		python3 tools/perf_benchmark.py $(BENCH_ARGS) \
+			--profile '$(BENCH_PROFILE)' --json '$(BENCH_RESULT)'
+	@python3 tools/check_perf_budget.py --result '$(BENCH_RESULT)' --budget '$(BENCH_BUDGET)'
 
 test-pty: resource-check-full native locales
 	@python3 tests/pty_scenario_ledger.py
@@ -404,7 +431,8 @@ luarocks-install: resource-check-full $(LUA_STAMP) $(LUAROCKS_STAMP)
 		make "$(ROCKSPEC)" --deps-mode=none --force
 
 test-luarocks: luarocks-install
-	@"$(WTOP_ROCK_TREE)/bin/wtop" --version | grep -qx 'wtop 0.1.0'
+	@"$(WTOP_ROCK_TREE)/bin/wtop" --version | sed 's/ (rev [^)]*)$$//' | \
+		grep -Fxq 'wtop $(WTOP_VERSION)'
 	@"$(WTOP_ROCK_TREE)/bin/wtop" --diagnose | grep -q 'Platform: Linux'
 	@"$(WTOP_ROCK_TREE)/bin/wtop" --snapshot | python3 tests/json_contract_smoke.py snapshot
 	@"$(WTOP_ROCK_TREE)/bin/wtop" --agent | python3 tests/json_contract_smoke.py agent
@@ -474,7 +502,7 @@ CROSS_LIBC_SUITE ?=
 cross-libc: native toolchain
 	@./tools/cross_libc_build.sh $(CROSS_LIBC_IMAGE) $(CROSS_LIBC_SUITE)
 
-bundle-dir: build-id native locales $(LUAI_STAMP)
+bundle-dir: build-id native locales luainstaller
 	@# luainstaller validates its output tree against an ownership marker and
 	@# rejects any file it did not generate, at any depth -- so the previous
 	@# bundle is removed first rather than merged into.  A phony packaging target
@@ -493,7 +521,7 @@ bundle-dir: build-id native locales $(LUAI_STAMP)
 	@chmod 0755 dist/wtop/wtop
 	@find dist/wtop/.luai/native -type f -exec chmod 0755 {} +
 
-bundle-file: build-id native locales $(LUAI_STAMP)
+bundle-file: build-id native locales luainstaller
 	mkdir -p dist
 	rm -f dist/.wtop-onefile.next
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAI) -b --file \
@@ -523,7 +551,7 @@ test-bundle-file: resource-check-full bundle-file
 # in the test and a list in the recipe would be two things to forget to update,
 # and a notice the packaging tool starts shipping would be covered by one and
 # not the other.
-test-release-notices: resource-check-full bundle-dir checksums sbom
+test-release-notices: resource-check-full sbom checksums
 	@for required in $(RELEASE_LICENCE) THIRD_PARTY_NOTICES.md \
 		.luai/licenses/Lua-MIT.txt .luai/licenses/LGPL-3.0-or-later.txt; do \
 		test -f "dist/wtop/$$required" || { \

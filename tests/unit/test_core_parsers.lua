@@ -64,6 +64,31 @@ assert(Parsers.psi("some avg10=1 avg60=2 total=3\n") == nil)
 
 local status = assert(Parsers.process_status(fixture("proc/100.status")))
 assert(status.uid == 1000 and status.rss_bytes == 4096 * 1024)
+local cpus, cpu_count = Parsers.range_list(" 0-3,8,10-11\n")
+assert(cpus == "0-3,8,10-11" and cpu_count == 7,
+  "a compact kernel range is counted without expansion")
+for _, bad in ipairs({ "", "0,", "1,,2", "2-1", "1-2,2", "2,1", "0-a", "0-", "0 1", "0\n1" }) do
+  assert(Parsers.range_list(bad) == nil, "bad range accepted: " .. bad)
+end
+assert(Parsers.range_list("0-4", 4) == nil,
+  "range count must obey the item budget")
+assert(Parsers.range_list("4", 4096, 3) == nil,
+  "a kernel id beyond the bound must be rejected")
+assert(Parsers.range_list("0-1", 4096, 65535, 2) == nil,
+  "the raw list must obey the read bound")
+local allowed = assert(Parsers.process_status(
+  "Name:\ttask\nCpus_allowed_list:\t0-3,8\nMems_allowed_list:\t0-1\n"))
+assert(allowed.affinity.status == "ok"
+  and allowed.affinity.cpus_allowed_list == "0-3,8"
+  and allowed.affinity.cpus_allowed_count == 5
+  and allowed.affinity.mems_allowed_count == 2)
+local partial_allowed = assert(Parsers.process_status(
+  "Name:\ttask\nCpus_allowed_list:\t0-999999\nMems_allowed_list:\t0\n"))
+assert(partial_allowed.affinity.status == "partial"
+  and partial_allowed.affinity.cpus_allowed_list == nil
+  and partial_allowed.affinity.mems_allowed_list == "0"
+  and partial_allowed.affinity.issues[1].field == "Cpus_allowed_list",
+  "one malformed optional mask must not discard other status fields")
 -- The fixture process is a container init: one entry would mean it shares the
 -- namespace of whoever read it.
 assert(#status.nspid == 2 and status.nspid[1] == 1 and status.nspid[2] == 100,
@@ -76,6 +101,7 @@ assert(#host.nspid == 1 and host.nspid[1] == 569150 and host.namespaced == nil)
 -- A kernel without the field leaves it absent rather than failing the parse.
 local without = assert(Parsers.process_status("Name:\tx\nUid:\t0\t0\t0\t0\n"))
 assert(without.nspid == nil and without.nstgid == nil)
+assert(without.affinity == nil, "a kernel without affinity lists leaves them absent")
 -- A malformed chain is rejected rather than turned into a plausible list.
 assert(Parsers.process_status("Name:\tx\nNSpid:\t\n") == nil, "an empty chain is rejected")
 assert(Parsers.process_status("Name:\tx\nNSpid:\tabc\n") == nil,
@@ -85,6 +111,19 @@ assert(Parsers.process_status("Name:\tx\nNSpid:\t1\t2\t3\t4\t5\t6\n") == nil,
 assert(Parsers.process_status("Name:\tx\nNStgid:\tzz\n") == nil,
   "the thread group chain is validated the same way")
 local io = assert(Parsers.process_io(fixture("proc/100.io")))
+local fd_limits = assert(Parsers.process_open_file_limits(
+  "Limit Soft Limit Hard Limit Units\nMax open files 1024 4096 files\n"))
+assert(fd_limits.soft == 1024 and fd_limits.hard == 4096)
+local unlimited_fds = assert(Parsers.process_open_file_limits(
+  "Max open files unlimited unlimited files\n"))
+assert(unlimited_fds.soft_unlimited and unlimited_fds.hard_unlimited
+  and unlimited_fds.soft == nil and unlimited_fds.hard == nil)
+assert(Parsers.process_open_file_limits("Max open files 4096 1024 files\n") == nil,
+  "a soft limit larger than the hard limit is rejected")
+assert(Parsers.process_open_file_limits("Max open files 1024 invalid files\n") == nil)
+assert(Parsers.process_open_file_limits("Max open files unlimited 4096 files\n") == nil)
+assert(Parsers.process_open_file_limits("Max open files 1024 4096 bytes\n") == nil)
+assert(Parsers.process_open_file_limits("Max processes 1024 4096 processes\n") == nil)
 assert(io.read_bytes == 4096 and io.write_bytes == 8192)
 assert(Parsers.process_status("Uid: nope\n") == nil)
 assert(Parsers.process_io("read_bytes: 1 trailing\n") == nil)

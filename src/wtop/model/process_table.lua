@@ -4,8 +4,9 @@ local Controller = {}
 Controller.__index = Controller
 
 local SORT_ORDER = {
-  "cpu", "memory", "pid", "name", "time", "threads", "virtual",
-  "state", "user", "io_read", "io_write",
+  "cpu", "memory", "pid", "name", "time", "elapsed", "threads", "virtual",
+  "state", "user", "io_read", "io_write", "priority", "nice",
+  "io_read_rate", "io_write_rate",
 }
 local SORT_KEYS = {}
 for index, key in ipairs(SORT_ORDER) do
@@ -18,12 +19,17 @@ local DEFAULT_DESCENDING = {
   pid = false,
   name = false,
   time = true,
+  elapsed = true,
   threads = true,
   virtual = true,
   state = false,
   user = false,
   io_read = true,
   io_write = true,
+  priority = false,
+  nice = false,
+  io_read_rate = true,
+  io_write_rate = true,
 }
 
 local DEFAULT_MAX_ROWS = 2048
@@ -97,13 +103,26 @@ local function finite_number(value)
   return value
 end
 
+local function cpu_time_seconds(process)
+  local stated = finite_number(process.cpu_time_seconds)
+  if stated and stated >= 0 then return stated end
+  local ticks = finite_number(process.cpu_ticks)
+  local rate = finite_number(process.clock_ticks_per_second) or 100
+  if ticks and ticks >= 0 and rate > 0 then return ticks / rate end
+  return nil
+end
+
+local function elapsed_seconds(process)
+  local value = finite_number(process.elapsed_seconds)
+  return value and value >= 0 and value or nil
+end
+
 local function io_value(process, direction)
   local nested = type(process.io) == "table" and process.io or nil
   return finite_number(process["io_" .. direction .. "_bytes"])
     or finite_number(process["io_" .. direction])
     or finite_number(process[direction .. "_bytes"])
     or (nested and finite_number(nested[direction .. "_bytes"]))
-    or (nested and finite_number(nested[direction .. "_bytes_per_second"]))
 end
 
 local function sort_value(record, key)
@@ -118,7 +137,9 @@ local function sort_value(record, key)
     local value = process.name or process.command
     return type(value) == "string" and value:lower() or nil
   elseif key == "time" then
-    return finite_number(process.cpu_ticks)
+    return cpu_time_seconds(process)
+  elseif key == "elapsed" then
+    return elapsed_seconds(process)
   elseif key == "threads" then
     return finite_number(process.threads)
   elseif key == "virtual" then
@@ -132,6 +153,16 @@ local function sort_value(record, key)
     return io_value(process, "read")
   elseif key == "io_write" then
     return io_value(process, "write")
+  elseif key == "priority" then
+    return finite_number(process.priority)
+  elseif key == "nice" then
+    return finite_number(process.nice)
+  elseif key == "io_read_rate" then
+    return type(process.io_rate) == "table"
+      and finite_number(process.io_rate.read_bytes_per_second) or nil
+  elseif key == "io_write_rate" then
+    return type(process.io_rate) == "table"
+      and finite_number(process.io_rate.write_bytes_per_second) or nil
   end
   return nil
 end
@@ -202,13 +233,14 @@ local function row_pairs(row)
   end
 end
 
-local function shallow_row(record, depth, direct_match, included_children)
+local function shallow_row(record, depth, direct_match, included_children, collapsed)
   -- Share the sampled fields until a row is actually read. Thousands of
   -- process records can be sorted while only a screenful is ever formatted.
   local row = {
     id = record.id,
     tree_depth = depth or 0,
     tree_has_children = included_children and included_children > 0 or false,
+    tree_collapsed = collapsed == true,
     tree_orphan = record.orphan == true,
     tree_cycle = record.cycle == true,
     filter_match = direct_match == true,
@@ -256,11 +288,17 @@ local QUERY_NUMERIC_FIELDS = {
   threads = { field = "threads", bytes = false },
   thr = { field = "threads", bytes = false },
   pid = { field = "pid", bytes = false },
-  -- CPU time is stored in centiseconds; the filter takes seconds because that
-  -- is what the detail overlay shows.
-  time = { field = "cpu_ticks", bytes = false, scale = 0.01 },
+  time = { time = true, bytes = false },
+  elapsed = { elapsed = true, bytes = false },
+  age = { elapsed = true, bytes = false },
   ioread = { field = nil, bytes = true, io = "read" },
   iowrite = { field = nil, bytes = true, io = "write" },
+  ioreadps = { field = nil, bytes = true, io_rate = "read" },
+  iowriteps = { field = nil, bytes = true, io_rate = "write" },
+  priority = { field = "priority", bytes = false },
+  pri = { field = "priority", bytes = false },
+  nice = { field = "nice", bytes = false },
+  ni = { field = "nice", bytes = false },
 }
 
 local MAX_QUERY_TERMS = 16
@@ -296,19 +334,27 @@ local function parse_number(text, bytes)
   end
   -- A percent sign is accepted and ignored: it is what a user types, and the
   -- field already says what it measures.
-  local number = text:match("^(%d+%.?%d*)%%?$")
+  local number = text:match("^([+-]?%d+%.?%d*)%%?$")
   if not number then return nil end
   return tonumber(number)
 end
 
 local function numeric_matches(process, term)
   local value
-  if term.io then
+  if term.time then
+    value = cpu_time_seconds(process)
+  elseif term.elapsed then
+    value = elapsed_seconds(process)
+  elseif term.io then
     value = io_value(process, term.io)
+  elseif term.io_rate then
+    local rates = type(process.io_rate) == "table" and process.io_rate or nil
+    value = rates and rates[term.io_rate .. "_bytes_per_second"] or nil
   else
     value = process[term.field]
   end
-  if type(value) ~= "number" or value ~= value then return false end
+  if type(value) ~= "number" or value ~= value
+      or value == math.huge or value == -math.huge then return nil end
   value = value * (term.scale or 1)
   if term.operator == ">" then return value > term.value end
   if term.operator == ">=" then return value >= term.value end
@@ -338,6 +384,9 @@ local function compile_comparison(word)
     numeric = true,
     field = spec.field,
     io = spec.io,
+    io_rate = spec.io_rate,
+    time = spec.time,
+    elapsed = spec.elapsed,
     scale = spec.scale,
     operator = operator,
     value = value,
@@ -423,6 +472,7 @@ local function process_matches(process, compiled)
     local matched
     if term.numeric then
       matched = numeric_matches(process, term)
+      if matched == nil then return false end
     else
       matched = term_matches(process, term)
     end
@@ -629,6 +679,7 @@ function Controller.new(options)
     _records = {},
     _record_by_id = {},
     _rows = {},
+    _row_index_by_id = {},
     _selected_id = nil,
     _selected_index = 0,
     _revision = 0,
@@ -636,6 +687,7 @@ function Controller.new(options)
     _pid_filter = nil,
     _pid_filter_size = 0,
     _pid_filter_label = nil,
+    _collapsed = {},
   }, Controller)
   self:update({})
   return self
@@ -650,13 +702,25 @@ function Controller:_rebuild(preferred_id, preferred_index)
   if self._tree then
     orphans, cycles, duplicate_pids = attach_parents(records)
   end
+  -- A collapsed identity belongs to one process generation. Expired IDs must
+  -- not accumulate throughout a long-running session or fold a recycled PID.
+  for id in pairs(self._collapsed) do
+    local record = by_id[id]
+    if not record or self._tree and #record.children == 0 then
+      self._collapsed[id] = nil
+    end
+  end
+  local collapsed_count = 0
+  for _ in pairs(self._collapsed) do collapsed_count = collapsed_count + 1 end
   self._records = records
   self._record_by_id = by_id
 
   local compare = comparator(self._descending)
   local rows = {}
   local depth_limited = 0
+  local hidden_by_collapse = 0
   local matched, included = 0, 0
+  local eligible = 0
   local pid_filter = self._pid_filter
   if self._tree then
     local direct = {}
@@ -667,7 +731,7 @@ function Controller:_rebuild(preferred_id, preferred_index)
       end
     end
 
-    local include = {}
+    local include, force_open = {}, {}
     -- A cgroup filter is a narrowing just like a query, so the ancestor chain
     -- a user needs to read it is kept the same way.
     if self._normalized_query ~= "" or pid_filter then
@@ -676,6 +740,11 @@ function Controller:_rebuild(preferred_id, preferred_index)
         while current and not include[current] do
           include[current] = true
           included = included + 1
+          current = current.parent
+        end
+        current = record.parent
+        while current and not force_open[current] do
+          force_open[current] = true
           current = current.parent
         end
       end
@@ -699,36 +768,59 @@ function Controller:_rebuild(preferred_id, preferred_index)
     for index = #roots, 1, -1 do
       stack[#stack + 1] = { record = roots[index], depth = 0 }
     end
-    local emitted = {}
-    while #stack > 0 and #rows < self._max_rows do
+    local emitted, suppressed = {}, {}
+    while #stack > 0 do
       local item = stack[#stack]
       stack[#stack] = nil
       local record = item.record
-      if not emitted[record] then
+      if not emitted[record] and not suppressed[record] then
         emitted[record] = true
+        eligible = eligible + 1
         local visible_children = {}
         for _, child in ipairs(record.children) do
           if include[child] then visible_children[#visible_children + 1] = child end
         end
-        rows[#rows + 1] = shallow_row(record, item.depth, direct[record], #visible_children)
-        for index = #visible_children, 1, -1 do
-          local depth = item.depth + 1
-          if depth > self._max_tree_depth then
-            depth = self._max_tree_depth
-            depth_limited = depth_limited + 1
+        local folded = self._collapsed[record.id] and not force_open[record]
+        if #rows < self._max_rows then
+          rows[#rows + 1] = shallow_row(record, item.depth, direct[record],
+            #visible_children, folded)
+        end
+        if folded then
+          local hidden_stack = visible_children
+          while #hidden_stack > 0 do
+            local child = hidden_stack[#hidden_stack]
+            hidden_stack[#hidden_stack] = nil
+            if not suppressed[child] then
+              suppressed[child] = true
+              hidden_by_collapse = hidden_by_collapse + 1
+              for _, grandchild in ipairs(child.children) do
+                if include[grandchild] then hidden_stack[#hidden_stack + 1] = grandchild end
+              end
+            end
           end
-          stack[#stack + 1] = { record = visible_children[index], depth = depth }
+        else
+          for index = #visible_children, 1, -1 do
+            local depth = item.depth + 1
+            if depth > self._max_tree_depth then
+              depth = self._max_tree_depth
+              depth_limited = depth_limited + 1
+            end
+            stack[#stack + 1] = { record = visible_children[index], depth = depth }
+          end
         end
       end
     end
     -- Defensive fallback: a malformed parent graph must never hide a row.
     local remaining = {}
     for _, record in ipairs(records) do
-      if #rows + #remaining >= self._max_rows then break end
-      if include[record] and not emitted[record] then remaining[#remaining + 1] = record end
+      if include[record] and not emitted[record] and not suppressed[record] then
+        remaining[#remaining + 1] = record
+      end
     end
     table.sort(remaining, compare)
+    eligible = eligible + #remaining
     for _, record in ipairs(remaining) do
+      if #rows >= self._max_rows then break end
       rows[#rows + 1] = shallow_row(record, 0, direct[record], 0)
     end
   else
@@ -741,6 +833,7 @@ function Controller:_rebuild(preferred_id, preferred_index)
     end
     visible, matched = bounded_best(records, self._max_rows, compare, matches)
     included = matched
+    eligible = matched
 
     -- Keep the user's current identity visible across a sort change even when
     -- it falls just outside the bounded top set. Search can still reach every
@@ -762,6 +855,9 @@ function Controller:_rebuild(preferred_id, preferred_index)
   end
 
   self._rows = rows
+  local row_index_by_id = {}
+  for index, row in ipairs(rows) do row_index_by_id[row.id] = index end
+  self._row_index_by_id = row_index_by_id
   self._selected_id = nil
   self._selected_index = 0
   if #rows > 0 then
@@ -772,6 +868,18 @@ function Controller:_rebuild(preferred_id, preferred_index)
           self._selected_index = index
           break
         end
+      end
+    end
+    if not self._selected_id and preferred_id and self._tree then
+      local current = by_id[preferred_id] and by_id[preferred_id].parent
+      while current do
+        local index = row_index_by_id[current.id]
+        if index then
+          self._selected_id = current.id
+          self._selected_index = index
+          break
+        end
+        current = current.parent
       end
     end
     if not self._selected_id then
@@ -785,7 +893,9 @@ function Controller:_rebuild(preferred_id, preferred_index)
     visible = #rows,
     matched = matched,
     included = included,
-    truncated = included > #rows,
+    truncated = eligible > #rows,
+    collapsed_count = collapsed_count,
+    hidden_by_collapse = hidden_by_collapse,
     invalid = invalid,
     duplicates = duplicates,
     duplicate_pids = duplicate_pids,
@@ -818,6 +928,25 @@ end
 
 function Controller:rows()
   return self._rows
+end
+
+function Controller:requires_io()
+  if self._sort_key == "io_read" or self._sort_key == "io_write"
+      or self:requires_io_rate() then return true end
+  for _, term in ipairs(self._compiled_query or {}) do
+    if term.numeric and term.io then return true end
+  end
+  return false
+end
+
+function Controller:requires_io_rate()
+  if self._sort_key == "io_read_rate" or self._sort_key == "io_write_rate" then
+    return true
+  end
+  for _, term in ipairs(self._compiled_query or {}) do
+    if term.numeric and term.io_rate then return true end
+  end
+  return false
 end
 
 function Controller:selected()
@@ -864,14 +993,39 @@ function Controller:select_id(id)
     return false
   end
   id = tostring(id)
-  for index, row in ipairs(self._rows) do
-    if row.id == id then
-      self._selected_index = index
-      self._selected_id = id
-      return true, row
-    end
+  local index = self._row_index_by_id[id]
+  if not index then return false end
+  self._selected_index = index
+  self._selected_id = id
+  return true, self._rows[index]
+end
+
+--- Follow the same parent edge the tree view draws, without changing filters.
+function Controller:select_parent()
+  if not self._tree then return false, "tree_disabled" end
+  local record = self._record_by_id[self._selected_id]
+  if not record or not record.parent then return false, "no_visible_parent" end
+  local selected, row = self:select_id(record.parent.id)
+  if not selected then return false, "no_visible_parent" end
+  return true, row
+end
+
+--- Choose the first child in the current tree order that is on screen.
+function Controller:select_first_child()
+  if not self._tree then return false, "tree_disabled" end
+  local record = self._record_by_id[self._selected_id]
+  if not record then return false, "no_visible_child" end
+  local selected = self:selected()
+  if selected and selected.tree_collapsed and selected.tree_has_children then
+    self._collapsed[record.id] = nil
+    self:_rebuild(record.id, self._selected_index)
+    record = self._record_by_id[record.id]
   end
-  return false
+  for _, child in ipairs(record.children or {}) do
+    local selected, row = self:select_id(child.id)
+    if selected then return true, row end
+  end
+  return false, "no_visible_child"
 end
 
 function Controller:set_query(query)
@@ -931,6 +1085,18 @@ function Controller:toggle_tree()
   return self._tree
 end
 
+function Controller:toggle_collapse()
+  if not self._tree then return false, "tree_disabled" end
+  if self._compiled_query or self._pid_filter then return false, "filter_active" end
+  local row = self:selected()
+  if not row or not row.tree_has_children then return false, "no_children" end
+  local id = row.id
+  local folded = not self._collapsed[id]
+  self._collapsed[id] = folded or nil
+  self:_rebuild(id, self._selected_index)
+  return true, folded
+end
+
 --- Which columns the table shows, and in what order.
 ---
 --- Session state, like the sort key, the sort direction and the full-path
@@ -967,8 +1133,8 @@ function Controller:toggle_column(key)
   return next_columns, reason
 end
 
-function Controller:move_column(key, direction)
-  local next_columns, reason = ProcessColumns.move(self._columns, key, direction)
+function Controller:move_column(key, direction, linux_host)
+  local next_columns, reason = ProcessColumns.move(self._columns, key, direction, linux_host)
   if reason == nil then self:set_columns(next_columns) end
   return next_columns, reason
 end
@@ -1030,6 +1196,8 @@ function Controller:status()
     selected_index = self._selected_index,
     selected_id = self._selected_id,
     sort_key = self._sort_key,
+    requires_io = self:requires_io(),
+    requires_io_rate = self:requires_io_rate(),
     descending = self._descending,
     query = self._query,
     query_highlights = (function()
@@ -1045,6 +1213,8 @@ function Controller:status()
     query_truncated = self._query_truncated,
     max_query_bytes = self._max_query_bytes,
     tree = self._tree,
+    collapsed_count = self._stats.collapsed_count or 0,
+    hidden_by_collapse = self._stats.hidden_by_collapse or 0,
     show_paths = self._show_paths == true,
     columns = self._columns,
     max_tree_depth = self._max_tree_depth,

@@ -127,6 +127,12 @@ rejected("maxLength", function(d)
                   severity = "warning", message = "m" } }
 end, "longer than maxLength")
 rejected("minimum", function(d) d.captured_unix_ns = -1 end, "below the minimum")
+rejected("negative retained-value age", function(d)
+  d.data_quality = { { resource = "cpu", value_age_ms = -1 } }
+end, "below the minimum")
+rejected("non-numeric retained-value time", function(d)
+  d.data_quality = { { resource = "cpu", value_timestamp_ns = "old" } }
+end, "expected number")
 rejected("items", function(d) d.signals = "a string where a list belongs" end,
   "expected array")
 rejected("a $ref, through the bounded string it points at", function(d)
@@ -222,8 +228,8 @@ assert(makefile:find('json.load(open("docs/agent-v1.schema.json"', 1, true) ~= n
 --     `docs/AGENT.md` told a caller that "each invocation ... normally takes
 --     about 250 ms".  Measured on the development host, `wtop --agent` takes
 --     1.22-1.25 s at the default interval -- about five times that -- and
---     `wtop --snapshot`, which takes no delay at all, takes 1.26 s, so the
---     difference is not the agent's second sample: 250 ms was the cap on the
+--     `wtop --snapshot` uses the same two-sample path and deliberate delay,
+--     and also takes about 1.26 s: 250 ms was the cap on the
 --     deliberate delay between the two samples, read as the whole cost.  The
 --     number was written inline in the source as `min(options.interval_ms or
 --     1000, 250)`, so there was nowhere for a document and a test to agree with
@@ -238,11 +244,11 @@ assert(makefile:find('json.load(open("docs/agent-v1.schema.json"', 1, true) ~= n
 --     What the document must not do is state the cap as a total, which is the
 --     sentence that was wrong.
 local Application = require("wtop.application")
-assert(type(Application.AGENT_SAMPLE_DELAY_CAP_MS) == "number"
-        and Application.AGENT_SAMPLE_DELAY_CAP_MS > 0,
-  "the agent's sample-delay cap is not a named number, so `docs/AGENT.md` and "
+assert(type(Application.ONESHOT_SAMPLE_DELAY_CAP_MS) == "number"
+        and Application.ONESHOT_SAMPLE_DELAY_CAP_MS > 0,
+  "the one-shot sample-delay cap is not a named number, so `docs/AGENT.md` and "
       .. "this clause have to repeat a literal and neither notices it changing")
-local cap = Application.AGENT_SAMPLE_DELAY_CAP_MS
+local cap = Application.ONESHOT_SAMPLE_DELAY_CAP_MS
 local agent_doc = read_file("docs/AGENT.md")
 local stated = agent_doc:match("min%(%-%-interval, (%d+) ms%)")
 assert(stated == tostring(cap),

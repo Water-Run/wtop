@@ -8,12 +8,13 @@ Workspace.__index = Workspace
 -- a generated or hand-edited file from becoming unbounded session state.
 local MAX_WORKSPACES = 16
 
-local function clone_trees(trees, orders)
+local function clone_trees(trees, orders, seeds)
     local copy = {}
     for page, order in pairs(orders) do
         local tree = trees and trees[page]
         copy[page] = tree and assert(LayoutModel.clone(tree, { allowed_widgets = order }))
-            or assert(LayoutModel.from_order(order, {
+            or assert(LayoutModel.from_order(seeds and seeds[page]
+                and { seeds[page] } or order, {
                 allowed_widgets = order, axis = "horizontal", alternate_axes = true,
             }))
     end
@@ -47,6 +48,57 @@ local TAB_DEFINITIONS = {
     { id = "system", label_id = "tabs.system", label = "System" },
     { id = "insights", label_id = "tabs.insights", label = "Insights" },
 }
+local TAB_BY_ID = {}
+for _, definition in ipairs(TAB_DEFINITIONS) do TAB_BY_ID[definition.id] = definition end
+local MAX_CUSTOM_PAGES = 8
+
+local function custom_definitions(value)
+    local result, seen = {}, {}
+    for _, definition in ipairs(type(value) == "table" and value or {}) do
+        if type(definition) ~= "table" or type(definition.id) ~= "string"
+            or not definition.id:match("^custom[1-8]$") or seen[definition.id]
+            or type(definition.name) ~= "string" or definition.name == ""
+            or #definition.name > 64 or not utf8.len(definition.name)
+            or definition.name:find("[%c]")
+            or type(definition.seed_widget) ~= "string" then
+            error("invalid custom page definition", 3)
+        end
+        seen[definition.id] = true
+        result[#result + 1] = { id = definition.id, name = definition.name,
+            seed_widget = definition.seed_widget }
+    end
+    if #result > MAX_CUSTOM_PAGES then error("too many custom pages", 3) end
+    return result
+end
+
+local function default_tab_ids()
+    local ids = {}
+    for index, definition in ipairs(TAB_DEFINITIONS) do ids[index] = definition.id end
+    return ids
+end
+
+local function normalized_tab_ids(requested, definitions)
+    local available = {}
+    for id, definition in pairs(TAB_BY_ID) do available[id] = definition end
+    local defaults = default_tab_ids()
+    for _, definition in ipairs(definitions) do
+        available[definition.id] = { id = definition.id, label = definition.name }
+        defaults[#defaults + 1] = definition.id
+    end
+    if type(requested) ~= "table" or #requested == 0 then return defaults end
+    local ids, seen = {}, {}
+    for _, id in ipairs(requested) do
+        if not available[id] or seen[id] then return defaults end
+        seen[id] = true
+        ids[#ids + 1] = id
+    end
+    return ids
+end
+
+local function tab(id, definitions)
+    local specification = assert(definitions[id])
+    return { id = id, label_id = specification.label_id, label = specification.label }
+end
 
 local function widget(id, kind, title, priority, dimensions)
     dimensions = dimensions or {}
@@ -123,6 +175,11 @@ local function build_pages(tabs, i18n)
                 80, { width = 26, height = 7 }),
             widget("cpufreq_table", "table", t("widgets.frequency_policies", "Frequency policies"),
                 70, { width = 58, height = 10 }),
+            widget("thermal_throttle_table", "table",
+                t("widgets.thermal_throttle", "Thermal throttling per CPU"),
+                68, { width = 60, height = 10 }),
+            widget("cpuidle_table", "table", t("widgets.cpuidle", "CPU idle states"),
+                67, { width = 62, height = 10 }),
             widget("sensor_table", "table", t("widgets.sensors", "Sensors"),
                 65, { width = 56, height = 10 }),
             widget("power_table", "table", t("widgets.power_zones", "Power zones"),
@@ -139,6 +196,10 @@ local function build_pages(tabs, i18n)
             widget("memory_pressure", "metric", t("widgets.memory_pressure", "Memory pressure"), 78),
             widget("memory_counters", "key_value", t("widgets.paging", "Paging & faults"),
                 70, { width = 34, height = 9 }),
+            widget("numa_table", "table", t("numa.nodes", "NUMA nodes"),
+                76, { width = 58, height = 10 }),
+            widget("dimm_table", "table", t("memory_hw.title", "Memory devices"),
+                75, { width = 64, height = 10 }),
         }),
         storage = page("storage", tabs, {
             widget("storage_summary", "metric", t("widgets.storage_throughput", "Storage throughput"), 100),
@@ -152,6 +213,8 @@ local function build_pages(tabs, i18n)
         }),
         network = page("network", tabs, {
             widget("network_summary", "metric", t("widgets.network_throughput", "Network throughput"), 100),
+            widget("network_softnet", "key_value", t("widgets.network_softnet", "Receive backlog"),
+                72, { width = 38, height = 9 }),
             widget("network_table", "table", t("widgets.interfaces", "Interfaces"),
                 95, { width = 54, height = 12 }),
             widget("connection_table", "table", t("widgets.connections", "Sockets & connections"),
@@ -206,6 +269,19 @@ local function page_widgets(current_page)
         order[#order + 1] = node.id
     end
     return widgets, order
+end
+
+local function combined_widgets(pages)
+    local widgets, order, origins = {}, {}, {}
+    for _, definition in ipairs(TAB_DEFINITIONS) do
+        for _, node in ipairs(pages[definition.id].layout.children) do
+            if widgets[node.id] then error("duplicate widget id: " .. node.id, 2) end
+            widgets[node.id] = node
+            origins[node.id] = definition.id
+            order[#order + 1] = node.id
+        end
+    end
+    return widgets, order, origins
 end
 
 local function ordered_widgets(default_order, requested)
@@ -300,25 +376,42 @@ end
 
 function Workspace.new(options)
     options = options or {}
+    local custom_pages = custom_definitions(options.custom_pages)
+    local definitions, custom_by_id, custom_seeds = {}, {}, {}
+    for id, definition in pairs(TAB_BY_ID) do definitions[id] = definition end
+    for _, definition in ipairs(custom_pages) do
+        definitions[definition.id] = { id = definition.id, label = definition.name }
+        custom_by_id[definition.id] = definition
+        custom_seeds[definition.id] = definition.seed_widget
+    end
     local tabs = {}
-    for index, specification in ipairs(TAB_DEFINITIONS) do
-        tabs[index] = {
-            id = specification.id,
-            label_id = specification.label_id,
-            label = specification.label,
-        }
+    for index, id in ipairs(normalized_tab_ids(options.tab_order, custom_pages)) do
+        tabs[index] = tab(id, definitions)
     end
     local pages = build_pages(tabs, options.i18n)
+    local all_widgets, all_widget_order, widget_origins = combined_widgets(pages)
+    for _, definition in ipairs(custom_pages) do
+        local seed = all_widgets[definition.seed_widget]
+        if not seed then error("unknown custom page seed widget", 2) end
+        pages[definition.id] = page(definition.id, tabs, { seed })
+    end
     local widgets, widget_orders, layout_trees = {}, {}, {}
     for page_id, current_page in pairs(pages) do
         local default_order
-        widgets[page_id], default_order = page_widgets(current_page)
+        if custom_by_id[page_id] then
+            widgets[page_id], default_order = all_widgets, all_widget_order
+        else
+            widgets[page_id], default_order = page_widgets(current_page)
+        end
         widget_orders[page_id] = default_order
         local tree = options.layout_trees and options.layout_trees[page_id]
         if tree then
             tree = assert(LayoutModel.clone(tree, { allowed_widgets = default_order }))
         else
-            local order = ordered_widgets(default_order, options.orders and options.orders[page_id])
+            local order = custom_by_id[page_id]
+                and (options.orders and options.orders[page_id]
+                    or { custom_by_id[page_id].seed_widget })
+                or ordered_widgets(default_order, options.orders and options.orders[page_id])
             tree = assert(LayoutModel.from_order(order, {
                 allowed_widgets = default_order,
                 axis = "horizontal",
@@ -335,7 +428,7 @@ function Workspace.new(options)
     if type(options.workspaces) == "table" then
         for name, stored in pairs(options.workspaces) do
             if type(name) == "string" and type(stored) == "table" then
-                workspaces[name] = clone_trees(stored, widget_orders)
+                workspaces[name] = clone_trees(stored, widget_orders, custom_seeds)
             end
         end
     end
@@ -350,12 +443,23 @@ function Workspace.new(options)
         -- The store already validated the active workspace, so its trees are
         -- the ones the pages were built from; re-cloning here would be wasted
         -- work and could only disagree with them.
-        workspaces[workspace_name] = clone_trees(workspaces[workspace_name], widget_orders)
+        workspaces[workspace_name] = clone_trees(workspaces[workspace_name],
+            widget_orders, custom_seeds)
     end
 
-    local active = options.active_tab and pages[options.active_tab] and options.active_tab or "overview"
+    local active = tabs[1].id
+    for _, entry in ipairs(tabs) do
+        if entry.id == options.active_tab then active = entry.id break end
+    end
     local self = setmetatable({
         tabs = tabs,
+        tab_definitions = definitions,
+        custom_pages = custom_pages,
+        custom_by_id = custom_by_id,
+        custom_seeds = custom_seeds,
+        all_widgets = all_widgets,
+        all_widget_order = all_widget_order,
+        widget_origins = widget_origins,
         pages = pages,
         active = active,
         focus = {},
@@ -428,7 +532,8 @@ function Workspace:save_workspace(name)
     if self.workspaces[name] == nil and self:workspace_count() >= MAX_WORKSPACES then
         return false, "workspace_limit_reached"
     end
-    self.workspaces[name] = clone_trees(self.layout_trees, self.widget_orders)
+    self.workspaces[name] = clone_trees(self.layout_trees, self.widget_orders,
+        self.custom_seeds)
     return self:_activate_workspace(name)
 end
 
@@ -487,7 +592,9 @@ function Workspace:_activate_workspace(name)
         if tree then
             tree = assert(LayoutModel.clone(tree, { allowed_widgets = order }))
         else
-            tree = assert(LayoutModel.from_order(order, {
+            local initial = self.custom_seeds[page]
+                and { self.custom_seeds[page] } or order
+            tree = assert(LayoutModel.from_order(initial, {
                 allowed_widgets = order, axis = "horizontal", alternate_axes = true,
             }))
         end
@@ -535,13 +642,214 @@ function Workspace:active_index()
     return 1
 end
 
+function Workspace:tab_ids()
+    local ids = {}
+    for index, entry in ipairs(self.tabs) do ids[index] = entry.id end
+    return ids
+end
+
+function Workspace:content_page()
+    if not self.custom_by_id[self.active] then return self.active end
+    return self.widget_origins[self.focus[self.active]] or "overview"
+end
+
+function Workspace:custom_tab_order()
+    local ids, defaults = self:tab_ids(), default_tab_ids()
+    if #ids == #defaults then
+        local same = true
+        for index, id in ipairs(ids) do if id ~= defaults[index] then same = false break end end
+        if same then return nil end
+    end
+    return ids
+end
+
+function Workspace:tab_entries()
+    local entries, visible = {}, {}
+    for index, entry in ipairs(self.tabs) do
+        visible[entry.id] = true
+        entries[#entries + 1] = { id = entry.id, label_id = entry.label_id,
+            label = entry.label, visible = true, position = index }
+    end
+    for _, definition in ipairs(TAB_DEFINITIONS) do
+        if not visible[definition.id] then
+            entries[#entries + 1] = { id = definition.id,
+                label_id = definition.label_id, label = definition.label, visible = false }
+        end
+    end
+    for _, definition in ipairs(self.custom_pages) do
+        if not visible[definition.id] then
+            entries[#entries + 1] = { id = definition.id,
+                label = definition.name, visible = false, custom = true }
+        end
+    end
+    for _, entry in ipairs(entries) do
+        entry.custom = self.custom_by_id[entry.id] ~= nil
+    end
+    return entries
+end
+
+function Workspace:show_tab(id)
+    if not self.tab_definitions[id] then return false, "unknown_tab" end
+    for _, entry in ipairs(self.tabs) do
+        if entry.id == id then return false, "tab_already_visible" end
+    end
+    table.insert(self.tabs, self:active_index() + 1,
+        tab(id, self.tab_definitions))
+    self.dirty = true
+    return true
+end
+
+function Workspace:custom_page_definitions()
+    local result = {}
+    for index, definition in ipairs(self.custom_pages) do
+        result[index] = { id = definition.id, name = definition.name,
+            seed_widget = definition.seed_widget }
+    end
+    return #result > 0 and result or nil
+end
+
+function Workspace:new_custom_page(seed_widget, name)
+    if #self.custom_pages >= MAX_CUSTOM_PAGES then return false, "custom_page_limit" end
+    seed_widget = seed_widget or self.focus[self.active]
+    if not self.all_widgets[seed_widget] then return false, "unknown_widget" end
+    local number
+    for candidate = 1, MAX_CUSTOM_PAGES do
+        if not self.custom_by_id["custom" .. candidate] then number = candidate break end
+    end
+    local id = "custom" .. number
+    name = name or translated(self.i18n, "tabs.custom_name",
+        "Custom {index}", { index = tostring(number) })
+    if type(name) ~= "string" or name == "" or #name > 64 or not utf8.len(name)
+        or name:find("[%c]") then
+        return false, "invalid_custom_page_name"
+    end
+    local definition = { id = id, name = name, seed_widget = seed_widget }
+    self.custom_pages[#self.custom_pages + 1] = definition
+    self.custom_by_id[id], self.custom_seeds[id] = definition, seed_widget
+    self.tab_definitions[id] = { id = id, label = name }
+    local tree = assert(LayoutModel.from_order({ seed_widget },
+        { allowed_widgets = self.all_widget_order }))
+    self.pages[id] = page(id, self.tabs, { self.all_widgets[seed_widget] })
+    self.widgets[id], self.widget_orders[id], self.layout_trees[id] =
+        self.all_widgets, self.all_widget_order, tree
+    self.pages[id].layout = page_layout(tree, self.all_widgets, id,
+        self.suppressed, self.all_widget_order)
+    self.focus[id], self.undo_stack[id], self.redo_stack[id] = seed_widget, {}, {}
+    for _, trees in pairs(self.workspaces) do
+        trees[id] = assert(LayoutModel.clone(tree,
+            { allowed_widgets = self.all_widget_order }))
+    end
+    table.insert(self.tabs, self:active_index() + 1,
+        tab(id, self.tab_definitions))
+    self.active, self.dirty = id, true
+    return true, id
+end
+
+function Workspace:duplicate_page(source_id)
+    local source_tree = self.layout_trees[source_id]
+    local source_spec = self.tab_definitions[source_id]
+    if not source_tree or not source_spec then return false, "unknown_tab" end
+    local source_order = assert(LayoutModel.to_order(source_tree,
+        tree_options(self, source_id)))
+    local label = translated(self.i18n, source_spec.label_id,
+        source_spec.label)
+    local name = translated(self.i18n, "tabs.copy_name", "Copy of {name}",
+        { name = label })
+    if #name > 64 then name = nil end
+    local source_focus = self.focus[source_id]
+    local created, id_or_reason = self:new_custom_page(source_order[1], name)
+    if not created then return false, id_or_reason end
+    local id = id_or_reason
+    local clone_options = { allowed_widgets = self.all_widget_order }
+    self.layout_trees[id] = assert(LayoutModel.clone(source_tree, clone_options))
+    self.pages[id].layout = page_layout(self.layout_trees[id], self.all_widgets,
+        id, self.suppressed, self.all_widget_order)
+    for _, widget_id in ipairs(source_order) do
+        if widget_id == source_focus then self.focus[id] = widget_id break end
+    end
+    for name, trees in pairs(self.workspaces) do
+        local source = name == self.workspace and source_tree or trees[source_id]
+        if source then trees[id] = assert(LayoutModel.clone(source, clone_options)) end
+    end
+    return true, id
+end
+
+function Workspace:rename_custom_page(id, name)
+    local definition = self.custom_by_id[id]
+    if not definition then return false, "not_custom_page" end
+    name = type(name) == "string" and name:match("^%s*(.-)%s*$") or nil
+    if type(name) ~= "string" or name == "" or #name > 64 or not utf8.len(name)
+        or name:find("[%c]") then
+        return false, "invalid_custom_page_name"
+    end
+    definition.name = name
+    self.tab_definitions[id].label = name
+    for _, entry in ipairs(self.tabs) do if entry.id == id then entry.label = name end end
+    self.dirty = true
+    return true
+end
+
+function Workspace:remove_custom_page(id)
+    if not self.custom_by_id[id] then return false, "not_custom_page" end
+    if #self.tabs == 1 and self.tabs[1].id == id then return false, "last_tab" end
+    for index, entry in ipairs(self.tabs) do
+        if entry.id == id then
+            table.remove(self.tabs, index)
+            if self.active == id then
+                self.active = self.tabs[math.min(index, #self.tabs)].id
+            end
+            break
+        end
+    end
+    for index, definition in ipairs(self.custom_pages) do
+        if definition.id == id then table.remove(self.custom_pages, index) break end
+    end
+    self.custom_by_id[id], self.custom_seeds[id], self.tab_definitions[id] = nil, nil, nil
+    self.pages[id], self.widgets[id], self.widget_orders[id], self.layout_trees[id] =
+        nil, nil, nil, nil
+    self.focus[id], self.undo_stack[id], self.redo_stack[id] = nil, nil, nil
+    for _, trees in pairs(self.workspaces) do trees[id] = nil end
+    self.dirty = true
+    return true
+end
+
+function Workspace:hide_tab(id)
+    if #self.tabs <= 1 then return false, "last_tab" end
+    for index, entry in ipairs(self.tabs) do
+        if entry.id == id then
+            table.remove(self.tabs, index)
+            if self.active == id then
+                self.active = self.tabs[math.min(index, #self.tabs)].id
+            end
+            self.dirty = true
+            return true
+        end
+    end
+    return false, "tab_hidden"
+end
+
+function Workspace:move_tab(id, direction)
+    for index, entry in ipairs(self.tabs) do
+        if entry.id == id then
+            local target = index + (direction < 0 and -1 or 1)
+            if target < 1 or target > #self.tabs then return false, "tab_edge" end
+            self.tabs[index], self.tabs[target] = self.tabs[target], self.tabs[index]
+            self.dirty = true
+            return true
+        end
+    end
+    return false, "tab_hidden"
+end
+
 function Workspace:select(value)
     if type(value) == "number" then
-        value = self.tabs[((value - 1) % #self.tabs) + 1].id
+        value = self.tabs[value] and self.tabs[value].id
     end
-    if self.pages[value] then
-        self.active = value
-        return true
+    for _, entry in ipairs(self.tabs) do
+        if entry.id == value then
+            self.active = value
+            return true
+        end
     end
     return false
 end
@@ -818,7 +1126,7 @@ function Workspace:render(columns, rows, state)
         local incoming = state.status or {}
         state.status = {
             message = incoming.message or translated(self.i18n, "layout.edit_message",
-                "LAYOUT · Tab select · arrows split/move · [/] resize · u/U undo/redo · e finish"),
+                "LAYOUT · b Tabs · Tab select · arrows split/move · [/] resize · u/U undo/redo · e finish"),
             error = incoming.error,
             privilege = incoming.privilege,
             filter = incoming.filter,
@@ -831,6 +1139,7 @@ function Workspace:render(columns, rows, state)
                 { key = "Arrows", id = "actions.move", fallback = "Split/move" },
                 { key = "[/]", id = "actions.resize", fallback = "Resize" },
                 { key = "u/U", id = "actions.undo_redo", fallback = "Undo/redo" },
+                { key = "b", id = "actions.manage_tabs", fallback = "Tabs" },
                 { key = "e", id = "actions.done", fallback = "Done" },
                 { key = "q", id = "actions.quit", fallback = "Quit" },
             },
@@ -900,7 +1209,8 @@ end
 function Workspace:saved_workspaces()
     local copy = {}
     for name, trees in pairs(self.workspaces or {}) do
-        copy[name] = clone_trees(trees, self.widget_orders)
+        copy[name] = clone_trees(name == self.workspace and self.layout_trees or trees,
+            self.widget_orders, self.custom_seeds)
     end
     return copy
 end
@@ -976,10 +1286,26 @@ function Workspace:trees()
     return result
 end
 
-function Workspace.default_orders()
-    return Workspace.new():orders()
+function Workspace.default_orders(custom_pages)
+    local pages = build_pages({}, nil)
+    local result = {}
+    for _, definition in ipairs(TAB_DEFINITIONS) do
+        local _, order = page_widgets(pages[definition.id])
+        result[definition.id] = order
+    end
+    local all_widgets, all_order = combined_widgets(pages)
+    for _, definition in ipairs(custom_definitions(custom_pages)) do
+        if not all_widgets[definition.seed_widget] then
+            error("unknown custom page seed widget", 2)
+        end
+        local order = {}
+        for index, id in ipairs(all_order) do order[index] = id end
+        result[definition.id] = order
+    end
+    return result
 end
 
 Workspace.tabs_definition = TAB_DEFINITIONS
+Workspace.default_tab_ids = default_tab_ids
 
 return Workspace

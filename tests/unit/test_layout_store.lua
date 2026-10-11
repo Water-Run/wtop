@@ -120,4 +120,59 @@ for _, placement in ipairs(solved.placements) do
 end
 assert(smallest >= 60, "no widget may be starved into an unusable sliver")
 
+local tabbed = LayoutStore.encode(defaults, nil, nil, nil, nil,
+  { "processes", "overview" })
+assert(tabbed:find("schema_version: 5", 1, true))
+local _, _, _, _, columns, tab_order = assert(LayoutStore.parse(tabbed, defaults))
+assert(#columns > 0 and table.concat(tab_order, ",") == "processes,overview")
+assert(LayoutStore.parse(tabbed:gsub('  %- "overview"', '  - "processes"'), defaults) == nil,
+  "duplicate visible tabs are refused")
+assert(LayoutStore.parse(tabbed:gsub('  %- "overview"', '  - "unknown"'), defaults) == nil,
+  "unknown visible tabs are refused")
+assert(LayoutStore.parse(tabbed:gsub('tabs:\n  %- "processes"\n  %- "overview"',
+  'tabs: []'), defaults) == nil, "a layout cannot hide every tab")
+assert(LayoutStore.parse(tabbed:gsub('schema_version: 5', 'schema_version: 4'), defaults)
+  == nil, "v4 does not silently ignore a v5 tab list")
+local workspace_tabbed = LayoutStore.encode(defaults, nil,
+  { alpha = v2_trees }, "alpha", nil, { "overview" })
+local _, _, saved_workspaces, active_workspace, _, saved_tabs =
+  assert(LayoutStore.parse(workspace_tabbed, defaults))
+assert(saved_workspaces.alpha and active_workspace == "alpha"
+  and saved_tabs[1] == "overview", "tab order survives named workspaces")
+local combined_session = require("wtop.workspace").new({
+  active_tab = "memory", tab_order = { "overview", "memory" },
+})
+local removed_widget = combined_session.focus.memory
+assert(combined_session:remove_focused_widget())
+local combined = LayoutStore.encode(combined_session:orders(), combined_session:trees(),
+  nil, nil, nil, combined_session:custom_tab_order(),
+  require("wtop.workspace").default_orders())
+local combined_orders, _, _, _, _, combined_tabs = assert(LayoutStore.parse(combined,
+  require("wtop.workspace").default_orders()))
+assert(table.concat(combined_tabs, ",") == "overview,memory")
+for _, id in ipairs(combined_orders.memory) do
+  assert(id ~= removed_widget, "tab customization lost the widget removal")
+end
+local Workspace = require("wtop.workspace")
+local mixed_page = Workspace.new()
+assert(mixed_page:new_custom_page("cpu_overview", "CPU and processes"))
+assert(mixed_page:add_focused_widget("process_table", "after"))
+local definitions = mixed_page:custom_page_definitions()
+local encoded_v6 = LayoutStore.encode(mixed_page:orders(), mixed_page:trees(),
+  nil, nil, nil, mixed_page:custom_tab_order(),
+  Workspace.default_orders(definitions), definitions)
+assert(encoded_v6:find("schema_version: 6", 1, true)
+  and encoded_v6:find("custom_pages:", 1, true))
+local v6_orders, v6_trees, _, _, _, v6_tabs, v6_definitions =
+  assert(LayoutStore.parse(encoded_v6, Workspace.default_orders()))
+assert(table.concat(v6_orders.custom1, ",") == "cpu_overview,process_table"
+  and v6_tabs[2] == "custom1" and v6_definitions[1].name == "CPU and processes")
+local v6_reopened = Workspace.new({ custom_pages = v6_definitions,
+  tab_order = v6_tabs, layout_trees = v6_trees, active_tab = "custom1" })
+assert(#v6_reopened:palette() == #Workspace.default_orders(definitions).custom1 - 2)
+assert(LayoutStore.parse(encoded_v6:gsub('name: "CPU and processes"',
+  'name: ""'), Workspace.default_orders()) == nil)
+assert(LayoutStore.parse(encoded_v6:gsub('seed_widget: "cpu_overview"',
+  'seed_widget: "unknown"'), Workspace.default_orders()) == nil)
+
 return true

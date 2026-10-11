@@ -6,6 +6,8 @@ local Platform = require("wtop.platform")
 local M = {}
 
 local ALLOWED_SIGNALS = {
+    [1] = true,
+    [2] = true,
     [9] = true,
     [15] = true,
     [18] = true,

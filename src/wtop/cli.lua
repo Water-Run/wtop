@@ -19,8 +19,11 @@ Options:
       --migrate-layout   Rewrite the persisted layout in the current schema
       --diagnose         Print capability diagnostics and exit
       --snapshot         Print one machine-readable snapshot and exit
+      --stream           Print snapshots as JSON Lines until stopped
+      --count N          With --stream: stop after N records (1..1000000)
+      --report           Print a readable hardware report in Markdown
       --unmask-remote-addresses
-                         With --snapshot: export full remote socket addresses
+                         With --snapshot or --stream: export full remote socket addresses
       --agent            Print compact LLM/agent context JSON and exit
       --sudo             Restart through sudo on Linux
       --elevate          Alias for --sudo
@@ -86,6 +89,22 @@ function M.parse(argv)
             if not ok then return nil, command_error end
         elseif item == "--snapshot" then
             local ok, command_error = select_command("snapshot", item)
+            if not ok then return nil, command_error end
+        elseif item == "--stream" then
+            local ok, command_error = select_command("stream", item)
+            if not ok then return nil, command_error end
+        elseif item == "--count" then
+            if options.stream_count ~= nil then return nil, "--count cannot be repeated" end
+            local value, next_index, parse_error = option_value(argv, index, item)
+            if parse_error then return nil, parse_error end
+            local count = value:match("^%d+$") and tonumber(value) or nil
+            if not count or count % 1 ~= 0 or count < 1 or count > 1000000 then
+                return nil, "--count must be an integer from 1 to 1000000"
+            end
+            options.stream_count = count
+            index = next_index
+        elseif item == "--report" then
+            local ok, command_error = select_command("report", item)
             if not ok then return nil, command_error end
         elseif item == "--unmask-remote-addresses" then
             if options.include_remote_addresses then
@@ -157,8 +176,12 @@ function M.parse(argv)
         end
         index = index + 1
     end
-    if options.include_remote_addresses and options.command ~= "snapshot" then
-        return nil, "--unmask-remote-addresses requires --snapshot"
+    if options.include_remote_addresses
+        and options.command ~= "snapshot" and options.command ~= "stream" then
+        return nil, "--unmask-remote-addresses requires --snapshot or --stream"
+    end
+    if options.stream_count and options.command ~= "stream" then
+        return nil, "--count requires --stream"
     end
     return options
 end
@@ -173,9 +196,19 @@ local function run_snapshot(options)
     return application.snapshot(options)
 end
 
+local function run_stream(options)
+    local application = require("wtop.application")
+    return application.stream(options)
+end
+
 local function run_agent(options)
     local application = require("wtop.application")
     return application.agent(options)
+end
+
+local function run_report(options)
+    local application = require("wtop.application")
+    return application.report(options)
 end
 
 local function run_tui(options)
@@ -271,6 +304,10 @@ function M.run(argv, dependencies)
         return run_diagnose(options)
     elseif options.command == "snapshot" then
         return run_snapshot(options)
+    elseif options.command == "stream" then
+        return run_stream(options)
+    elseif options.command == "report" then
+        return run_report(options)
     elseif options.command == "agent" then
         return run_agent(options)
     elseif options.command == "export_layout" then

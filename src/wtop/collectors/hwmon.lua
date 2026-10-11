@@ -1,6 +1,7 @@
 local Capability = require("wtop.core.capability")
 local FS = require("wtop.linux.fs")
 local Common = require("wtop.collectors.common")
+local SensorSession = require("wtop.model.sensor_session")
 
 local Hwmon = {}
 Hwmon.__index = Hwmon
@@ -479,6 +480,7 @@ local function read_device(self, fs, entry, used_ids)
     class_index = entry.number,
     name = name,
     device_target = target,
+    device_path = normalize_target(fs:readlink(base)),
     identity_quality = identity_quality,
     quality = quality,
     channels = channels,
@@ -490,7 +492,7 @@ local function read_device(self, fs, entry, used_ids)
   }
 end
 
-function Hwmon:sample(context)
+function Hwmon:sample(context, previous)
   local started = Common.now_ns(context)
   local fs = Common.fs(context, self.fs)
   local entries, list_error, class_truncated = device_entries(fs, self.base_path, self.max_class_entries)
@@ -520,6 +522,8 @@ function Hwmon:sample(context)
     any_partial = any_partial or device.quality == "partial"
     any_estimated = any_estimated or device.quality == "estimated"
   end
+  local sampled_at = Common.now_ns(context)
+  SensorSession.attach(devices, Common.previous_data(previous), sampled_at, "hwmon")
   local finished = Common.now_ns(context)
   return Common.result("ok", finished, {
     devices = devices,

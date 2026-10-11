@@ -27,18 +27,23 @@ local defaults = Columns.defaults()
 assert(joined(defaults) ==
   "pid user priority nice virtual_memory memory state cpu time threads name",
   "the default order must be the historical render order, got " .. joined(defaults))
--- The catalogue holds every column the table can draw, which is the eleven that
--- have always been drawn plus the run-queue column, which is offered but hidden
--- by default.  Offering it without showing it is the point: a column the user
+-- The catalogue holds every column the table can draw: the eleven historical
+-- defaults plus elapsed time, I/O rates, WCHAN and run-queue wait, hidden by default.
+-- Offering them without showing them is the point: a column the user
 -- cannot switch on is a column that does not exist.
-assert(#Columns.keys() == 12,
-  "the catalogue holds the eleven drawn columns plus the run-queue one, got "
+assert(#Columns.keys() == 16,
+  "the catalogue holds the eleven drawn columns plus five optional ones, got "
     .. #Columns.keys())
 assert(#defaults == 11,
   "a user who never opens the editor still sees the same eleven columns, got "
     .. #defaults)
 assert(not Columns.contains(defaults, "queued"),
   "the run-queue column is offered but not shown by default")
+assert(not Columns.contains(defaults, "elapsed"),
+  "the elapsed-time column is available without changing the default table")
+assert(not Columns.contains(defaults, "io_read_rate")
+  and not Columns.contains(defaults, "io_write_rate"),
+  "I/O rates remain opt-in so the default table incurs no bulk I/O reads")
 
 -- The view model must emit the columns in the order the user chose, and must
 -- not emit a hidden one at all -- not even widthless, which would still cost the
@@ -61,6 +66,10 @@ local function column_keys(chosen)
 end
 assert(joined(column_keys(defaults)) == joined(defaults),
   "the default columns render in the default order")
+local with_elapsed = Columns.toggle(defaults, "elapsed")
+assert(joined(column_keys(with_elapsed)) ==
+  "pid user priority nice virtual_memory memory state cpu time elapsed threads name",
+  "the optional elapsed column is offered in its catalogue position")
 assert(joined(column_keys({ "pid", "cpu", "name" })) == "pid cpu name",
   "the table renders exactly the chosen columns, in that order, got "
     .. joined(column_keys({ "pid", "cpu", "name" })))
@@ -244,12 +253,30 @@ assert(joined(model:status().columns) == joined(model:columns()),
 
 local translator = assert(I18n.new({ locale = "zh-CN" }))
 local entries = Columns.entries(Columns.toggle(defaults, "time"))
-assert(#entries == 12,
+assert(#entries == 16,
   "the editor offers every column including the hidden one, got " .. #entries)
 local by_key = {}
 for _, entry in ipairs(entries) do by_key[entry.key] = entry end
 assert(by_key.time.visible == false and by_key.time.position == nil,
   "a hidden column is listed as hidden and has no position")
+assert(by_key.elapsed.visible == false and by_key.elapsed.label == "ETIME",
+  "the elapsed-time column is available in the editor")
+assert(by_key.io_read_rate.visible == false and by_key.io_read_rate.label == "IO R/s"
+  and by_key.io_write_rate.visible == false
+  and by_key.io_write_rate.label == "IO W/s",
+  "the editor offers both I/O-rate columns without changing defaults")
+assert(by_key.wait_site.visible == false and by_key.wait_site.label == "WCHAN",
+  "Linux offers a wait-site column without changing the default table")
+local non_linux = Columns.entries(defaults, false)
+assert(#non_linux == 15 and not Columns.contains(defaults, "wait_site"),
+  "other platforms do not offer a Linux-only process column")
+local imported = { "pid", "name", "wait_site", "queued" }
+local portable_entries = Columns.entries(imported, false)
+assert(portable_entries[#portable_entries].position == 3,
+  "a hidden Linux column does not count toward portable positions")
+local moved_portable = Columns.move(imported, "queued", -1, false)
+assert(joined(moved_portable) == "pid queued wait_site name",
+  "moving a portable column skips a hidden Linux-only neighbour")
 assert(by_key.cpu.visible == true and by_key.cpu.position == 8,
   "a visible column is listed with the place it occupies, got "
     .. tostring(by_key.cpu.position))

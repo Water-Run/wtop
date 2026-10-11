@@ -136,6 +136,13 @@ assert(missing_output:find("no first frame", 1, true) == nil,
     "the failure surfaced as the application's own timeout, which is a claim "
         .. "about wtop rather than about the path that was passed:\n"
         .. missing_output)
+local absent_runtime, absent_code = run(
+    "python3 tools/perf_benchmark.py --pages 1 --window-seconds 0.1 --latency-samples 1",
+    { "WTOP_LUA=build/native/not-a-lua-interpreter" })
+assert(absent_code ~= 0 and absent_runtime:find("refusing", 1, true)
+    and absent_runtime:find("not%-a%-lua%-interpreter"),
+    "a source benchmark without Lua must name the missing runtime before "
+    .. "starting a PTY:\n" .. absent_runtime)
 
 -- The live run below drives the real TUI on the packaged interpreter with the
 -- native module, and both are artifacts this tree may not have built.  A run
@@ -192,6 +199,22 @@ assert(document:find('"subject"', 1, true) ~= nil,
         .. "file:\n" .. document)
 assert(document:find('"kind": "source%-tree"') ~= nil,
     "the record does not say which subject it measured:\n" .. document)
+assert(document:find('"measurement_version": 3', 1, true) ~= nil
+    and document:find('"settings"', 1, true) ~= nil,
+    "the record does not identify complete-frame/workload timing and its benchmark settings:\n"
+    .. document)
+local decoded = assert(require("wtop.core.json").decode(document))
+local observations = decoded.host_processes_samples
+assert(type(observations) == "table" and #observations == 6,
+    "a one-page/two-switch run must sample first frame, both window bounds, "
+    .. "each switch and the end")
+local phases = {}
+for _, item in ipairs(observations) do phases[item.phase] = item.count end
+for _, phase in ipairs({ "first_frame", "page_1_start", "page_1_end",
+    "latency_0", "latency_1", "end" }) do
+    assert(type(phases[phase]) == "number" and phases[phase] >= 0,
+        "missing live process count for " .. phase)
+end
 assert(document:find('"host"', 1, true) ~= nil,
     "the record does not carry a host, and the banner tells the reader to "
         .. "compare runs only on the same one:\n" .. document)
@@ -203,6 +226,10 @@ assert(document:find('"kernel"', 1, true) ~= nil
 assert(document:find('"unavailable"', 1, true) == nil,
     "the host record says a field could not be read, so the record is "
         .. "describing a host it could not identify:\n" .. document)
+assert(document:find('"page_1_p95"', 1, true) ~= nil
+    and document:find('"page_2_p95"', 1, true) ~= nil,
+    "the input-latency record must identify which page each switch entered; "
+        .. "one slow destination is hidden by a single combined percentile:\n" .. document)
 
 -- The printed form carries them too.  The JSON is what a machine reads, and the
 -- banner is what a person reads while deciding whether two numbers are worth
@@ -212,6 +239,9 @@ assert(live:find("subject.kind", 1, true) ~= nil,
     "the printed output does not name the subject:\n" .. live)
 assert(live:find("host.kernel", 1, true) ~= nil,
     "the printed output does not name the host:\n" .. live)
+assert(live:find("input_latency_ms.page_1_p95", 1, true) ~= nil
+    and live:find("input_latency_ms.page_2_p95", 1, true) ~= nil,
+    "the printed output does not identify the slow switch destination:\n" .. live)
 
 -- The Makefile is how every other release target is reached, and the bundle
 -- subject used to be reachable only through an environment variable that
@@ -225,6 +255,18 @@ assert(benchmark ~= nil and benchmark:find("WTOP_BENCH_EXECUTABLE", 1, true) ~= 
     "the benchmark target does not pass BENCH_EXECUTABLE through to the tool, "
         .. "so setting the Makefile variable changes nothing:\n"
         .. tostring(benchmark))
+local budget_recipe = recipe_of(makefile, "benchmark-check")
+assert(budget_recipe and budget_recipe:find("check_perf_budget.py", 1, true)
+    and budget_recipe:find("BENCH_BUDGET", 1, true)
+    and budget_recipe:find("BENCH_PROFILE", 1, true),
+    "the performance gate does not run against an explicit hardware profile")
+assert(makefile:find("benchmark: resource-check-benchmark", 1, true)
+    and makefile:find("benchmark-check: resource-check-benchmark", 1, true),
+    "prebuilt artifact measurement must not require the build/test memory floors")
+
+local gate_output, gate_code = run("python3 tests/test_perf_budget.py")
+assert(gate_code == 0, "the budget gate accepted a mismatched or incomplete "
+  .. "performance record, or rejected a matching one:\n" .. gate_output)
 
 os.execute("rm -f " .. output_path .. " " .. bundle .. " " .. not_executable)
 return true

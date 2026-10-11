@@ -258,13 +258,10 @@ local function spelled(text, unicode)
   local row = scratch:row_text(1)
   return (row:gsub("%s+$", ""))
 end
--- How many pages share their spelling with another page.  In the ASCII fallback
--- this is not zero and cannot be made zero by this file: the grid substitutes
--- every grapheme the terminal cannot take, so five Japanese pages arrive on the
--- row as five runs of `?` and the reader cannot tell them apart.  It is measured
--- and reported rather than required, because a rule that fails on it would be a
--- rule about transliterating the catalogues, which is a product decision and not
--- this increment's -- `docs/PLAN.md` carries it as an open item.
+-- On a non-Unicode terminal, names can collapse to identical question-mark
+-- runs.  The tab position must keep each page identifiable, including the
+-- tenth page selected with 0.  This is read from the actual grid, not the
+-- source label, so a substitution or truncation bug cannot pass by accident.
 local indistinct = 0
 for _, unicode in ipairs({true, false}) do
   for _, locale in ipairs(LOCALES) do
@@ -282,6 +279,11 @@ for _, unicode in ipairs({true, false}) do
       require(drawn:find(label, 1, true) ~= nil,
         "the reference row for " .. locale .. " does not carry the label of "
         .. box.id .. ": " .. string.format("%q", drawn))
+      if not unicode then
+        local selector = box.index == 10 and "0" or tostring(box.index)
+        require(drawn:find(selector .. " " .. label, 1, true) ~= nil,
+          "the ASCII page " .. box.id .. " does not show its selector " .. selector)
+      end
       if seen[drawn] then
         indistinct = indistinct + 1
       else
@@ -289,6 +291,40 @@ for _, unicode in ipairs({true, false}) do
       end
     end
   end
+end
+require(indistinct == 0,
+  "two pages still have the same spelling on a non-Unicode terminal")
+
+local many_tabs = {}
+for index = 1, 11 do many_tabs[index] = { id = "page-" .. index, label = "same" } end
+local many_grid = Grid.new(200, 1, {
+  default_style = theme:style("text.primary", "surface.base"), unicode = false,
+})
+local many_meta = TabBar.render(many_grid, { x = 1, y = 1, width = 200, height = 1 },
+  { tabs = many_tabs, active = "page-11", brand = "wtop", frequency_label = "" },
+  contexts[false]["en-US"])
+local many_cells = read_cells(many_grid)
+require(#many_meta.tabs == 11, "the custom-page reference row omitted a page")
+for _, box in ipairs(many_meta.tabs) do
+  local text = slice(many_cells, box.x, box.x + box.width - 1)
+  local selector = box.index == 10 and "0" or tostring(box.index)
+  require(text:find(selector .. " same", 1, true) ~= nil,
+    "ASCII page " .. box.index .. " lost its distinct position")
+end
+local narrow_grid = Grid.new(14, 1, {
+  default_style = theme:style("text.primary", "surface.base"), unicode = false,
+})
+local narrow_meta = TabBar.render(narrow_grid,
+  { x = 1, y = 1, width = 14, height = 1 },
+  { tabs = many_tabs, active = "page-11", brand = "wtop", frequency_label = "" },
+  contexts[false]["en-US"])
+local narrow_cells = read_cells(narrow_grid)
+require(#narrow_meta.tabs == 1 and narrow_meta.tabs[1].index == 11,
+  "the narrow ASCII bar did not keep the active custom page")
+if narrow_meta.tabs[1] then
+  local box = narrow_meta.tabs[1]
+  require(slice(narrow_cells, box.x, box.x + box.width - 1):find("11", 1, true),
+    "the narrow ASCII bar cut an eleven-page position to a false first-page label")
 end
 
 local renders, with_hidden, counted = 0, 0, 0
@@ -730,8 +766,7 @@ io.write(string.format(
   .. "spelling), %d had no cells to say anything in; %d pages were drawn and %d of the "
   .. "reader's-neighbour pages whole; the bar's own partition: %d wrote a count, %d "
   .. "could not pay for it, %d had nothing to say; %d page(s) across the twenty "
-  .. "reference rows share their ASCII spelling with another page, which is a "
-  .. "measurement and not a rule)\n",
+  .. "reference rows share their ASCII spelling with another page)\n",
   renders, #COLUMNS, #ASCII_COLUMNS, #BRANDS, #STATES, #LOCALES, #tabs,
   with_hidden, counted, counted - count_alone_rows, count_alone_rows, marker_rows,
   ascii_marker, empty_rows, pages_with_name, pages_whole, BLOCKED["none"],

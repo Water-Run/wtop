@@ -106,10 +106,13 @@ function Runner:run(argv, options)
   then
     return { status = "error", reason = "invalid_runner_policy", argv = argv }
   end
-  for _, key in ipairs({ "LANG", "LC_ALL" }) do
+  for _, key in ipairs({ "LANG", "LC_ALL", "XDG_RUNTIME_DIR" }) do
     if policy.env[key] ~= nil and not valid_locale(policy.env[key]) then
       return { status = "error", reason = "invalid_runner_policy", argv = argv }
     end
+  end
+  if policy.env.XDG_RUNTIME_DIR ~= nil and policy.env.XDG_RUNTIME_DIR:sub(1, 1) ~= "/" then
+    return { status = "error", reason = "invalid_runner_policy", argv = argv }
   end
 
   local ok, raw = pcall(self.execute, argv, policy)

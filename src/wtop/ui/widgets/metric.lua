@@ -121,9 +121,13 @@ local function axis_label(model, value)
 end
 
 local function render_chart(grid, area, model, context, token, surface)
-  local chart_mode = context.chart_mode == "ascii" and "ascii" or "block"
+  local chart_mode = context.chart_mode == "ascii" and "ascii"
+    or context.chart_mode == "braille" and "braille" or "block"
   local label_width = 0
   local scale_preview
+  local axis_row = area.height >= 4 and type(model.history) == "table"
+    and type(model.history.timestamps_ns) == "table" and 1 or 0
+  local plot_height = area.height - axis_row
   if area.width >= 22 then
     -- The gutter is sized from the labels that are going to be drawn, so the
     -- scale it measures has to be the scale the plot uses.  Measuring that scale
@@ -147,7 +151,8 @@ local function render_chart(grid, area, model, context, token, surface)
     -- only argument is a comment saying it is needed, hides the fact that the
     -- estimate above is the thing doing the work.
     _, scale_preview = Chart.render(model.history, area.width, 1,
-      { min = model.min, max = model.max, mode = chart_mode })
+      { min = model.min, max = model.max, mode = chart_mode,
+        column_ns = context.chart_column_ns })
     local top = axis_label(model, scale_preview.maximum)
     local bottom = axis_label(model, scale_preview.minimum)
     label_width = math.max(Width.display_width(top, grid.width_options),
@@ -160,10 +165,11 @@ local function render_chart(grid, area, model, context, token, surface)
   if plot_width < 4 then
     plot_width, label_width = area.width, 0
   end
-  local rows, scale = Chart.render(model.history, plot_width, area.height, {
+  local rows, scale = Chart.render(model.history, plot_width, plot_height, {
     min = model.min,
     max = model.max,
     mode = chart_mode,
+    column_ns = context.chart_column_ns,
     gap = chart_mode == "ascii" and " " or "·",
   })
   local chart_style = Util.style(context, token, surface)
@@ -177,9 +183,22 @@ local function render_chart(grid, area, model, context, token, surface)
     if not scale.flat then
       grid:write(area.x, area.y, axis_label(model, scale.maximum), muted, label_width - 1)
     end
-    if area.height > 1 then
-      grid:write(area.x, area.y + area.height - 1, axis_label(model, scale.minimum),
+    if plot_height > 1 then
+      grid:write(area.x, area.y + plot_height - 1, axis_label(model, scale.minimum),
         muted, label_width - 1)
+    end
+  end
+  if axis_row == 1 and scale.window_ns then
+    local seconds = scale.window_ns / 1000000000
+    local left = seconds < 1 and string.format("-%.1fs", seconds)
+      or string.format("-%ds", math.floor(seconds + 0.5))
+    local right = "0"
+    local leading = scale.leading_columns or 0
+    if plot_width - leading >= #left + #right + 1 then
+      local muted = Util.style(context, "text.muted", surface)
+      local y = area.y + plot_height
+      grid:write(area.x + label_width + leading, y, left, muted, #left)
+      grid:write(area.x + area.width - #right, y, right, muted, #right)
     end
   end
   return true
@@ -267,19 +286,29 @@ function M.render(grid, area, model, context, variant)
   end
 
   local chart_height = bottom - row + 1
-  -- Below three rows a real plot is noise; keep the familiar single-row
-  -- sparkline pinned to the bottom edge so short cards stay rhythmic.
+  -- Below three rows a full plot is noise; keep a single-row trend pinned
+  -- to the bottom edge so short cards stay rhythmic.
   if chart_height >= 3 and area.width >= 8 and variant == "full" then
     render_chart(grid, { x = area.x, y = row, width = area.width, height = chart_height },
       model, context, quality_token == "text.muted" and "text.muted" or token, surface)
   else
-    local spark = Sparkline.render(model.history, area.width, {
-      mode = context.chart_mode == "ascii" and "ascii" or "block",
-      min = model.min,
-      max = model.max,
-      gap = context.chart_mode == "ascii" and " " or "·",
-      pad = true,
-    })
+    local spark
+    if context.chart_mode == "braille" then
+      local rows = Chart.render(model.history, area.width, 1, {
+        mode = "braille", min = model.min, max = model.max, gap = "·",
+        column_ns = context.chart_column_ns,
+      })
+      spark = rows[1]
+    else
+      spark = Sparkline.render(model.history, area.width, {
+        mode = context.chart_mode == "ascii" and "ascii" or "block",
+        min = model.min,
+        max = model.max,
+        gap = context.chart_mode == "ascii" and " " or "·",
+        pad = true,
+        column_ns = context.chart_column_ns,
+      })
+    end
     grid:write(area.x, bottom, spark, Util.style(context, token, surface), area.width)
   end
 end

@@ -177,8 +177,8 @@ else
 end
 
 -- ---------------------------------------------------------------------------
--- Processes: the enumerated set must match the /proc/<pid> directories, and
--- the first sample must already carry usable CPU values.
+-- Processes: the current process must appear even in a small PID namespace,
+-- and the first sample must already carry usable CPU values.
 -- ---------------------------------------------------------------------------
 
 local process_sample = Process.new({ read_cmdline = true }):sample({})
@@ -186,24 +186,40 @@ if process_sample.status ~= "ok" then
   skip("process collector reported " .. tostring(process_sample.status))
 else
   local live = 0
+  local self_stat = read_file("/proc/self/stat")
+  local self_pid = self_stat and tonumber(self_stat:match("^(%d+)"))
+  local includes_self = false
   for _, entry in ipairs(process_sample.data.list or {}) do
     assert(type(entry.pid) == "number" and entry.pid > 0, "every row needs a PID")
     assert(type(entry.starttime_ticks) == "number",
       "every row needs a start time, which is what makes the identity reusable")
+    if entry.pid == self_pid then includes_self = true end
     live = live + 1
   end
-  assert(live > 5, "a live host must have more than five processes")
-
-  -- The first sample has nothing to difference against.  It must still produce
-  -- a usable ordering, marked estimated rather than passed off as measured.
-  local with_cpu, estimated = 0, 0
-  for _, entry in ipairs(process_sample.data.list or {}) do
-    if entry.cpu_percent then with_cpu = with_cpu + 1 end
-    if entry.quality == "estimated" then estimated = estimated + 1 end
+  assert(live > 0, "a live procfs must yield at least one process")
+  if self_pid then
+    assert(includes_self, "the current process must be in the collector's view")
   end
-  assert(with_cpu > live // 2,
-    string.format("the first sample must price most processes: %d of %d", with_cpu, live))
-  assert(estimated > 0, "first-sample CPU must be labelled estimated, not fresh")
+
+  -- The first sample has nothing to difference against. Processes older than
+  -- the collector's half-second floor must still have an estimated CPU value.
+  local eligible, with_cpu, estimated = 0, 0, 0
+  for _, entry in ipairs(process_sample.data.list or {}) do
+    if type(entry.elapsed_seconds) == "number" and entry.elapsed_seconds > 0.5
+        and type(entry.cpu_ticks) == "number" then
+      eligible = eligible + 1
+      if entry.cpu_percent ~= nil then with_cpu = with_cpu + 1 end
+      if entry.quality == "estimated" then estimated = estimated + 1 end
+    end
+  end
+  if eligible == 0 then
+    skip("no process is old enough for a first-sample CPU estimate")
+  else
+    assert(with_cpu == eligible,
+      string.format("first-sample CPU is missing: %d of %d priced", with_cpu, eligible))
+    assert(estimated == eligible,
+      "first-sample CPU must be labelled estimated, not fresh")
+  end
 end
 
 -- ---------------------------------------------------------------------------

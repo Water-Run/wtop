@@ -90,7 +90,7 @@ end -- native module present: vendor probe states
 -- from the service inspector.  The list is pinned, because there is no
 -- declarative registry of inspector tools to derive it from -- the argv arrays
 -- are built inline -- so a new inspector has to add its command here.
-for _, helper in ipairs({ "smartctl", "nvme", "perf", "systemctl" }) do
+for _, helper in ipairs({ "smartctl", "nvme", "perf", "systemctl", "journalctl", "loginctl", "sshd" }) do
   assert(report.helpers[helper], "the helper list names " .. helper)
 end
 for _, absent in ipairs({ "lspci", "nvidia-smi", "rocm-smi", "intel_gpu_top",
@@ -108,6 +108,9 @@ for name in pairs(report.helpers) do
   for _, path in ipairs({
     "src/wtop/inspectors/smart.lua", "src/wtop/inspectors/perf_bandwidth.lua",
     "src/wtop/inspectors/ram_bandwidth.lua", "src/wtop/inspectors/service.lua",
+    "src/wtop/inspectors/journal.lua",
+    "src/wtop/inspectors/logind.lua",
+    "src/wtop/inspectors/sshd_config.lua",
   }) do
     local handle = io.open(path, "rb")
     if handle then

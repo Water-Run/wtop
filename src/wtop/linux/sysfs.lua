@@ -35,6 +35,29 @@ function Sysfs.basename(path)
   return name and name ~= "." and name ~= ".." and name or nil
 end
 
+-- Resolve a class/dev symlink lexically. Kernel device links point into the
+-- real /sys/devices tree; do not turn a missing link into an invented path.
+function Sysfs.device_path(fs, path)
+  if type(fs.readlink) ~= "function" then return nil end
+  local target = fs:readlink(path)
+  if type(target) ~= "string" or target == "" or #target > 4096
+      or target:find("[%z\1-\31\127]") then return nil end
+  if target:sub(1, 1) ~= "/" then
+    target = path:match("^(.*)/[^/]+$") .. "/" .. target
+  end
+  local parts = {}
+  for part in target:gmatch("[^/]+") do
+    if part == ".." then
+      if #parts == 0 then return nil end
+      parts[#parts] = nil
+    elseif part ~= "." then
+      parts[#parts + 1] = part
+    end
+  end
+  local resolved = "/" .. table.concat(parts, "/")
+  return #resolved <= 4096 and resolved:match("^/sys/devices/.") and resolved or nil
+end
+
 function Sysfs.pci_bdf(path)
   if type(path) ~= "string" then
     return nil

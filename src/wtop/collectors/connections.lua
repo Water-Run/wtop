@@ -2,6 +2,7 @@ local Capability = require("wtop.core.capability")
 local Common = require("wtop.collectors.common")
 local FS = require("wtop.linux.fs")
 local SocketTables = require("wtop.linux.socket_tables")
+local Parsers = require("wtop.linux.parsers")
 
 local Connections = {}
 Connections.__index = Connections
@@ -51,6 +52,9 @@ end
 
 local function safe_name(value)
   if type(value) ~= "string" then return nil end
+  -- /proc/<pid>/comm ends with a newline. Remove that delimiter before
+  -- replacing embedded control characters, or every owner gains a '?'.
+  value = Common.trim(value)
   value = value:gsub("%z+", " ")
   value = value:gsub("[%c]", function(character) return character == "\t" and " " or "?" end)
   if not utf8.len(value) then
@@ -132,6 +136,12 @@ end
 
 local function scan_owners(fs, proc_path, wanted_inodes, options)
   local limits, limit_error = bounded_owner_limits(options)
+  local target = options.target_process
+  local target_valid = type(target) == "table"
+    and type(target.pid) == "number" and math.type(target.pid) == "integer"
+    and target.pid > 0 and target.pid <= 2147483647
+    and type(target.id) == "string"
+    and target.id:match("^" .. tostring(target.pid) .. ":%d+$") ~= nil
   local stats = {
     enabled = true,
     status = "ok",
@@ -153,6 +163,8 @@ local function scan_owners(fs, proc_path, wanted_inodes, options)
     owners_attached = 0,
     owner_limit_sockets = 0,
     name_errors = 0,
+    target_id = target_valid and target.id or nil,
+    target_status = target_valid and "not_scanned" or target and "invalid" or nil,
     process_limit_reached = false,
     link_limit_reached = false,
   }
@@ -165,6 +177,9 @@ local function scan_owners(fs, proc_path, wanted_inodes, options)
   end
   if next(wanted_inodes) == nil then
     stats.status = "empty"
+    -- A connection table with no addressable inodes has no rows to attribute.
+    -- The caller already confirmed that at least one kernel table was read.
+    if target_valid then stats.target_status = "ok" end
     return owners_by_inode, stats
   end
 
@@ -194,8 +209,27 @@ local function scan_owners(fs, proc_path, wanted_inodes, options)
   end
   stats.process_candidates = #processes
   if proc_detail == true or #processes > limits.max_processes then stats.process_limit_reached = true end
-  local process_count = math.min(#processes, limits.max_processes)
+  local scan_processes = {}
+  if target_valid then
+    -- A jump names one process exactly. Reserve a slot for it even when the
+    -- bounded /proc listing stops before its PID or the global fd budget is
+    -- consumed by earlier processes.
+    scan_processes[1] = { text = tostring(target.pid), number = target.pid }
+  end
+  local listed_target = false
+  for _, process in ipairs(processes) do
+    if target_valid and process.number == target.pid then
+      listed_target = true
+    elseif #scan_processes < limits.max_processes then
+      scan_processes[#scan_processes + 1] = process
+    end
+  end
+  if target_valid and not listed_target and #processes >= limits.max_processes then
+    stats.process_limit_reached = true
+  end
+  local process_count = #scan_processes
   local owner_limit_seen = {}
+  local owner_pids_by_inode = {}
   local names = {}
   local stop = false
 
@@ -210,8 +244,24 @@ local function scan_owners(fs, proc_path, wanted_inodes, options)
 
   for process_index = 1, process_count do
     if stop then break end
-    local process = processes[process_index]
+    local process = scan_processes[process_index]
     stats.processes_considered = stats.processes_considered + 1
+    local requested = target_valid and process.number == target.pid
+    local target_before
+    local target_owners = {}
+    local target_partial = false
+    if requested then
+      local raw, read_error = call_fs("read", fs,
+        proc_path .. "/" .. process.text .. "/stat", 65536)
+      local parsed = raw and Parsers.process_stat(raw)
+      if parsed and parsed.pid == target.pid then
+        if parsed.id == target.id then target_before = parsed.id
+        else stats.target_status = "changed" end
+      else
+        stats.target_status = read_error and error_kind(read_error) == "denied"
+          and "denied" or "unavailable"
+      end
+    end
     local fd_path = proc_path .. "/" .. process.text .. "/fd"
     local fd_entries, fd_error, fd_detail
     if limits.max_fds_per_process > 0 then
@@ -222,6 +272,9 @@ local function scan_owners(fs, proc_path, wanted_inodes, options)
     end
     if not fd_entries then
       local kind = error_kind(fd_error, fd_detail)
+      if requested and target_before then
+        stats.target_status = kind == "denied" and "denied" or "unavailable"
+      end
       if kind == "denied" then stats.processes_denied = stats.processes_denied + 1
       elseif kind == "missing" then stats.process_races = stats.process_races + 1
       else stats.process_errors = stats.process_errors + 1 end
@@ -235,11 +288,13 @@ local function scan_owners(fs, proc_path, wanted_inodes, options)
       stats.fd_entries = stats.fd_entries + #descriptors
       if fd_detail == true or #descriptors > limits.max_fds_per_process then
         stats.fd_truncated_processes = stats.fd_truncated_processes + 1
+        if requested then target_partial = true end
       end
       local descriptor_count = math.min(#descriptors, limits.max_fds_per_process)
       for descriptor_index = 1, descriptor_count do
         if stats.links_examined >= limits.max_total_links then
           stats.link_limit_reached = true
+          if requested then target_partial = true end
           stop = true
           break
         end
@@ -250,6 +305,7 @@ local function scan_owners(fs, proc_path, wanted_inodes, options)
         )
         if not target then
           local kind = error_kind(link_error, link_errno)
+          if requested then target_partial = true end
           if kind == "denied" then stats.link_denied = stats.link_denied + 1
           elseif kind == "missing" then stats.link_races = stats.link_races + 1
           else stats.link_errors = stats.link_errors + 1 end
@@ -265,20 +321,41 @@ local function scan_owners(fs, proc_path, wanted_inodes, options)
               stats.matched_links = stats.matched_links + 1
               local owners = owners_by_inode[inode]
               if not owners then owners = {}; owners_by_inode[inode] = owners end
-              if #owners < limits.max_owners_per_socket then
-                owners[#owners + 1] = {
-                  pid = process.number,
-                  fd = descriptor.number,
-                  name = process_name(process.text),
-                }
+              local by_pid = owner_pids_by_inode[inode]
+              if not by_pid then by_pid = {}; owner_pids_by_inode[inode] = by_pid end
+              local existing = by_pid[process.number]
+              if existing then
+                existing.fds[#existing.fds + 1] = descriptor.number
+                existing.fd_count = existing.fd_count + 1
+              elseif #owners < limits.max_owners_per_socket then
+                local owner = { pid = process.number, fd = descriptor.number,
+                  fds = { descriptor.number }, fd_count = 1,
+                  name = process_name(process.text) }
+                owners[#owners + 1] = owner
+                by_pid[process.number] = owner
+                if requested then target_owners[#target_owners + 1] = owner end
                 stats.owners_attached = stats.owners_attached + 1
-              elseif not owner_limit_seen[inode] then
-                owner_limit_seen[inode] = true
-                stats.owner_limit_sockets = stats.owner_limit_sockets + 1
+              else
+                if requested then target_partial = true end
+                if not owner_limit_seen[inode] then
+                  owner_limit_seen[inode] = true
+                  stats.owner_limit_sockets = stats.owner_limit_sockets + 1
+                end
               end
             end
           end
         end
+      end
+    end
+    if requested and target_before and fd_entries then
+      local raw = call_fs("read", fs,
+        proc_path .. "/" .. process.text .. "/stat", 65536)
+      local parsed = raw and Parsers.process_stat(raw)
+      if parsed and parsed.id == target_before and parsed.pid == target.pid then
+        for _, owner in ipairs(target_owners) do owner.id = target.id end
+        stats.target_status = target_partial and "partial" or "ok"
+      else
+        stats.target_status = "changed"
       end
     end
   end
@@ -502,6 +579,7 @@ function Connections:sample(context)
       max_fds_per_process = self.max_fds_per_process,
       max_total_links = self.max_total_links,
       max_owners_per_socket = self.max_owners_per_socket,
+      target_process = context and context.connection_owner_target,
     })
     partial = partial or owner_scan.partial
   else
@@ -513,7 +591,9 @@ function Connections:sample(context)
     local owners = owners_by_inode[connection.inode]
     if owners then
       for index, owner in ipairs(owners) do
-        connection.owners[index] = { pid = owner.pid, fd = owner.fd, name = owner.name }
+        connection.owners[index] = { pid = owner.pid, fd = owner.fd,
+          fds = owner.fds, fd_count = owner.fd_count, name = owner.name,
+          id = owner.id }
       end
     end
     connection.owners_quality = (not scan_enabled or connection.inode == "0") and "unavailable"

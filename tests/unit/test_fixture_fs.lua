@@ -26,9 +26,13 @@
 
 package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;;" .. package.path
 local Fixture = require("support.fixture_fs")
+assert(not Fixture.new({}):exists("/proc/self/stat"),
+    "fixture existence must not consult the real host")
+assert(Fixture.new({ files = { ["/wtop-fixture-only/file"] = "value" } }):exists("/wtop-fixture-only/file"),
+    "fixture existence must see declared files absent from the real host")
 
 -- Everything a fixture filesystem can be asked about a path, rendered as one
--- deterministic string.  Four accessors rather than one, because the kinds do
+-- deterministic string.  Five accessors rather than one, because the kinds do
 -- not fail the same way: a dropped `denied` still leaves the file readable, and
 -- a dropped `truncated` still lists the right names.  Reading only `read` would
 -- have missed both.
@@ -37,6 +41,9 @@ local function observe(fs, path)
     local content, err = fs:read(path)
     parts[#parts + 1] = "read=" .. (content ~= nil and ("ok:" .. content)
         or ("err:" .. tostring(err and err.kind) .. "/" .. tostring(err and err.message)))
+    local slice, slice_err = fs:read_at(path, 0, 1)
+    parts[#parts + 1] = "read_at=" .. (slice ~= nil and ("ok:" .. slice)
+        or ("err:" .. tostring(slice_err and slice_err.kind)))
     local target, link_err = fs:readlink(path)
     parts[#parts + 1] = "readlink=" .. (target ~= nil and ("ok:" .. target)
         or ("err:" .. tostring(link_err and link_err.kind)))

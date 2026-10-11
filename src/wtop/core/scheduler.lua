@@ -230,6 +230,8 @@ end
 function Scheduler:probe_all(context)
   local capabilities = {}
   context = context or self.context
+  local previous_batch = context._collector_batch
+  context._collector_batch = {}
   for _, id in ipairs(self.order) do
     local collector = self.tasks[id].collector
     if type(collector.probe) == "function" then
@@ -254,6 +256,7 @@ function Scheduler:probe_all(context)
       capabilities[id] = { state = "available", available = true }
     end
   end
+  context._collector_batch = previous_batch
   return capabilities
 end
 
@@ -264,6 +267,8 @@ function Scheduler:tick(context)
   context = context or self.context
   local now = call_now(self.clock)
   local completed = {}
+  local previous_batch = context._collector_batch
+  context._collector_batch = {}
 
   for _, id in ipairs(self.order) do
     local task = self.tasks[id]
@@ -308,6 +313,7 @@ function Scheduler:tick(context)
       completed[id] = result
     end
   end
+  context._collector_batch = previous_batch
   return completed
 end
 

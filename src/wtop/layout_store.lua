@@ -1,6 +1,7 @@
 local I18n = require("wtop.i18n")
 local Layout = require("wtop.model.layout")
 local ProcessColumns = require("wtop.model.process_columns")
+local Workspace = require("wtop.workspace")
 local FS = require("wtop.linux.fs")
 local native = require("wtop.native")
 local ConfigPath = require("wtop.config_path")
@@ -26,6 +27,86 @@ M.DEFAULT_WORKSPACE = "default"
 -- that a future version can forget.
 local COLUMN_KEYS = {}
 for _, key in ipairs(ProcessColumns.keys()) do COLUMN_KEYS[key] = true end
+local TAB_KEYS = {}
+for _, tab in ipairs(Workspace.tabs_definition) do TAB_KEYS[tab.id] = true end
+
+local function parse_tabs(value, defaults, custom_ids)
+    if type(value) ~= "table" or value == I18n.Yaml.null then
+        return nil, "layout tabs must be a sequence"
+    end
+    local keyed, result, seen = 0, {}, {}
+    for key in pairs(value) do
+        if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then
+            return nil, "layout tabs must be a dense sequence"
+        end
+        keyed = keyed + 1
+    end
+    for _, id in ipairs(value) do
+        if not (TAB_KEYS[id] or custom_ids and custom_ids[id]) or not defaults[id] then
+            return nil, "unknown layout tab: " .. tostring(id)
+        end
+        if seen[id] then return nil, "duplicate layout tab: " .. id end
+        seen[id] = true
+        result[#result + 1] = id
+    end
+    if #result ~= keyed then return nil, "layout tabs must be a dense sequence" end
+    if #result == 0 then return nil, "layout must keep at least one tab" end
+    return result
+end
+
+local function parse_removed(value, defaults)
+    if value == nil then return nil end
+    if type(value) ~= "table" or value == I18n.Yaml.null then
+        return nil, "layout removed_widgets must be a mapping"
+    end
+    local result = {}
+    for page, list in pairs(value) do
+        local order = defaults[page]
+        if not order then return nil, "unknown removed_widgets page: " .. tostring(page) end
+        if type(list) ~= "table" or list == I18n.Yaml.null then
+            return nil, "removed_widgets." .. page .. " must be a sequence"
+        end
+        local allowed, seen, count, removed = {}, {}, 0, {}
+        for _, id in ipairs(order) do allowed[id] = true end
+        for key in pairs(list) do
+            if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then
+                return nil, "removed_widgets." .. page .. " must be a dense sequence"
+            end
+            count = count + 1
+        end
+        for _, id in ipairs(list) do
+            if not allowed[id] then return nil, "unknown removed widget in " .. page .. ": " .. tostring(id) end
+            if seen[id] then return nil, "duplicate removed widget in " .. page .. ": " .. id end
+            seen[id] = true
+            removed[#removed + 1] = id
+        end
+        if count ~= #removed then
+            return nil, "removed_widgets." .. page .. " must be a dense sequence"
+        end
+        if #removed == 0 then return nil, "removed_widgets." .. page .. " is empty" end
+        result[page] = seen
+    end
+    if next(result) == nil then return nil, "layout removed_widgets is empty" end
+    return result
+end
+
+local function parse_removed_workspaces(value, defaults, workspaces)
+    if value == nil then return nil end
+    if type(value) ~= "table" or value == I18n.Yaml.null then
+        return nil, "layout removed_workspaces must be a mapping"
+    end
+    local result = {}
+    for name, pages in pairs(value) do
+        if not workspaces[name] then
+            return nil, "unknown removed_workspaces name: " .. tostring(name)
+        end
+        local parsed, reason = parse_removed(pages, defaults)
+        if not parsed then return nil, "workspace " .. name .. ": " .. tostring(reason) end
+        result[name] = parsed
+    end
+    if next(result) == nil then return nil, "layout removed_workspaces is empty" end
+    return result
+end
 
 -- The name rule lives in the layout model, so the file and the live session
 -- cannot disagree about which names exist.  They used to: a second copy of the
@@ -91,8 +172,16 @@ function M.path(environment)
     return ConfigPath.file("layout.yml", environment)
 end
 
-local function validate_v1(raw, defaults)
+local function validate_v1(raw, defaults, removed)
     local result = copy_orders(defaults)
+    for page, hidden in pairs(removed or {}) do
+        local kept = {}
+        for _, id in ipairs(result[page]) do
+            if not hidden[id] then kept[#kept + 1] = id end
+        end
+        if #kept == 0 then return nil, "layout page " .. page .. " has no widgets" end
+        result[page] = kept
+    end
     for page, order in pairs(raw.pages) do
         local expected = defaults[page]
         if not expected then
@@ -109,6 +198,9 @@ local function validate_v1(raw, defaults)
             if type(id) ~= "string" or not allowed[id] then
                 return nil, "unknown widget in " .. page .. ": " .. tostring(id)
             end
+            if removed and removed[page] and removed[page][id] then
+                return nil, "removed widget is still placed in " .. page .. ": " .. id
+            end
             if seen[id] then
                 return nil, "duplicate widget in " .. page .. ": " .. id
             end
@@ -116,7 +208,9 @@ local function validate_v1(raw, defaults)
             normalized[#normalized + 1] = id
         end
         for _, id in ipairs(expected) do
-            if not seen[id] then normalized[#normalized + 1] = id end
+            if not seen[id] and not (removed and removed[page] and removed[page][id]) then
+                normalized[#normalized + 1] = id
+            end
         end
         result[page] = normalized
     end
@@ -180,7 +274,7 @@ local function model_node(raw, path, limits)
     return nil, path .. " has unknown node type: " .. tostring(raw.type)
 end
 
-local function validate_v2(raw, defaults)
+local function validate_v2(raw, defaults, removed, custom_seeds)
     local orders, trees = {}, {}
     for page in pairs(raw.pages) do
         if not defaults[page] then return nil, "unknown layout page: " .. tostring(page) end
@@ -188,7 +282,18 @@ local function validate_v2(raw, defaults)
     for page, expected in pairs(defaults) do
         local tree
         if raw.pages[page] == nil then
-            tree = default_tree(expected)
+            local available = {}
+            if custom_seeds and custom_seeds[page] then
+                available[1] = custom_seeds[page]
+            else
+                for _, id in ipairs(expected) do
+                    if not (removed and removed[page] and removed[page][id]) then
+                        available[#available + 1] = id
+                    end
+                end
+            end
+            if #available == 0 then return nil, "layout page " .. page .. " has no widgets" end
+            tree = default_tree(available)
         else
             local limits = { nodes = 0, depth = 1 }
             local parse_error
@@ -196,6 +301,13 @@ local function validate_v2(raw, defaults)
             if not tree then return nil, parse_error end
             local valid, info_or_error = Layout.validate(tree, { allowed_widgets = expected })
             if not valid then return nil, "invalid layout page " .. page .. ": " .. info_or_error end
+            if removed and removed[page] then
+                for _, id in ipairs(info_or_error.order) do
+                    if removed[page][id] then
+                        return nil, "removed widget is still placed in " .. page .. ": " .. id
+                    end
+                end
+            end
             -- Widgets added by a newer wtop have to join a layout that was
             -- saved without them.  Inserting each one below the previous
             -- built a right-leaning chain: every insert halved the remaining
@@ -209,8 +321,12 @@ local function validate_v2(raw, defaults)
             local seen = {}
             for _, id in ipairs(info_or_error.order) do seen[id] = true end
             local additions = {}
-            for _, id in ipairs(expected) do
-                if not seen[id] then additions[#additions + 1] = id end
+            if not (custom_seeds and custom_seeds[page]) then
+                for _, id in ipairs(expected) do
+                    if not seen[id] and not (removed and removed[page] and removed[page][id]) then
+                        additions[#additions + 1] = id
+                    end
+                end
             end
             if #additions > 0 then
                 local existing = #info_or_error.order
@@ -243,7 +359,7 @@ end
 -- today reads the same inside a workspace tomorrow.  The active workspace is
 -- projected back into the v1/v2 shape that every caller already understands,
 -- which is what keeps this additive rather than a rewrite of the store's API.
-local function validate_v3(raw, defaults)
+local function validate_v3(raw, defaults, removed, custom_seeds)
     if type(raw.workspaces) ~= "table" or raw.workspaces == I18n.Yaml.null then
         return nil, "layout workspaces must be a mapping"
     end
@@ -276,7 +392,8 @@ local function validate_v3(raw, defaults)
             schema_version = 2,
             pages = body.pages,
         }
-        local orders, trees_or_error = validate_v2(page_body, defaults)
+        local orders, trees_or_error = validate_v2(page_body, defaults,
+            removed and removed[name], custom_seeds)
         if not orders then
             return nil, "workspace " .. name .. ": " .. tostring(trees_or_error)
         end
@@ -376,7 +493,7 @@ end
 -- The layout half is validated by the version it actually is -- the trees,
 -- ratios and workspace rules did not change -- so v4 stays additive: it is the
 -- same three shapes with one more top-level key, not a fourth layout model.
-local function validate_v4(raw, defaults)
+local function validate_v4(raw, defaults, removed, custom_seeds)
     local has_workspaces = raw.workspaces ~= nil and raw.workspaces ~= I18n.Yaml.null
     local has_pages = raw.pages ~= nil and raw.pages ~= I18n.Yaml.null
     if has_workspaces and has_pages then
@@ -387,7 +504,8 @@ local function validate_v4(raw, defaults)
     local columns, columns_error = parse_columns(raw.process_columns)
     if not columns then return nil, columns_error end
     if has_workspaces then
-        local orders, trees_or_error, workspaces, active = validate_v3(raw, defaults)
+        local orders, trees_or_error, workspaces, active =
+            validate_v3(raw, defaults, removed, custom_seeds)
         if not orders then return nil, trees_or_error end
         return orders, trees_or_error, workspaces, active, columns
     end
@@ -397,14 +515,109 @@ local function validate_v4(raw, defaults)
     if type(raw.pages) ~= "table" or raw.pages == I18n.Yaml.null then
         return nil, "layout pages must be a mapping"
     end
-    if has_tree_body(raw.pages) then
-        local orders, trees_or_error = validate_v2(raw, defaults)
+    if has_tree_body(raw.pages) or custom_seeds then
+        local orders, trees_or_error = validate_v2(raw, defaults, removed,
+            custom_seeds)
         if not orders then return nil, trees_or_error end
         return orders, trees_or_error, nil, nil, columns
     end
-    local orders, trees_or_error = validate_v1(raw, defaults)
+    local orders, trees_or_error = validate_v1(raw, defaults, removed)
     if not orders then return nil, trees_or_error end
     return orders, trees_or_error, nil, nil, columns
+end
+
+local function validate_v5(raw, defaults, custom_seeds, custom_ids)
+    local tabs, tabs_error
+    if raw.tabs ~= nil then
+        tabs, tabs_error = parse_tabs(raw.tabs, defaults, custom_ids)
+        if not tabs then return nil, tabs_error end
+    end
+    local has_workspaces = raw.workspaces ~= nil and raw.workspaces ~= I18n.Yaml.null
+    if has_workspaces and raw.removed_widgets ~= nil then
+        return nil, "workspace layouts use removed_workspaces"
+    elseif not has_workspaces and raw.removed_workspaces ~= nil then
+        return nil, "page layouts use removed_widgets"
+    end
+    local removed, removed_error
+    if has_workspaces then
+        removed, removed_error = parse_removed_workspaces(raw.removed_workspaces,
+            defaults, raw.workspaces)
+    else
+        removed, removed_error = parse_removed(raw.removed_widgets, defaults)
+    end
+    if removed_error then return nil, removed_error end
+    local orders, trees_or_error, workspaces, active, columns =
+        validate_v4(raw, defaults, removed, custom_seeds)
+    if not orders then return nil, trees_or_error end
+    return orders, trees_or_error, workspaces, active, columns, tabs
+end
+
+local function parse_custom_pages(value, defaults)
+    if type(value) ~= "table" or value == I18n.Yaml.null then
+        return nil, "layout custom_pages must be a sequence"
+    end
+    local union, seen_widget = {}, {}
+    for _, tab in ipairs(Workspace.tabs_definition) do
+        for _, id in ipairs(defaults[tab.id] or {}) do
+            if not seen_widget[id] then
+                seen_widget[id] = true
+                union[#union + 1] = id
+            end
+        end
+    end
+    local result, seeds, ids, count = {}, {}, {}, 0
+    for key in pairs(value) do
+        if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then
+            return nil, "layout custom_pages must be a dense sequence"
+        end
+        count = count + 1
+    end
+    for _, raw in ipairs(value) do
+        if type(raw) ~= "table" or raw == I18n.Yaml.null then
+            return nil, "custom page must be a mapping"
+        end
+        for key in pairs(raw) do
+            if key ~= "id" and key ~= "name" and key ~= "seed_widget" then
+                return nil, "unknown custom page key: " .. tostring(key)
+            end
+        end
+        local id = raw.id
+        if type(id) ~= "string" or not id:match("^custom[1-8]$") or ids[id] then
+            return nil, "invalid custom page id: " .. tostring(id)
+        end
+        if type(raw.name) ~= "string" or raw.name == "" or #raw.name > 64
+            or not utf8.len(raw.name) or raw.name:find("[%c]") then
+            return nil, "invalid custom page name: " .. tostring(raw.name)
+        end
+        if not seen_widget[raw.seed_widget] then
+            return nil, "unknown custom page seed widget: " .. tostring(raw.seed_widget)
+        end
+        result[#result + 1] = { id = id, name = raw.name,
+            seed_widget = raw.seed_widget }
+        ids[id], seeds[id] = true, raw.seed_widget
+    end
+    if count ~= #result or count == 0 or count > 8 then
+        return nil, "layout custom_pages must contain 1..8 entries"
+    end
+    local catalog = copy_orders(defaults)
+    for _, definition in ipairs(result) do
+        catalog[definition.id] = {}
+        for index, widget_id in ipairs(union) do
+            catalog[definition.id][index] = widget_id
+        end
+    end
+    return result, catalog, seeds, ids
+end
+
+local function validate_v6(raw, defaults)
+    local definitions, catalog_or_error, seeds, ids =
+        parse_custom_pages(raw.custom_pages, defaults)
+    if not definitions then return nil, catalog_or_error end
+    local orders, trees_or_error, workspaces, active, columns, tabs =
+        validate_v5(raw, catalog_or_error, seeds, ids)
+    if not orders then return nil, trees_or_error end
+    return orders, trees_or_error, workspaces, active, columns, tabs,
+        definitions
 end
 
 -- Each version has an exact key set.  Allowing a key a version does not define
@@ -419,6 +632,12 @@ local KNOWN_KEYS = {
     [3] = { schema_version = true, workspaces = true, active = true },
     [4] = { schema_version = true, pages = true, workspaces = true, active = true,
         process_columns = true },
+    [5] = { schema_version = true, pages = true, workspaces = true, active = true,
+        process_columns = true, tabs = true, removed_widgets = true,
+        removed_workspaces = true },
+    [6] = { schema_version = true, pages = true, workspaces = true, active = true,
+        process_columns = true, tabs = true, removed_widgets = true,
+        removed_workspaces = true, custom_pages = true },
 }
 
 function M.validate(raw, defaults)
@@ -436,6 +655,8 @@ function M.validate(raw, defaults)
             return nil, "unknown layout key: " .. tostring(key)
         end
     end
+    if raw.schema_version == 6 then return validate_v6(raw, defaults) end
+    if raw.schema_version == 5 then return validate_v5(raw, defaults) end
     if raw.schema_version == 4 then return validate_v4(raw, defaults) end
     if raw.schema_version == 3 then return validate_v3(raw, defaults) end
     if type(raw.pages) ~= "table" or raw.pages == I18n.Yaml.null then
@@ -503,13 +724,53 @@ local function emit_columns(lines, indent, columns)
     end
 end
 
--- The body a session saves is whichever of the three it actually has, and the
--- version number says which: v3 with a workspace set, v2 with trees, v1 with
--- neither.  Carrying a column set makes the file v4 whichever body it is, so
--- the version tracks what the file can hold rather than how the session got
--- there -- and a session that never opens the column editor keeps writing the
--- version it had.
-function M.encode(orders, trees, workspaces, active, columns)
+local function emit_tabs(lines, tabs)
+    lines[#lines + 1] = "tabs:"
+    for _, id in ipairs(tabs) do lines[#lines + 1] = "  - " .. quote(id) end
+end
+
+local function removed_for(trees, orders, catalog, custom_ids)
+    local removed = {}
+    for page, expected in pairs(catalog) do
+        if not (custom_ids and custom_ids[page]) then
+            local placed = trees and trees[page] and assert(Layout.to_order(trees[page],
+                { allowed_widgets = expected })) or orders[page] or expected
+            local seen, missing = {}, {}
+            for _, id in ipairs(placed) do seen[id] = true end
+            for _, id in ipairs(expected) do
+                if not seen[id] then missing[#missing + 1] = id end
+            end
+            if #missing > 0 then removed[page] = missing end
+        end
+    end
+    return next(removed) and removed or nil
+end
+
+local function emit_removed_pages(lines, key, removed, indent)
+    lines[#lines + 1] = string.rep(" ", indent) .. key .. ":"
+    for _, page in ipairs(sorted_page_names(removed)) do
+        lines[#lines + 1] = string.rep(" ", indent + 2) .. page .. ":"
+        for _, id in ipairs(removed[page]) do
+            lines[#lines + 1] = string.rep(" ", indent + 4) .. "- " .. quote(id)
+        end
+    end
+end
+
+local function emit_custom_pages(lines, definitions)
+    lines[#lines + 1] = "custom_pages:"
+    for _, definition in ipairs(definitions) do
+        lines[#lines + 1] = "  - id: " .. quote(definition.id)
+        lines[#lines + 1] = "    name: " .. quote(definition.name)
+        lines[#lines + 1] = "    seed_widget: " .. quote(definition.seed_widget)
+    end
+end
+
+-- The body a session saves is whichever form it has: v3 with workspaces, v2
+-- with trees, v1 with neither. Columns raise that form to v4; a customized
+-- visible tab order or an explicit removal raises it to v5. Older files keep
+-- their version until a feature requiring a newer one is saved.
+function M.encode(orders, trees, workspaces, active, columns, tabs, catalog,
+        custom_pages)
     local valid_orders, orders_error = validate_defaults(orders)
     if not valid_orders then error(orders_error, 2) end
     if trees ~= nil and type(trees) ~= "table" then error("layout trees must be a table", 2) end
@@ -524,6 +785,40 @@ function M.encode(orders, trees, workspaces, active, columns)
         if type(columns) ~= "table" then error("layout process_columns must be a table", 2) end
         columns = ProcessColumns.normalize(columns)
     end
+    local custom_ids
+    if custom_pages ~= nil then
+        if catalog == nil then error("custom pages need a widget catalog", 2) end
+        local base = copy_orders(catalog)
+        for _, definition in ipairs(custom_pages) do base[definition.id] = nil end
+        local parsed, error_or_catalog, _, ids = parse_custom_pages(custom_pages, base)
+        if not parsed then error(error_or_catalog, 2) end
+        custom_pages, custom_ids = parsed, ids
+    end
+    if tabs ~= nil then
+        local parsed, tabs_error = parse_tabs(tabs, orders, custom_ids)
+        if not parsed then error(tabs_error, 2) end
+        tabs = parsed
+    end
+    local removed, removed_workspaces
+    if catalog ~= nil then
+        local valid_catalog, catalog_error = validate_defaults(catalog)
+        if not valid_catalog then error(catalog_error, 2) end
+        if workspaces and next(workspaces) ~= nil then
+            removed_workspaces = {}
+            for name, set in pairs(workspaces) do
+                local missing = removed_for(set, orders, catalog, custom_ids)
+                if missing then removed_workspaces[name] = missing end
+            end
+            if next(removed_workspaces) == nil then removed_workspaces = nil end
+        else
+            removed = removed_for(trees, orders, catalog, custom_ids)
+        end
+    end
+    if tabs or removed or removed_workspaces or custom_pages then
+        columns = columns or ProcessColumns.defaults()
+    end
+    local version = custom_pages and 6
+        or (tabs or removed or removed_workspaces) and 5 or columns and 4
     -- An empty set is not a broken workspace set: it is a session that never
     -- named one, and it has to be able to save like any other.  Falling through
     -- keeps such a file at v2, which is what it means.
@@ -541,7 +836,7 @@ function M.encode(orders, trees, workspaces, active, columns)
         local chosen = active
         if chosen == nil or not workspaces[chosen] then chosen = names[1] end
         local lines = {
-            "schema_version: " .. (columns and 4 or 3),
+            "schema_version: " .. (version or 3),
             "active: " .. quote(chosen),
             "workspaces:",
         }
@@ -552,21 +847,35 @@ function M.encode(orders, trees, workspaces, active, columns)
             -- this same loader then refused -- so the exit save replaced a good
             -- layout.yml with a file the next start could not read at all.
             lines[#lines + 1] = "  " .. quote(name) .. ":"
-            emit_pages(lines, 4, workspaces[name], orders)
+            emit_pages(lines, 4, workspaces[name], catalog or orders)
         end
         if columns then emit_columns(lines, 0, columns) end
+        if tabs then emit_tabs(lines, tabs) end
+        if custom_pages then emit_custom_pages(lines, custom_pages) end
+        if removed_workspaces then
+            lines[#lines + 1] = "removed_workspaces:"
+            local names = {}
+            for name in pairs(removed_workspaces) do names[#names + 1] = name end
+            table.sort(names)
+            for _, name in ipairs(names) do
+                emit_removed_pages(lines, quote(name), removed_workspaces[name], 2)
+            end
+        end
         return table.concat(lines, "\n") .. "\n"
     end
     if trees then
-        local lines = { "schema_version: " .. (columns and 4 or 2) }
-        emit_pages(lines, 0, trees, orders)
+        local lines = { "schema_version: " .. (version or 2) }
+        emit_pages(lines, 0, trees, catalog or orders)
         if columns then emit_columns(lines, 0, columns) end
+        if tabs then emit_tabs(lines, tabs) end
+        if custom_pages then emit_custom_pages(lines, custom_pages) end
+        if removed then emit_removed_pages(lines, "removed_widgets", removed, 0) end
         return table.concat(lines, "\n") .. "\n"
     end
     local pages = {}
     for page in pairs(orders) do pages[#pages + 1] = page end
     table.sort(pages)
-    local lines = { "schema_version: " .. (columns and 4 or 1), "pages:" }
+    local lines = { "schema_version: " .. (version or 1), "pages:" }
     for _, page in ipairs(pages) do
         lines[#lines + 1] = "  " .. page .. ":"
         for _, id in ipairs(orders[page]) do
@@ -574,16 +883,19 @@ function M.encode(orders, trees, workspaces, active, columns)
         end
     end
     if columns then emit_columns(lines, 0, columns) end
+    if tabs then emit_tabs(lines, tabs) end
+    if custom_pages then emit_custom_pages(lines, custom_pages) end
+    if removed then emit_removed_pages(lines, "removed_widgets", removed, 0) end
     return table.concat(lines, "\n") .. "\n"
 end
 
 local function recover_from_backup(defaults, path)
     local text = FileBackup.read(path)
     if not text then return nil, nil end
-    local orders, trees, workspaces, active, columns = M.parse(text, defaults,
+    local orders, trees, workspaces, active, columns, tabs, custom_pages = M.parse(text, defaults,
         FileBackup.backup_path(path))
     if not orders then return nil, nil end
-    return orders, trees, workspaces, active, columns
+    return orders, trees, workspaces, active, columns, tabs, custom_pages
 end
 
 function M.load(defaults, path)
@@ -607,26 +919,31 @@ function M.load(defaults, path)
         end
         local reason = read_error and read_error.kind == "too_large" and "layout exceeds 1 MiB"
             or tostring(read_error and read_error.message or "layout read failed")
-        local orders, trees, workspaces, active, columns = recover_from_backup(defaults, path)
+        local orders, trees, workspaces, active, columns, tabs, custom_pages =
+            recover_from_backup(defaults, path)
         if orders then
             return orders, { state = "recovered_backup", path = path,
-                reason = reason }, trees, workspaces, active, columns
+                reason = reason }, trees, workspaces, active, columns, tabs,
+                custom_pages
         end
         return copy_orders(defaults), { state = "error", path = path, reason = reason }, nil
     end
-    local orders, trees_or_error, workspaces, active, columns = M.parse(text, defaults, path)
+    local orders, trees_or_error, workspaces, active, columns, tabs, custom_pages =
+        M.parse(text, defaults, path)
     if not orders then
-        local recovered, trees, recovered_workspaces, recovered_active, recovered_columns =
+        local recovered, trees, recovered_workspaces, recovered_active, recovered_columns,
+            recovered_tabs, recovered_custom_pages =
             recover_from_backup(defaults, path)
         if recovered then
             return recovered, { state = "recovered_backup", path = path,
                 reason = trees_or_error }, trees, recovered_workspaces, recovered_active,
-            recovered_columns
+            recovered_columns, recovered_tabs, recovered_custom_pages
         end
         return copy_orders(defaults), { state = "error", path = path, reason = trees_or_error }, nil
     end
     FileBackup.refresh(path)
-    return orders, { state = "loaded", path = path }, trees_or_error, workspaces, active, columns
+    return orders, { state = "loaded", path = path }, trees_or_error, workspaces, active,
+        columns, tabs, custom_pages
 end
 
 local function ensure_directory(path)
@@ -647,7 +964,8 @@ local function ensure_directory(path)
     return true
 end
 
-function M.save(orders, path, trees, workspaces, active, columns)
+function M.save(orders, path, trees, workspaces, active, columns, tabs, catalog,
+        custom_pages)
     local valid_orders, orders_error = validate_defaults(orders)
     if not valid_orders then return nil, orders_error end
     path = path or M.path()
@@ -661,7 +979,8 @@ function M.save(orders, path, trees, workspaces, active, columns)
     if not ensured then return nil, ensure_error end
     -- Keep the replaced file recoverable before the atomic write lands.
     FileBackup.capture(path)
-    local encoded, content = pcall(M.encode, orders, trees, workspaces, active, columns)
+    local encoded, content = pcall(M.encode, orders, trees, workspaces, active,
+        columns, tabs, catalog, custom_pages)
     if not encoded then return nil, tostring(content) end
     local called, written, write_error = pcall(native.atomic_write, path, content, 384)
     if not called then return nil, tostring(written) end

@@ -15,6 +15,8 @@ local function process(pid, starttime, fields)
     state = fields.state or "S",
     cpu_percent = fields.cpu,
     resident_bytes = fields.memory,
+    priority = fields.priority,
+    nice = fields.nice,
     io = fields.io,
   }
   return value
@@ -99,10 +101,75 @@ assert(tree:rows()[2].tree_depth == 1 and tree:rows()[2].filter_ancestor)
 assert(tree:rows()[3].tree_depth == 2 and tree:rows()[3].filter_match)
 assert(tree:rows()[1].tree_has_children and tree:rows()[2].tree_has_children)
 assert(tree:select_id("3:3"))
+local moved, row = tree:select_parent()
+assert(moved and row.id == "2:2" and tree:selected_id() == "2:2")
+moved, row = tree:select_parent()
+assert(moved and row.id == "1:1")
+assert(tree:select_parent() == false)
+moved, row = tree:select_first_child()
+assert(moved and row.id == "2:2", "the filter keeps the matching branch visible")
+moved, row = tree:select_first_child()
+assert(moved and row.id == "3:3")
+assert(tree:select_first_child() == false)
 tree:set_query("")
 assert(tree:selected_id() == "3:3")
 assert(#tree:rows() == 4)
 assert(tree:toggle_tree() == false and tree:selected_id() == "3:3")
+assert(tree:select_parent() == false and tree:select_first_child() == false)
+
+-- Folding is bound to a process generation, and hiding descendants is not a
+-- collection or viewport truncation. Search and cgroup filters still reveal a
+-- direct match through its folded ancestors without discarding the fold.
+local folding = Controller.new({ sort_key = "pid", tree = true })
+folding:update({ child, unrelated, shell, root })
+assert(ids(folding:rows()) == "1:1,2:2,3:3,4:4")
+assert(folding:select_id("2:2"))
+assert(select(1, folding:toggle_collapse()))
+assert(ids(folding:rows()) == "1:1,2:2,4:4")
+assert(folding:rows()[2].tree_collapsed and folding:rows()[2].tree_has_children)
+assert(folding:status().hidden_by_collapse == 1
+  and folding:status().collapsed_count == 1 and not folding:status().truncated)
+local followed, followed_row = folding:select_first_child()
+assert(followed and followed_row.id == "3:3"
+  and folding:status().hidden_by_collapse == 0,
+  "] opens a folded parent before selecting its first child")
+assert(folding:select_id("2:2"))
+assert(select(1, folding:toggle_collapse()))
+folding:set_query("needle")
+assert(ids(folding:rows()) == "1:1,2:2,3:3")
+assert(not folding:rows()[2].tree_collapsed
+  and folding:status().hidden_by_collapse == 0)
+assert(select(2, folding:toggle_collapse()) == "filter_active")
+assert(folding:select_id("3:3"))
+folding:set_query("")
+assert(ids(folding:rows()) == "1:1,2:2,4:4")
+assert(folding:selected_id() == "2:2",
+  "clearing a search reanchors a now-hidden selection on its visible parent")
+folding:set_pid_filter({ 3 }, "worker")
+assert(ids(folding:rows()) == "1:1,2:2,3:3")
+folding:clear_pid_filter()
+assert(ids(folding:rows()) == "1:1,2:2,4:4")
+folding:toggle_tree()
+assert(folding:toggle_tree() and ids(folding:rows()) == "1:1,2:2,4:4")
+local reused_shell = process(2, 22, { parent_pid = 1, name = "new shell" })
+folding:update({ root, reused_shell, child, unrelated })
+assert(ids(folding:rows()) == "1:1,2:22,3:3,4:4")
+assert(folding:status().collapsed_count == 0,
+  "a recycled PID is a new process whose children are open")
+local tiny_fold = Controller.new({ sort_key = "pid", tree = true, max_rows = 2 })
+tiny_fold:update({ root, shell, child, unrelated })
+assert(tiny_fold:status().truncated)
+assert(tiny_fold:select_id("1:1") and select(1, tiny_fold:toggle_collapse()))
+assert(ids(tiny_fold:rows()) == "1:1" and not tiny_fold:status().truncated
+  and tiny_fold:status().hidden_by_collapse == 3,
+  "folded descendants do not count as rows lost to the table cap")
+assert(select(2, Controller.new():toggle_collapse()) == "tree_disabled")
+
+local capped_tree = Controller.new({ sort_key = "pid", tree = true, max_rows = 2 })
+capped_tree:update({ child, root, shell })
+assert(capped_tree:select_id("2:2"))
+assert(capped_tree:select_first_child() == false,
+  "a child outside the bounded visible rows is not silently selected")
 
 -- Cycles are broken deterministically, orphans remain roots, and displayed
 -- depth is capped without losing descendants.
@@ -132,12 +199,15 @@ assert(guarded:status().visible == 7 and guarded:status().total == 7)
 -- Every sort puts missing values last; equal keys have a stable PID/id
 -- tie-break independent of input order.
 local values = {
-  process(3, 3, { name = "same", cpu = nil, memory = 100, io = { read_bytes = 5, write_bytes = 90 } }),
-  process(1, 1, { name = "same", cpu = 20, memory = nil, io = { read_bytes = 20 } }),
+  process(3, 3, { name = "same", cpu = nil, memory = 100, priority = 30, nice = 5,
+    io = { read_bytes = 5, write_bytes = 90 } }),
+  process(1, 1, { name = "same", cpu = 20, memory = nil, priority = 20, nice = -5,
+    io = { read_bytes = 20 } }),
   process(2, 2, { name = "Beta", cpu = 20, memory = 300, io = { write_bytes = 40 } }),
 }
 local sorted = Controller.new({ sort_key = "cpu", descending = true })
 sorted:update(values)
+assert(not sorted:requires_io(), "the default CPU sort does not request process I/O")
 assert(ids(sorted:rows()) == "1:1,2:2,3:3")
 sorted:update({ values[2], values[1], values[3] })
 assert(ids(sorted:rows()) == "1:1,2:2,3:3")
@@ -146,13 +216,31 @@ assert(ids(sorted:rows()) == "3:3,2:2,1:1")
 assert(sorted:set_sort("name", false))
 assert(ids(sorted:rows()) == "2:2,1:1,3:3")
 assert(sorted:set_sort("io_read", true))
+assert(sorted:requires_io() and sorted:status().requires_io,
+  "an I/O sort requests comparable readings for all processes")
 assert(ids(sorted:rows()) == "1:1,3:3,2:2")
 assert(sorted:set_sort("io_write", true))
 assert(ids(sorted:rows()) == "3:3,2:2,1:1")
+assert(sorted:set_sort("priority", false))
+assert(not sorted:requires_io(), "leaving I/O sort stops its bulk scan")
+assert(ids(sorted:rows()) == "1:1,3:3,2:2")
+assert(sorted:set_sort("nice", false))
+assert(ids(sorted:rows()) == "1:1,3:3,2:2")
+assert(sorted:set_sort("nice", true))
+assert(ids(sorted:rows()) == "3:3,1:1,2:2")
+assert(sorted:set_sort("io_write", true))
 local before = sorted:selected_id()
 assert(sorted:set_sort("bogus", true) == false)
 assert(sorted:selected_id() == before and sorted:status().sort_key == "io_write")
 local next_key, next_descending = sorted:cycle_sort()
+assert(next_key == "priority" and next_descending == false)
+next_key, next_descending = sorted:cycle_sort()
+assert(next_key == "nice" and next_descending == false)
+next_key, next_descending = sorted:cycle_sort()
+assert(next_key == "io_read_rate" and next_descending == true)
+next_key, next_descending = sorted:cycle_sort()
+assert(next_key == "io_write_rate" and next_descending == true)
+next_key, next_descending = sorted:cycle_sort()
 assert(next_key == "cpu" and next_descending == true)
 
 -- Missing and duplicate identities are accounted for, never selected twice.
@@ -254,10 +342,12 @@ assert(highlight_status.query_highlights[1] == "root", "the literal term is repo
 local metric_set = {
     { id = "1:1", pid = 1, name = "systemd", user = "root", state = "S",
       starttime_ticks = 1, cpu_percent = 0.4, resident_bytes = 12 * 1024 * 1024,
-      virtual_bytes = 400 * 1024 * 1024, threads = 1, cpu_ticks = 250 },
+      virtual_bytes = 400 * 1024 * 1024, threads = 1, cpu_ticks = 250,
+      priority = 20, nice = 0 },
     { id = "2:2", pid = 42, name = "bash", user = "waterrun", state = "S",
       starttime_ticks = 2, cpu_percent = 55.5, resident_bytes = 900 * 1024 * 1024,
       virtual_bytes = 1024 * 1024 * 1024, threads = 4, cpu_ticks = 90000,
+      priority = 10, nice = -5,
       io = { read_bytes = 5 * 1024 * 1024, write_bytes = 0 } },
     { id = "3:3", pid = 99, name = "kworker", user = "root", state = "D",
       starttime_ticks = 3, cpu_percent = 12, resident_bytes = 300 * 1024 * 1024,
@@ -293,11 +383,70 @@ expect_metric_query("threads>1", "bash,kworker", "thread count")
 expect_metric_query("threads>=2", "bash,kworker", "thread count with a boundary")
 expect_metric_query("pid>50", "kworker", "pid as a number")
 expect_metric_query("pid>1", "bash,kworker", "pid excludes the smallest")
--- CPU time is stored in centiseconds and filtered in seconds.
+-- Older standalone fixtures carry centiseconds; sampled rows now publish
+-- seconds after applying the platform's actual tick rate.
 expect_metric_query("time>100", "bash", "cpu time in seconds")
 expect_metric_query("time>3", "bash,kworker", "a three-second floor")
+expect_metric_query("elapsed<60", "", "missing age is not zero")
+expect_metric_query("!elapsed<60", "", "negation does not invent an age")
+local time_controller = Controller.new({ sort_key = "time", descending = true })
+time_controller:update({
+    { pid = 4, starttime_ticks = 1, name = "measured", cpu_ticks = 90000,
+      cpu_time_seconds = 2 },
+    { pid = 5, starttime_ticks = 1, name = "rate-only", cpu_ticks = 750,
+      clock_ticks_per_second = 250 },
+})
+assert(time_controller:rows()[1].name == "rate-only",
+    "time sorting compares seconds even when only one row has a converted value")
+time_controller:set_query("time>2.5")
+assert(#time_controller:rows() == 1 and time_controller:rows()[1].name == "rate-only")
 expect_metric_query("ioread>1M", "bash", "io read")
 expect_metric_query("iowrite>1M", "kworker", "io write")
+local cumulative_controller = Controller.new({ sort_key = "io_read", descending = true })
+cumulative_controller:update({
+  { pid = 10, starttime_ticks = 1, io = { read_bytes_per_second = 9999 } },
+  { pid = 11, starttime_ticks = 1, io = { read_bytes = 1 } },
+})
+assert(cumulative_controller:rows()[1].pid == 11,
+  "a cumulative I/O sort cannot substitute an interval rate for a missing counter")
+cumulative_controller:set_query("ioread>0")
+assert(#cumulative_controller:rows() == 1
+  and cumulative_controller:rows()[1].pid == 11,
+  "a cumulative I/O filter also treats a rate-only row as unknown")
+local rate_controller = Controller.new({ sort_key = "io_read_rate", descending = true })
+rate_controller:update({
+  { pid = 10, starttime_ticks = 1, io_rate = {
+      read_bytes_per_second = 1024, write_bytes_per_second = 0 } },
+  { pid = 11, starttime_ticks = 1, io_rate = {
+      read_bytes_per_second = 4096, write_bytes_per_second = 8192 } },
+  { pid = 12, starttime_ticks = 1 },
+})
+assert(rate_controller:requires_io() and rate_controller:requires_io_rate()
+  and rate_controller:rows()[1].pid == 11
+  and rate_controller:rows()[3].pid == 12,
+  "I/O-rate sorting uses measured rates and puts missing intervals last")
+rate_controller:set_sort("cpu", true)
+rate_controller:set_query("ioreadps>2K")
+assert(rate_controller:requires_io_rate() and #rate_controller:rows() == 1
+  and rate_controller:rows()[1].pid == 11,
+  "I/O-rate numeric filters request sampling and compare bytes per second")
+rate_controller:set_query("ioreadps>bad")
+assert(not rate_controller:requires_io_rate(),
+  "an incomplete I/O-rate expression is literal text, not a bulk request")
+local io_filter = Controller.new({ sort_key = "cpu" })
+io_filter:set_query("user:root ioread>1M")
+assert(io_filter:requires_io(), "a mixed query must request its I/O operand")
+io_filter:set_query("user:root ioread>bad")
+assert(not io_filter:requires_io(),
+  "malformed I/O text is not a numeric filter that triggers a bulk scan")
+expect_metric_query("nice<0", "bash", "negative nice threshold")
+expect_metric_query("nice>=0", "systemd", "nice boundary")
+expect_metric_query("ni=-5", "bash", "short nice field and signed equality")
+expect_metric_query("nice=+0", "systemd", "explicit positive sign")
+expect_metric_query("priority<=10", "bash", "priority boundary")
+expect_metric_query("pri>10", "systemd", "short priority field")
+expect_metric_query("!nice<0", "systemd", "unknown nice does not pass a negated comparison")
+expect_metric_query("!priority<=10", "systemd", "unknown priority remains unknown")
 -- A process with no reading never satisfies a comparison in either
 -- direction: an unknown value is not zero.  systemd has no io table at all, so
 -- `ioread<1M` must not pick it up just because "less than 1 MB" sounds true of

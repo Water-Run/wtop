@@ -378,8 +378,10 @@ local function topology_inventory(self, fs, sections, issues)
       "topology.die", self.max_issues, -2147483648, 2147483647)
     local cluster_id = optional_integer(fs, base .. "/cluster_id", issues,
       "topology.cluster", self.max_issues, -2147483648, 2147483647)
-    if package_id == nil then package_id = 0; estimated = true end
-    if core_id == nil then core_id = id; estimated = true end
+    local package_id_known = package_id ~= nil and package_id >= 0
+    local core_id_known = core_id ~= nil and core_id >= 0
+    if not package_id_known then package_id = 0; estimated = true end
+    if not core_id_known then core_id = id; estimated = true end
     sockets[tostring(package_id)] = true
     local core_key = table.concat({ tostring(package_id), tostring(die_id or "-"),
       tostring(cluster_id or "-"), tostring(core_id) }, ":")
@@ -392,7 +394,10 @@ local function topology_inventory(self, fs, sections, issues)
     logical[#logical + 1] = {
       id = id,
       online = online_set[id] == true,
+      online_known = online ~= nil,
       package_id = package_id,
+      package_id_known = package_id_known,
+      core_id_known = core_id_known,
       die_id = die_id,
       cluster_id = cluster_id,
       core_id = core_id,

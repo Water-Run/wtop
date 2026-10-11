@@ -12,6 +12,82 @@ local HARD_MAX_PROCESSES = 65536
 local DIRECTORY_ENTRY_SLACK = 256
 local DEFAULT_MAX_DETAIL_THREADS = 1024
 local HARD_MAX_DETAIL_THREADS = 4096
+local MAX_DETAIL_FDS = 4096
+local MAX_BULK_IO_READS = 8192
+local BULK_IO_REFRESH_NS = 5 * 1000000000
+local BULK_IO_RATE_REFRESH_NS = 2 * 1000000000
+local NUMA_MAPS_MAX_BYTES = 2 * 1024 * 1024
+local NUMA_REFRESH_NS = 10 * 1000000000
+
+-- wchan is a symbolic kernel location, not a diagnosis or a duration. The
+-- kernel prints 0 when it has no sleeping location to report. Keep this read
+-- confined to an open detail and verify the task generation after it.
+local function wait_site(fs, path)
+  local content, err = fs:read(path .. "/wchan", 256)
+  if not content then return nil, FS.error_status(err) end
+  if #content > 256 then return nil, "parse_error" end
+  local symbol = Common.trim(content)
+  if symbol == "0" then return nil, "not_reported" end
+  if not symbol or not symbol:match("^[!-~]+$") then
+    return nil, "parse_error"
+  end
+  return symbol, "ok"
+end
+
+local function descriptor_detail(fs, path, now)
+  local entries, failure, truncated = fs:list(path, MAX_DETAIL_FDS)
+  return {
+    count = entries and #entries or nil,
+    status = entries and (truncated and "truncated" or "ok")
+      or FS.error_status(failure),
+    observed_ns = now,
+  }
+end
+
+local function oom_counter(fs, path, minimum, maximum)
+  local content, err = fs:read(path, 64)
+  if not content then return nil, FS.error_status(err) end
+  local token = Common.trim(content)
+  if not token or not token:match("^%-?%d+$") then return nil, "error" end
+  local value = tonumber(token)
+  if not value or math.type(value) ~= "integer"
+      or value < minimum or value > maximum then return nil, "error" end
+  return value, "ok"
+end
+
+local function process_io_rate(current, previous, previous_ns, now)
+  local result = { quality = "gap", observed_ns = now }
+  if type(current) ~= "table" or type(current.read_bytes) ~= "number"
+      or type(current.write_bytes) ~= "number" then
+    result.reason = "missing_counter"
+    return result
+  end
+  if type(previous) ~= "table" or type(previous_ns) ~= "number" then
+    result.reason = "first_sample"
+    return result
+  end
+  local interval = Common.elapsed_ns(now, previous_ns)
+  if not interval or interval <= 0 then
+    result.reason = "invalid_interval"
+    return result
+  end
+  result.interval_ns = interval
+  local read, read_error = Common.rate(current.read_bytes, previous.read_bytes, interval)
+  local write, write_error = Common.rate(current.write_bytes, previous.write_bytes, interval)
+  if read == nil or write == nil then
+    if read_error == "reset" or write_error == "reset" then
+      result.quality = "reset"
+      result.reason = "counter_reset"
+    else
+      result.reason = read_error or write_error
+    end
+    return result
+  end
+  result.quality = "fresh"
+  result.read_bytes_per_second = read
+  result.write_bytes_per_second = write
+  return result
+end
 
 local function bounded_process_limit(value)
   if value == nil then return DEFAULT_MAX_PROCESSES end
@@ -27,6 +103,16 @@ local function bounded_detail_thread_limit(value)
   if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge
       or value % 1 ~= 0 or value < 1 or value > HARD_MAX_DETAIL_THREADS then
     error("max_detail_threads must be an integer in 1.." .. HARD_MAX_DETAIL_THREADS, 3)
+  end
+  return value
+end
+
+local function bounded_bulk_io_limit(value)
+  if value == nil then return MAX_BULK_IO_READS end
+  if type(value) ~= "number" or value ~= value or value == math.huge
+      or value == -math.huge or value % 1 ~= 0 or value < 1
+      or value > MAX_BULK_IO_READS then
+    error("max_bulk_io_reads must be an integer in 1.." .. MAX_BULK_IO_READS, 3)
   end
   return value
 end
@@ -115,6 +201,7 @@ function Process.new(options)
     -- (fixtures, chroot-like tests) must keep the per-file reader.
     use_native_batch = Common.absolute_path("proc_path", options.proc_path, "/proc") == "/proc"
       and native.available == true and type(native.proc_batch) == "function",
+    use_native_parsed_stat = type(native.process_stat_fields) == "function",
     proc_path = Common.absolute_path("proc_path", options.proc_path, "/proc"),
     clock_ticks_per_second = clock_ticks_per_second,
     uptime_path = Common.absolute_path("uptime_path", options.uptime_path, "/proc/uptime"),
@@ -125,11 +212,12 @@ function Process.new(options)
     read_cgroup = options.read_cgroup == true,
     max_processes = bounded_process_limit(options.max_processes),
     max_detail_threads = bounded_detail_thread_limit(options.max_detail_threads),
+    max_bulk_io_reads = bounded_bulk_io_limit(options.max_bulk_io_reads),
     _method_style = true,
-    -- Static per-identity fields (uid, resolved user, command line) survive
-    -- between samples; a process keeps them for its whole lifetime, so
-    -- re-reading status and cmdline for every row every second was pure I/O.
+    -- Identity fields survive between samples. An explicitly requested I/O
+    -- sort/filter also keeps its last counter reading for five seconds.
     identity_cache = {},
+    io_bulk_last_ns = nil,
     -- The previous schedstat reading of everything this collector has been
     -- asked to measure: the processes whose rows the operator can see, and the
     -- individual threads they opened.  Keyed by an identity string that carries
@@ -161,10 +249,16 @@ end
 -- differ from the process the thread belongs to.  The reads happen for the
 -- selected TID only -- a process with a thousand threads must not cost a
 -- thousand extra files.
-function Process:_thread_detail(fs, context, base, task_entry, tid, starttime_ticks, now)
+function Process:_thread_detail(fs, context, base, task_entry, tid, starttime_ticks, now,
+    leader_fd_detail)
   local task_base = base .. "/task/" .. task_entry
-  local result = { tid = tid }
+  local result = { tid = tid, starttime_ticks = starttime_ticks }
   local source = task_base
+
+  -- Threads usually share an FD table, but CLONE_FILES can be undone for one
+  -- thread. Read the selected task's own directory. The leader's selected
+  -- process read is the same table and can be reused without another walk.
+  result.fd_detail = leader_fd_detail or descriptor_detail(fs, task_base .. "/fd", now)
 
   local status_content, status_error = fs:read(task_base .. "/status", 256 * 1024)
   -- The switch counters come out of this same file, and they are the only
@@ -182,6 +276,8 @@ function Process:_thread_detail(fs, context, base, task_entry, tid, starttime_ti
       result.tgid = status.tgid
       result.uid = status.uid
       result.nspid = status.nspid
+      result.affinity = status.affinity
+      if result.affinity then result.affinity.observed_ns = now end
       result.voluntary_switches = status.voluntary_context_switches
       result.involuntary_switches = status.nonvoluntary_context_switches
       if type(status.voluntary_context_switches) == "number"
@@ -250,6 +346,18 @@ function Process:_thread_detail(fs, context, base, task_entry, tid, starttime_ti
   local parsed_sched
   if sched_content then
     parsed_sched = Parsers.thread_sched(sched_content)
+  end
+
+  result.wait_site, result.wait_site_status = wait_site(fs, task_base)
+
+  -- A TID can exit and be recycled while its optional files are being read.
+  -- The first stat read admitted the row; only a second one can confirm that
+  -- the supplemental values still belong to that same task generation.
+  local final_content = fs:read(task_base .. "/stat", 65536)
+  local final_task = final_content and Parsers.process_stat(final_content)
+  if not final_task or final_task.pid ~= tid
+      or final_task.starttime_ticks ~= starttime_ticks then
+    return nil
   end
 
   -- One rate call for the whole thread, after every file has been read: the
@@ -384,6 +492,24 @@ local function wants_detail(context, process_id)
   return type(selected) == "table" and selected[process_id] == true
 end
 
+local function wants_thread_list(context, process_id)
+  local selected = context and context.selected_process_thread_list_ids
+  return type(selected) == "table" and selected[process_id] == true
+end
+
+local function selected_numa_process_id(context)
+  local selected = context and context.selected_process_numa_ids
+  if type(selected) ~= "table" then return nil end
+  local id
+  for candidate, wanted in pairs(selected) do
+    if wanted == true then
+      if id or type(candidate) ~= "string" then return nil end
+      id = candidate
+    end
+  end
+  return id
+end
+
 -- The process ids the table is currently drawing, bounded so a malformed or
 -- hostile context cannot turn a viewport measurement into a full sweep.  The
 -- bound is generous next to any real terminal: a viewport is as tall as the
@@ -391,8 +517,8 @@ end
 -- usable.
 local MAX_VISIBLE_PROCESSES = 256
 
-local function visible_process_ids(context)
-  local selected = context and context.visible_process_ids
+local function visible_process_ids(context, key)
+  local selected = context and context[key or "visible_process_ids"]
   if type(selected) ~= "table" then return nil end
   local result, count = {}, 0
   for id, wanted in pairs(selected) do
@@ -411,7 +537,7 @@ end
 -- rather than by process id because a TID is only meaningful together with the
 -- process that owns it, and a stale entry for a process that is gone can never
 -- match.
-local function selected_thread_tid(context, pid)
+local function selected_thread_identity(context, pid)
   if not context then
     return nil
   end
@@ -419,11 +545,15 @@ local function selected_thread_tid(context, pid)
   if type(selected) ~= "table" then
     return nil
   end
-  local tid = selected[pid]
+  local target = selected[pid]
+  local tid = type(target) == "table" and target.tid or target
   if type(tid) ~= "number" or tid <= 0 or tid ~= tid then
     return nil
   end
-  return tid
+  local starttime = type(target) == "table" and target.starttime_ticks or nil
+  if starttime ~= nil and (type(starttime) ~= "number" or starttime < 0
+      or starttime ~= starttime) then return nil end
+  return tid, starttime
 end
 
 function Process:sample(context, previous)
@@ -442,22 +572,21 @@ function Process:sample(context, previous)
   local previous_data = Common.previous_data(previous)
   local elapsed_ns = previous_data and Common.elapsed_ns(now, previous.timestamp_ns) or nil
   local previous_by_id = previous_data and previous_data.by_id or {}
+  local numa_process_id = selected_numa_process_id(context)
   -- This sample's cache; assigned over self.identity_cache at the end so
   -- identities that disappeared are dropped in the same pass.
   local live_cache = {}
   local prior_cache = self.identity_cache
-  -- Only needed on the first sample, to turn cumulative ticks into a lifetime
-  -- average; a missing or unreadable /proc/uptime simply leaves the first
-  -- frame without CPU values, exactly as before.
+  -- One read per sample gives every process an age in wall-clock seconds.
+  -- The first frame also uses that age for its lifetime CPU average. If
+  -- uptime is unreadable, age remains unknown and rates still work.
   local uptime_seconds
-  if not previous_data then
-    local uptime_content = fs:read(self.uptime_path, 4096)
-    if type(uptime_content) == "string" then
-      local seconds = tonumber(uptime_content:match("^%s*([%d%.]+)"))
-      if type(seconds) == "number" and seconds == seconds
-          and seconds ~= math.huge and seconds > 0 then
-        uptime_seconds = seconds
-      end
+  local uptime_content = fs:read(self.uptime_path, 4096)
+  if type(uptime_content) == "string" then
+    local seconds = tonumber(uptime_content:match("^%s*([%d%.]+)"))
+    if type(seconds) == "number" and seconds == seconds
+        and seconds ~= math.huge and seconds > 0 then
+      uptime_seconds = seconds
     end
   end
   local clock_ticks_per_second = (context and context.clock_ticks_per_second) or self.clock_ticks_per_second
@@ -479,6 +608,7 @@ function Process:sample(context, previous)
   local supplemental_parse_errors = 0
   local scanned = 0
   local visible_ids = visible_process_ids(context)
+  local visible_wait_ids = visible_process_ids(context, "visible_wait_process_ids")
 
   local candidates = {}
   for _, entry in ipairs(entries) do
@@ -492,6 +622,35 @@ function Process:sample(context, previous)
     return left.pid < right.pid
   end)
 
+  -- A process I/O sort/filter needs comparable readings for the whole
+  -- collected set. Never pay this cost for the default CPU table. The native
+  -- batch reader amortizes the crossing on real procfs; fixtures keep their
+  -- injected filesystem. Each identity retains its exact observation time.
+  local bulk_rate = context and context.scan_process_io_rate == true
+  local bulk_io = context and context.scan_process_io == true or bulk_rate
+  local io_refresh_ns = self.read_io and 0
+    or (bulk_rate and BULK_IO_RATE_REFRESH_NS or BULK_IO_REFRESH_NS)
+  if not bulk_io then self.io_bulk_last_ns = nil end
+  local bulk_due = bulk_io and (type(self.io_bulk_last_ns) ~= "number"
+    or now < self.io_bulk_last_ns
+    or now - self.io_bulk_last_ns >= io_refresh_ns
+    or context.force_process_io_refresh == true)
+  local io_batch_contents, io_batch_denied
+  if bulk_due and self.use_native_batch and fs == FS.default
+      and context_fs(self, context) == nil then
+    local wanted = {}
+    for index, candidate in ipairs(candidates) do
+      if index > self.max_processes or index > self.max_bulk_io_reads then break end
+      wanted[#wanted + 1] = candidate.pid
+    end
+    local ok, contents, denied_flags = pcall(self.native.proc_batch, wanted, "io", 65536)
+    if ok and type(contents) == "table" then
+      io_batch_contents, io_batch_denied = contents, denied_flags
+    end
+  end
+  if bulk_due then self.io_bulk_last_ns = now end
+  local io_reads, io_reused, io_covered, io_rate_covered, io_capped = 0, 0, 0, 0, 0
+
   -- One native crossing for every stat file when the real /proc is in use.
   -- A context-injected fs (fixtures, isolated tests) always keeps the
   -- per-file reader even with the default proc_path, and so do pure-Lua runs.
@@ -502,7 +661,8 @@ function Process:sample(context, previous)
       if index > self.max_processes then break end
       wanted[#wanted + 1] = candidate.pid
     end
-    local ok, contents, denied_flags = pcall(self.native.proc_batch, wanted, "stat")
+    local mode = self.use_native_parsed_stat and "stat_parsed" or "stat"
+    local ok, contents, denied_flags = pcall(self.native.proc_batch, wanted, mode)
     if ok and type(contents) == "table" then
       batch_contents, batch_denied = contents, denied_flags
     end
@@ -534,7 +694,8 @@ function Process:sample(context, previous)
           races = races + 1
         end
       else
-        local stat = Parsers.process_stat(stat_content)
+        local stat = type(stat_content) == "table" and stat_content
+          or Parsers.process_stat(stat_content)
         if not stat then
           parse_errors = parse_errors + 1
         elseif stat.pid ~= pid then
@@ -558,9 +719,16 @@ function Process:sample(context, previous)
               and stat.rss_pages <= math.maxinteger // page_size_bytes
               and (stat.rss_pages * page_size_bytes) or nil,
             cpu_ticks = stat.cpu_ticks,
+            cpu_time_seconds = type(stat.cpu_ticks) == "number"
+              and stat.cpu_ticks / clock_ticks_per_second or nil,
+            elapsed_seconds = uptime_seconds
+              and uptime_seconds - stat.starttime_ticks / clock_ticks_per_second or nil,
             cpu_percent = nil,
             quality = "gap",
           }
+          if process.elapsed_seconds and process.elapsed_seconds < 0 then
+            process.elapsed_seconds = process.elapsed_seconds >= -1 and 0 or nil
+          end
           local old = previous_by_id[process.id]
           if old and elapsed_ns and elapsed_ns > 0 then
             local ticks = Common.delta(process.cpu_ticks, old.cpu_ticks)
@@ -572,13 +740,13 @@ function Process:sample(context, previous)
                 process.quality = "fresh"
               end
             end
-          elseif uptime_seconds and type(process.cpu_ticks) == "number" then
+          elseif process.elapsed_seconds and type(process.cpu_ticks) == "number" then
             -- The very first sample has nothing to difference against, so every
             -- row used to show "—" and a CPU-descending table was really sorted
             -- by PID.  Lifetime average CPU over the process's age is a usable
             -- first frame; it is explicitly marked estimated so it is never
             -- mistaken for an interval measurement.
-            local age = uptime_seconds - (process.starttime_ticks or 0) / clock_ticks_per_second
+            local age = process.elapsed_seconds
             if age > 0.5 then
               local cpu_percent = (process.cpu_ticks + 0.0) / clock_ticks_per_second
                 / age * 100
@@ -590,12 +758,15 @@ function Process:sample(context, previous)
           end
 
           local detail = wants_detail(context, process.id)
+          local thread_list = wants_thread_list(context, process.id)
           local command_value = nil
+          local io_attempted = false
           local cached = prior_cache[process.id]
           if cached then
             process.uid = cached.uid
             process.user = cached.user
             if cached.command then process.command = cached.command end
+            process.affinity = cached.affinity
           end
           if self.read_status and (detail or not cached) then
             local status_content, status_error = fs:read(base .. "/status", 256 * 1024)
@@ -604,6 +775,8 @@ function Process:sample(context, previous)
               if status then
                 process.uid = status.uid
                 process.resident_bytes = status.rss_bytes or process.resident_bytes
+                process.affinity = status.affinity
+                if process.affinity then process.affinity.observed_ns = now end
                 process.context_switches = {
                   voluntary = status.voluntary_context_switches,
                   involuntary = status.nonvoluntary_context_switches,
@@ -651,24 +824,65 @@ function Process:sample(context, previous)
               process.command_status = FS.error_status(cmdline_error)
             end
           end
-          if self.read_io or detail then
-            supplemental_read = true
-            local io_content, io_error = fs:read(base .. "/io", 65536)
-            if io_content then
-              local parsed_io = Parsers.process_io(io_content)
-              if parsed_io then
-                process.io = parsed_io
+          local cached_io = bulk_io and not bulk_due and not detail
+            and not self.read_io and cached and type(cached.io) == "table"
+            and type(cached.io_observed_ns) == "number"
+            and now >= cached.io_observed_ns
+            and now - cached.io_observed_ns < io_refresh_ns
+          if cached_io then
+            process.io = cached.io
+            process.io_observed_ns = cached.io_observed_ns
+            if type(cached.io_rate) == "table" then
+              process.io_rate = {
+                read_bytes_per_second = cached.io_rate.read_bytes_per_second,
+                write_bytes_per_second = cached.io_rate.write_bytes_per_second,
+                interval_ns = cached.io_rate.interval_ns,
+                observed_ns = cached.io_rate.observed_ns,
+                reason = cached.io_rate.reason,
+                quality = cached.io_rate.quality == "fresh" and "held"
+                  or cached.io_rate.quality,
+              }
+            end
+            io_reused = io_reused + 1
+          elseif self.read_io or detail or bulk_io then
+            if bulk_io and not self.read_io and index > self.max_bulk_io_reads then
+              process.io_status = "truncated"
+              process.partial = true
+              io_capped = io_capped + 1
+            else
+              supplemental_read = true
+              io_attempted = true
+              local io_content, io_error
+              if bulk_io and bulk_due and io_batch_contents then
+                io_content = io_batch_contents[index]
+                if io_content == false or io_content == nil then
+                  io_content = nil
+                  io_error = type(io_batch_denied) == "table" and io_batch_denied[index]
+                    and { kind = "denied" } or { kind = "missing" }
+                end
               else
-                process.io_status = "parse_error"
-                process.partial = true
-                supplemental_parse_errors = supplemental_parse_errors + 1
+                io_content, io_error = fs:read(base .. "/io", 65536)
               end
-            elseif io_error and io_error.kind == "denied" then
-              process.io_status = "denied"
-              process.partial = true
-            elseif io_error then
-              process.io_status = FS.error_status(io_error)
-              process.partial = true
+              if bulk_io then io_reads = io_reads + 1 end
+              if io_content then
+                local parsed_io = Parsers.process_io(io_content)
+                if parsed_io then
+                  process.io = parsed_io
+                  process.io_observed_ns = now
+                  process.io_rate = process_io_rate(parsed_io,
+                    cached and cached.io, cached and cached.io_observed_ns, now)
+                else
+                  process.io_status = "parse_error"
+                  process.partial = true
+                  supplemental_parse_errors = supplemental_parse_errors + 1
+                end
+              elseif io_error and io_error.kind == "denied" then
+                process.io_status = "denied"
+                process.partial = true
+              elseif io_error then
+                process.io_status = FS.error_status(io_error)
+                process.partial = true
+              end
             end
           end
           if self.read_cgroup or detail then
@@ -687,10 +901,38 @@ function Process:sample(context, previous)
               process.cgroup_status = FS.error_status(cgroup_error)
             end
           end
+          -- File descriptors are useful when diagnosing a leak, but one
+          -- directory walk per PID would overwhelm the ordinary process
+          -- scan. Only the open detail requests this bounded count.
+          if detail then
+            supplemental_read = true
+            process.fd_detail = descriptor_detail(fs, base .. "/fd", now)
+            local limits_content, limits_error = fs:read(base .. "/limits", 65536)
+            if limits_content then
+              local limits, parse_error = Parsers.process_open_file_limits(limits_content)
+              if limits then
+                process.fd_detail.limit = limits
+                process.fd_detail.limit_status = "ok"
+              else
+                process.fd_detail.limit_status = parse_error == "open_file_limits_absent"
+                  and "unavailable" or "error"
+              end
+            else
+              process.fd_detail.limit_status = FS.error_status(limits_error)
+            end
+            local score, score_status = oom_counter(fs, base .. "/oom_score", 0, 1000)
+            local adjustment, adjustment_status = oom_counter(fs,
+              base .. "/oom_score_adj", -1000, 1000)
+            if score_status ~= "unavailable" or adjustment_status ~= "unavailable" then
+              process.oom = { score = score, score_status = score_status,
+                adjustment = adjustment, adjustment_status = adjustment_status,
+                observed_ns = now, source = base }
+            end
+          end
           -- Thread rows are a detail-only read: enumerating every process's
           -- /proc/<pid>/task every tick would multiply procfs traffic by the
           -- thread count for one table that shows a single selection.
-          if detail then
+          if detail or thread_list then
             supplemental_read = true
             local task_entries, task_error, task_truncated =
               fs:list(base .. "/task", self.max_detail_threads)
@@ -716,11 +958,18 @@ function Process:sample(context, previous)
                       nice = parsed_task.nice,
                       priority = parsed_task.priority,
                       cpu_ticks = parsed_task.cpu_ticks,
+                      cpu_time_seconds = type(parsed_task.cpu_ticks) == "number"
+                        and parsed_task.cpu_ticks / clock_ticks_per_second or nil,
+                      elapsed_seconds = uptime_seconds
+                        and uptime_seconds - parsed_task.starttime_ticks / clock_ticks_per_second or nil,
                       starttime_ticks = parsed_task.starttime_ticks,
                       leader = tid == process.pid,
                       cpu_percent = nil,
                       quality = "gap",
                     }
+                    if thread.elapsed_seconds and thread.elapsed_seconds < 0 then
+                      thread.elapsed_seconds = thread.elapsed_seconds >= -1 and 0 or nil
+                    end
                     -- TIDs are recycled as threads exit, so ticks are only
                     -- differenced against the same thread identity, the same
                     -- starttime discipline the process rows use.
@@ -741,16 +990,29 @@ function Process:sample(context, previous)
                         end
                       end
                     end
-                    thread_ticks_by_tid[tid] = {
-                      cpu_ticks = thread.cpu_ticks,
-                      starttime_ticks = thread.starttime_ticks,
-                    }
-                    if tid == selected_thread_tid(context, process.pid) then
+                    local generation_matches = true
+                    local selected_tid, selected_starttime =
+                      selected_thread_identity(context, process.pid)
+                    if tid == selected_tid and (selected_starttime == nil
+                        or selected_starttime == thread.starttime_ticks) then
                       supplemental_read = true
-                      thread_details[tid] = self:_thread_detail(fs, context, base,
-                        task_entry, tid, thread.starttime_ticks, now)
+                      local detail_value = self:_thread_detail(fs, context, base,
+                        task_entry, tid, thread.starttime_ticks, now,
+                        tid == process.pid and process.fd_detail or nil)
+                      if detail_value then
+                        thread_details[tid] = detail_value
+                      else
+                        generation_matches = false
+                        thread_races = thread_races + 1
+                      end
                     end
-                    thread_rows[#thread_rows + 1] = thread
+                    if generation_matches then
+                      thread_ticks_by_tid[tid] = {
+                        cpu_ticks = thread.cpu_ticks,
+                        starttime_ticks = thread.starttime_ticks,
+                      }
+                      thread_rows[#thread_rows + 1] = thread
+                    end
                   else
                     -- A thread that exited between the listing and the stat
                     -- read is normal churn, not a failed process sample.
@@ -782,6 +1044,7 @@ function Process:sample(context, previous)
           -- carries the proportional and private totals the table needs.
           if detail then
             supplemental_read = true
+            process.wait_site, process.wait_site_status = wait_site(fs, base)
             local rollup_content, rollup_error = fs:read(base .. "/smaps_rollup", 65536)
             if rollup_content then
               local parsed_rollup = Parsers.process_smaps_rollup(rollup_content)
@@ -811,6 +1074,41 @@ function Process:sample(context, previous)
               -- reason instead of silently showing an empty memory section.
               process.memory_status = FS.error_status(rollup_error)
               process.partial = true
+            end
+          end
+          if visible_wait_ids and visible_wait_ids[process.id] and not detail then
+            -- The optional WCHAN column is sampled only for rows on screen.
+            -- Unlike a scheduler rate, this is a symbolic value attached to
+            -- the row; recheck PID generation before publishing it.
+            supplemental_read = true
+            process.wait_site, process.wait_site_status = wait_site(fs, base)
+          end
+          -- numa_maps walks a process's VMAs in the kernel.  Only an open
+          -- process detail overlay requests it, and one reading serves ten
+          -- ordinary process samples.  The identity-keyed previous row keeps
+          -- a recycled pid from inheriting another process's node totals.
+          if detail and process.id == numa_process_id then
+            supplemental_read = true
+            if old and type(old.numa_sample_ns) == "number"
+                and now >= old.numa_sample_ns
+                and now - old.numa_sample_ns < NUMA_REFRESH_NS then
+              process.numa_detail = old.numa_detail
+              process.numa_status = old.numa_status
+              process.numa_sample_ns = old.numa_sample_ns
+            else
+              process.numa_sample_ns = now
+              local maps, maps_error = fs:read(base .. "/numa_maps", NUMA_MAPS_MAX_BYTES)
+              if maps then
+                local parsed = Parsers.process_numa_maps(maps, page_size_bytes)
+                if parsed then
+                  process.numa_detail = parsed
+                else
+                  process.numa_status = "parse_error"
+                end
+              elseif maps_error then
+                process.numa_status = maps_error.kind == "too_large"
+                  and "too_large" or FS.error_status(maps_error)
+              end
             end
           end
           if context and type(context.resolve_username) == "function" and process.uid then
@@ -882,6 +1180,16 @@ function Process:sample(context, previous)
             end
           end
           if generation_matches then
+            if bulk_io and process.io
+                and type(process.io.read_bytes) == "number"
+                and type(process.io.write_bytes) == "number" then
+              io_covered = io_covered + 1
+            end
+            if bulk_io and process.io_rate
+                and type(process.io_rate.read_bytes_per_second) == "number"
+                and type(process.io_rate.write_bytes_per_second) == "number" then
+              io_rate_covered = io_rate_covered + 1
+            end
             by_id[process.id] = process
             by_pid[process.pid] = process
             processes[#processes + 1] = process
@@ -894,6 +1202,20 @@ function Process:sample(context, previous)
             end
             entry.uid = process.uid
             entry.user = process.user
+            entry.affinity = process.affinity
+            if io_attempted then
+              entry.io = process.io
+              entry.io_observed_ns = process.io_observed_ns
+              entry.io_rate = process.io_rate
+            elseif process.io then
+              entry.io = process.io
+              entry.io_observed_ns = process.io_observed_ns
+              entry.io_rate = process.io_rate
+            elseif cached then
+              entry.io = cached.io
+              entry.io_observed_ns = cached.io_observed_ns
+              entry.io_rate = cached.io_rate
+            end
             if command_value ~= nil then
               entry.command_read = true
               if command_value then entry.command = command_value end
@@ -924,6 +1246,16 @@ function Process:sample(context, previous)
     supplemental_parse_errors = supplemental_parse_errors,
     process_candidates = process_candidates,
     process_limit = self.max_processes,
+    clock_ticks_per_second = clock_ticks_per_second,
+    uptime_seconds = uptime_seconds,
+    io_scan = bulk_io and {
+      status = (io_covered == #processes and not truncated and io_capped == 0)
+        and "ok" or "partial",
+      covered = io_covered, total = #processes,
+      rate_covered = io_rate_covered, refresh_interval_ns = io_refresh_ns,
+      refreshed = io_reads, reused = io_reused, capped = io_capped,
+      observed_ns = now,
+    } or nil,
     truncated = truncated,
     partial = truncated or denied > 0 or parse_errors > 0
       or supplemental_parse_errors > 0 or any_process_partial,

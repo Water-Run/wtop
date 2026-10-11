@@ -58,7 +58,7 @@ end
 -- a scale derives it from the readings rather than from the columns, and so that
 -- a guard can ask which samples the columns were built from instead of
 -- re-deriving the window itself.
-local function time_buckets(values, length, width)
+local function time_buckets(values, length, width, column_ns_override)
   local timestamps = values.timestamps_ns
   if timestamps == nil then return nil end
   if type(timestamps) ~= "table" then
@@ -69,12 +69,13 @@ local function time_buckets(values, length, width)
     error("sparkline time window metadata must be finite and positive", 3)
   end
   local active_width = width
-  if values.column_ns ~= nil then
-    if not finite(values.column_ns) or values.column_ns <= 0 then
+  local column_ns = column_ns_override or values.column_ns
+  if column_ns ~= nil then
+    if not finite(column_ns) or column_ns <= 0 then
       error("sparkline column_ns must be finite and positive", 3)
     end
-    active_width = math.min(width, math.max(1, math.floor(window_ns / values.column_ns)))
-    window_ns = math.min(window_ns, values.column_ns * active_width)
+    active_width = math.min(width, math.max(1, math.floor(window_ns / column_ns)))
+    window_ns = math.min(window_ns, column_ns * active_width)
   end
   local bucket_offset = width - active_width
   local start_ns = end_ns - window_ns
@@ -108,7 +109,7 @@ local function time_buckets(values, length, width)
     end
   end
   return buckets, { samples = samples, minimum = low, maximum = high,
-    window_ns = window_ns, columns = width }
+    window_ns = window_ns, columns = width, active_columns = active_width }
 end
 
 function M.render(values, width, options)
@@ -127,7 +128,7 @@ function M.render(values, width, options)
     error("sparkline width must be an integer in 0..10000", 2)
   end
   if width == 0 then return "" end
-  local bucketed = time_buckets(values, length, width)
+  local bucketed = time_buckets(values, length, width, options.column_ns)
   if bucketed then
     values, length = bucketed, width
   end
@@ -186,6 +187,8 @@ end
 -- zero.  When the series carries timestamp metadata the same one-column-per-
 -- interval bucketing the sparkline uses is applied, which keeps a chart and a
 -- sparkline built from one history aligned column for column.
+-- `options.column_ns` can override the series' per-column interval when a
+-- display cell is split into finer subcolumns.
 -- @return the columns, and a table describing the window they were built from:
 --   `samples` (how many readings fell inside it), `minimum`, `maximum`,
 --   `window_ns` and `columns`.
@@ -201,7 +204,7 @@ function M.buckets(values, width, options)
   local result = {}
   if width == 0 then return result, { samples = 0, minimum = nil, maximum = nil, columns = 0 } end
   local length = sequence_length(values)
-  local bucketed, window = time_buckets(values, length, width)
+  local bucketed, window = time_buckets(values, length, width, options.column_ns)
   if bucketed then
     for index = 1, width do
       local value = bucketed[index]

@@ -1,6 +1,8 @@
 package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
 
 local Actions = require("wtop.actions")
+local TUI = require("wtop.tui")
+local I18n = require("wtop.i18n")
 
 local stat = "42 (worker name) S 1 1 1 0 -1 0 1 2 3 4 5 6 7 8 9 10 11 1234 4096 2 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n"
 local fs = {
@@ -12,6 +14,7 @@ local fs = {
 local called
 local native = {
     pid = function() return 100 end,
+    uname = function() return { sysname = "Linux" } end,
     signal_process = function(pid, signal_number, starttime_ticks)
         called = { pid, signal_number, starttime_ticks }
         return true
@@ -21,7 +24,23 @@ local process = { pid = 42, starttime_ticks = 4096 }
 assert(Actions.verify_process(process, fs))
 assert(Actions.signal_process(process, 15, { fs = fs, native = native }))
 assert(called[1] == 42 and called[2] == 15 and called[3] == 4096)
-assert(Actions.signal_process(process, 2, { fs = fs, native = native }) == nil)
+for _, signal_number in ipairs({ 1, 2 }) do
+    assert(Actions.signal_process(process, signal_number, { fs = fs, native = native }))
+    assert(called[1] == 42 and called[2] == signal_number and called[3] == 4096,
+        "new Linux signals retain the verified process identity")
+end
+assert(Actions.signal_process(process, 3, { fs = fs, native = native }) == nil)
+local menu = table.concat(TUI.signal_menu_lines(process, 1,
+    assert(I18n.new({ locale = "en-US" })), true), "\n")
+assert(menu:find("SIGTERM", 1, true) < menu:find("SIGHUP", 1, true)
+    and menu:find("SIGHUP", 1, true) < menu:find("SIGINT", 1, true)
+    and menu:find("SIGINT", 1, true) < menu:find("SIGKILL", 1, true),
+    "the visible menu keeps TERM as the default and offers HUP and INT")
+local windows = { pid = native.pid, signal_process = native.signal_process,
+    uname = function() return { sysname = "Windows" } end }
+assert(Actions.signal_process(process, 1, { native = windows }) == nil,
+    "Windows does not expose a POSIX hangup action")
+assert(Actions.signal_process(process, 9, { native = windows }))
 assert(Actions.signal_process({ pid = 1, starttime_ticks = 1 }, 15, { fs = fs, native = native }) == nil)
 assert(Actions.signal_process({ pid = 100, starttime_ticks = 1 }, 15, { fs = fs, native = native }) == nil)
 assert(Actions.signal_process({ pid = 42, starttime_ticks = 999 }, 15, { fs = fs, native = native }) == nil)

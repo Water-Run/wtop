@@ -18,6 +18,12 @@ local REDUCTION = "window-max"
 
 local PARTIAL = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
 local ASCII_PARTIAL = { ".", ".", ":", ":", "|", "|", "#", "#" }
+-- Each Braille cell has two sample columns and four vertical dots. Ordered
+-- from the baseline upward; Unicode's dot numbering is not row-major.
+local BRAILLE_BITS = {
+  { 0x40, 0x04, 0x02, 0x01 },
+  { 0x80, 0x20, 0x10, 0x08 },
+}
 
 local function finite(value)
   return type(value) == "number" and value == value
@@ -34,7 +40,8 @@ end
 --                 carrying `timestamps_ns`/`window_ns`/`end_ns` metadata
 -- @param width    display cells per row
 -- @param height   number of rows
--- @param options  `min`, `max`, `mode` ("block"|"ascii"), `gap` (string)
+-- @param options  `min`, `max`, `mode` ("block"|"braille"|"ascii"), `gap` (string),
+--                 `column_ns` (time span of one display cell)
 -- @return array of strings (top row first), plus a table describing the
 --         resolved scale so a caller can label the axis
 function M.render(values, width, height, options)
@@ -44,11 +51,21 @@ function M.render(values, width, height, options)
   if width < 1 or height < 1 then return {}, { minimum = 0, maximum = 0 } end
 
   local ascii = options.mode == "ascii"
+  local braille = options.mode == "braille"
   local partial = ascii and ASCII_PARTIAL or PARTIAL
   local gap = options.gap or (ascii and " " or "·")
   local full = partial[8]
 
-  local buckets, window = Sparkline.buckets(values, width, options)
+  local sample_columns = braille and width * 2 or width
+  local bucket_options = options
+  local column_ns = options.column_ns or (type(values) == "table" and values.column_ns)
+  if braille and column_ns ~= nil then
+    -- Two subcolumns belong to one display cell, so each spans half of the
+    -- original interval. Otherwise switching glyphs would double the time
+    -- window as well as the horizontal resolution.
+    bucket_options = { column_ns = finite(column_ns) and column_ns / 2 or column_ns }
+  end
+  local buckets, window = Sparkline.buckets(values, sample_columns, bucket_options)
   local minimum, maximum = options.min, options.max
   local flat = false
   if not finite(minimum) or not finite(maximum) or maximum <= minimum then
@@ -76,6 +93,48 @@ function M.render(values, width, height, options)
   local span = maximum - minimum
   local rows = {}
   for row = 1, height do rows[row] = {} end
+
+  if braille then
+    local sampled = {}
+    for row = 1, height do
+      for column = 1, width do rows[row][column] = 0 end
+    end
+    for column = 1, width do
+      for half = 1, 2 do
+        local value = buckets[(column - 1) * 2 + half]
+        if finite(value) then
+          sampled[column] = true
+          local fraction = math.max(0, math.min(1, (value - minimum) / span))
+          local dots = math.floor(fraction * height * 4 + 0.5)
+          -- A measured baseline is one dot, distinct from a missing interval.
+          if dots == 0 then dots = 1 end
+          for dot = 0, dots - 1 do
+            local row = height - math.floor(dot / 4)
+            local bit = BRAILLE_BITS[half][dot % 4 + 1]
+            rows[row][column] = rows[row][column] | bit
+          end
+        end
+      end
+    end
+    local result = {}
+    for row = 1, height do
+      for column = 1, width do
+        local mask = rows[row][column]
+        rows[row][column] = mask ~= 0 and utf8.char(0x2800 + mask)
+          or row == height and not sampled[column] and gap or " "
+      end
+      result[row] = table.concat(rows[row])
+    end
+    return result, {
+      minimum = minimum, maximum = maximum, columns = width,
+      subcolumns = sample_columns, flat = flat == true,
+      reduction = REDUCTION, samples = window.samples or 0,
+      window_minimum = window.minimum, window_maximum = window.maximum,
+      window_ns = window.window_ns,
+      leading_columns = math.floor((sample_columns
+        - (window.active_columns or sample_columns)) / 2),
+    }
+  end
 
   for column = 1, width do
     local value = buckets[column]
@@ -120,6 +179,8 @@ function M.render(values, width, height, options)
     samples = window.samples or 0,
     window_minimum = window.minimum,
     window_maximum = window.maximum,
+    window_ns = window.window_ns,
+    leading_columns = sample_columns - (window.active_columns or sample_columns),
   }
 end
 

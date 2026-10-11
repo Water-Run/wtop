@@ -77,6 +77,34 @@ local function default_read_file(path, limit)
   return content
 end
 
+local function default_read_file_at(path, offset, length)
+  if ok_native and native and native.available and type(native.readfile_at) == "function" then
+    local called, content, err, errno = pcall(native.readfile_at, path, offset, length)
+    if not called then
+      return nil, { kind = "io_error", message = tostring(content), path = path }
+    end
+    if content ~= nil then return content end
+    return nil, { kind = classify_error(err, errno), message = tostring(err),
+      path = path, errno = errno }
+  end
+  local file, open_error = io.open(path, "rb")
+  if not file then
+    return nil, { kind = classify_error(open_error), message = tostring(open_error), path = path }
+  end
+  local position, seek_error = file:seek("set", offset)
+  if not position then file:close(); return nil,
+    { kind = "io_error", message = tostring(seek_error), path = path } end
+  local content, read_error = file:read(length)
+  local close_ok, close_error = file:close()
+  if not content and read_error then
+    return nil, { kind = "io_error", message = tostring(read_error), path = path }
+  end
+  if close_ok == nil then
+    return nil, { kind = "io_error", message = tostring(close_error), path = path }
+  end
+  return content or ""
+end
+
 local function default_list_dir(path, limit)
   if ok_native and native and native.available and type(native.listdir) == "function" then
     local called, entries, err, detail = pcall(native.listdir, path, limit)
@@ -157,10 +185,10 @@ function FS.new(options)
   -- decides the answer, and the two doubles that made the mistake were testing
   -- collectors that never ask for a symlink, so the substitution stayed invisible
   -- in one case and produced a real `readlink(2)` on this host in the other.
-  -- The four names are also the only ones `FS.new` will ever substitute a real
+  -- The accessor names are also the only ones `FS.new` will ever substitute a real
   -- implementation for, so an unknown key can only ever be a misspelling or dead
   -- weight.
-  local FS_OPTION_KEYS = { "root", "read_file", "list_dir", "read_link", "path_type" }
+  local FS_OPTION_KEYS = { "root", "read_file", "read_file_at", "list_dir", "read_link", "path_type" }
   for key in pairs(options) do
     local known = false
     for _, accepted in ipairs(FS_OPTION_KEYS) do
@@ -171,7 +199,7 @@ function FS.new(options)
         .. table.concat(FS_OPTION_KEYS, ", "), 2)
     end
   end
-  for _, key in ipairs({ "read_file", "list_dir", "read_link", "path_type" }) do
+  for _, key in ipairs({ "read_file", "read_file_at", "list_dir", "read_link", "path_type" }) do
     if options[key] ~= nil and type(options[key]) ~= "function" then
       error(key .. " must be a function", 2)
     end
@@ -185,6 +213,7 @@ function FS.new(options)
   end
   return setmetatable({
     read_impl = options.read_file or default_read_file,
+    read_at_impl = options.read_file_at or default_read_file_at,
     list_impl = options.list_dir or default_list_dir,
     readlink_impl = options.read_link or default_read_link,
     path_type_impl = options.path_type or default_path_type,
@@ -222,6 +251,14 @@ function FS:read(path, limit)
   return self.read_impl(self:path(path), limit)
 end
 
+function FS:read_at(path, offset, length)
+  if type(offset) ~= "number" or offset % 1 ~= 0 or offset < 0 or offset > 64 * 1024 * 1024
+      or type(length) ~= "number" or length % 1 ~= 0 or length < 1 or length > 4096 then
+    return nil, { kind = "invalid", message = "invalid_read_range", path = self:path(path) }
+  end
+  return self.read_at_impl(self:path(path), offset, length)
+end
+
 function FS:read_number(path)
   local content, err = self:read(path, 256)
   if not content then
@@ -254,7 +291,14 @@ function FS:kind(path)
 end
 
 function FS:exists(path)
-  if ok_native and native and native.available and type(native.access) == "function" then
+  if self.path_type_impl ~= default_path_type then
+    local kind, err = self:kind(path)
+    if kind ~= nil then return true end
+    if err and err.kind == "denied" then return true, err end
+    if self.read_impl == default_read_file then return false, err end
+  end
+  if self.path_type_impl == default_path_type and self.read_impl == default_read_file
+      and ok_native and native and native.available and type(native.access) == "function" then
     local called, exists = pcall(native.access, self:path(path), "f")
     if called then return exists == true end
   end

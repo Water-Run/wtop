@@ -3,18 +3,28 @@ local Width = require("wtop.ui.renderer.width")
 
 local M = {}
 
-local function tab_label(tab, context)
+local function tab_label(tab, context, index)
+  local label
   if tab.label_id then
-    return tostring(Util.t(context, tab.label_id, tab.label or tab.title or tab.id or "?"))
+    label = tostring(Util.t(context, tab.label_id, tab.label or tab.title or tab.id or "?"))
+  else
+    label = tostring(tab.label or tab.title or tab.id or "?")
   end
-  return tostring(tab.label or tab.title or tab.id or "?")
+  -- In an ASCII-only terminal, different localized names can collapse to the
+  -- same run of question marks.  The visible tab position stays legible and
+  -- matches the numeric selector (1..9, then 0 for the tenth).
+  if context.capabilities and context.capabilities.unicode == false
+      and type(index) == "number" then
+    return (index == 10 and "0" or tostring(index)) .. " " .. label
+  end
+  return label
 end
 
-local function representation(tab, active, context)
+local function representation(tab, active, context, index)
   if active and context.theme and context.theme.mode == "mono" then
-    return "[" .. tab_label(tab, context) .. "]"
+    return "[" .. tab_label(tab, context, index) .. "]"
   end
-  return " " .. tab_label(tab, context) .. " "
+  return " " .. tab_label(tab, context, index) .. " "
 end
 
 function M.render(grid, area, state, context)
@@ -90,7 +100,7 @@ function M.render(grid, area, state, context)
     -- run by nine and made the bar reserve room for a count on rows where all ten
     -- pages fitted after all -- costing a page to announce nothing.
     full_width = full_width
-      + Width.display_width(representation(tabs[index], false, context), grid.width_options)
+      + Width.display_width(representation(tabs[index], false, context, index), grid.width_options)
   end
 
   -- How many pages the row is not showing, and the room that statement needs.
@@ -147,11 +157,17 @@ function M.render(grid, area, state, context)
   local beside = #tabs > 1 and (1 + #tostring(hidden_worst)) or 0
   local alone = #tabs > 1 and (1 + #tostring(#tabs)) or 0
   local first_cell = 1
-  for _, width in Width.graphemes(tab_label(tabs[active_index], context), grid.width_options) do
+  for _, width in Width.graphemes(tab_label(tabs[active_index], context, active_index), grid.width_options) do
     first_cell = math.max(1, width)
     break
   end
   local name_cells = 2 + first_cell
+  if not unicode then
+    -- A custom page beyond the tenth has a two-digit position.  The active
+    -- label must keep both digits when it is cut; " 1." would point at the
+    -- first page while the reader is actually on the eleventh.
+    name_cells = 2 + #(active_index == 10 and "0" or tostring(active_index))
+  end
   -- The statement is booked out of the run *before* the pages are chosen, so a
   -- neighbour never takes a cell the statement needs.  Only the count's own
   -- digits are booked: the quiet cell an earlier version also reserved between
@@ -191,7 +207,7 @@ function M.render(grid, area, state, context)
   local selected, used, active_width = {}, 0, 0
   local function try_add(index, required)
     if index < 1 or index > #tabs or selected[index] then return false end
-    local text = representation(tabs[index], required, context)
+    local text = representation(tabs[index], required, context, index)
     local width = Width.display_width(text, grid.width_options)
     if width > selectable - used then
       if not required or selectable - used < 1 then return false end

@@ -13,6 +13,34 @@ local function unsigned_number(token)
   return value
 end
 
+-- Validate a compact kernel CPU/node list without expanding large ranges.
+-- A caller may retain the source spelling and the bounded item count.
+function Parsers.range_list(content, maximum_items, maximum_id, maximum_bytes)
+  maximum_items = maximum_items or 4096
+  maximum_id = maximum_id or 65535
+  maximum_bytes = maximum_bytes or 1024
+  if type(content) ~= "string" or #content > maximum_bytes then
+    return nil, "invalid_range_list"
+  end
+  local value = content:match("^%s*(.-)%s*$")
+  if value == "" or value:find("[^%d,%-]")
+      or value:sub(1, 1) == "," or value:sub(-1) == ","
+      or value:find(",,", 1, true) then return nil, "invalid_range_list" end
+  local count, previous_end = 0, -1
+  for token in value:gmatch("[^,]+") do
+    local first, last = token:match("^(%d+)%-(%d+)$")
+    if not first then first = token:match("^(%d+)$"); last = first end
+    first, last = unsigned_number(first), unsigned_number(last)
+    if first == nil or last == nil or first > last or first <= previous_end
+        or last > maximum_id or last - first + 1 > maximum_items - count then
+      return nil, "invalid_range_list"
+    end
+    count = count + last - first + 1
+    previous_end = last
+  end
+  return value, count
+end
+
 local function exact_integer(token)
   if type(token) ~= "string" or not token:match("^%-?%d+$") then return nil end
   local value = tonumber(token)
@@ -313,6 +341,56 @@ function Parsers.net_dev(content)
   return interfaces
 end
 
+-- The first three softnet columns have remained the processed, dropped and
+-- time-squeeze counters across kernel layouts. Newer kernels also print the
+-- receive backlog and an explicit CPU id; without that id the rows cannot be
+-- matched safely across samples when CPUs go offline.
+function Parsers.softnet_stat(content)
+  if type(content) ~= "string" or #content > 1024 * 1024 then
+    return nil, "invalid_softnet_stat"
+  end
+  local rows, seen, indexed = {}, {}, nil
+  local function hex32(token)
+    if type(token) ~= "string" or #token < 1 or #token > 8
+        or not token:match("^%x+$") then return nil end
+    return tonumber(token, 16)
+  end
+  for line in content:gmatch("[^\n]+") do
+    if #rows >= 4096 then return nil, "softnet_row_limit" end
+    local fields = split_words(line)
+    if #fields < 3 or #fields > 32 then return nil, "invalid_softnet_line" end
+    local processed, dropped, squeezed = hex32(fields[1]), hex32(fields[2]),
+      hex32(fields[3])
+    if not processed or not dropped or not squeezed then
+      return nil, "invalid_softnet_counter"
+    end
+    local has_id = #fields >= 13
+    if indexed ~= nil and indexed ~= has_id then
+      return nil, "inconsistent_softnet_columns"
+    end
+    indexed = has_id
+    local row = { processed = processed, dropped = dropped, time_squeeze = squeezed }
+    if has_id then
+      row.backlog_packets = hex32(fields[12])
+      row.cpu = hex32(fields[13])
+      if not row.backlog_packets or not row.cpu or row.cpu > 65535 or seen[row.cpu] then
+        return nil, "invalid_softnet_cpu"
+      end
+      seen[row.cpu] = true
+      if #fields >= 15 then
+        row.input_backlog_packets = hex32(fields[14])
+        row.process_backlog_packets = hex32(fields[15])
+        if not row.input_backlog_packets or not row.process_backlog_packets then
+          return nil, "invalid_softnet_backlog"
+        end
+      end
+    end
+    rows[#rows + 1] = row
+  end
+  if #rows == 0 then return nil, "softnet_rows_missing" end
+  return { rows = rows, indexed = indexed == true }
+end
+
 -- Field positions (after state) that process_stat needs; defined once so a
 -- per-process parse does not allocate its own lookup table.
 local PROCESS_STAT_REQUIRED = {
@@ -469,6 +547,35 @@ function Parsers.process_status(content)
   if nspid_error then return nil, nspid_error end
   local nstgid, nstgid_error = id_chain("NStgid")
   if nstgid_error then return nil, nstgid_error end
+  local affinity
+  if result.Cpus_allowed_list ~= nil or result.Mems_allowed_list ~= nil then
+    affinity = { issues = {} }
+    for _, specification in ipairs({
+      { "Cpus_allowed_list", "cpus_allowed_list", "cpus_allowed_count" },
+      { "Mems_allowed_list", "mems_allowed_list", "mems_allowed_count" },
+    }) do
+      local raw = result[specification[1]]
+      if raw ~= nil then
+        local list, count = Parsers.range_list(raw, 4096, 65535, 1024)
+        if list then
+          affinity[specification[2]] = list
+          affinity[specification[3]] = count
+        else
+          affinity.issues[#affinity.issues + 1] = {
+            field = specification[1], status = "error",
+          }
+        end
+      end
+    end
+    if #affinity.issues == 0 and affinity.cpus_allowed_list
+        and affinity.mems_allowed_list then
+      affinity.status = "ok"
+    elseif #affinity.issues == 2 then
+      affinity.status = "error"
+    else
+      affinity.status = "partial"
+    end
+  end
   return {
     raw = result,
     uid = uid,
@@ -478,7 +585,36 @@ function Parsers.process_status(content)
     nonvoluntary_context_switches = involuntary,
     nspid = nspid,
     nstgid = nstgid,
+    affinity = affinity,
   }
+end
+
+-- /proc/<pid>/limits is an English kernel table. Only the open-file row is
+-- needed here; a missing or malformed row must not turn into a zero limit.
+function Parsers.process_open_file_limits(content)
+  if type(content) ~= "string" then return nil, "content_required" end
+  for line in content:gmatch("[^\n]+") do
+    if line:match("^Max open files%s") then
+      local soft_text, hard_text = line:match(
+        "^Max open files%s+(%S+)%s+(%S+)%s+files%s*$")
+      if not soft_text then return nil, "invalid_open_file_limits" end
+      local soft_unlimited = soft_text == "unlimited"
+      local hard_unlimited = hard_text == "unlimited"
+      local soft = not soft_unlimited and unsigned_number(soft_text) or nil
+      local hard = not hard_unlimited and unsigned_number(hard_text) or nil
+      if (not soft_unlimited and soft == nil) or (not hard_unlimited and hard == nil)
+          or (soft_unlimited and not hard_unlimited)
+          or (soft and hard and soft > hard) then
+        return nil, "invalid_open_file_limits"
+      end
+      return {
+        soft = soft, hard = hard,
+        soft_unlimited = soft_unlimited,
+        hard_unlimited = hard_unlimited,
+      }
+    end
+  end
+  return nil, "open_file_limits_absent"
 end
 
 function Parsers.process_io(content)
@@ -563,6 +699,173 @@ function Parsers.process_smaps_rollup(content)
   end
   if fields == 0 then return nil, "empty_smaps_rollup" end
   return result
+end
+
+-- numa_maps counts mapped pages per VMA and node.  A huge VMA counts huge
+-- pages, so its own kernel page size must be used before aggregating nodes.
+-- Keep only totals: addresses and backing file names are private detail.
+function Parsers.process_numa_maps(content, base_page_bytes)
+  if type(content) ~= "string" then return nil, "content_required" end
+  if type(base_page_bytes) ~= "number" or base_page_bytes < 1
+      or base_page_bytes % 1 ~= 0 then return nil, "invalid_page_size" end
+  local totals, mappings, node_count, total = {}, 0, 0, 0
+  for line in content:gmatch("[^\n]+") do
+    mappings = mappings + 1
+    if mappings > 8192 then return nil, "too_many_mappings" end
+    local address, policy = line:match("^(%x+)%s+(%S+)")
+    if not address or not policy then return nil, "invalid_numa_maps_line" end
+    local page_kb, huge, line_nodes = nil, false, {}
+    for token in line:gmatch("%S+") do
+      local size = token:match("^kernelpagesize_kB=(%d+)$")
+      if size then
+        if page_kb then return nil, "duplicate_page_size" end
+        page_kb = unsigned_number(size)
+        if not page_kb or page_kb < 1 then return nil, "invalid_page_size" end
+      elseif token == "huge" then
+        huge = true
+      else
+        local node, pages = token:match("^N(%d+)=(%d+)$")
+        if node then
+          node, pages = unsigned_number(node), unsigned_number(pages)
+          if not node or node > 65535 or not pages then
+            return nil, "invalid_node_pages"
+          end
+          if line_nodes[node] then return nil, "duplicate_node" end
+          line_nodes[node] = pages
+        elseif token:match("^N%d+=") or token:match("^kernelpagesize_kB=") then
+          return nil, "invalid_numa_maps_value"
+        end
+      end
+    end
+    if next(line_nodes) then
+      if huge and not page_kb then return nil, "huge_page_size_missing" end
+      local page_bytes = page_kb and checked_multiply(page_kb, 1024) or base_page_bytes
+      if not page_bytes then return nil, "page_size_out_of_range" end
+      for node, pages in pairs(line_nodes) do
+        local amount = checked_multiply(pages, page_bytes)
+        if not amount or total > math.maxinteger - amount
+            or (totals[node] or 0) > math.maxinteger - amount then
+          return nil, "node_bytes_out_of_range"
+        end
+        if totals[node] == nil then
+          node_count = node_count + 1
+          if node_count > 128 then return nil, "too_many_nodes" end
+        end
+        totals[node] = (totals[node] or 0) + amount
+        total = total + amount
+      end
+    end
+  end
+  local nodes = {}
+  for node, mapped_bytes in pairs(totals) do
+    nodes[#nodes + 1] = { node_id = node, mapped_bytes = mapped_bytes }
+  end
+  table.sort(nodes, function(a, b) return a.node_id < b.node_id end)
+  return { nodes = nodes, total_mapped_bytes = total, mappings = mappings }
+end
+
+-- PCIe AER device files have named error classes and one authoritative
+-- TOTAL_ERR_* line.  The kernel explicitly says a message may contain several
+-- errors, so adding the class counters is not a substitute for that total.
+function Parsers.pci_aer_stats(content, total_key)
+  if type(content) ~= "string" or #content > 16 * 1024 then
+    return nil, "invalid_aer_content"
+  end
+  if total_key ~= "TOTAL_ERR_COR" and total_key ~= "TOTAL_ERR_FATAL"
+      and total_key ~= "TOTAL_ERR_NONFATAL" then
+    return nil, "invalid_aer_total_key"
+  end
+  local total, categories, seen, lines = nil, {}, {}, 0
+  for line in content:gmatch("[^\n]+") do
+    lines = lines + 1
+    if lines > 64 then return nil, "too_many_aer_lines" end
+    local name, token = line:match("^%s*(.-)%s+(%d+)%s*$")
+    if not name or name == "" or #name > 64 or name:find("[%c]")
+        or seen[name] then return nil, "invalid_aer_line" end
+    local value = unsigned_number(token)
+    if value == nil then return nil, "invalid_aer_counter" end
+    seen[name] = true
+    if name == total_key then
+      total = value
+    elseif name:match("^TOTAL_") then
+      return nil, "unexpected_aer_total"
+    elseif value > 0 then
+      if #categories >= 32 then return nil, "too_many_aer_categories" end
+      categories[#categories + 1] = { name = name, count = value }
+    end
+  end
+  if total == nil then return nil, "aer_total_missing" end
+  return { total = total, categories = categories }
+end
+
+function Parsers.pci_aer_root_total(content)
+  if type(content) ~= "string" or #content > 64 then return nil end
+  return unsigned_number(content:match("^%s*(%d+)%s*$"))
+end
+
+-- Match numeric IRQs explicitly named by sysfs to /proc/interrupts. Textual
+-- handler names are not used as device identity. Keep only the four busiest
+-- CPUs per vector so a large CPU machine cannot inflate a Snapshot.
+function Parsers.proc_interrupts(content, wanted)
+  if type(content) ~= "string" or #content > 4 * 1024 * 1024
+      or type(wanted) ~= "table" then return nil, "invalid_interrupts_content" end
+  local first = content:match("^([^\n]*)")
+  if not first or #first > 65536 then return nil, "invalid_interrupts_header" end
+  local cpus = {}
+  for token in first:gmatch("%S+") do
+    local id = unsigned_number(token:match("^CPU(%d+)$"))
+    if id == nil or id > 65535 or #cpus >= 4096 then
+      return nil, "invalid_interrupts_header"
+    end
+    cpus[#cpus + 1] = id
+  end
+  if #cpus == 0 then return nil, "invalid_interrupts_header" end
+  local totals, partial, lines, header = {}, false, 0, true
+  for line in content:gmatch("[^\n]+") do
+    if header then header = false
+    else
+      lines = lines + 1
+      if lines > 65536 or #line > 65536 then
+        partial = true
+        break
+      end
+      local token, rest = line:match("^%s*(%d+):%s*(.*)$")
+      local irq = token and unsigned_number(token)
+      if irq and wanted[irq] then
+        if totals[irq] ~= nil then
+          totals[irq] = false
+          partial = true
+        else
+          local total, top, position, valid = 0, {}, 0, true
+          for field in rest:gmatch("%S+") do
+            if position == #cpus then break end
+            position = position + 1
+            local amount = unsigned_number(field)
+            if amount == nil or amount > math.maxinteger - total then
+              valid = false
+              break
+            end
+            total = total + amount
+            if amount > 0 then
+              top[#top + 1] = { cpu_id = cpus[position], count = amount }
+              table.sort(top, function(a, b)
+                return a.count > b.count or a.count == b.count
+                  and a.cpu_id < b.cpu_id
+              end)
+              if #top > 4 then top[5] = nil end
+            end
+          end
+          if valid and position == #cpus then
+            totals[irq] = { total = total, top_cpus = top }
+          else
+            totals[irq] = false
+            partial = true
+          end
+        end
+      end
+    end
+  end
+  return totals, partial and "partial" or "ok"
 end
 
 function Parsers.cgroup(content)

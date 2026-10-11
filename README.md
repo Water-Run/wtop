@@ -14,6 +14,8 @@ no color at all.
 ```bash
 wtop                # interactive monitor
 wtop --snapshot     # one JSON snapshot, for scripts
+wtop --stream --count 60 > samples.jsonl  # 60 JSON snapshots
+wtop --report       # English hardware summary in Markdown
 wtop --diagnose     # what wtop can see on this machine
 ```
 
@@ -48,11 +50,11 @@ build target but hasn't been tested on a real XP machine yet.
 
 ## What it shows
 
-- Ten tabs: Overview, Processes, Compute, Memory, Storage, Network, GPU,
+- Ten built-in tabs: Overview, Processes, Compute, Memory, Storage, Network, GPU,
   Workloads, System and Insights.
-- A process list with search, sorting, a tree view, and a confirmed
-  signal menu.
-- Optional deep checks (SMART/NVMe, memory bandwidth, sshd) when the host
+- A process list with search, sorting, tree navigation, links to workloads,
+  and a confirmed signal menu.
+- Optional deep checks (SMART/NVMe, memory bandwidth, systemd units, sshd) when the host
   tools are available.
 - Readings that failed or are incomplete are labeled as such (for example
   `denied` or `partial`) instead of showing up as blank or zero.
@@ -109,8 +111,18 @@ and 10.13 on Intel.
 
 | Key | Action |
 |---|---|
-| `1`–`8`, `Tab` | Switch tabs and focus |
+| `1`–`9`, `0`, `Tab` | Switch tabs and focus |
+| `e`, then `b` | Show, hide, reorder, create, or copy pages |
+| `e`, then `a` | Add a widget to the current page |
+| `j`/`k`, `Enter` in hardware tables | Select a device and open its details |
+| `F` in process details | Show open file descriptors and their details on Linux |
+| `d` / `D` | Inspect systemd units / sshd on Linux |
+| `l` in unit details | Read recent journal messages on Linux |
+| `u` | Inspect login sessions on Linux |
+| `s` in journal or sshd details | Show a log summary on Linux |
 | `f` | Change the update rate |
+| `B` | Switch block and Braille charts |
+| `z` / `Z` | Show more / less time in charts |
 | `L` | Change language |
 | `?` or `F1` | All keys |
 | `q` or `Ctrl+C` | Quit |
@@ -121,7 +133,10 @@ and 10.13 on Intel.
 | Option | |
 |---|---|
 | `--snapshot` | Print one JSON snapshot and exit |
-| `--unmask-remote-addresses` | With `--snapshot`: export full remote socket addresses |
+| `--stream` | Print snapshots as JSON Lines until interrupted |
+| `--count N` | With `--stream`, stop after N snapshots |
+| `--report` | Print an English hardware summary in Markdown |
+| `--unmask-remote-addresses` | With `--snapshot` or `--stream`: export full remote socket addresses |
 | `--agent` | Print compact JSON context for scripts and LLM agents |
 | `--diagnose` | Show which data sources work on this machine |
 | `--lang LOCALE` | Interface language, e.g. `zh-CN`, `fr-FR`, `ru-RU` |

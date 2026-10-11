@@ -254,9 +254,89 @@ end
 local _, flat_scale = Chart.render(series_of("windowed", function() return 42 end),
   20, 4, {})
 
+-- Two readings fit in each Braille cell. A measured zero is a baseline dot,
+-- while an interval with no reading is a gap. The four vertical dots must be
+-- placed in Unicode's dot order, not numeric code-point order.
+local braille_rows, braille_scale = Chart.render({ n = 2, [1] = 0, [2] = 100 },
+  1, 1, { mode = "braille", min = 0, max = 100 })
+local braille_gap = Chart.render({ n = 0 }, 1, 1, { mode = "braille" })
+local braille_zero = Chart.render({ n = 1, [1] = 0 }, 1, 1,
+  { mode = "braille", min = 0, max = 100 })
+
+local Width = require("wtop.ui.renderer.width")
+local braille_window = series_of("windowed", function(index)
+  return index == 30 and 100 or 5
+end)
+local detailed_rows, detailed_scale = Chart.render(braille_window, 20, 3,
+  { mode = "braille" })
+local live_window = series_of("windowed", function(index)
+  return index == 50 and 100 or 5
+end)
+live_window.column_ns = SAMPLE_NS
+local _, block_live = Chart.render(live_window, 20, 3, { mode = "block" })
+local _, braille_live = Chart.render(live_window, 20, 3, { mode = "braille" })
+live_window.window_ns = 240 * SAMPLE_NS
+local zoom_scales = {}
+for _, mode in ipairs({ "block", "braille" }) do
+  zoom_scales[mode] = {}
+  for _, seconds in ipairs({ 0.5, 1, 2, 4 }) do
+    local _, scale = Chart.render(live_window, 20, 3,
+      { mode = mode, column_ns = seconds * SAMPLE_NS })
+    zoom_scales[mode][seconds] = scale
+  end
+end
+local _, capped_block = Chart.render(live_window, 40, 3,
+  { mode = "block", column_ns = 8 * SAMPLE_NS })
+local _, capped_braille = Chart.render(live_window, 40, 3,
+  { mode = "braille", column_ns = 8 * SAMPLE_NS })
+braille_window.column_ns = SAMPLE_NS
+local short_default = Sparkline.render(braille_window, 20, { min = 0, max = 100 })
+local short_zoomed = Sparkline.render(braille_window, 20,
+  { min = 0, max = 100, column_ns = 2 * SAMPLE_NS })
+
 local failures = {}
 local function require_(condition, message)
   if not condition then failures[#failures + 1] = message end
+end
+
+require_(braille_rows[1] == utf8.char(0x28F8),
+  "a zero and a full-scale reading did not draw the expected two-dot-column cell")
+require_(braille_gap[1] == "·" and braille_zero[1] == utf8.char(0x2880),
+  "a missing interval and a measured zero became indistinguishable")
+require_(braille_scale.columns == 1 and braille_scale.subcolumns == 2,
+  "the Braille chart did not report two samples per display cell")
+require_(detailed_scale.minimum == 5 and detailed_scale.maximum == 100
+    and detailed_scale.window_maximum == 100 and detailed_scale.samples == COUNT,
+  "Braille scale lost the highest reading or changed the timestamped window")
+require_(detailed_rows[1] ~= string.rep(" ", 20),
+  "the Braille scale includes the spike but its top row does not draw it")
+require_(block_live.samples == 20 and braille_live.samples == block_live.samples
+    and braille_live.window_maximum == block_live.window_maximum
+    and braille_live.maximum == block_live.maximum,
+  "Braille changed the live chart's time window instead of only its resolution")
+for _, seconds in ipairs({ 0.5, 1, 2, 4 }) do
+  local expected_window = seconds * 20 * SAMPLE_NS
+  local block = zoom_scales.block[seconds]
+  local braille = zoom_scales.braille[seconds]
+  require_(block.window_ns == expected_window and braille.window_ns == expected_window,
+    ("%s s/cell did not produce the same %s s time axis in both modes")
+      :format(seconds, seconds * 20))
+  require_(block.samples == braille.samples
+      and block.window_minimum == braille.window_minimum
+      and block.window_maximum == braille.window_maximum,
+    ("%s s/cell changed the readings when only the glyph mode changed"):format(seconds))
+end
+require_(capped_block.window_ns == 240 * SAMPLE_NS
+    and capped_braille.window_ns == capped_block.window_ns,
+  "zooming out exceeded the four-minute retained history")
+require_(capped_block.leading_columns == 10
+    and capped_braille.leading_columns == capped_block.leading_columns,
+  "the capped time window was not right-aligned in both chart modes")
+require_(not short_default:find("█", 1, true)
+    and short_zoomed:find("█", 1, true) ~= nil,
+  "the single-row trend did not follow the time-axis zoom")
+for _, row in ipairs(detailed_rows) do
+  require_(Width.display_width(row) == 20, "Braille row is not 20 display cells wide")
 end
 
 require_(flat_scale.flat == true and flat_scale.minimum == 42,

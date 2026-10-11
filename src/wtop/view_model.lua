@@ -2,7 +2,12 @@ local Engine = require("wtop.engine")
 local Technical = require("wtop.i18n.technical")
 local ProcessTable = require("wtop.model.process_table")
 local ProcessColumns = require("wtop.model.process_columns")
+local ConnectionFilter = require("wtop.model.connection_filter")
+local WorkloadFilter = require("wtop.model.workload_filter")
+local MountFilter = require("wtop.model.mount_filter")
 local Quality = require("wtop.model.quality")
+local Hardware = require("wtop.model.hardware")
+local HardwareFilter = require("wtop.model.hardware_filter")
 local Privacy = require("wtop.privacy")
 
 local M = {}
@@ -190,6 +195,16 @@ local function process_sort_label(i18n, key)
         name = { "process.sort.name", "Name" },
         io_read = { "process.sort.io_read", "I/O read" },
         io_write = { "process.sort.io_write", "I/O write" },
+        io_read_rate = { "process.sort.io_read_rate", "I/O read rate" },
+        io_write_rate = { "process.sort.io_write_rate", "I/O write rate" },
+        time = { "process.sort.time", "CPU time" },
+        elapsed = { "process.sort.elapsed", "Elapsed time" },
+        threads = { "process.sort.threads", "Threads" },
+        virtual = { "process.sort.virtual", "Virtual memory" },
+        state = { "process.sort.state", "State" },
+        user = { "process.sort.user", "User" },
+        priority = { "process.sort.priority", "Priority" },
+        nice = { "process.sort.nice", "Nice" },
     }
     local label = labels[key] or labels.cpu
     return translated(i18n, label[1], label[2])
@@ -236,11 +251,11 @@ local function ordered_process_columns(chosen, i18n, process_status, platform)
       sort_key = "user", width = 12, min_width = 8, priority = 55, highlight = true,
     },
     priority = {
-      key = "priority", label = "PRI", width = 4, min_width = 3,
+      key = "priority", label = "PRI", sort_key = "priority", width = 4, min_width = 3,
       align = "right", priority = 20, full_only = true,
     },
     nice = {
-      key = "nice", label = "NI", width = 4, min_width = 3,
+      key = "nice", label = "NI", sort_key = "nice", width = 4, min_width = 3,
       align = "right", priority = 22, full_only = true,
     },
     virtual_memory = {
@@ -278,6 +293,11 @@ local function ordered_process_columns(chosen, i18n, process_status, platform)
       key = "time", label = "TIME+", sort_key = "time",
       width = 10, min_width = 8, align = "right", priority = 40,
     },
+    elapsed = {
+      key = "elapsed", label = "ETIME", sort_key = "elapsed",
+      width = 10, min_width = 8, align = "right", priority = 30,
+      full_only = true,
+    },
     threads = {
       key = "threads", label = translated(i18n, "metrics.threads", "Thr"),
       sort_key = "threads", width = 5, min_width = 4,
@@ -300,12 +320,26 @@ local function ordered_process_columns(chosen, i18n, process_status, platform)
       key = "queued", label = translated(i18n, "process.thread_queued", "Queued"),
       width = 11, min_width = 8, align = "right", priority = 30, full_only = true,
     },
+    wait_site = {
+      key = "wait_site", label = "WCHAN", width = 22, min_width = 12,
+      priority = 30, full_only = true,
+    },
+    io_read_rate = {
+      key = "io_read_rate", label = "IO R/s", sort_key = "io_read_rate",
+      width = 11, min_width = 8, align = "right", priority = 28, full_only = true,
+    },
+    io_write_rate = {
+      key = "io_write_rate", label = "IO W/s", sort_key = "io_write_rate",
+      width = 11, min_width = 8, align = "right", priority = 28, full_only = true,
+    },
   }
   local order = ProcessColumns.normalize(chosen)
   local result = {}
   for _, key in ipairs(order) do
     local definition = definitions[key]
-    if definition then result[#result + 1] = definition end
+    if definition and (key ~= "wait_site" or (platform or "Linux") == "Linux") then
+      result[#result + 1] = definition
+    end
   end
   return result
 end
@@ -314,13 +348,37 @@ local function process_status_text(i18n, status)
     local filter = status.query ~= "" and translated(i18n, "process.filter_status",
         " · Filter: {query}", { query = status.query }) or ""
     local tree = status.tree and translated(i18n, "process.tree_status", " · Tree") or ""
+    if status.tree and (status.hidden_by_collapse or 0) > 0 then
+        tree = tree .. translated(i18n, "process.collapsed_status",
+            " · {count} folded", { count = status.hidden_by_collapse })
+    end
     local collection = status.collection_truncated and translated(i18n, "process.collection_truncated",
         " · collection capped at {limit}", { limit = status.collection_limit or status.total }) or ""
     -- A cgroup reached from the Workloads page is announced here rather than
     -- hidden, because nothing about the process table says why the rows ended.
     local cgroup = status.cgroup_filter and translated(i18n, "process.cgroup_status",
         " · cgroup: {name} · Esc clears", { name = status.cgroup_filter }) or ""
-    tree = tree .. cgroup .. collection
+    local io_note = ""
+    if status.requires_io and status.platform == "Linux" then
+        local scan = status.io_scan
+        if not scan then
+            io_note = translated(i18n, "process.io_scan_pending", " · I/O loading")
+        elseif status.requires_io_rate and (scan.rate_covered or 0) == 0 then
+            io_note = translated(i18n, "process.io_rate_scan_pending",
+                " · I/O rate needs another sample")
+        elseif status.requires_io_rate and (scan.rate_covered or 0) < (scan.total or 0) then
+            io_note = translated(i18n, "process.io_rate_scan_coverage",
+                " · I/O rate {covered}/{total}", {
+                    covered = scan.rate_covered or 0, total = scan.total or 0,
+                })
+        elseif scan.status ~= "ok" then
+            io_note = translated(i18n, "process.io_scan_coverage",
+                " · I/O {covered}/{total}", {
+                    covered = scan.covered or 0, total = scan.total or 0,
+                })
+        end
+    end
+    tree = tree .. cgroup .. collection .. io_note
     return translated(i18n, "process.table_status",
         "Sort: {sort} {direction} · {visible}/{total}{filter}{tree}", {
             sort = process_sort_label(i18n, status.sort_key),
@@ -357,6 +415,8 @@ local function top_processes(snapshot, format, controller, i18n, platform)
     local status = controller:status()
     status.collection_truncated = snapshot.processes and snapshot.processes.truncated == true or false
     status.collection_limit = snapshot.processes and snapshot.processes.process_limit
+    status.platform = platform
+    status.io_scan = snapshot.processes and snapshot.processes.io_scan or nil
     local locale_id = type(i18n.locale) == "function" and i18n:locale() or nil
     local cached = PROCESS_VIEW_CACHE[controller]
     if cached and cached.revision == status.revision and cached.format == format
@@ -364,6 +424,7 @@ local function top_processes(snapshot, format, controller, i18n, platform)
         and cached.platform == platform
         and cached.collection_truncated == status.collection_truncated
         and cached.collection_limit == status.collection_limit
+        and cached.io_scan == status.io_scan
     then
         return cached.rows, status, cached.status_text
     end
@@ -396,10 +457,15 @@ local function top_processes(snapshot, format, controller, i18n, platform)
         name = name or process.name or "?"
         if status.tree then
             local prefix = string.rep("  ", math.min(process.tree_depth or 0, status.max_tree_depth or 64))
-            name = prefix .. (process.tree_has_children and "▾ " or "· ") .. name
+            name = prefix .. (process.tree_has_children
+                and (process.tree_collapsed and "▸ " or "▾ ") or "· ") .. name
         end
-        local cpu_seconds = type(process.cpu_ticks) == "number"
-            and clock_ticks > 0 and process.cpu_ticks / clock_ticks or nil
+        local cpu_seconds = process.cpu_time_seconds
+        if type(cpu_seconds) ~= "number" or cpu_seconds ~= cpu_seconds
+            or cpu_seconds < 0 or cpu_seconds == math.huge then
+            cpu_seconds = type(process.cpu_ticks) == "number"
+                and clock_ticks > 0 and process.cpu_ticks / clock_ticks or nil
+        end
         return {
             id = process.id,
             pid = tostring(process.pid),
@@ -414,6 +480,8 @@ local function top_processes(snapshot, format, controller, i18n, platform)
             nice = process.nice and tostring(process.nice) or "—",
             priority = process.priority and tostring(process.priority) or "—",
             time = cpu_seconds and duration(format, cpu_seconds) or "—",
+            elapsed = type(process.elapsed_seconds) == "number"
+                and duration(format, process.elapsed_seconds) or "—",
             state = process.state or "—",
             user = process.user or "—",
             -- Run-queue wait is only read for the rows the viewport is showing,
@@ -422,6 +490,13 @@ local function top_processes(snapshot, format, controller, i18n, platform)
             -- the process never waited for a cpu, which is the one thing this
             -- column must not invent.
             queued = queued_rate(format, process.scheduler),
+            -- A visible Linux row reads the leader's wchan on demand. The
+            -- kernel's 0 means no sleeping site was reported, not a measured
+            -- zero. Other failures retain their localized status.
+            wait_site = process.wait_site or (process.wait_site_status
+                and process.wait_site_status ~= "not_reported"
+                and Technical.state(i18n, process.wait_site_status == "parse_error"
+                    and "error" or process.wait_site_status) or "—"),
             -- Process I/O byte counters are cumulative, not a per-second rate.
             -- Linux samples them for the selection; Windows bulk collection
             -- supplies them for every row without opening each process.
@@ -429,6 +504,10 @@ local function top_processes(snapshot, format, controller, i18n, platform)
                 or process.io_read_bytes),
             write = bytes(format, process.io and process.io.write_bytes
                 or process.io_write_bytes),
+            io_read_rate = rate(format, process.io_rate
+                and process.io_rate.read_bytes_per_second),
+            io_write_rate = rate(format, process.io_rate
+                and process.io_rate.write_bytes_per_second),
             process = process,
         }
     end
@@ -460,6 +539,7 @@ local function top_processes(snapshot, format, controller, i18n, platform)
         platform = platform,
         collection_truncated = status.collection_truncated,
         collection_limit = status.collection_limit,
+        io_scan = status.io_scan,
         rows = rows,
         status_text = status_text,
     }
@@ -516,7 +596,8 @@ local function disk_rows(snapshot, format, options)
                 and temperature_entry.temperature or nil
             rows[#rows + 1] = {
                 device = device.name,
-                model = identity.model or identity.vendor or "—",
+                model = device.stack and (device.stack.name or device.stack.level)
+                    or identity.model or identity.vendor or "—",
                 size = bytes(format, identity.size_bytes),
                 medium = identity.rotational == 1 and "HDD"
                     or (identity.rotational == 0 and "SSD" or "—"),
@@ -546,6 +627,10 @@ local function network_rows(snapshot, format)
         local counters = interface.counters or {}
         local errors = (counters.rx_errors or 0) + (counters.tx_errors or 0)
         local drops = (counters.rx_drops or 0) + (counters.tx_drops or 0)
+        local link_change = type(interface.link_events) == "table"
+            and interface.link_events.change or nil
+        local new_link_changes = type(link_change) == "table"
+            and link_change.quality == "fresh" and link_change.new_changes or nil
         rows[#rows + 1] = {
             interface = interface.name,
             state = interface.operstate or "?",
@@ -570,12 +655,42 @@ local function network_rows(snapshot, format)
             errors = tostring(errors),
             drops = tostring(drops),
             error_value = errors + drops,
+            link_changes = type(new_link_changes) == "number"
+                and (new_link_changes > 0 and "+" .. tostring(new_link_changes)
+                    or "0") or "—",
+            link_change_value = new_link_changes,
         }
     end
     return rows
 end
 
-local function connection_rows(snapshot, mask_remote)
+local function softnet_entries(snapshot, format, i18n)
+    local softnet = snapshot.network and snapshot.network.softnet or nil
+    if type(softnet) ~= "table" or softnet.status ~= "ok" then
+        return { entry("softnet.status", "Status",
+            Technical.state(i18n, softnet and softnet.status or "unavailable")) }
+    end
+    local function events_per_second(value)
+        return type(value) == "number" and number(format, value, 1) .. "/s" or "—"
+    end
+    local entries = {
+        entry("softnet.cpus", "CPUs observed", number(format, softnet.cpu_count)),
+        entry("softnet.backlog", "Receive backlog", number(format, softnet.backlog_packets)),
+        entry("softnet.dropped_total", "Softnet drops", number(format, softnet.dropped)),
+        entry("softnet.dropped_rate", "New drops", events_per_second(softnet.dropped_per_second)),
+        entry("softnet.squeezed_rate", "Budget squeezes", events_per_second(
+            softnet.time_squeeze_per_second)),
+        entry("softnet.rate_quality", "Rate quality", Technical.state(i18n, softnet.quality)),
+    }
+    if softnet.hot_cpu ~= nil then
+        entries[#entries + 1] = entry("softnet.hot_cpu", "Largest backlog",
+            "CPU " .. tostring(softnet.hot_cpu) .. " · "
+                .. number(format, softnet.hot_cpu_backlog))
+    end
+    return entries
+end
+
+local function connection_rows(snapshot, mask_remote, query, owner_id)
     local rank = { ESTABLISHED = 1, LISTEN = 2, SYN_SENT = 3, SYN_RECV = 4 }
     local function better(left, right)
         local left_rank, right_rank = rank[left.state] or 10, rank[right.state] or 10
@@ -597,8 +712,31 @@ local function connection_rows(snapshot, mask_remote)
         if left_local ~= right_local then return left_local < right_local end
         return tostring(left.id or left.base_id or "") < tostring(right.id or right.base_id or "")
     end
-    local selected = bounded_best_values(
-        snapshot.connections and snapshot.connections.connections or {}, TABLE_ROW_LIMIT, better)
+    local compiled = ConnectionFilter.compile(query)
+    local source = snapshot.connections and snapshot.connections.connections or {}
+    local selected, matching = {}, 0
+    local function visible_remote(connection)
+        local endpoint = connection.remote_endpoint
+        return endpoint and (mask_remote
+            and Privacy.masked_endpoint_text(endpoint) or endpoint.text) or "—"
+    end
+    local function matches(connection)
+        if owner_id then
+            local found = false
+            for _, owner in ipairs(connection.owners or {}) do
+                if owner.id == owner_id then found = true; break end
+            end
+            if not found then return false end
+        end
+        return ConnectionFilter.matches(compiled, connection, visible_remote(connection))
+    end
+    for _, connection in ipairs(source) do
+        if matches(connection) then
+            matching = matching + 1
+            bounded_best_add(selected, TABLE_ROW_LIMIT, better, connection)
+        end
+    end
+    table.sort(selected, better)
     local rows = {}
     for _, connection in ipairs(selected) do
         local owners = {}
@@ -609,11 +747,7 @@ local function connection_rows(snapshot, mask_remote)
             protocol = string.upper(connection.protocol or connection.table or "?"),
             local_endpoint = connection.local_endpoint and connection.local_endpoint.text
                 or connection.path or "—",
-            remote_endpoint = connection.remote_endpoint
-                and (mask_remote
-                    and Privacy.masked_endpoint_text(connection.remote_endpoint)
-                    or connection.remote_endpoint.text)
-                or "—",
+            remote_endpoint = visible_remote(connection),
             state = connection.state or "—",
             process = #owners > 0 and table.concat(owners, ", ") or "—",
             queue = tostring((connection.tx_queue or 0) + (connection.rx_queue or 0)),
@@ -621,7 +755,7 @@ local function connection_rows(snapshot, mask_remote)
             connection_ref = connection,
         }
     end
-    return rows
+    return rows, matching
 end
 
 -- GPU board figures come from the general hwmon snapshot, joined on
@@ -1022,25 +1156,92 @@ local function gpu_process_rows(snapshot, format)
     return rows, total
 end
 
-local function cpufreq_rows(snapshot, format)
+local function cpufreq_rows(snapshot, format, i18n)
     local rows = {}
+    local graph = Hardware.build(snapshot)
+    local sources = {
+        cpuinfo_cur_freq = translated(i18n, "cpufreq.source_hardware_current", "HW current"),
+        cpuinfo_avg_freq = translated(i18n, "cpufreq.source_hardware_average", "HW average"),
+        scaling_cur_freq = translated(i18n, "cpufreq.source_scaling", "Scaling"),
+    }
     for _, policy in ipairs(snapshot.cpu_frequency and snapshot.cpu_frequency.policies or {}) do
         local cpus = policy.affected_cpus or policy.related_cpus or {}
         local labels = {}
         for index, cpu in ipairs(cpus) do labels[index] = tostring(cpu) end
         local frequencies = policy.frequencies or {}
+        local linked = policy.id and graph.by_id["cpufreq:" .. policy.id]
+        local reading = linked and linked.temperature
+        local scope = reading and reading.scope
+        local scope_label = scope == "core"
+            and translated(i18n, "cpufreq.temperature_core", "Core")
+            or scope == "package"
+                and translated(i18n, "cpufreq.temperature_package", "Package") or nil
         rows[#rows + 1] = {
             policy = policy.policy or policy.id,
             cpus = table.concat(labels, ","),
             current = frequency(format, frequencies.current_hz),
+            source = sources[frequencies.current_source] or "—",
+            temperature = scope_label and (scope_label .. " "
+                .. temperature(format, reading.celsius)) or "—",
+            temperature_scope = scope,
+            temperature_sensor_id = reading and reading.sensor_id,
             minimum = frequency(format, frequencies.scaling_minimum_hz or frequencies.hardware_minimum_hz),
             maximum = frequency(format, frequencies.scaling_maximum_hz or frequencies.hardware_maximum_hz),
             governor = policy.governor or "—",
             driver = policy.driver or "—",
-            quality = frequencies.current_quality or policy.quality or "—",
+            quality = policy.quality or frequencies.current_quality or "—",
         }
     end
     return rows
+end
+
+local function thermal_throttle_rows(snapshot, format)
+    local rows = {}
+    for _, cpu in ipairs(snapshot.thermal_throttle and snapshot.thermal_throttle.cpus or {}) do
+        if #rows >= TABLE_ROW_LIMIT then break end
+        rows[#rows + 1] = {
+            cpu = "cpu" .. cpu.id,
+            core_new = number(format, cpu.core_new),
+            package_new = number(format, cpu.package_new),
+            core_total = number(format, cpu.core_count),
+            package_total = number(format, cpu.package_count),
+            core_ms = number(format, cpu.core_total_time_ms),
+            package_ms = number(format, cpu.package_total_time_ms),
+        }
+    end
+    return rows
+end
+
+local function cpuidle_rows(snapshot, format, i18n)
+    local rows, total = {}, 0
+    for _, cpu in ipairs(snapshot.cpuidle and snapshot.cpuidle.cpus or {}) do
+        for _, state in ipairs(cpu.states or {}) do
+            total = total + 1
+            if #rows < TABLE_ROW_LIMIT then
+                rows[#rows + 1] = {
+                    cpu = "cpu" .. cpu.id,
+                    state = state.name or ("state" .. state.id),
+                    usage_delta = number(format, state.usage_delta),
+                    reported_ms = number(format,
+                        state.new_time_us and state.new_time_us / 1000, 1),
+                    rejected_delta = number(format, state.rejected_delta),
+                    above_delta = number(format, state.above_delta),
+                    below_delta = number(format, state.below_delta),
+                    rejected_delta_quality = state.rejected_delta_quality,
+                    above_delta_quality = state.above_delta_quality,
+                    below_delta_quality = state.below_delta_quality,
+                    latency_us = number(format, state.exit_latency_us),
+                    target_us = number(format, state.target_residency_us),
+                    disabled = state.disabled == nil and "—" or translated(i18n,
+                        state.disabled and "cpuidle.yes" or "cpuidle.no",
+                        state.disabled and "Yes" or "No"),
+                    quality = state.time_delta_quality == "fresh"
+                        and state.usage_delta_quality or state.time_delta_quality,
+                }
+            end
+        end
+    end
+    return rows, total
 end
 
 local function sensor_value(channel, format)
@@ -1112,7 +1313,14 @@ local function mount_rows(snapshot, format, options)
             seen[key] = #source
         end
     end
-    local selected = bounded_best_values(source, TABLE_ROW_LIMIT,
+    local compiled = MountFilter.compile(options.query)
+    local matching = {}
+    for _, mount in ipairs(source) do
+        if MountFilter.matches(compiled, mount) then
+            matching[#matching + 1] = mount
+        end
+    end
+    local selected = bounded_best_values(matching, TABLE_ROW_LIMIT,
         function(left, right)
             local left_rank, right_rank = rank[left.kind] or 4, rank[right.kind] or 4
             if left_rank ~= right_rank then return left_rank < right_rank end
@@ -1139,7 +1347,7 @@ local function mount_rows(snapshot, format, options)
                 or (mount.readonly and "ro" or "rw"),
         }
     end
-    return rows, hidden, #source
+    return rows, hidden, #source, #matching
 end
 
 local function workload_by_id(snapshot)
@@ -1164,10 +1372,31 @@ local function workload_row_name(workload)
     return workload.name or workload.id
 end
 
-local function workload_rows(snapshot, format, collapsed, selected_id)
+local function workload_rows(snapshot, format, collapsed, selected_id, query)
     local source = snapshot.workloads and snapshot.workloads.workloads or {}
     local by_id = {}
     for _, workload in ipairs(source) do by_id[workload.id] = workload end
+    query = type(query) == "string" and query:match("^%s*(.-)%s*$") or ""
+    local filtering = query ~= ""
+    local compiled = WorkloadFilter.compile(query)
+    local direct, included = {}, {}
+    local direct_count = 0
+    if filtering then
+        for _, workload in ipairs(source) do
+            if WorkloadFilter.matches(compiled, workload) then
+                direct[workload.id] = true
+                direct_count = direct_count + 1
+                local node, seen = workload, {}
+                for _ = 1, 128 do
+                    if seen[node.id] then break end
+                    seen[node.id] = true
+                    included[node.id] = true
+                    node = node.parent_id and by_id[node.parent_id] or nil
+                    if not node then break end
+                end
+            end
+        end
+    end
     local has_children = {}
     for _, workload in ipairs(source) do
         if workload.parent_id and by_id[workload.parent_id] then
@@ -1186,17 +1415,17 @@ local function workload_rows(snapshot, format, collapsed, selected_id)
         end
         return false
     end
-    local rows, ids, selected_index = {}, {}, nil
+    local rows, ids, selected_index, first_match_index = {}, {}, nil, nil
     local matched = 0
     for _, workload in ipairs(source) do
-        if not hidden(workload) then
+        if (not filtering and not hidden(workload)) or (filtering and included[workload.id]) then
             matched = matched + 1
             if #rows < TABLE_ROW_LIMIT then
                 local io_rates = workload.io and workload.io.totals and workload.io.totals.rates or {}
                 local pressure = workload.pressure and workload.pressure.cpu
                 local cpu_pressure = pressure and pressure.some and pressure.some.avg10
                 local children = has_children[workload.id]
-                local marker = children and (collapsed and collapsed[workload.id]
+                local marker = children and (not filtering and collapsed and collapsed[workload.id]
                     and "▸ " or "▾ ") or "· "
                 rows[#rows + 1] = {
                     workload = string.rep("  ", math.min(workload.depth or 0, 6))
@@ -1205,20 +1434,26 @@ local function workload_rows(snapshot, format, collapsed, selected_id)
                     memory = bytes(format, workload.memory and workload.memory.current_bytes),
                     read = rate(format, io_rates.rbytes_per_second),
                     write = rate(format, io_rates.wbytes_per_second),
-                    processes = tostring(workload.processes and workload.processes.count or 0),
+                    processes = number(format, workload.processes and workload.processes.count),
+                    threads = number(format, workload.threads and workload.threads.count),
                     pressure = percent(format, cpu_pressure),
                     quality = workload.quality or "—",
                     raw_cpu = workload.cpu and workload.cpu.utilization_percent or -1,
                     workload_ref = workload,
+                    filter_match = filtering and direct[workload.id] or nil,
                 }
                 ids[#ids + 1] = workload.id
+                if filtering and direct[workload.id] and first_match_index == nil then
+                    first_match_index = #rows
+                end
                 if selected_id ~= nil and workload.id == selected_id then
                     selected_index = #rows
                 end
             end
         end
     end
-    return rows, ids, selected_index, matched
+    if filtering and selected_index == nil then selected_index = first_match_index end
+    return rows, ids, selected_index, matched, direct_count
 end
 
 local function power_rows(snapshot, format)
@@ -1523,72 +1758,84 @@ end
 local function system_firmware_entries(snapshot, format, i18n)
     local system = snapshot.system or {}
     local firmware = system.firmware
+    local entries
     if not firmware then
-        return { entry("system.firmware_unavailable", "Firmware",
+        entries = { entry("system.firmware_unavailable", "Firmware",
             translated(i18n, "system.dmi_unavailable", "DMI not exposed by this platform")) }
+    else
+        entries = {
+            section("system.machine_section", "Machine"),
+            entry("system.vendor", "Vendor", firmware.system_vendor),
+            entry("system.product", "Product", firmware.product_name, { emphasis = true }),
+            entry("system.product_version", "Version", firmware.product_version),
+            entry("system.chassis", "Chassis", firmware.chassis_type),
+            section("system.board_section", "Board"),
+            entry("system.board_vendor", "Vendor", firmware.board_vendor),
+            entry("system.board_name", "Model", firmware.board_name),
+            entry("system.board_version", "Version", firmware.board_version),
+            section("system.bios_section", "Firmware"),
+            entry("system.bios_vendor", "Vendor", firmware.bios_vendor),
+            entry("system.bios_version", "Version", firmware.bios_version),
+            entry("system.bios_date", "Date", firmware.bios_date),
+        }
     end
-    local entries = {
-        section("system.machine_section", "Machine"),
-        entry("system.vendor", "Vendor", firmware.system_vendor),
-        entry("system.product", "Product", firmware.product_name, { emphasis = true }),
-        entry("system.product_version", "Version", firmware.product_version),
-        entry("system.chassis", "Chassis", firmware.chassis_type),
-        section("system.board_section", "Board"),
-        entry("system.board_vendor", "Vendor", firmware.board_vendor),
-        entry("system.board_name", "Model", firmware.board_name),
-        entry("system.board_version", "Version", firmware.board_version),
-        section("system.bios_section", "Firmware"),
-        entry("system.bios_vendor", "Vendor", firmware.bios_vendor),
-        entry("system.bios_version", "Version", firmware.bios_version),
-        entry("system.bios_date", "Date", firmware.bios_date),
-    }
+    local esrt = type(snapshot.firmware_esrt) == "table" and snapshot.firmware_esrt or {}
+    local count = type(esrt.scanned) == "number" and esrt.scanned or 0
+    if count > 0 then
+        local denied = 0
+        for _, resource in ipairs(esrt.entries or {}) do
+            if resource.status == "denied" then denied = denied + 1 end
+        end
+        local summary = denied > 0
+            and translated(i18n, "system.esrt_denied_count",
+                "{count} · {denied} denied", { count = count, denied = denied })
+            or translated(i18n, "system.esrt_count", "{count}", { count = count })
+        table.insert(entries, 1, entry("system.esrt_resources", "UEFI resources", summary))
+    end
     return entries
 end
 
-local function system_device_rows(snapshot)
+local function system_device_rows(snapshot, i18n, query)
     local inventory = type(snapshot.inventory) == "table" and snapshot.inventory or {}
-    local rows, pci_total, usb_total, truncated = {}, 0, 0, false
     local pci = type(inventory.pci) == "table" and inventory.pci or {}
     local usb = type(inventory.usb) == "table" and inventory.usb or {}
-    -- `#pci.devices or 0` is not a nil guard: the length is taken before the
-    -- `or` can fall through, so an absent `devices` raises instead of counting
-    -- zero.  The two lines below use the guarded form, and the difference was
-    -- the tell -- a fresh snapshot pre-populates `inventory` as an empty table
-    -- and the collector leaves it that way whenever it reports no device
-    -- inventory at all, which is a container or a host whose PCI enumeration is
-    -- not readable.  So this was reachable on exactly the machines least likely
-    -- to have a GPU, and it took the whole system page down rather than showing
-    -- an empty device table.
     local pci_devices = type(pci.devices) == "table" and pci.devices or {}
     local usb_devices = type(usb.devices) == "table" and usb.devices or {}
-    pci_total = pci.total or #pci_devices
-    usb_total = usb.total or #usb_devices
-    truncated = pci.truncated == true or usb.truncated == true
-    for _, device in ipairs(pci_devices) do
-        local name = device.vendor_name
-            or (device.vendor_id and string.format("%04x", device.vendor_id) or "?")
-        if device.device_name then name = name .. " " .. device.device_name end
-        rows[#rows + 1] = {
-            bus = "PCI",
-            id = tostring(device.address or "?"),
-            device = name,
-            class = device.class_id and string.format("%06x", device.class_id) or "—",
+    local graph = Hardware.build(snapshot)
+    local function row_for(node)
+        local device = node.device
+        local class = (node.bus == "pci" or node.kind == "usb_interface")
+            and device.class_id or device.product_id
+        return {
+            bus = node.bus:upper(),
+            id = (node.bus == "slot" or node.bus == "firmware") and node.resource_id
+                or node.bus == "usb" and type(device.bus) == "number"
+                and type(device.device) == "number"
+                and string.format("%d:%d", device.bus, device.device) or node.identifier,
+            device = string.rep("  ", math.min(node.depth, 8)) .. Hardware.label(node, i18n),
+            class = class and string.format(node.bus == "pci" and "%06x"
+                or node.kind == "usb_interface" and "%02x" or "%04x", class) or "—",
         }
     end
-    for _, device in ipairs(usb_devices) do
-        local name = device.manufacturer
-            or (device.vendor_id and string.format("%04x", device.vendor_id) or "?")
-        if device.product then name = name .. " " .. device.product end
-        rows[#rows + 1] = {
-            bus = "USB",
-            id = type(device.bus) == "number" and type(device.device) == "number"
-                and string.format("%d:%d", device.bus, device.device)
-                or tostring(device.id or "?"),
-            device = name,
-            class = device.product_id and string.format("%04x", device.product_id) or "—",
-        }
+    local included, direct, direct_count, cached = HardwareFilter.select(graph, query, row_for)
+    local rows, ids, total, first_match_index = {}, {}, 0, nil
+    for _, node in ipairs(graph.nodes) do
+        if included == nil or included[node.id] then
+            total = total + 1
+            if #rows < TABLE_ROW_LIMIT then
+                local row = cached and cached[node.id] or row_for(node)
+                row.filter_match = direct and direct[node.id] or nil
+                rows[#rows + 1] = row
+                ids[#ids + 1] = node.id
+                if direct and direct[node.id] and first_match_index == nil then
+                    first_match_index = #rows
+                end
+            end
+        end
     end
-    return rows, pci_total, usb_total, truncated
+    return rows, pci.total or #pci_devices, usb.total or #usb_devices,
+        graph.truncated or graph.partial or total > #rows,
+        ids, total, direct_count, first_match_index
 end
 
 local function system_limits_entries(snapshot, format, i18n)
@@ -1629,22 +1876,32 @@ local function battery_items(snapshot, format, i18n)
     local supplies = snapshot.power_supplies or {}
     local items = {}
     for _, battery in ipairs(supplies.batteries or {}) do
-        local detail = battery.capacity_percent
-            and string.format("%.0f%%", battery.capacity_percent) or "—"
+        local absent = battery.present == false
+        local detail = absent and translated(i18n, "system.absent", "absent")
+            or (battery.capacity_percent
+                and string.format("%.0f%%", battery.capacity_percent) or "—")
         items[#items + 1] = {
             label = battery.name,
-            value = battery.capacity_percent,
+            value = not absent and battery.capacity_percent or nil,
             display_value = detail,
+            token = absent and "text.muted" or nil,
         }
     end
     for _, supply in ipairs(supplies.supplies or {}) do
+        local online = supply.online
+        local value
+        if online ~= nil then value = online and 100 or 0 end
+        local state = online == nil
+            and translated(i18n, "system.unknown", "unknown")
+            or online == false and translated(i18n, "system.offline", "offline")
+            or supply.online_mode == "programmable"
+                and translated(i18n, "system.online_programmable", "online (programmable)")
+            or translated(i18n, "system.online", "online")
         items[#items + 1] = {
             label = supply.name,
-            value = supply.online and 100 or 0,
-            display_value = supply.online
-                and translated(i18n, "system.online", "online")
-                or translated(i18n, "system.offline", "offline"),
-            token = supply.online and "metric.good" or "text.muted",
+            value = value,
+            display_value = state,
+            token = online and "metric.good" or "text.muted",
         }
     end
     return items
@@ -1722,7 +1979,25 @@ end
 -- collector writes, which fails both for a missing entry and for one pointing at
 -- a neighbour's slot.
 local COLLECTOR_RESOURCE = {
-    cpu = "cpu", cpu_info = "cpu_info", memory = "memory", pressure = "pressure",
+    cpu = "cpu", cpu_info = "cpu_info", memory = "memory", numa = "numa",
+    memory_devices = "memory_devices", expansion_slots = "expansion_slots",
+    port_connectors = "port_connectors",
+    onboard_devices = "onboard_devices",
+    firmware_batteries = "firmware_batteries",
+    firmware_power_supplies = "firmware_power_supplies",
+    firmware_bmcs = "firmware_bmcs",
+    firmware_tpms = "firmware_tpms",
+    firmware_components = "firmware_components",
+    firmware_esrt = "firmware_esrt",
+    tpm = "tpm",
+    watchdog = "watchdog",
+    rfkill = "rfkill",
+    thermal_zones = "thermal_zones",
+    host_interfaces = "host_interfaces",
+    processor_firmware = "processor_firmware",
+    edac = "edac", spd = "spd", thermal_throttle = "thermal_throttle",
+    cpuidle = "cpuidle",
+    pressure = "pressure",
     disk = "disks", network = "network", connections = "connections",
     process = "processes", gpu = "gpus", cpufreq = "cpu_frequency", hwmon = "sensors",
     powercap = "power", mounts = "mounts", cgroup = "workloads",
@@ -1766,7 +2041,8 @@ local function inspector_rows(capabilities, i18n)
     local keys = {
         ["storage.smart"] = { "s", "inspector.smart", "SMART / NVMe health" },
         ["memory.bandwidth"] = { "b", "inspector.ram_bandwidth", "RAM bandwidth (PMU)" },
-        ["service.sshd"] = { "d", "inspector.sshd", "sshd service and listeners" },
+        ["service.sshd"] = { "D", "inspector.sshd", "sshd service and listeners" },
+        ["service.systemd"] = { "d", "inspector.systemd", "systemd units" },
     }
     for _, id in ipairs(ids) do
         local capability = inspectors[id]
@@ -1943,13 +2219,27 @@ local function workload_selected_entries(selected, format, i18n)
         entry("metrics.read", "Read", rate(format, io_rates.rbytes_per_second)),
         entry("metrics.write", "Write", rate(format, io_rates.wbytes_per_second)),
         entry("metrics.processes", "Processes",
-            tostring(selected.processes and selected.processes.count or 0)),
+            number(format, selected.processes and selected.processes.count)),
         entry("metrics.pressure", "Pressure",
             percent(format, cpu_pressure and cpu_pressure.some
                 and cpu_pressure.some.avg10)),
         entry("inspector.quality", "Quality", Technical.state(i18n, selected.quality)),
     }) do
         entries[#entries + 1] = metric
+    end
+    if selected.cgroup_type == "threaded" then
+        entries[#entries + 1] = entry("workloads.threaded_group", "Group type",
+            translated(i18n, "workloads.threaded_subgroup", "Threaded subgroup"))
+        entries[#entries + 1] = entry("workloads.threads", "Threads",
+            number(format, selected.threads and selected.threads.count))
+    end
+    if selected.processes and (selected.processes.hidden_entries or 0) > 0 then
+        entries[#entries + 1] = entry("workloads.unmapped_pid_entries",
+            "Unmapped PID entries", number(format, selected.processes.hidden_entries))
+    end
+    if selected.threads and (selected.threads.hidden_entries or 0) > 0 then
+        entries[#entries + 1] = entry("workloads.unmapped_tid_entries",
+            "Unmapped TID entries", number(format, selected.threads.hidden_entries))
     end
     return entries
 end
@@ -1972,6 +2262,10 @@ local function workload_detail_entries(snapshot, format, i18n, selected)
             entry("metrics.cpu", "CPU", percent(format, root.cpu_utilization_percent)),
             entry("metrics.memory", "Memory", bytes(format, root.memory_current_bytes)),
         }
+        if (summary.unknown_process_nodes or 0) > 0 then
+            entries[#entries + 1] = entry("workloads.unknown_process_nodes",
+                "Groups without process counts", summary.unknown_process_nodes)
+        end
         if (summary.partial_node_count or 0) > 0 then
             entries[#entries + 1] = section("workloads.why_section", "Why partial")
             entries[#entries + 1] = {
@@ -1988,6 +2282,10 @@ local function workload_detail_entries(snapshot, format, i18n, selected)
         entry("workloads.partial", "Partial cgroups", summary.partial_node_count or 0,
             { token = (summary.partial_node_count or 0) > 0 and "metric.warn" or nil }),
     }
+    if (summary.unknown_process_nodes or 0) > 0 then
+        entries[#entries + 1] = entry("workloads.unknown_process_nodes",
+            "Groups without process counts", summary.unknown_process_nodes)
+    end
     -- What the tree is made of, counted only where the path establishes it: a
     -- container's own children are not extra containers, and a cgroupfs pod
     -- that never named its runtime is still a pod.
@@ -2068,7 +2366,9 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         return type(visible_widgets) ~= "table" or visible_widgets[widget_id] == true
     end
     local function on(tab, widget_id)
-        return (not active_tab or active_tab == tab) and visible(widget_id)
+        return (not active_tab or active_tab == tab
+            or type(active_tab) == "string" and active_tab:match("^custom[1-8]$"))
+            and visible(widget_id)
     end
     local function process_view()
         if on("processes", "process_table") then
@@ -2124,14 +2424,99 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
     end
     local interfaces = on("network", "network_table") and network_rows(snapshot, format) or {}
     local system_devices_rows, system_pci_total, system_usb_total, system_devices_truncated
+    local system_device_ids, system_device_selected = {}, 1
+    local system_device_total, system_device_matches = 0, 0
+    local system_query = type(options.system_query) == "string"
+        and options.system_query:match("^%s*(.-)%s*$") or ""
     if on("system", "system_devices") then
         system_devices_rows, system_pci_total, system_usb_total,
-            system_devices_truncated = system_device_rows(snapshot)
+            system_devices_truncated, system_device_ids, system_device_total,
+            system_device_matches, system_device_selected =
+            system_device_rows(snapshot, i18n, system_query)
+        if system_query == "" then system_device_selected = 1 end
+        for index, id in ipairs(system_device_ids) do
+            if id == options.system_selected then system_device_selected = index break end
+        end
     else
         system_devices_rows = {}
     end
-    local connections = on("network", "connection_table")
-        and connection_rows(snapshot, options.mask_remote_addresses == true) or {}
+    local dimm_rows, dimm_ids, dimm_selected = {}, {}, 1
+    local memory_device_state = snapshot.quality and snapshot.quality.memory_devices
+        or capabilities and capabilities.memory_devices
+    local dimm_empty = translated(i18n, "memory_hw.no_devices", "No memory devices exposed")
+    if memory_device_state and (memory_device_state.status == "denied" or memory_device_state.state == "denied") then
+        dimm_empty = translated(i18n, "status.denied", "Denied") .. " · SMBIOS"
+    elseif memory_device_state and memory_device_state.reason then
+        dimm_empty = Technical.reason(i18n, memory_device_state.reason)
+    end
+    if on("memory", "dimm_table") then
+        for index, device in ipairs(snapshot.memory_devices and snapshot.memory_devices.devices or {}) do
+            if index > 256 then break end
+            dimm_ids[index] = "dimm:" .. device.id
+            if options.system_selected == dimm_ids[index] then dimm_selected = index end
+            dimm_rows[index] = { id = device.id, slot = device.locator or ("0x" .. device.id),
+                size = device.populated == false and translated(i18n, "memory_hw.empty", "Empty")
+                    or bytes(format, device.size_bytes),
+                type = device.logical and translated(i18n, "memory_hw.logical", "Logical") or device.memory_type or "—",
+                manufacturer = device.manufacturer or "—",
+                speed = device.configured_speed_mts and number(format, device.configured_speed_mts) .. " MT/s" or "—",
+                state = memory_device_state and memory_device_state.status ~= "ok"
+                    and memory_device_state.quality or device.quality,
+            }
+        end
+    end
+    local numa_rows, numa_ids, numa_selected = {}, {}, 1
+    if on("memory", "numa_table") then
+        for index, node in ipairs(snapshot.numa and snapshot.numa.nodes or {}) do
+            if index > 128 then break end
+            local memory = node.memory or {}
+            local allocation_rates = node.allocations and node.allocations.rates or {}
+            local state = snapshot.quality and snapshot.quality.numa
+            numa_ids[#numa_ids + 1] = "numa:" .. node.id
+            if options.system_selected == numa_ids[#numa_ids] then numa_selected = index end
+            numa_rows[#numa_rows + 1] = {
+                node = tostring(node.id), cpus = node.cpu_ids and tostring(#node.cpu_ids) or "—",
+                total = bytes(format, memory.total_bytes), free = bytes(format, memory.free_bytes),
+                other_rate = number(format, allocation_rates.other_pages_per_second, 1),
+                state = state and state.status ~= "ok" and state.quality or node.quality,
+            }
+        end
+    end
+    local connections, matching_connections = {}, 0
+    local owner_target = type(options.connection_owner_target) == "table"
+        and options.connection_owner_target or nil
+    local owner_scan = snapshot.connections and snapshot.connections.owner_scan or {}
+    local owner_quality = snapshot.quality and snapshot.quality.connections or {}
+    local requested_ns = owner_target and type(owner_target.requested_ns) == "number"
+        and owner_target.requested_ns or math.huge
+    local attempted = owner_target and type(owner_quality.timestamp_ns) == "number"
+        and owner_quality.timestamp_ns >= requested_ns
+        and (not owner_target.prior_quality
+            or owner_quality ~= owner_target.prior_quality)
+    local target_seen = attempted and owner_quality.status == "ok"
+        and owner_scan.target_id == owner_target.id
+    local target_status = target_seen and owner_scan.target_status
+        or attempted and owner_quality.status ~= "ok" and owner_quality.status
+        or "loading"
+    local target_usable = target_seen
+        and (target_status == "ok" or target_status == "partial")
+    if on("network", "connection_table") then
+        if not owner_target or target_usable then
+            connections, matching_connections = connection_rows(snapshot,
+                options.mask_remote_addresses == true, options.connection_query,
+                owner_target and owner_target.id)
+        end
+    end
+    local connection_ids, connection_selected_index = {}, nil
+    for index, row in ipairs(connections) do
+        connection_ids[index] = row.connection_ref.id
+        if options.connection_selected == row.connection_ref.id then
+            connection_selected_index = index
+        end
+    end
+    if connection_selected_index == nil and #connection_ids > 0 then
+        connection_selected_index = 1
+    end
     local addresses = on("network", "address_table") and address_rows(snapshot) or {}
     local gpu_table_rows = on("gpu", "gpu_table") and gpu_rows(snapshot, format) or {}
     local gpu_process_table_rows, gpu_process_total = {}, 0
@@ -2145,40 +2530,74 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             end
         end
     end
-    local cpufreq_table_rows = on("compute", "cpufreq_table") and cpufreq_rows(snapshot, format) or {}
+    local cpufreq_table_rows = on("compute", "cpufreq_table")
+        and cpufreq_rows(snapshot, format, i18n) or {}
+    local thermal_throttle_table_rows = on("compute", "thermal_throttle_table")
+        and thermal_throttle_rows(snapshot, format) or {}
+    local cpuidle_table_rows, cpuidle_table_total = {}, 0
+    if on("compute", "cpuidle_table") then
+        cpuidle_table_rows, cpuidle_table_total = cpuidle_rows(snapshot, format, i18n)
+    end
     local sensor_table_rows = on("compute", "sensor_table") and sensor_rows(snapshot, format) or {}
     local power_table_rows = on("compute", "power_table") and power_rows(snapshot, format) or {}
-    local mount_table_rows, mounts_hidden, mounts_total = {}, 0, 0
+    local mount_table_rows, mounts_hidden, mounts_total, mounts_matching = {}, 0, 0, 0
     if on("storage", "mount_table") then
-        mount_table_rows, mounts_hidden, mounts_total = mount_rows(snapshot, format,
-            { show_pseudo = options.show_pseudo_filesystems })
+        mount_table_rows, mounts_hidden, mounts_total, mounts_matching =
+            mount_rows(snapshot, format,
+                { show_pseudo = options.show_pseudo_filesystems,
+                  query = options.mount_query })
     end
-    local workload_table_rows, workload_row_ids, workload_selected_index, workloads_total =
-        {}, {}, nil, 0
+    local workload_table_rows, workload_row_ids, workload_selected_index,
+        workloads_total, workload_matches = {}, {}, nil, 0, 0
     if on("workloads", "workload_table") then
-        workload_table_rows, workload_row_ids, workload_selected_index, workloads_total =
+        workload_table_rows, workload_row_ids, workload_selected_index,
+            workloads_total, workload_matches =
             workload_rows(snapshot, format,
                 type(options.workload_collapsed) == "table"
                     and options.workload_collapsed or nil,
-                options.workload_selected)
+                options.workload_selected, options.workload_query)
     end
-    local workload_selected = options.workload_selected ~= nil
-        and workload_by_id(snapshot)[options.workload_selected] or nil
+    local workload_query = type(options.workload_query) == "string"
+        and options.workload_query:match("^%s*(.-)%s*$") or ""
+    local effective_workload_id = options.workload_selected
+    if workload_query ~= "" then
+        effective_workload_id = workload_selected_index
+            and workload_row_ids[workload_selected_index] or nil
+    end
+    local workload_selected = effective_workload_id ~= nil
+        and workload_by_id(snapshot)[effective_workload_id] or nil
 
     -- A table that stopped at the model's row cap must say so: an absent row
     -- is otherwise indistinguishable from an object that does not exist.
-    local mount_status_text = #mount_table_rows < mounts_total
-        and translated(i18n, "ui.rows_capped", "showing {visible} of {total}",
-            { visible = #mount_table_rows, total = mounts_total }) or nil
+    local mount_query = type(options.mount_query) == "string"
+        and options.mount_query:match("^%s*(.-)%s*$") or ""
+    local mount_status_text = mount_query ~= "" and translated(i18n,
+        "storage.mount_filter_status",
+        "{visible}/{matching} mounts · Filter: {query} · Esc clears", {
+            visible = #mount_table_rows, matching = mounts_matching,
+            query = mount_query,
+        }) or #mount_table_rows < mounts_total
+            and translated(i18n, "ui.rows_capped", "showing {visible} of {total}",
+                { visible = #mount_table_rows, total = mounts_total }) or nil
     if mounts_hidden > 0 then
         local hidden_note = translated(i18n, "storage.hidden_mounts",
             "{count} pseudo filesystems hidden", { count = mounts_hidden })
-        mount_status_text = mount_status_text
-            and hidden_note .. " · " .. mount_status_text or hidden_note
+        if mount_query ~= "" and mount_status_text then
+            mount_status_text = mount_status_text .. " · " .. hidden_note
+        else
+            mount_status_text = mount_status_text
+                and hidden_note .. " · " .. mount_status_text or hidden_note
+        end
     end
-    local workload_status_text = #workload_table_rows < workloads_total
-        and translated(i18n, "ui.rows_capped", "showing {visible} of {total}",
-            { visible = #workload_table_rows, total = workloads_total }) or nil
+    local workload_status_text = workload_query ~= ""
+        and translated(i18n, "workloads.filter_status",
+            "{matches} matches · {visible}/{total} rows · Filter: {query} · Esc clears", {
+                matches = workload_matches, visible = #workload_table_rows,
+                total = workloads_total, query = workload_query,
+            })
+        or #workload_table_rows < workloads_total
+            and translated(i18n, "ui.rows_capped", "showing {visible} of {total}",
+                { visible = #workload_table_rows, total = workloads_total }) or nil
 
     local average_frequency = Engine.average_cpu_frequency(snapshot.cpu_frequency)
     local maximum_temperature = Engine.maximum_temperature(snapshot.sensors)
@@ -2327,13 +2746,68 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             columns = {
                 { key = "policy", label = translated(i18n, "metrics.policy", "Policy"), width = 10, min_width = 8, priority = 90 },
                 { key = "cpus", label = "CPU", width = 12, min_width = 6, priority = 70 },
-                { key = "current", label = translated(i18n, "metrics.current", "Current"), width = 13, min_width = 9, align = "right", priority = 95 },
+                { key = "current", label = translated(i18n, "metrics.frequency", "Frequency"), width = 13, min_width = 9, align = "right", priority = 95 },
+                { key = "source", label = translated(i18n, "metrics.source", "Source"), width = 14, min_width = 8, priority = 85 },
+                { key = "temperature", label = translated(i18n, "cpufreq.related_temperature", "Related temp"),
+                    width = 20, min_width = 12, priority = 52 },
+                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = STATE_COLUMN_WIDTH, min_width = 8, priority = 75,
+                    format = function(value) return Technical.state(i18n, value) end },
                 { key = "minimum", label = translated(i18n, "metrics.minimum", "Minimum"), width = 12, min_width = 9, align = "right", priority = 50 },
                 { key = "maximum", label = translated(i18n, "metrics.maximum", "Maximum"), width = 12, min_width = 9, align = "right", priority = 60 },
                 { key = "governor", label = translated(i18n, "metrics.governor", "Governor"), width = 14, min_width = 9, priority = 65 },
                 { key = "driver", label = translated(i18n, "metrics.driver", "Driver"), width = 16, min_width = 9, priority = 20, full_only = true },
             },
             rows = cpufreq_table_rows,
+        },
+        thermal_throttle_table = {
+            columns = {
+                { key = "cpu", label = "CPU", width = 8, min_width = 7, priority = 95 },
+                { key = "core_new", label = translated(i18n, "thermal.core_new", "Core Δ"),
+                    width = 12, min_width = 8, align = "right", priority = 95 },
+                { key = "package_new", label = translated(i18n, "thermal.package_new", "Package Δ"),
+                    width = 14, min_width = 9, align = "right", priority = 90 },
+                { key = "core_total", label = translated(i18n, "thermal.core_total", "Core total"),
+                    width = 14, min_width = 9, align = "right", priority = 70 },
+                { key = "package_total", label = translated(i18n, "thermal.package_total", "Package total"),
+                    width = 16, min_width = 9, align = "right", priority = 65 },
+                { key = "core_ms", label = translated(i18n, "thermal.core_time", "Core ms"),
+                    width = 12, min_width = 8, align = "right", priority = 35, full_only = true },
+                { key = "package_ms", label = translated(i18n, "thermal.package_time", "Package ms"),
+                    width = 14, min_width = 9, align = "right", priority = 30, full_only = true },
+            },
+            rows = thermal_throttle_table_rows,
+        },
+        cpuidle_table = {
+            columns = {
+                { key = "cpu", label = "CPU", width = 8, min_width = 6, priority = 95 },
+                { key = "state", label = translated(i18n, "cpuidle.state", "Idle state"),
+                    width = 18, min_width = 10, priority = 95 },
+                { key = "usage_delta", label = translated(i18n, "cpuidle.usage_delta", "Usage Δ"),
+                    width = 13, min_width = 9, align = "right", priority = 90 },
+                { key = "reported_ms", label = translated(i18n, "cpuidle.reported_ms", "Reported ms Δ"),
+                    width = 16, min_width = 11, align = "right", priority = 88 },
+                { key = "rejected_delta", label = translated(i18n, "cpuidle.rejected_delta", "Rejected Δ"),
+                    width = 14, min_width = 10, align = "right", priority = 68 },
+                { key = "quality", label = translated(i18n, "inspector.quality", "Quality"),
+                    width = STATE_COLUMN_WIDTH, min_width = 8, priority = 70,
+                    format = function(value) return Technical.state(i18n, value) end },
+                { key = "latency_us", label = translated(i18n, "cpuidle.latency_us", "Exit latency µs"),
+                    width = 16, min_width = 11, align = "right", priority = 55 },
+                { key = "target_us", label = translated(i18n, "cpuidle.target_us", "Target µs"),
+                    width = 12, min_width = 9, align = "right", priority = 45 },
+                { key = "disabled", label = translated(i18n, "cpuidle.disabled", "Disabled"),
+                    width = 10, min_width = 8, priority = 35 },
+                { key = "above_delta", label = translated(i18n, "cpuidle.above_delta", "Too short Δ"),
+                    width = 14, min_width = 10, align = "right", priority = 30,
+                    full_only = true },
+                { key = "below_delta", label = translated(i18n, "cpuidle.below_delta", "Deeper fit Δ"),
+                    width = 14, min_width = 10, align = "right", priority = 25,
+                    full_only = true },
+            },
+            rows = cpuidle_table_rows,
+            status_text = cpuidle_table_total > #cpuidle_table_rows
+                and translated(i18n, "ui.rows_capped", "showing {visible} of {total}", {
+                    visible = #cpuidle_table_rows, total = cpuidle_table_total }) or nil,
         },
         sensor_table = {
             columns = {
@@ -2398,6 +2872,49 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             axis_format = percent_axis,
         },
         memory_counters = { entries = paging_entries(snapshot, format) },
+        numa_table = {
+            columns = {
+                { key = "node", label = translated(i18n, "inventory.numa_node", "NUMA node"),
+                    width = 9, min_width = 5, priority = 100 },
+                { key = "cpus", label = "CPUs", width = 6, min_width = 5, priority = 75, align = "right" },
+                { key = "total", label = translated(i18n, "metrics.total", "Total"),
+                    width = 13, min_width = 10, priority = 90, align = "right" },
+                { key = "free", label = translated(i18n, "metrics.free", "Free"),
+                    width = 13, min_width = 10, priority = 80, align = "right" },
+                { key = "other_rate", label = translated(i18n, "numa.other_rate_short", "Cross-node p/s"),
+                    width = 15, min_width = 10, priority = 30, align = "right",
+                    full_only = true },
+                { key = "state", label = translated(i18n, "metrics.state", "State"),
+                    width = STATE_COLUMN_WIDTH, min_width = 8, priority = 40,
+                    format = function(value) return Technical.state(i18n, value) end },
+            },
+            rows = numa_rows, ids = numa_ids, selected = numa_selected,
+            empty_text = translated(i18n, "numa.no_nodes", "No NUMA nodes exposed"),
+            status_text = snapshot.numa and (snapshot.numa.truncated
+                or #(snapshot.numa.nodes or {}) > 128) and "…" or nil,
+        },
+        dimm_table = {
+            columns = {
+                { key = "id", label = translated(i18n, "inventory.identifier", "ID"),
+                    width = 4, min_width = 4, priority = 110 },
+                { key = "slot", label = translated(i18n, "memory_hw.locator", "Position"),
+                    width = 22, min_width = 8, priority = 100 },
+                { key = "size", label = translated(i18n, "metrics.capacity", "Size"),
+                    width = 14, min_width = 10, priority = 95, align = "right" },
+                { key = "type", label = translated(i18n, "metrics.medium", "Type"),
+                    width = 10, min_width = 6, priority = 70 },
+                { key = "speed", label = translated(i18n, "memory_hw.configured_rate", "Configured rate"),
+                    width = 20, min_width = 10, priority = 80, align = "right" },
+                { key = "manufacturer", label = translated(i18n, "memory_hw.manufacturer", "Manufacturer"),
+                    width = 18, min_width = 8, priority = 50 },
+                { key = "state", label = translated(i18n, "metrics.state", "State"),
+                    width = STATE_COLUMN_WIDTH, min_width = 8, priority = 40,
+                    format = function(value) return Technical.state(i18n, value) end },
+            },
+            rows = dimm_rows, ids = dimm_ids, selected = dimm_selected, empty_text = dimm_empty,
+            status_text = snapshot.memory_devices and (snapshot.memory_devices.truncated
+                or #(snapshot.memory_devices.devices or {}) > 256) and "…" or nil,
+        },
 
         -- Storage --------------------------------------------------------
         storage_summary = {
@@ -2492,6 +3009,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             history = history("network_receive"), quality = quality(snapshot, "network"),
             axis_format = rate_axis,
         },
+        network_softnet = { entries = softnet_entries(snapshot, format, i18n) },
         network_table = {
             columns = {
                 { key = "interface", label = translated(i18n, "metrics.interface", "Interface"), width = 15, min_width = 15, priority = 95 },
@@ -2517,6 +3035,11 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                     token = function(_, row)
                         return (row.error_value or 0) > 0 and "metric.warn" or nil
                     end },
+                linux_host and { key = "link_changes", label = translated(i18n, "network.link_new", "Link chg"),
+                  width = 9, min_width = 8, align = "right", priority = 50,
+                  token = function(_, row)
+                      return (row.link_change_value or 0) > 0 and "metric.warn" or nil
+                  end } or nil,
             },
             rows = interfaces,
         },
@@ -2534,6 +3057,8 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 and Technical.state(i18n, snapshot.network.addresses_status) or nil,
         },
         connection_table = {
+            ids = connection_ids,
+            selected = connection_selected_index,
             columns = {
                 { key = "protocol", label = translated(i18n, "metrics.protocol", "Proto"), width = 7, min_width = 5, priority = 80 },
                 { key = "local_endpoint", label = translated(i18n, "metrics.local_endpoint", "Local"), width = 26, min_width = 14, priority = 90 },
@@ -2554,7 +3079,24 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                     count = snapshot.connections and snapshot.connections.total or #connections,
                     quality = Technical.state(i18n, snapshot.connections and snapshot.connections.owner_scan
                         and snapshot.connections.owner_scan.status or "unavailable"),
-                }),
+                }) .. (owner_target and translated(i18n, "network.owner_filter_status",
+                    " · PID {pid}: {visible}/{matching} sockets · {state} · Esc clears", {
+                        pid = owner_target.pid, visible = #connections,
+                        matching = matching_connections,
+                        state = target_status == "loading" and translated(i18n,
+                            "network.owner_filter_loading", "finding owners")
+                            or target_status == "changed" and translated(i18n,
+                                "network.owner_filter_changed", "process identity changed")
+                            or target_status == "not_scanned" and translated(i18n,
+                                "network.owner_filter_not_scanned", "scan did not reach PID")
+                            or Technical.state(i18n, target_status or "unavailable"),
+                    }) or "")
+                .. (type(options.connection_query) == "string" and options.connection_query ~= ""
+                    and translated(i18n, "network.filter_status",
+                        " · {visible}/{matching} shown · Filter: {query}", {
+                            visible = #connections, matching = matching_connections,
+                            query = options.connection_query,
+                        }) or ""),
         },
 
         -- GPU ------------------------------------------------------------
@@ -2637,6 +3179,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "read", label = translated(i18n, "metrics.read", "Read"), width = 12, min_width = 9, align = "right", priority = 50 },
                 { key = "write", label = translated(i18n, "metrics.write", "Write"), width = 12, min_width = 9, align = "right", priority = 48 },
                 { key = "processes", label = translated(i18n, "metrics.processes", "Procs"), width = 7, min_width = 6, align = "right", priority = 60 },
+                { key = "threads", label = translated(i18n, "metrics.threads", "Thr"), width = 7, min_width = 6, align = "right", priority = 58 },
                 { key = "pressure", label = translated(i18n, "metrics.pressure", "Pressure"), width = 9, min_width = 7, align = "right", priority = 30, full_only = true },
                 { key = "quality", label = translated(i18n, "inspector.quality", "Quality"), width = STATE_COLUMN_WIDTH, min_width = 8, priority = 22, full_only = true,
                     format = function(value) return Technical.state(i18n, value) end },
@@ -2684,10 +3227,19 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                   width = 8, min_width = 6, priority = 60 },
             },
             rows = system_devices_rows,
-            empty_text = translated(i18n, "system.no_devices", "No PCI or USB devices exposed"),
-            status_text = string.format("PCI %d · USB %d%s",
-                system_pci_total or 0, system_usb_total or 0,
-                system_devices_truncated and " · …" or ""),
+            ids = system_device_ids,
+            selected = system_device_selected,
+            empty_text = translated(i18n, "system.no_devices", "No devices exposed"),
+            status_text = system_query ~= "" and translated(i18n,
+                "system.device_filter_status",
+                "{matches} matches · {visible}/{total} rows · Filter: {query} · Esc clears", {
+                    matches = system_device_matches, visible = #system_device_ids,
+                    total = system_device_total, query = system_query,
+                }) .. (system_devices_truncated and " · …" or "")
+                or string.format("PCI %d · USB %d · %s %d%s",
+                    system_pci_total or 0, system_usb_total or 0,
+                    translated(i18n, "metrics.total", "Total"), #system_device_ids,
+                    system_devices_truncated and " · …" or ""),
         },
 
         -- Insights -------------------------------------------------------

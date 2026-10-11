@@ -48,8 +48,10 @@ local Grid = require("wtop.ui.renderer.grid")
 local I18n = require("wtop.i18n")
 local Inspectors = require("wtop.inspectors")
 local ProcessColumns = require("wtop.model.process_columns")
+local Workspace = require("wtop.workspace")
 local Theme = require("wtop.ui.theme")
 local TUI = require("wtop.tui")
+local JournalStats = require("wtop.inspectors.journal_stats")
 local Width = require("wtop.ui.renderer.width")
 
 local LOCALES = assert(I18n.available())
@@ -130,7 +132,11 @@ local gpu_device = { card = "card0", model_name = "NVIDIA GeForce RTX 4090",
       source_kind = "requested", states = { active = true } } } } }
 local inspector_result = { status = "partial", reason = "gpu_identity_inferred",
   source = "/sys/bus/pci/devices/" .. string.rep("0", 30), issues = { "one", "two" },
-  items = { { name = "engine0", value = 42 } } }
+  items = { { name = "engine0", value = 42 } },
+  sections = { { id = "configuration", fields = { effective = { quality = "estimated",
+    reason = "sshd_configuration_current_files", value = { port = { "22", "2222" },
+      listenaddress = { "0.0.0.0:22", "[::]:2222" }, authenticationmethods = LONG } } } } },
+  details = { configuration = { data = { scope = "global", file = "/etc/ssh/" .. LONG } } } }
 local snapshot = { sensors = { devices = { { class = "hwmon0", name = "probe",
   channels = { { type = "temperature", input = 69.8, quality = "fresh" } } } } } }
 local entity = { id = "enp0s31f1", name = "enp0s31f1", model = "I219-V",
@@ -141,13 +147,74 @@ local widget_items = { { kind = "metric", title = "CPU usage" },
 local function build(i18n, name)
   if name == "inspector_lines" then
     return TUI.inspector_lines("SMART / NVMe health", inspector_result, i18n)
+  elseif name == "systemd_unit_lines" then
+    return TUI.systemd_unit_lines({ status = "ok", quality = "partial",
+      reason = "systemd_data_incomplete", source = "/usr/bin/systemctl", timestamp_ns = 0,
+      entity = { summary = {
+        unit = { value = "worker.service", quality = "fresh" },
+        manager = { value = "user", quality = "fresh" },
+        description = { value = LONG, quality = "fresh" },
+        memory_max = { value = "unlimited", quality = "fresh" },
+        cpu_time = { value = 2500000000, unit = "nanoseconds", quality = "fresh" },
+      } } }, i18n, 1000000000)
+  elseif name == "journal_lines" then
+    return TUI.journal_lines({ unit = "worker.service", index = 1, detail = true,
+      result = { status = "ok", quality = "partial", reason = "journal_data_partial", timestamp_ns = 0,
+        source = "/usr/bin/journalctl", data = { unit = "worker.service", manager = "system", max_entries = 100,
+          entries = { { id = "cursor", timestamp_us = 1700000000123456, priority = 4, pid = 4194304,
+            uid = 1000, identifier = "worker", unit = "worker.service", quality = "partial",
+            relation = "referenced", message = LONG .. "\n" .. LONG, message_truncated = true } } } } },
+      i18n, true, 1000000000)
+  elseif name == "session_lines" then
+    return TUI.session_lines({ entity = { session_id = "c42" }, result = { status = "ok",
+      quality = "partial", reason = "logind_data_partial", timestamp_ns = 0, source = "/usr/bin/loginctl",
+      entity = { summary = { session_id = { value = "c42" }, user = { value = LONG },
+        service = { value = LONG }, uid = { value = 1000 }, remote = { value = false },
+        scope = { value = "session-c42.scope" }, idle_hint = { value = true } } } } }, i18n, 1000000000)
+  elseif name == "event_stats_lines" then
+    return TUI.event_stats_lines(JournalStats.summarize({ status = "ok", quality = "partial",
+      reason = "journal_data_truncated", timestamp_ns = 0, source = "/usr/bin/journalctl", data = {
+        unit = "sshd.service", max_entries = 100, truncated = true, rejected = 1,
+        entries = { { message = "Failed password for u from 192.0.2.1 port 22 ssh2", priority = 3,
+          timestamp_us = 1700000000123456, identifier = "sshd", relation = "emitted" } } } }, true),
+      i18n, 1000000000, "sshd.service", "service")
   elseif name == "sensor_detail_lines" then
     return TUI.sensor_detail_lines(snapshot, i18n, 1000000000)
+  elseif name == "hardware_detail_lines" then
+    return TUI.hardware_detail_lines({ inventory = { pci = { devices = {
+      { address = "0000:01:00.0", vendor_name = LONG, device_name = LONG,
+        driver = LONG, source = LONG, numa_node = 0, link_speed_gtps = 16,
+        link_width = 8, max_link_speed_gtps = 32, max_link_width = 16 },
+    } } } }, "pci:0000:01:00.0", i18n, 1000000000)
+  elseif name == "route_detail_lines" then
+    return TUI.route_detail_lines({ network = { routes = {
+      total = 2, ipv4_status = "ok", ipv6_status = "ok", entries = {
+        { family = "ipv4", destination_cidr = "0.0.0.0/0", default = true,
+          gateway = "10.0.0.1", interface = "eth0", metric = 100, flags = 3 },
+        { family = "ipv6", destination_cidr = "2001:db8:abcd:ef01::/64",
+          source_cidr = "2001:db8:1234:5678::/64", gateway = "fe80::1",
+          interface = "enp0s31f6", metric = 1024, flags = 1 },
+      },
+    } } }, i18n)
   elseif name == "process_detail_lines" then
     return TUI.process_detail_lines(process, i18n)
+  elseif name == "process_fd_lines" then
+    return TUI.process_fd_lines({ pid = process.pid, status = "ok",
+      entries = { { fd = 0, target = LONG }, { fd = 10, target = "socket:[1234]" } },
+      truncated = true }, i18n)
+  elseif name == "process_fd_detail_lines" then
+    return TUI.process_fd_detail_lines({ pid = process.pid, fd = 10,
+      status = "ok", target = LONG, position = "1000", flags = "01002002",
+      mount_id = "21", inode = "63107" }, i18n)
   elseif name == "process_column_lines" then
     return TUI.process_column_lines(
       { index = 2, entries = ProcessColumns.entries({}) }, i18n, true)
+  elseif name == "signal_menu_lines" then
+    return TUI.signal_menu_lines(process, 1, i18n, true)
+  elseif name == "tab_manager_lines" then
+    return TUI.tab_manager_lines({ index = 3,
+      entries = Workspace.new({ tab_order = { "overview", "processes" } }):tab_entries() },
+      i18n, true)
   elseif name == "thread_picker_lines" then
     return TUI.thread_picker_lines(process, 1, i18n, true)
   elseif name == "thread_detail_lines" then
@@ -183,10 +250,18 @@ end
 -- The list of builders this file has a fixture for, and the clause that holds the
 -- two lists to be the same set.
 local FIXTURED = {
+  "hardware_detail_lines",
   "entity_picker_lines", "gpu_client_detail_lines", "gpu_client_lines",
   "gpu_device_clock_detail_lines", "gpu_device_clock_lines", "inspector_lines",
   "move_target_lines", "process_column_lines", "process_detail_lines",
-  "sensor_detail_lines", "thread_detail_lines", "thread_picker_lines",
+  "process_fd_detail_lines", "process_fd_lines",
+  "route_detail_lines",
+  "sensor_detail_lines", "signal_menu_lines", "tab_manager_lines",
+  "systemd_unit_lines",
+  "journal_lines",
+  "session_lines",
+  "event_stats_lines",
+  "thread_detail_lines", "thread_picker_lines",
   "widget_picker_lines", "workspace_lines",
 }
 table.sort(FIXTURED)

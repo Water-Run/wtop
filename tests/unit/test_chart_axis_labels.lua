@@ -112,16 +112,43 @@ self_check = false
 
 local rendered = 0
 for _, case in ipairs(cases) do
-  for width = 20, 120 do
-    for _, height in ipairs({ 6, 8, 12 }) do
-      local model = { id = "probe", label = "Metric", value = case.value,
-                      history = case.history, axis_format = case.format }
-      local grid = Grid.new(width, height, { default_style = background })
-      Metric.render(grid, { x = 1, y = 1, width = width, height = height },
-        model, {}, "full")
-      rendered = rendered + 1
+  for _, mode in ipairs({ "block", "braille" }) do
+    for width = 20, 120 do
+      for _, height in ipairs({ 6, 8, 12 }) do
+        local model = { id = "probe", label = "Metric", value = case.value,
+                        history = case.history, axis_format = case.format }
+        local grid = Grid.new(width, height, { default_style = background })
+        Metric.render(grid, { x = 1, y = 1, width = width, height = height },
+          model, { chart_mode = mode }, "full")
+        rendered = rendered + 1
+      end
     end
   end
+end
+local timed_history = { n = 60, timestamps_ns = {},
+  window_ns = 240000000000, column_ns = 1000000000, end_ns = 60000000000 }
+for index = 1, 60 do
+  timed_history[index] = 50
+  timed_history.timestamps_ns[index] = (index - 1) * 1000000000
+end
+local zoom_renders = 0
+for _, mode in ipairs({ "block", "braille" }) do
+  for _, zoom in ipairs({ { 1000000000, "-26s" }, { 2000000000, "-52s" } }) do
+    local grid = Grid.new(30, 8, { default_style = background })
+    Metric.render(grid, { x = 1, y = 1, width = 30, height = 8 },
+      { label = "Probe", value = 50, history = timed_history, min = 0, max = 100 },
+      { chart_mode = mode, chart_column_ns = zoom[1] }, "full")
+    require(grid:row_text(8):find(zoom[2], 1, true) ~= nil,
+      mode .. " chart did not label its " .. zoom[2] .. " time window")
+    zoom_renders = zoom_renders + 1
+  end
+  local grid = Grid.new(70, 8, { default_style = background })
+  Metric.render(grid, { x = 1, y = 1, width = 70, height = 8 },
+    { label = "Probe", value = 50, history = timed_history, min = 0, max = 100 },
+    { chart_mode = mode, chart_column_ns = 8000000000 }, "full")
+  require(grid:row_text(8):find("-240s", 1, true) == 41,
+    mode .. " chart placed its capped history label outside the active time window")
+  zoom_renders = zoom_renders + 1
 end
 Grid.write = real_write
 
@@ -129,8 +156,9 @@ Grid.write = real_write
 -- Non-vacuity.  Three ways this file could pass without testing anything, and
 -- each number is the one the drive produces, so none can drift upward unnoticed.
 -- ---------------------------------------------------------------------------
-require(rendered == #cases * 101 * 3,
-  "the drive ran " .. rendered .. " renders, not the " .. (#cases * 101 * 3)
+require(rendered == #cases * 2 * 101 * 3 and zoom_renders == 6,
+  "the drive ran " .. rendered .. " renders and " .. zoom_renders
+  .. " zoom renders, not the expected " .. (#cases * 2 * 101 * 3)
   .. " this file was written against; the case list or the sweep changed")
 require(bounded > 1000,
   "only " .. bounded .. " bounded writes were made; the widget was not exercised")
@@ -169,4 +197,4 @@ assert(#failures == 0, table.concat(failures, "\n  ") .. "\n  ("
 
 io.write(string.format(
   "ok: chart axis labels (%d renders, %d bounded writes, no unmarked cut)\n",
-  rendered, bounded))
+  rendered + zoom_renders, bounded))

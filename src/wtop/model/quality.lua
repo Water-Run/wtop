@@ -93,4 +93,24 @@ M.SEVERITY = {
   missing = "warn", held = "warn",
 }
 
+-- Failure of a core monitor changes the host-health verdict; failure of a
+-- supporting monitor is worth a warning.  Optional hardware capabilities
+-- still report their exact state in data_quality and Insights, but their
+-- absence is not evidence that the host itself is unhealthy.  Agent and the
+-- TUI header read this one classification rather than maintaining two lists.
+M.SOURCE_FAILURE_SEVERITY = {
+  cpu = "critical", memory = "critical", processes = "critical",
+  disks = "warning", network = "warning", mounts = "warning", system = "warning",
+}
+
+M.UNUSABLE_FOR_ALERT = {
+  stale = true, error = true, denied = true, unavailable = true,
+}
+
+function M.current_source(quality, resource)
+  local state = type(quality) == "table" and quality[resource] or nil
+  return type(state) ~= "table" or ((state.status == nil or state.status == "ok")
+    and not M.UNUSABLE_FOR_ALERT[state.quality])
+end
+
 return M

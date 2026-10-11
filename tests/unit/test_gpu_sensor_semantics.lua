@@ -165,6 +165,22 @@ equal(#ViewModel.build(engine, { gpus = {}, sensors = { devices = {} } },
 equal(type(ViewModel.gpu_sensor_join({})), "table", "an empty snapshot still joins")
 equal(type(ViewModel.gpu_sensor_join(nil)), "table", "a missing snapshot still joins")
 
+-- A failed retry updates the attempt timestamp, not the sensor reading.
+local old_sensor = snapshot({}, { sensor("thermal", "thermal.0",
+  { channel("temperature", 1, 45) }, "thermal") }, {
+  quality = { sensors = { status = "error", quality = "stale",
+    timestamp_ns = 100000000000, value_timestamp_ns = 1000000000 } },
+})
+local old_sensor_lines = table.concat(
+  TUI.sensor_detail_lines(old_sensor, translator, 100000000000), "\n")
+equal(old_sensor_lines:find("has not updated for", 1, true) ~= nil, true,
+  "the sensor overlay dates the retained value rather than the failed retry")
+old_sensor.quality.sensors.value_timestamp_ns = nil
+local unknown_sensor_lines = table.concat(
+  TUI.sensor_detail_lines(old_sensor, translator, 100000000000), "\n")
+equal(unknown_sensor_lines:find("has not updated for", 1, true), nil,
+  "a sensor with no known value time cannot claim a measured age")
+
 -- 10. A device matched by device_target rather than by class joins the same
 -- way, because a driver that publishes no class must not be excluded.
 local by_target = snapshot(

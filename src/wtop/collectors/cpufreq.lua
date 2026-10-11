@@ -61,10 +61,11 @@ local function optional_text(fs, path, errors, key, limit)
   return value
 end
 
-local function optional_number(fs, path, errors, key, maximum)
+local function optional_number(fs, path, errors, key, maximum, behavior)
   local content, err = read_limited(fs, path, 256)
   if not content then
-    if not is_optional_absence(err) then
+    if not is_optional_absence(err)
+        and not (behavior and behavior.allow_eagain and err and err.errno == 11) then
       errors[key] = error_record(err, path)
     end
     return nil
@@ -79,13 +80,16 @@ local function optional_number(fs, path, errors, key, maximum)
     errors[key] = error_record({ kind = "parse_error", message = "number_out_of_range" }, path)
     return nil
   end
+  if value == 0 and behavior and behavior.zero_is_absent then return nil end
   return value
 end
 
-local function optional_khz(fs, path, errors, key, maximum_khz)
-  local value = optional_number(fs, path, errors, key, maximum_khz)
+local function optional_khz(fs, path, errors, key, maximum_khz, behavior)
+  local value = optional_number(fs, path, errors, key, maximum_khz, behavior)
   return value and value * 1000 or nil
 end
+
+local CURRENT_FREQUENCY = { allow_eagain = true, zero_is_absent = true }
 
 local function optional_boolean(fs, path, errors, key)
   local value = optional_text(fs, path, errors, key, 256)
@@ -285,13 +289,15 @@ function CPUFreq:sample(context)
     else
       local frequencies = {
         scaling_current_hz = optional_khz(fs, path .. "/scaling_cur_freq", errors,
-          "scaling_cur_freq", self.max_frequency_khz),
+          "scaling_cur_freq", self.max_frequency_khz, CURRENT_FREQUENCY),
         scaling_minimum_hz = optional_khz(fs, path .. "/scaling_min_freq", errors,
           "scaling_min_freq", self.max_frequency_khz),
         scaling_maximum_hz = optional_khz(fs, path .. "/scaling_max_freq", errors,
           "scaling_max_freq", self.max_frequency_khz),
         hardware_current_hz = optional_khz(fs, path .. "/cpuinfo_cur_freq", errors,
-          "cpuinfo_cur_freq", self.max_frequency_khz),
+          "cpuinfo_cur_freq", self.max_frequency_khz, CURRENT_FREQUENCY),
+        hardware_average_hz = optional_khz(fs, path .. "/cpuinfo_avg_freq", errors,
+          "cpuinfo_avg_freq", self.max_frequency_khz, CURRENT_FREQUENCY),
         hardware_minimum_hz = optional_khz(fs, path .. "/cpuinfo_min_freq", errors,
           "cpuinfo_min_freq", self.max_frequency_khz),
         hardware_maximum_hz = optional_khz(fs, path .. "/cpuinfo_max_freq", errors,
@@ -303,6 +309,10 @@ function CPUFreq:sample(context)
         frequencies.current_hz = frequencies.hardware_current_hz
         frequencies.current_quality = "measured"
         frequencies.current_source = "cpuinfo_cur_freq"
+      elseif frequencies.hardware_average_hz then
+        frequencies.current_hz = frequencies.hardware_average_hz
+        frequencies.current_quality = "measured"
+        frequencies.current_source = "cpuinfo_avg_freq"
       elseif frequencies.scaling_current_hz then
         frequencies.current_hz = frequencies.scaling_current_hz
         frequencies.current_quality = "estimated"
@@ -372,7 +382,8 @@ function CPUFreq:sample(context)
     -- the payload already says which: `truncated`, `duplicates_skipped` and
     -- each policy's `errors`.  `estimated` has two causes too, a policy with no
     -- `related_cpus`/`affected_cpus` and a current frequency taken from
-    -- `scaling_cur_freq` because the hardware value was not there, and both
+    -- `scaling_cur_freq` because neither hardware current nor its short-window
+    -- feedback average was there, and both
     -- mean a value was derived rather than read.
     reason = any_partial and "cpufreq_data_incomplete"
       or (any_estimated and "cpufreq_value_derived" or nil),

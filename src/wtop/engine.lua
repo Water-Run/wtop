@@ -38,7 +38,28 @@ local DEFAULT_HISTORY_CAPACITY = math.ceil(
     HISTORY_WINDOW_MS / UpdateFrequency.MIN_INTERVAL_MS) + 16
 
 local INTERVAL_FLOORS_MS = {
+    numa = 2000,
+    memory_devices = 60000,
+    expansion_slots = 60000,
+    port_connectors = 60000,
+    onboard_devices = 60000,
+    firmware_batteries = 60000,
+    firmware_power_supplies = 60000,
+    firmware_bmcs = 60000,
+    firmware_tpms = 60000,
+    firmware_components = 60000,
+    firmware_esrt = 60000,
+    tpm = 60000,
+    watchdog = 5000,
+    rfkill = 2000,
+    thermal_zones = 2000,
+    host_interfaces = 60000,
+    processor_firmware = 60000,
+    edac = 5000,
+    spd = 60000,
     cpu_info = 30000,
+    thermal_throttle = 5000,
+    cpuidle = 5000,
     process = 1000,
     connections = 2000,
     gpu = 500,
@@ -56,8 +77,29 @@ local INTERVAL_FLOORS_MS = {
 -- is hidden, but at a lower cadence so histories stay meaningful without
 -- making a system monitor consume the resources it is meant to observe.
 local BACKGROUND_INTERVALS_MS = {
+    numa = 10000,
+    memory_devices = 300000,
+    expansion_slots = 300000,
+    port_connectors = 300000,
+    onboard_devices = 300000,
+    firmware_batteries = 300000,
+    firmware_power_supplies = 300000,
+    firmware_bmcs = 300000,
+    firmware_tpms = 300000,
+    firmware_components = 300000,
+    firmware_esrt = 300000,
+    tpm = 300000,
+    watchdog = 30000,
+    rfkill = 10000,
+    thermal_zones = 10000,
+    host_interfaces = 300000,
+    processor_firmware = 300000,
+    edac = 30000,
+    spd = 300000,
     cpu = 2000,
     cpu_info = 60000,
+    thermal_throttle = 30000,
+    cpuidle = 30000,
     memory = 5000,
     pressure = 2000,
     disk = 3000,
@@ -84,15 +126,32 @@ local TAB_COLLECTORS = {
     processes = { cpu = true, memory = true, process = true },
     compute = {
         cpu = true, cpu_info = true, memory = true, pressure = true,
-        cpufreq = true, hwmon = true, powercap = true,
+        cpufreq = true, thermal_throttle = true, cpuidle = true,
+        hwmon = true, powercap = true,
     },
-    memory = { memory = true, pressure = true, system_info = true },
+    memory = { memory = true, numa = true, memory_devices = true, edac = true, spd = true,
+        pressure = true, system_info = true },
     storage = { disk = true, mounts = true, pressure = true },
     network = { network = true, connections = true },
     gpu = { gpu = true, hwmon = true },
     workloads = { cpu = true, memory = true, pressure = true, cgroup = true },
     system = { system_info = true, cpu_info = true, memory = true,
-        power_supply = true, inventory = true },
+        power_supply = true, inventory = true, disk = true, network = true,
+        cpufreq = true, hwmon = true, numa = true, memory_devices = true,
+        expansion_slots = true, port_connectors = true,
+        onboard_devices = true, firmware_batteries = true,
+        firmware_power_supplies = true,
+        firmware_bmcs = true,
+        firmware_tpms = true,
+        firmware_components = true,
+        firmware_esrt = true,
+        tpm = true,
+        watchdog = true,
+        rfkill = true,
+        thermal_zones = true,
+        host_interfaces = true,
+        processor_firmware = true,
+        edac = true, spd = true, thermal_throttle = true, cpuidle = true },
     -- Insights is a static capability summary.  Its counts may use the bounded
     -- background samples; keeping the full process collector at 1 Hz here
     -- would burn a core merely to refresh a decorative count.
@@ -115,13 +174,17 @@ local TAB_WIDGET_COLLECTORS = {
     compute = {
         cpu_total = { "cpu" }, cpu_identity = { "cpu_info" },
         core_bars = { "cpu" }, load_summary = { "cpu" },
-        core_table = { "cpu" }, cpufreq_table = { "cpufreq" }, sensor_table = { "hwmon" },
+        core_table = { "cpu" }, cpufreq_table = { "cpufreq", "cpu_info", "hwmon" },
+        cpuidle_table = { "cpuidle" },
+        thermal_throttle_table = { "thermal_throttle" }, sensor_table = { "hwmon" },
         power_table = { "powercap" },
     },
     memory = {
         memory_total = { "memory" }, memory_segments = { "memory" },
         memory_detail = { "memory" }, swap_detail = { "memory", "system_info" },
         memory_pressure = { "pressure" }, memory_counters = { "memory" },
+        numa_table = { "numa" },
+        dimm_table = { "memory_devices", "edac", "spd" },
     },
     storage = {
         storage_summary = { "disk" }, disk_table = { "disk" }, smart_hint = {},
@@ -129,6 +192,7 @@ local TAB_WIDGET_COLLECTORS = {
     },
     network = {
         network_summary = { "network" }, network_table = { "network" },
+        network_softnet = { "network" },
         connection_table = { "connections" }, address_table = { "network" },
     },
     gpu = {
@@ -143,10 +207,34 @@ local TAB_WIDGET_COLLECTORS = {
         system_identity = { "system_info" }, system_kernel = { "system_info" },
         system_firmware = { "system_info", "cpu_info" },
         system_limits = { "system_info" }, battery_bars = { "power_supply" },
-        system_devices = { "inventory" },
+        system_devices = { "inventory", "disk", "network", "cpu_info", "cpufreq", "hwmon",
+            "numa", "memory_devices", "expansion_slots", "port_connectors",
+            "onboard_devices",
+            "firmware_batteries",
+            "firmware_power_supplies",
+            "firmware_bmcs",
+            "firmware_tpms",
+            "firmware_components",
+            "firmware_esrt",
+            "tpm",
+            "watchdog",
+            "rfkill",
+            "thermal_zones",
+            "host_interfaces",
+            "processor_firmware", "edac", "spd",
+            "thermal_throttle", "cpuidle" },
     },
     insights = { collector_table = {}, inspector_table = {}, advice_list = {} },
 }
+local CUSTOM_WIDGET_COLLECTORS = {}
+for _, mapping in pairs(TAB_WIDGET_COLLECTORS) do
+    for widget_id, collectors in pairs(mapping) do
+        if CUSTOM_WIDGET_COLLECTORS[widget_id] then
+            error("duplicate widget collector mapping: " .. widget_id)
+        end
+        CUSTOM_WIDGET_COLLECTORS[widget_id] = collectors
+    end
+end
 
 local function finite_number(value)
     return type(value) == "number" and value == value
@@ -169,11 +257,15 @@ local function valid_clock(clock)
 end
 
 local function widget_visibility(tab_id, widget_ids)
-    if type(widget_ids) ~= "table" then return TAB_COLLECTORS[tab_id] end
+    local mapping = tab_id:match("^custom[1-8]$")
+        and CUSTOM_WIDGET_COLLECTORS or TAB_WIDGET_COLLECTORS[tab_id]
+    if type(widget_ids) ~= "table" then return TAB_COLLECTORS[tab_id] or {} end
     local visible = {}
-    for widget_id in pairs(widget_ids) do
-        for _, collector_id in ipairs((TAB_WIDGET_COLLECTORS[tab_id] or {})[widget_id] or {}) do
-            visible[collector_id] = true
+    for widget_id, shown in pairs(widget_ids) do
+        if shown == true then
+            for _, collector_id in ipairs((mapping or {})[widget_id] or {}) do
+                visible[collector_id] = true
+            end
         end
     end
     return visible
@@ -348,7 +440,21 @@ function Engine.new(options)
         return Users.default:user(uid, clock.now_ns())
     end
     local ordered = {
-        "cpu", "cpu_info", "memory", "pressure", "disk", "network", "connections",
+        "cpu", "cpu_info", "memory", "numa", "memory_devices", "expansion_slots",
+        "port_connectors",
+        "onboard_devices", "firmware_batteries",
+        "firmware_power_supplies",
+        "firmware_bmcs",
+        "firmware_tpms",
+        "firmware_components",
+        "firmware_esrt",
+        "tpm",
+        "watchdog",
+        "rfkill",
+        "thermal_zones",
+        "host_interfaces",
+        "processor_firmware", "thermal_throttle", "cpuidle",
+        "edac", "spd", "pressure", "disk", "network", "connections",
         "process", "gpu", "cpufreq", "hwmon", "powercap", "mounts", "cgroup",
         "system_info", "power_supply", "inventory",
     }
@@ -435,8 +541,13 @@ function Engine:set_interval(interval_ms)
 end
 
 function Engine:set_active_tab(tab_id, widget_ids, extra_visible)
-    if not TAB_COLLECTORS[tab_id] then
+    local custom = type(tab_id) == "string"
+        and tab_id:match("^custom[1-8]$") ~= nil or false
+    if not TAB_COLLECTORS[tab_id] and not custom then
         return false, "unknown_tab"
+    end
+    if custom and type(widget_ids) ~= "table" then
+        return false, "custom_tab_needs_widgets"
     end
     local visible = widget_visibility(tab_id, widget_ids)
     -- A detail overlay can keep its source at the foreground cadence even
@@ -444,10 +555,12 @@ function Engine:set_active_tab(tab_id, widget_ids, extra_visible)
     local overlay_visible = type(extra_visible) == "table" and extra_visible or nil
     self.active_tab = tab_id
     self.active_widgets = widget_ids
-    self.context.scan_connection_owners = tab_id == "network"
+    self.context.scan_connection_owners = (tab_id == "network" or custom)
         and (type(widget_ids) ~= "table" or widget_ids.connection_table == true)
+    local routes_were_enabled = self.context.scan_routes == true
+    self.context.scan_routes = overlay_visible and overlay_visible.route_detail == true or false
     local gpu_scan_was_enabled = self.context.scan_gpu_processes == true
-    self.context.scan_gpu_processes = tab_id == "gpu"
+    self.context.scan_gpu_processes = (tab_id == "gpu" or custom)
         and (type(widget_ids) ~= "table" or widget_ids.gpu_process_table == true)
     for _, id in ipairs(self.scheduler.order) do
         self.scheduler:set_visible(id, visible[id] == true
@@ -456,6 +569,13 @@ function Engine:set_active_tab(tab_id, widget_ids, extra_visible)
     if self.context.scan_gpu_processes and not gpu_scan_was_enabled then
         local gpu_task = self.scheduler:task("gpu")
         if gpu_task then gpu_task.next_due_ns = self.clock:now_ns() end
+    end
+    if self.context.scan_routes and not routes_were_enabled then
+        self.context.force_route_refresh = true
+        local task = self.scheduler:task("network")
+        if task then task.next_due_ns = self.clock:now_ns() end
+    elseif not self.context.scan_routes then
+        self.context.force_route_refresh = false
     end
     return true
 end

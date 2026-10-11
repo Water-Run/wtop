@@ -183,6 +183,106 @@ if native.available then
   os.remove(recoverable_path .. ".bak")
 end
 
+-- A customized tab bar survives the three CLI paths as well as the TUI save.
+local tabbed_path = base .. "-tabs.yml"
+local tabbed_export = base .. "-tabs-export.yml"
+local tabbed_target = base .. "-tabs-import.yml"
+write_file(tabbed_path, LayoutStore.encode(Workspace.default_orders(), {},
+  nil, nil, nil, { "system", "overview" }))
+assert(LayoutCommands.export(tabbed_export, tabbed_path))
+local exported_tabs = read_file(tabbed_export)
+assert(exported_tabs:find("schema_version: 5", 1, true)
+  and exported_tabs:find('tabs:\n  - "system"\n  - "overview"', 1, true),
+  "layout export retains the visible tab order")
+if native.available then
+  assert(LayoutCommands.import(tabbed_export, tabbed_target))
+  local _, _, _, _, _, imported_tabs = LayoutStore.parse(
+    read_file(tabbed_target), Workspace.default_orders())
+  assert(table.concat(imported_tabs, ",") == "system,overview",
+    "layout import retains the visible tab order")
+  assert(LayoutCommands.migrate(tabbed_path))
+  local _, _, _, _, _, migrated_tabs = LayoutStore.parse(
+    read_file(tabbed_path), Workspace.default_orders())
+  assert(table.concat(migrated_tabs, ",") == "system,overview",
+    "layout migration does not discard a customized tab bar")
+end
+for _, path in ipairs({ tabbed_path, tabbed_export, tabbed_target }) do
+  os.remove(path)
+  os.remove(path .. ".bak")
+end
+
+local removed_live = Workspace.new()
+local removed_id = removed_live.focus.overview
+assert(removed_live:remove_focused_widget())
+local removed_path = base .. "-removed.yml"
+local removed_export = base .. "-removed-export.yml"
+local removed_target = base .. "-removed-import.yml"
+write_file(removed_path, LayoutStore.encode(removed_live:orders(),
+  removed_live:trees(), nil, nil, nil, nil, Workspace.default_orders()))
+assert(LayoutCommands.export(removed_export, removed_path))
+local _, exported_removed = LayoutStore.parse(read_file(removed_export),
+  Workspace.default_orders())
+local function has_widget(tree, id)
+  for _, placed in ipairs(assert(require("wtop.model.layout").to_order(tree,
+      { allowed_widgets = Workspace.default_orders().overview }))) do
+    if placed == id then return true end
+  end
+  return false
+end
+assert(not has_widget(exported_removed.overview, removed_id),
+  "layout export restored a removed widget")
+if native.available then
+  assert(LayoutCommands.import(removed_export, removed_target))
+  local _, imported_removed = LayoutStore.parse(read_file(removed_target),
+    Workspace.default_orders())
+  assert(not has_widget(imported_removed.overview, removed_id),
+    "layout import restored a removed widget")
+  assert(LayoutCommands.migrate(removed_path))
+  local _, migrated_removed = LayoutStore.parse(read_file(removed_path),
+    Workspace.default_orders())
+  assert(not has_widget(migrated_removed.overview, removed_id),
+    "layout migration restored a removed widget")
+end
+for _, path in ipairs({ removed_path, removed_export, removed_target }) do
+  os.remove(path)
+  os.remove(path .. ".bak")
+end
+
+local mixed = Workspace.new()
+assert(mixed:new_custom_page("cpu_overview", "My dashboard"))
+assert(mixed:add_focused_widget("process_table", "after"))
+local definitions = mixed:custom_page_definitions()
+local mixed_path = base .. "-mixed.yml"
+local mixed_export = base .. "-mixed-export.yml"
+local mixed_target = base .. "-mixed-import.yml"
+write_file(mixed_path, LayoutStore.encode(mixed:orders(), mixed:trees(),
+  nil, nil, nil, mixed:custom_tab_order(),
+  Workspace.default_orders(definitions), definitions))
+assert(LayoutCommands.export(mixed_export, mixed_path))
+local _, exported_trees, _, _, _, _, exported_defs = LayoutStore.parse(
+  read_file(mixed_export), Workspace.default_orders())
+assert(exported_defs[1].name == "My dashboard"
+  and #require("wtop.model.layout").to_order(exported_trees.custom1) == 2,
+  "layout export retains a mixed custom page")
+if native.available then
+  assert(LayoutCommands.import(mixed_export, mixed_target))
+  local _, imported_trees, _, _, _, _, imported_defs = LayoutStore.parse(
+    read_file(mixed_target), Workspace.default_orders())
+  assert(imported_defs[1].id == "custom1"
+    and #require("wtop.model.layout").to_order(imported_trees.custom1) == 2,
+    "layout import retains a mixed custom page")
+  assert(LayoutCommands.migrate(mixed_path))
+  local _, migrated_trees, _, _, _, _, migrated_defs = LayoutStore.parse(
+    read_file(mixed_path), Workspace.default_orders())
+  assert(migrated_defs[1].id == "custom1"
+    and #require("wtop.model.layout").to_order(migrated_trees.custom1) == 2,
+    "layout migration retains a mixed custom page")
+end
+for _, path in ipairs({ mixed_path, mixed_export, mixed_target }) do
+  os.remove(path)
+  os.remove(path .. ".bak")
+end
+
 os.remove(v1_path)
 os.remove(v1_path .. ".bak")
 os.remove(broken_path)

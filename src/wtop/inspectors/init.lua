@@ -2,6 +2,8 @@ local Registry = require("wtop.inspectors.registry")
 local Smart = require("wtop.inspectors.smart")
 local Bandwidth = require("wtop.inspectors.ram_bandwidth")
 local SSHD = require("wtop.inspectors.sshd")
+local Systemd = require("wtop.inspectors.systemd")
+local Logind = require("wtop.inspectors.logind")
 
 local M = {}
 
@@ -12,6 +14,8 @@ function M.new_default(options)
   assert(registry:register(Smart.new(options.smart)))
   assert(registry:register(Bandwidth.new(options.ram_bandwidth)))
   assert(registry:register(SSHD.new(options.sshd)))
+  assert(registry:register(Systemd.new(options.systemd)))
+  assert(registry:register(Logind.new(options.logind)))
   return registry
 end
 
@@ -19,5 +23,7 @@ M.Registry = Registry
 M.Smart = Smart
 M.RamBandwidth = Bandwidth
 M.SSHD = SSHD
+M.Systemd = Systemd
+M.Logind = Logind
 
 return M

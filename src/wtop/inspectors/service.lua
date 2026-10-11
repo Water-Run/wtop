@@ -5,6 +5,7 @@ local FS = require("wtop.linux.fs")
 local SocketTables = require("wtop.linux.socket_tables")
 local Common = require("wtop.collectors.common")
 local Model = require("wtop.inspectors.model")
+local Config = require("wtop.inspectors.sshd_config")
 
 local Service = {}
 Service.__index = Service
@@ -79,20 +80,7 @@ local SYSTEMD_FIELDS = {
   ControlGroup = "string",
 }
 
-local SSHD_CONFIG_FIELDS = {
-  port = true,
-  addressfamily = true,
-  listenaddress = true,
-  permitrootlogin = true,
-  passwordauthentication = true,
-  pubkeyauthentication = true,
-  maxauthtries = true,
-  maxsessions = true,
-  allowusers = true,
-  allowgroups = true,
-  authenticationmethods = true,
-  loglevel = true,
-}
+local SSHD_CONFIG_FIELDS = Config.fields
 
 local function parse_systemctl_show(content)
   local result = {}
@@ -214,7 +202,11 @@ local function normalize_config(config)
       local key, value = line:match("^%s*([%w]+)%s+(.+)$")
       key = key and key:lower()
       if key and SSHD_CONFIG_FIELDS[key] then
-        result[key] = safe_text(value)
+        local text = safe_text(value)
+        if (key == "port" or key == "listenaddress") and result[key] ~= nil then
+          if type(result[key]) ~= "table" then result[key] = { result[key] } end
+          if #result[key] < 128 then result[key][#result[key] + 1] = text else truncated = true end
+        else result[key] = text end
       end
     end
   elseif type(config) == "table" then
@@ -267,6 +259,18 @@ function Service.new(options)
       or not safe_absolute_path(proc_net_tcp6) then
     error("invalid service provider path", 2)
   end
+  if options.sessions_provider ~= nil and options.sessions_provider ~= false
+      and (type(options.sessions_provider) ~= "table" or type(options.sessions_provider.read) ~= "function") then
+    error("invalid session provider", 2)
+  end
+  if options.events_provider ~= nil and options.events_provider ~= false
+      and (type(options.events_provider) ~= "table" or type(options.events_provider.read) ~= "function") then
+    error("invalid event provider", 2)
+  end
+  if options.config_provider ~= nil and options.config_provider ~= false
+      and (type(options.config_provider) ~= "table" or type(options.config_provider.read) ~= "function") then
+    error("invalid configuration provider", 2)
+  end
   return setmetatable({
     id = id,
     domain = "service",
@@ -287,6 +291,9 @@ function Service.new(options)
       "max_sessions", options.max_sessions, MAX_SESSIONS, 1, MAX_SESSIONS),
     max_events = bounded_integer(
       "max_events", options.max_events, 100, 0, MAX_EVENTS),
+    sessions_provider = options.sessions_provider,
+    events_provider = options.events_provider,
+    config_provider = options.config_provider,
     _method_style = true,
   }, Service)
 end
@@ -386,8 +393,27 @@ function Service:inspect(context, entity)
   local processes, processes_truncated = normalize_processes(
     context, self.name, self.max_processes)
   local config, config_truncated = normalize_config(context.effective_config)
+  local config_quality = next(config) and (config_truncated and "partial" or "fresh")
+    or config_truncated and "partial" or "unavailable"
+  local config_source, config_reason = context.config_source,
+    config_truncated and "configuration_limit_reached" or nil
+  local config_observation
+  if context.effective_config == nil and self.config_provider then
+    local ok, observed = pcall(self.config_provider.read, self.config_provider, context, self.unit, systemd)
+    config_reason = "sshd_configuration_unavailable"
+    if ok and type(observed) == "table" then
+      config_observation = observed
+      config_source, config_reason = observed.source, observed.reason or config_reason
+      if observed.status == "ok" and type(observed.data) == "table"
+          and type(observed.data.configuration) == "table" then
+        config, config_truncated = normalize_config(observed.data.configuration)
+        config_quality = config_truncated and "partial" or observed.quality or "estimated"
+      elseif observed.status == "denied" or observed.status == "error" then config_quality = observed.status end
+    end
+  end
   local sockets = {}
   local sockets_partial = false
+  local sockets_estimated = false
   if type(context.listening_sockets) == "table" then
     for index, socket in ipairs(context.listening_sockets) do
       if index > self.max_sockets then sockets_partial = true break end
@@ -452,6 +478,7 @@ function Service:inspect(context, entity)
           or context.socket_owners[tostring(socket.inode)]) or nil
       if allowed_ports[socket.port] or (owner and process_pids[owner]) then
         filtered[#filtered + 1] = socket
+        if not (owner and process_pids[owner]) then sockets_estimated = true end
       end
     end
     sockets = filtered
@@ -465,11 +492,27 @@ function Service:inspect(context, entity)
 
   local sessions = {}
   local sessions_quality = "unavailable"
-  if type(context.sessions) == "table" then
-    sessions_quality = "fresh"
-    for index, session in ipairs(context.sessions) do
+  local session_source, session_reason = context.sessions_source, "session_provider_unavailable"
+  local supplied_sessions = context.sessions
+  if supplied_sessions == nil and self.sessions_provider then
+    local ok, observed = pcall(self.sessions_provider.read, self.sessions_provider, context, self.name)
+    if ok and type(observed) == "table" then
+      session_source, session_reason = observed.source, observed.reason
+      if observed.status == "ok" and observed.data and type(observed.data.sessions) == "table" then
+        supplied_sessions = observed.data.sessions
+        sessions_quality = observed.quality or "partial"
+      elseif observed.status == "denied" or observed.status == "error" then
+        sessions_quality = observed.status
+      end
+    end
+  end
+  if type(supplied_sessions) == "table" then
+    if sessions_quality == "unavailable" then sessions_quality = "fresh" end
+    for index, session in ipairs(supplied_sessions) do
       if index > self.max_sessions then sessions_quality = "partial" break end
       if type(session) ~= "table" then sessions_quality = "partial" goto continue_session end
+      local is_remote
+      if type(session.remote) == "boolean" then is_remote = session.remote end
       sessions[#sessions + 1] = {
         user = safe_text(session.user),
         tty = safe_text(session.tty),
@@ -478,6 +521,13 @@ function Service:inspect(context, entity)
         login_time = session.login_time,
         idle_seconds = session.idle_seconds,
         pid = decimal_integer(session.pid),
+        id = safe_text(session.session_id, 64),
+        uid = decimal_integer(session.uid),
+        service = safe_text(session.service, 128),
+        scope = safe_text(session.scope, 255),
+        state = safe_text(session.state, 64),
+        is_remote = is_remote,
+        leader_pid = decimal_integer(session.leader_pid),
       }
       ::continue_session::
     end
@@ -485,6 +535,8 @@ function Service:inspect(context, entity)
 
   local events
   local events_quality = "unavailable"
+  local events_source, events_reason = context.events_source, "event_provider_unavailable"
+  local events_observation
   if type(context.recent_events) == "table" then
     events = {}
     local requested_max = context.max_events
@@ -496,13 +548,32 @@ function Service:inspect(context, entity)
       events[index] = context.recent_events[index]
     end
     events_quality = #context.recent_events > requested_max and "partial" or "fresh"
+    if events_quality == "partial" then events_reason = "event_records_limited" end
+  elseif self.events_provider then
+    local ok, observed = pcall(self.events_provider.read, self.events_provider, context, self.unit, systemd)
+    if ok and type(observed) == "table" then
+      events_observation = observed
+      events_source, events_reason = observed.source, observed.reason
+      if observed.status == "ok" and observed.data and type(observed.data.events) == "table" then
+        local requested = context.max_events
+        if type(requested) ~= "number" or requested % 1 ~= 0 or requested < 0 or requested > self.max_events then
+          requested = self.max_events
+        end
+        events, events_quality = {}, observed.quality or "partial"
+        for index = 1, math.min(#observed.data.events, requested) do events[index] = observed.data.events[index] end
+        if #observed.data.events > requested then
+          events_quality, events_reason = "partial", "event_records_limited"
+        end
+      elseif observed.status == "denied" or observed.status == "error" then events_quality = observed.status end
+    end
   end
   local finished = Common.now_ns(context, self.clock)
   local source = systemd and "systemd" or "/proc"
   local status = (systemd and next(systemd)) or #processes > 0 or #sockets > 0
   status = status and "ok" or "unavailable"
   local observation_partial = systemd_partial or processes_truncated or sockets_partial
-    or config_truncated or sessions_quality == "partial" or events_quality == "partial"
+    or config_truncated or config_quality == "partial"
+    or sessions_quality == "partial" or events_quality == "partial"
   local quality
   if status == "ok" then
     quality = observation_partial and "partial"
@@ -516,11 +587,8 @@ function Service:inspect(context, entity)
       and (processes_truncated and "partial" or "fresh")
     or processes_truncated and "partial" or "unavailable"
   local socket_quality = #sockets > 0
-      and (sockets_partial and "partial" or "fresh")
+      and (sockets_partial and "partial" or sockets_estimated and "estimated" or "fresh")
     or sockets_partial and "partial" or "unavailable"
-  local config_quality = next(config)
-      and (config_truncated and "partial" or "fresh")
-    or config_truncated and "partial" or "unavailable"
 
   local service_fields = {
     unit = Model.field(self.unit, nil, { source = source, timestamp_ns = finished, quality = quality }),
@@ -542,24 +610,30 @@ function Service:inspect(context, entity)
   local socket_fields = {
     listeners = Model.field(sockets, nil, { source = { self.proc_net_tcp, self.proc_net_tcp6 },
       timestamp_ns = finished, quality = socket_quality,
-      reason = sockets_partial and "socket_data_partial" }),
+      reason = sockets_partial and "socket_data_partial"
+        or sockets_estimated and "service_listener_attribution_unknown" }),
   }
   local session_fields = {
-    active_sessions = Model.field(sessions, nil, { source = context.sessions_source, timestamp_ns = finished, quality = sessions_quality, reason = sessions_quality == "unavailable" and "session_provider_unavailable" }),
+    active_sessions = Model.field((sessions_quality == "fresh" or sessions_quality == "partial") and sessions or nil,
+      nil, { source = session_source, timestamp_ns = finished,
+      quality = sessions_quality, reason = sessions_quality ~= "fresh" and session_reason or nil }),
   }
   local event_fields = {
-    recent_events = Model.field(events, nil, { source = context.events_source, timestamp_ns = finished, quality = events_quality, permission = "journal_read_may_be_required", reason = events_quality == "unavailable" and "event_provider_unavailable" }),
+    recent_events = Model.field(events, nil, { source = events_source, timestamp_ns = finished,
+      quality = events_quality, permission = "journal_read_may_be_required",
+      reason = events_quality ~= "fresh" and events_reason or nil }),
   }
   local config_fields = {
-    effective = Model.field(config, nil, { source = context.config_source,
+    effective = Model.field((config_quality == "fresh" or config_quality == "estimated"
+      or config_quality == "partial") and config or nil, nil, { source = config_source,
       timestamp_ns = finished, quality = config_quality,
-      reason = config_truncated and "configuration_limit_reached" }),
+      reason = config_reason }),
   }
   local entity_id = safe_identifier(entity.id) and entity.id or self.unit
   local normalized = Model.entity(entity_id, "service", {
     name = safe_text(entity.name) or self.name,
     summary = service_fields,
-    relations = { processes = processes, listeners = sockets, sessions = sessions },
+    relations = { processes = processes, listeners = sockets, sessions = session_fields.active_sessions.value },
     evidence = {
       timestamp_ns = finished,
       systemd_error = systemd_error,
@@ -572,9 +646,9 @@ function Service:inspect(context, entity)
     Model.section("service", service_fields, { quality = quality, source = source }),
     Model.section("processes", process_fields, { quality = process_quality, source = "/proc" }),
     Model.section("listeners", socket_fields, { quality = socket_quality, source = { self.proc_net_tcp, self.proc_net_tcp6 } }),
-    Model.section("sessions", session_fields, { quality = sessions_quality, source = context.sessions_source }),
-    Model.section("events", event_fields, { quality = events_quality, source = context.events_source }),
-    Model.section("configuration", config_fields, { quality = config_quality, source = context.config_source }),
+    Model.section("sessions", session_fields, { quality = sessions_quality, source = session_source }),
+    Model.section("events", event_fields, { quality = events_quality, source = events_source }),
+    Model.section("configuration", config_fields, { quality = config_quality, source = config_source }),
   }, {
     timestamp_ns = finished,
     duration_ns = math.max(0, finished - started),
@@ -583,6 +657,8 @@ function Service:inspect(context, entity)
     source = source,
     provider = systemd and "systemd" or "procfs",
     details = {
+      event_summary = events_observation,
+      configuration = config_observation,
       systemd_status = systemd_status,
       systemd_error = systemd_error,
       processes_truncated = processes_truncated,

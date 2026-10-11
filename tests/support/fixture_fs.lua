@@ -124,6 +124,26 @@ function M.new(specification)
       end
       return content
     end,
+    read_file_at = function(path, offset, length)
+      if denied[path] then
+        return nil, { kind = "denied", message = "permission denied", path = path }
+      end
+      local content = files[path]
+      if content == nil then
+        if errors[path] then
+          local declared = errors[path]
+          local errno, message = declared, "io_error"
+          if type(declared) == "table" then
+            errno = declared.errno
+            message = declared.message or message
+          end
+          return nil, { kind = FS.classify_error(message, errno),
+            message = message, path = path, errno = errno }
+        end
+        return nil, { kind = "missing", message = "no such file", path = path }
+      end
+      return content:sub(offset + 1, offset + length)
+    end,
     list_dir = function(path, limit)
       if denied[path] then
         return nil, { kind = "denied", message = "permission denied", path = path }

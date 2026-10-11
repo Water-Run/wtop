@@ -2,6 +2,7 @@
 -- Linux Snapshot contract so the scheduler, ViewModel, and exports stay shared.
 local Capability = require("wtop.core.capability")
 local Common = require("wtop.collectors.common")
+local SensorSession = require("wtop.model.sensor_session")
 local native_default = require("wtop.native")
 
 local M = {}
@@ -12,6 +13,9 @@ local sources = {
   cpu = {"collect_cpu", 500},
   cpu_info = {"collect_cpu_info", 30000},
   memory = {"collect_memory", 1000},
+  numa = {"collect_numa", 2000},
+  edac = {"collect_edac", 5000},
+  spd = {"collect_spd", 60000},
   pressure = {"collect_pressure", 2000},
   disk = {"collect_disk", 1000},
   network = {"collect_network", 1000},
@@ -86,30 +90,42 @@ local function cpu_data(data, previous)
   return data, any_gap and "gap" or "fresh"
 end
 
--- Nanoseconds from each platform's process start-time epoch to the Unix epoch.
+-- Process creation timestamps use different epochs and tick sizes. Convert to
+-- seconds before subtracting; FILETIME * 100 would overflow a Lua integer.
 local START_EPOCHS = {
   -- FILETIME: 100 ns ticks since 1601-01-01.
-  filetime = { scale = 100, offset = 11644473600 * 1000000000 },
+  filetime = { ticks_per_second = 10000000, offset_seconds = 11644473600 },
   -- proc_bsdinfo: microseconds since 1970-01-01.
-  unix_us = { scale = 1000, offset = 0 },
+  unix_us = { ticks_per_second = 1000000, offset_seconds = 0 },
 }
 
-local function process_age_seconds(process, epoch, realtime_ns)
+local function process_elapsed_seconds(process, epoch, realtime_ns)
   if not epoch or type(realtime_ns) ~= "number"
       or type(process.starttime_ticks) ~= "number" then return nil end
-  local started_ns = process.starttime_ticks * epoch.scale - epoch.offset
-  local age = (realtime_ns - started_ns) / 1000000000
-  return age > 0.5 and age or nil
+  local started_seconds = process.starttime_ticks / epoch.ticks_per_second
+    - epoch.offset_seconds
+  local age = realtime_ns / 1000000000 - started_seconds
+  return age >= 0 and age < math.huge and age or nil
 end
 
 local function process_data(data, previous, timestamp_ns, realtime_ns)
   local old_by_id = previous_ok(previous) and previous_ok(previous).by_id or {}
   local elapsed_ns = elapsed_since(previous, timestamp_ns)
   local ticks_per_second = data.clock_ticks_per_second or 100
+  if type(ticks_per_second) ~= "number" or ticks_per_second ~= ticks_per_second
+      or ticks_per_second <= 0 or ticks_per_second == math.huge then
+    ticks_per_second = 100
+  end
+  data.clock_ticks_per_second = ticks_per_second
   local epoch = START_EPOCHS[data.starttime_unit]
   local by_id, by_pid = {}, {}
   local any_fresh, any_partial = false, false
   for _, process in ipairs(data.list or {}) do
+    process.elapsed_seconds = process_elapsed_seconds(process, epoch, realtime_ns)
+    if type(process.cpu_ticks) == "number" and process.cpu_ticks == process.cpu_ticks
+        and process.cpu_ticks >= 0 and process.cpu_ticks < math.huge then
+      process.cpu_time_seconds = process.cpu_ticks / ticks_per_second
+    end
     if not process.id and process.pid and process.starttime_ticks then
       process.id = tostring(process.pid) .. ":" .. tostring(process.starttime_ticks)
     end
@@ -123,8 +139,8 @@ local function process_data(data, previous, timestamp_ns, realtime_ns)
     elseif not old and type(process.cpu_ticks) == "number" then
       -- Like the Linux collector, the first frame shows the lifetime average
       -- so a CPU-sorted table is meaningful before the second sample.
-      local age = process_age_seconds(process, epoch, realtime_ns)
-      if age then
+      local age = process.elapsed_seconds
+      if age and age > 0.5 then
         process.cpu_percent = math.max(0, process.cpu_ticks / ticks_per_second / age * 100)
         process.quality = "estimated"
       else
@@ -603,6 +619,10 @@ local function new_collector(id, description, options)
     elseif type(data.quality) == "string" then
       quality = data.quality
     end
+    if id == "hwmon" then
+      SensorSession.attach(data.devices, previous_ok(previous), timestamp_ns,
+        "native", quality == "fresh")
+    end
     return Common.result("ok", timestamp_ns, data, {
       quality = quality,
       -- This dispatcher published a quality with no reason at all, and it is
@@ -642,6 +662,72 @@ function M.new_all(options)
   for id, description in pairs(sources) do
     result[id] = new_collector(id, description, options[id] or options.common)
   end
+  local memory_options = {}
+  for key, value in pairs(options.memory_devices or options.common or {}) do memory_options[key] = value end
+  -- Portable.new_all can be called directly by fixtures on a Linux host.
+  memory_options.platform = options.platform or "portable"
+  result.memory_devices = require("wtop.collectors.memory_devices").new(memory_options)
+  local slot_options = {}
+  for key, value in pairs(options.expansion_slots or options.common or {}) do slot_options[key] = value end
+  slot_options.platform = options.platform or "portable"
+  result.expansion_slots = require("wtop.collectors.expansion_slots").new(slot_options)
+  local port_options = {}
+  for key, value in pairs(options.port_connectors or options.common or {}) do
+    port_options[key] = value
+  end
+  port_options.platform = options.platform or "portable"
+  result.port_connectors = require("wtop.collectors.port_connectors").new(port_options)
+  local onboard_options = {}
+  for key, value in pairs(options.onboard_devices or options.common or {}) do
+    onboard_options[key] = value
+  end
+  onboard_options.platform = options.platform or "portable"
+  result.onboard_devices = require("wtop.collectors.onboard_devices").new(onboard_options)
+  local battery_options = {}
+  for key, value in pairs(options.firmware_batteries or options.common or {}) do
+    battery_options[key] = value
+  end
+  battery_options.platform = options.platform or "portable"
+  result.firmware_batteries = require("wtop.collectors.firmware_batteries")
+    .new(battery_options)
+  local supply_options = {}
+  for key, value in pairs(options.firmware_power_supplies or options.common or {}) do
+    supply_options[key] = value
+  end
+  supply_options.platform = options.platform or "portable"
+  result.firmware_power_supplies = require("wtop.collectors.firmware_power_supplies")
+    .new(supply_options)
+  local bmc_options = {}
+  for key, value in pairs(options.firmware_bmcs or options.common or {}) do
+    bmc_options[key] = value
+  end
+  bmc_options.platform = options.platform or "portable"
+  result.firmware_bmcs = require("wtop.collectors.firmware_bmcs").new(bmc_options)
+  local tpm_options = {}
+  for key, value in pairs(options.firmware_tpms or options.common or {}) do
+    tpm_options[key] = value
+  end
+  tpm_options.platform = options.platform or "portable"
+  result.firmware_tpms = require("wtop.collectors.firmware_tpms").new(tpm_options)
+  local component_options = {}
+  for key, value in pairs(options.firmware_components or options.common or {}) do
+    component_options[key] = value
+  end
+  component_options.platform = options.platform or "portable"
+  result.firmware_components = require("wtop.collectors.firmware_components")
+    .new(component_options)
+  local host_options = {}
+  for key, value in pairs(options.host_interfaces or options.common or {}) do
+    host_options[key] = value
+  end
+  host_options.platform = options.platform or "portable"
+  result.host_interfaces = require("wtop.collectors.host_interfaces").new(host_options)
+  local processor_options = {}
+  for key, value in pairs(options.processor_firmware or options.common or {}) do
+    processor_options[key] = value
+  end
+  processor_options.platform = options.platform or "portable"
+  result.processor_firmware = require("wtop.collectors.processor_firmware").new(processor_options)
   return result
 end
 
