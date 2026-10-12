@@ -23,9 +23,18 @@ if [ ! -f "$work_dir/.lua-source-clean" ]; then
     touch "$work_dir/.lua-source-clean"
 fi
 
-make -C "$work_dir/lua-src/src" mingw "CC=$compiler"
-"$compiler" -std=c17 -O2 -Wall -Wextra -Werror -shared \
-    -I"$source_dir/src" -o "$work_dir/wtop_native.dll" \
+if [ ! -f "$work_dir/.lua-static-runtime" ]; then
+    make -C "$work_dir/lua-src/src" clean
+fi
+make -C "$work_dir/lua-src/src" lua.exe "CC=$compiler" \
+    "LUA_A=lua55.dll" "LUA_T=lua.exe" \
+    "AR=$compiler -shared -static-libgcc -o" \
+    "RANLIB=i686-w64-mingw32-strip --strip-unneeded" \
+    "SYSCFLAGS=-DLUA_BUILD_AS_DLL" "SYSLIBS=" "SYSLDFLAGS=-s -static-libgcc"
+touch "$work_dir/.lua-static-runtime"
+"$project_dir/tools/write_build_id.sh"
+"$compiler" -std=c17 -O2 -Wall -Wextra -Werror -shared -static-libgcc \
+    -I"$source_dir/src" -I"$project_dir/build/native" -o "$work_dir/wtop_native.dll" \
     "$project_dir/native/wtop_windows.c" "$project_dir/native/wtop_windows_net.c" \
     "$project_dir/native/wtop_windows_hw.c" \
     "$work_dir/lua-src/src/lua55.dll" -lpsapi -liphlpapi -lsetupapi
@@ -35,18 +44,6 @@ mkdir -p "$output_dir"
 cp "$work_dir/lua-src/src/lua.exe" "$output_dir/lua.exe"
 cp "$work_dir/lua-src/src/lua55.dll" "$output_dir/lua55.dll"
 cp "$work_dir/wtop_native.dll" "$output_dir/wtop_native.dll"
-runtime_dll=$("$compiler" -print-sysroot)/mingw/bin/libgcc_s_dw2-1.dll
-if [ ! -f "$runtime_dll" ]; then
-    echo "wtop: MinGW runtime DLL is missing: $runtime_dll" >&2
-    exit 1
-fi
-cp "$runtime_dll" "$output_dir/libgcc_s_dw2-1.dll"
-thread_dll=$("$compiler" -print-sysroot)/mingw/bin/libwinpthread-1.dll
-if [ ! -f "$thread_dll" ]; then
-    echo "wtop: MinGW thread runtime DLL is missing: $thread_dll" >&2
-    exit 1
-fi
-cp "$thread_dll" "$output_dir/libwinpthread-1.dll"
 cp -R "$project_dir/src" "$output_dir/"
 cat > "$output_dir/wtop.cmd" <<'EOF'
 @echo off

@@ -48,6 +48,7 @@
 #include <wchar.h>
 
 #include "wtop_macos.h"
+#include "wtop_build.h"
 
 #define MAX_PROCESS_COUNT 8192
 
@@ -286,9 +287,10 @@ static int l_uid(lua_State *L) {
 }
 
 static int l_system_constants(lua_State *L) {
-    lua_createtable(L, 0, 2);
+    lua_createtable(L, 0, 3);
     integer_field(L, "clock_ticks_per_second", 100);
     integer_field(L, "page_size_bytes", (lua_Integer)sysconf(_SC_PAGESIZE));
+    string_field(L, "build_revision", WTOP_BUILD_REVISION);
     return 1;
 }
 
@@ -1267,6 +1269,6 @@ static const luaL_Reg functions[] = {
 int luaopen_wtop_native(lua_State *L) {
     luaL_newlib(L, functions);
     wtop_register_hardware(L);
-    string_field(L, "VERSION", "macos-0.1");
+    string_field(L, "VERSION", WTOP_VERSION);
     return 1;
 }

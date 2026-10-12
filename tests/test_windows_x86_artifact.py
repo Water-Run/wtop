@@ -50,6 +50,11 @@ reports["wtop_native.dll"]["imports"]["lua55.dll"] = {"lua_gettop"}
 optional = Check.optional_api_names(ROOT / "native")
 assert {"GetTickCount64", "GetSystemTimes", "GetIfTable2"} <= optional
 assert Check.check_reports(reports, optional)[0] == 5
+static_reports = {name: reports[name] for name in Check.CORE_PE_FILES}
+assert Check.check_reports(static_reports, optional)[0] == 3
+missing_runtime = dict(static_reports)
+missing_runtime.pop("lua55.dll")
+refused(lambda: Check.check_reports(missing_runtime, optional), "missing core")
 build_script = (ROOT / "tools" / "build_windows_x86.sh").read_text(encoding="utf-8")
 assert ('python3 "$project_dir/tools/check_windows_x86.py" --bundle "$output_dir"'
         in build_script), "the gate must run on every completed Windows x86 build"

@@ -20,6 +20,7 @@ PE_FILES = (
     "lua.exe", "lua55.dll", "wtop_native.dll",
     "libgcc_s_dw2-1.dll", "libwinpthread-1.dll",
 )
+CORE_PE_FILES = ("lua.exe", "lua55.dll", "wtop_native.dll")
 SYSTEM_DLLS = frozenset({
     "advapi32.dll", "iphlpapi.dll", "kernel32.dll", "msvcrt.dll",
     "psapi.dll", "setupapi.dll",
@@ -94,10 +95,10 @@ def parse_objdump(output: str, name: str) -> dict[str, object]:
 def check_reports(reports: dict[str, dict[str, object]],
                   optional_names: set[str]) -> tuple[int, int]:
     bundled = {name.lower() for name in reports}
-    required = {name.lower() for name in PE_FILES}
-    if bundled != required:
-        raise ValueError("bundle PE files differ from the checked set: "
-                         + ", ".join(sorted(bundled ^ required)))
+    required = {name.lower() for name in CORE_PE_FILES}
+    if not required.issubset(bundled) or len(bundled) != len(reports):
+        raise ValueError("bundle is missing core PE files or has case collisions: "
+                         + ", ".join(sorted(required - bundled)))
     symbol_count = 0
     for name, report in reports.items():
         imports = report["imports"]
@@ -124,10 +125,15 @@ def check_bundle(bundle: pathlib.Path, objdump: str,
         if not (bundle / name).is_file():
             raise ValueError(f"{bundle}: {name} is missing")
     reports = {}
-    for name in PE_FILES:
-        path = bundle / name
-        if not path.is_file():
+    for name in CORE_PE_FILES:
+        if not (bundle / name).is_file():
             raise ValueError(f"{bundle}: {name} is missing")
+    for path in sorted(bundle.iterdir()):
+        if path.suffix.lower() not in (".exe", ".dll"):
+            continue
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"{path}: PE image is not a regular file")
+        name = path.name
         output = subprocess.run([objdump, "-p", str(path)], check=True,
                                 capture_output=True, text=True,
                                 env={**os.environ, "LC_ALL": "C"}).stdout

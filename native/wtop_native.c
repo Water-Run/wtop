@@ -1890,27 +1890,7 @@ static int l_interface_addresses(lua_State *L) {
  * this file without the build tree still works -- a test does exactly that to
  * check the empty case -- and the reported value is then an empty string
  * rather than a plausible-looking revision nobody vouched for. */
-#if defined(__has_include)
-# if __has_include("build_revision.h")
-#  include "build_revision.h"
-# endif
-# if __has_include("build_version.h")
-#  include "build_version.h"
-# endif
-#endif
-#ifndef WTOP_BUILD_REVISION
-#define WTOP_BUILD_REVISION ""
-#endif
-/* The version is written down once, in VERSION at the top of the tree, and
- * arrives here through the same generator that produces the revision.  It used
- * to be a literal in this file, and `--diagnose` printed the result next to the
- * Lua tree's version, so a release that bumped one and not the other made one
- * report state two different versions with nothing flagging the disagreement.
- * An empty fallback keeps a module built outside the build tree honest: it says
- * it does not know its version rather than claiming one. */
-#ifndef WTOP_VERSION
-#define WTOP_VERSION ""
-#endif
+#include "wtop_build.h"
 
 static int l_system_constants(lua_State *L) {
     long clock_ticks = sysconf(_SC_CLK_TCK);

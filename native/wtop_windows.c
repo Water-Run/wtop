@@ -19,6 +19,7 @@
 #include <string.h>
 #include <lua.h>
 #include <lauxlib.h>
+#include "wtop_build.h"
 
 #include "wtop_windows.h"
 
@@ -710,9 +711,10 @@ static int l_signal_process(lua_State *L) {
 static int l_system_constants(lua_State *L) {
     SYSTEM_INFO system;
     GetSystemInfo(&system);
-    lua_createtable(L, 0, 2);
+    lua_createtable(L, 0, 3);
     integer_field(L, "clock_ticks_per_second", 100);
     integer_field(L, "page_size_bytes", (lua_Integer)system.dwPageSize);
+    string_field(L, "build_revision", WTOP_BUILD_REVISION);
     return 1;
 }
 
@@ -2619,6 +2621,6 @@ static const luaL_Reg functions[] = {
 int __declspec(dllexport) luaopen_wtop_native(lua_State *L) {
     luaL_newlib(L, functions);
     wtop_register_hardware(L);
-    string_field(L, "VERSION", "win32-0.1");
+    string_field(L, "VERSION", WTOP_VERSION);
     return 1;
 }

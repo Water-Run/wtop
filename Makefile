@@ -3,7 +3,7 @@ SHELL := /bin/sh
 HOST_OS := $(shell uname -s 2>/dev/null || echo unknown)
 ifeq ($(HOST_OS),Darwin)
 
-.PHONY: all native run snapshot diagnose
+.PHONY: all native run snapshot diagnose bundle-dir bundle-file test-bundle-dir test-bundle-file
 all: native
 native:
 	@./tools/build_macos.sh
@@ -13,6 +13,20 @@ snapshot: native
 	@./dist/macos/wtop --snapshot
 diagnose: native
 	@./dist/macos/wtop --diagnose
+bundle-dir: native
+	@./tools/package_macos.sh dir
+bundle-file: native
+	@./tools/package_macos.sh file
+test-bundle-dir: bundle-dir
+	@python3 tests/installed_smoke.py --executable dist/macos-bundle/wtop/wtop \
+		--version "$$(cat VERSION)" --platform Darwin
+	@WTOP_EXECUTABLE='$(CURDIR)/dist/macos-bundle/wtop/wtop' WTOP_ROOT='$(CURDIR)' \
+		WTOP_PTY_PROFILE=quick python3 tests/pty_smoke.py
+test-bundle-file: bundle-file
+	@python3 tests/installed_smoke.py --executable dist/macos-bundle/wtop-onefile \
+		--version "$$(cat VERSION)" --platform Darwin
+	@WTOP_EXECUTABLE='$(CURDIR)/dist/macos-bundle/wtop-onefile' WTOP_ROOT='$(CURDIR)' \
+		WTOP_PTY_PROFILE=quick python3 tests/pty_smoke.py
 
 else
 ifneq ($(HOST_OS),Linux)
@@ -44,7 +58,7 @@ SOURCE_ROCK_ARGS ?=
 
 NATIVE_SOURCES := native/wtop_native.c native/wtop_nvml.c native/wtop_amdsmi.c \
   native/wtop_levelzero.c
-NATIVE_HEADERS := native/wtop_nvml.h native/wtop_amdsmi.h native/wtop_levelzero.h
+NATIVE_HEADERS := native/wtop_nvml.h native/wtop_amdsmi.h native/wtop_levelzero.h native/wtop_build.h
 NATIVE_DIR := $(CURDIR)/build/native
 NATIVE_MODULE := $(NATIVE_DIR)/wtop_native.so
 NATIVE_REVISION_HEADER := $(NATIVE_DIR)/build_revision.h

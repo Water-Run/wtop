@@ -40,11 +40,14 @@ fi
 make -C "$work_dir/lua-5.5.1/src" macosx \
     "MYCFLAGS=-mmacosx-version-min=$deployment" \
     "MYLDFLAGS=-mmacosx-version-min=$deployment"
+make -C "$work_dir/lua-5.5.1" install INSTALL_TOP="$project_dir/.tools/lua-5.5.1"
 rm -rf "$output_dir"
 mkdir -p "$output_dir"
+"$project_dir/tools/write_build_id.sh"
 cc -std=c17 -O2 -Wall -Wextra -Werror \
     "-mmacosx-version-min=$deployment" -dynamiclib -undefined dynamic_lookup \
     -I"$work_dir/lua-5.5.1/src" \
+    -I"$project_dir/build/native" \
     -o "$output_dir/wtop_native.so" "$project_dir/native/wtop_macos.c" \
     "$project_dir/native/wtop_macos_hw.c" \
     -framework IOKit -framework CoreFoundation
