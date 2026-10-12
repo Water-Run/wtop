@@ -67,12 +67,14 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 ## 验证矩阵
 
-2026-10-12 核对：当前提交 `9868791` 的
-[CI 运行](https://github.com/Water-Run/wtop/actions/runs/38125050681)
-已完成，12 个作业全部通过。覆盖 Linux x86_64/aarch64、Lua 5.5 与 Lua 5.4
-子集、PTY、fuzz、ASan/UBSan、LuaRocks 和两种捆绑形态。
-本次下载复核另发现 onedir 上传内容不完整；CI 成功不能作为该下载包可用的
-证据，具体复现见下方开发验证记录。以下保留早期主机与提交的验证范围。
+2026-10-12 核对：提交 `74a6687` 的
+[CI 运行](https://github.com/Water-Run/wtop/actions/runs/38210309458)
+已完成，14 个作业全部通过。覆盖 Linux x86_64/aarch64、Lua 5.5 与 Lua 5.4
+子集、PTY、fuzz、ASan/UBSan、LuaRocks、两种捆绑形态，以及独立下载验收：
+两种架构的下载包在 CI 内核验清单与原生身份，并以完整 PTY 通过。
+此前 `9868791` 的 12 作业运行全部通过，但当时的下载复核发现 onedir
+上传内容不完整；修复后的下载链以最新运行为准，经过见下方开发验证记录。
+以下保留早期主机与提交的验证范围。
 
 2026-10-09 核对：开发树提交 `aea04ad` 对应的
 [CI 运行](https://github.com/Water-Run/wtop/actions/runs/37277030786)
@@ -105,6 +107,25 @@ macOS、Windows 的运行验证来自下表列出的主机记录。
 | 带 WSL 的 Windows | WSL 中的 Linux 运行时 | Linux 兼容性;这不构成原生 Windows 支持的证据 |
 
 ## 开发验证记录
+
+### 2026-10-12：main 红屏修复与首次下载验收
+
+交接提交 `1c1a41a` 推送后，main 的
+[CI 38199832495](https://github.com/Water-Run/wtop/actions/runs/38199832495)
+在两种架构的 `test_release_evidence` 上失败：`bundle-dir` 的许可条款拷贝
+断言读到了 macOS 配方。根因是同批交接改动把 macOS 打包目标（`bundle-dir`
+等四个）加在 Makefile 顶部、Linux 定义之前；守卫按文本读取每个目标的
+第一条配方，而 make 只解析所在平台的分支，因此只有文本读者看得见这次
+重名。修复 `74a6687` 把 macOS 打包块移到文件末尾的独立 `ifeq` 分支并
+写明该位置约束；修复主机没有 Linux 工具链，验证是按守卫读取器复刻的
+静态检查（本机 `build/verify_recipe_reader.ps1`，不随 Git 分发）。
+
+随后 [CI 38210309458](https://github.com/Water-Run/wtop/actions/runs/38210309458)
+14 个作业全部通过，独立下载验收首次真实完成：两种架构的下载包在独立
+runner 上核对外层校验和、与包内容完全一致的内层清单、SBOM 摘要一致和
+原生模块身份，并以完整 PTY 运行 onedir 与 onefile。交付缺口表中下载
+验收一项据此关闭。发布签名与溯源链仍由 Release candidate 流程在正式
+发布时验证；`v0.2.0` 尚未发布。
 
 ### 2026-10-12：暂停交接
 
