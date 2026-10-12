@@ -22,20 +22,87 @@ def refused(action, expected: str) -> None:
 
 
 def report(symbol: str = "GetTickCount") -> str:
+    """One real import section, captured from `i686-w64-mingw32-objdump -p`.
+
+    The column layout this guard reads belongs to objdump, not to this file.
+    The fixture used to be written by hand in a shape the parser remembered,
+    and a parser that read none of a genuine table passed it: both halves were
+    confidently wrong about the same format, which is why the gate reported
+    every built bundle as having no named imports while reading none of them.
+    Capturing a transcript keeps the fixture and the instrument describing the
+    same object.  The relocation block before the header and the export table
+    after it are part of the capture on purpose -- their rows have the same
+    "address number name" shape as an import line and must not be read as one.
+    """
     return (
-        "module.dll: file format pei-i386\n"
+        "PE File Base Relocations\n"
+        "        vma    LDRVA  Type   Unknown\n"
+        "       2a0  10820  Dir    12010  1218f  1\n"
+        "\n"
+        "lua.exe:     file format pei-i386\n"
+        "\n"
         "Magic 010b (PE32)\n"
-        "MajorOSystemVersion 4\nMinorOSystemVersion 0\n"
-        "MajorSubsystemVersion 4\nMinorSubsystemVersion 0\n"
-        "DLL Name: KERNEL32.dll\n"
-        f" 00001000 <none> 0001 {symbol}\n"
-        "DLL Name: lua55.dll\n"
-        " 00001004 <none> 0002 lua_gettop\n"
+        "MajorOSystemVersion 4\n"
+        "MinorOSystemVersion 0\n"
+        "MajorSubsystemVersion 4\n"
+        "MinorSubsystemVersion 4\n"
+        "Time/Date 0x68e0f0f0\n"
+        "\n"
+        "The Import Tables (interpreted .idata section contents)\n"
+        "\n"
+        " vma:            Hint    Time      Forward  DLL       First\n"
+        "                 Table   Stamp     Chain    Name      Thunk\n"
+        " 0000f000\t0000f050 00000000 00000000 0000f9b8 0000f1ec\n"
+        "\n"
+        "\tDLL Name: kernel32.dll\n"
+        "\tvma:  Hint/Ord Member-Name Bound-To\n"
+        "\tf388\t  275  DeleteCriticalSection\n"
+        f"\tf410\t  875  {symbol}\n"
+        "\n"
+        " 0000f014\t0000f09c 00000000 00000000 0000fa74 0000f238\n"
+        "\n"
+        "\tDLL Name: lua55.dll\n"
+        "\tvma:  Hint/Ord Member-Name Bound-To\n"
+        "\tf4ea\t   58  lua_gettop\n"
+        "\n"
+        "The Export Tables\n"
+        "\n"
+        " vma   ord   base  Name\n"
+        "\t   0\t     0  [ordinal function #1]\n"
     )
 
 
 clean = Check.parse_objdump(report(), "module.dll")
-assert clean["imports"]["kernel32.dll"] == {"GetTickCount"}
+assert clean["imports"]["kernel32.dll"] == {"DeleteCriticalSection", "GetTickCount"}
+assert clean["imports"]["lua55.dll"] == {"lua_gettop"}
+assert not any(
+    symbol.startswith("[") for symbols in clean["imports"].values()
+    for symbol in symbols
+), "an export row was read as an import"
+
+# The other column shape objdump uses for a named import: an explicit ordinal
+# column and the address ahead of the name.  Which release prints which is not
+# the guard's question; "this row names an import" is.
+assert Check.parse_objdump(
+    report().replace("\tf388\t  275  DeleteCriticalSection",
+                     "\t00001000 <none> 0001 DeleteCriticalSection"),
+    "module.dll",
+)["imports"]["kernel32.dll"] == {"DeleteCriticalSection", "GetTickCount"}
+
+# A row the guard cannot read is a fact about the guard and not about the
+# binary, so the message has to say so.  Reporting it as "no named imports"
+# would assert a loader defect while having read nothing -- the same wrong
+# answer the gate used to give for every real bundle.
+refused(lambda: Check.parse_objdump(
+    report().replace("\tf410\t  875  GetTickCount", "\tf410\t  ???"),
+    "module.dll"), "unrecognized objdump import line")
+
+# And an image whose import table the transcript never showed is missing one,
+# which is a different defect from a table that arrived unreadable.
+refused(lambda: Check.parse_objdump(
+    report().replace("The Import Tables", "The Nothing Tables"),
+    "module.dll"), "no import table was parsed")
+
 refused(lambda: Check.parse_objdump(report().replace("pei-i386", "pei-x86-64"),
                                      "module.dll"), "not a PE32 i386")
 refused(lambda: Check.parse_objdump(report().replace("(PE32)", "(PE32+)"),
