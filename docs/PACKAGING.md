@@ -2,7 +2,17 @@
 
 ## 1. 当前状态
 
-wtop `0.1.0` 附带一套可用的 Lua 5.5.1 引导、C17 原生模块、确定性的语言区域（locale）编译、LuaRocks rockspec、luainstaller 的 onedir/onefile 目标，以及 PTY 冒烟测试。它不带一份覆盖多种架构、多种 libc、旧版本 glibc 和发行版的正式版本验证矩阵；`CHANGELOG.md` 准确记录了本次发布在什么环境上构建和测试。
+当前开发候选为 `0.2.0`，包含 Lua 5.5.1 引导、C17 原生模块、确定性的语言区域编译、开发与版本 rockspec、源 rock、luainstaller onedir/onefile 及完整归档验证。既有 `v0.1.0` 的验证范围见 `CHANGELOG.md`；0.2.0 的公开发布仍待完成。
+
+开发目标是同时提供 luainstaller bin 和 LuaRocks 安装。当前两条标准路径均为
+Linux；macOS、Windows 的脚本仍生成开发目录包。开发状态与优先级见
+[交付缺口](PLAN.md#交付缺口与完成条件)。
+
+2026-10-12 核对发现，CI 构建成功不等于上传内容完整：当前 `wtop-bundles`
+下载包遗漏 `.luai` 目录，缺失原生模块并无法运行快照。本轮已加入保留隐藏
+载荷和权限的 tar、外层摘要及下载后的全文件/运行检查，真实新 CI 仍待验收。
+[实测记录](CROSS_PLATFORM.md#开发验证记录)
+同时记录了干净源码 LuaRocks 安装结果与公开发布入口的缺口。
 
 构建没有运行时 LuaRock 依赖。`wtop_native.so` 提供交互式终端处理、poll、信号、原子写、受限子进程执行和一组小型 Linux 系统调用。原生文件读取器以非阻塞/不跟随符号链接模式打开，只接受常规文件，默认上限 4 MiB、显式最大 64 MiB，并拒绝符号链接、设备文件、FIFO 和超限内容，同时仍支持以常规文件形式呈现的 procfs/sysfs 伪文件。
 
@@ -62,7 +72,18 @@ make rockspec-check
 make test-luarocks
 ```
 
-`make test-luarocks` 引导项目的 Lua 5.5.1，把 rock 安装到 `.tools/wtop-rocks-5.5`，然后通过 LuaRocks 生成的包装脚本运行 `--version` 和 `--diagnose`。该 rock 包含 Lua 模块、`wtop_native.so`、`wtop` 命令，以及根目录下的许可证、英文 README、中文 README 和配置示例。`rock-build`/`rock-install` 是 rockspec 后端的入口点，不是面向最终用户的独立安装命令。
+`make test-luarocks` 引导项目的 Lua 5.5.1，把 rock 安装到 `.tools/wtop-rocks-5.5`，然后通过 LuaRocks 生成的包装脚本运行 `--version`、`--diagnose`、`--snapshot` 和 `--agent`，后两项检查 JSON 契约。该 rock 包含 Lua 模块、`wtop_native.so`、`wtop` 命令，以及许可证、四种语言的 README 和配置示例。`rock-build`/`rock-install` 是 rockspec 后端的入口点，不是面向最终用户的独立安装命令。
+
+源码安装仍需要 Lua 5.5 的配套头文件、C17 编译器和 make；自带解释器的是
+luainstaller 产物。`wtop-0.2.0-1.rockspec` 从开发 spec 和 VERSION 生成，固定
+源码标签 `v0.2.0`。`make source-rock` 输出源 rock、源码 tar 和源码摘要；
+`make test-source-rock` 从包内源码安装，`make test-rock-index` 验证本地索引上的
+按名称安装。2026-10-12 的 LuaRocks 公共检索没有 wtop，不能把本地
+`luarocks make` 成功视为已支持公共索引上的 `luarocks install wtop`。
+
+原生版本为空的问题已修复：`rock-build` 依赖 `build-id`，没有 Git 元数据的
+源 rock 也会从 VERSION 生成版本头文件。安装检查核对 Lua/C 版本、平台以及
+五种 CLI 输出；空的原生版本会失败。无 Git 元数据的目录不会借用父仓库身份。
 
 权限重执行保留真实进程 argv（包括 LuaRocks 生成的包装脚本），只把 argv[0] 替换为当前可执行文件路径，然后调用固定的系统 `sudo`。它不构造 shell 命令，也不信任 PATH 上任意一个 `sudo`。
 
@@ -170,18 +191,20 @@ CI/评审还可以额外验证生成输出是否为最新：
 | `make diagnose` | 输出能力诊断 |
 | `make snapshot` | 输出一份 JSON 快照 |
 | `make check` | 校验 Lua、POSIX shell 和 Python，解析 Agent JSON schema，并**将其应用到一次实时的 `--agent` 采集** |
-| `make test-fast` | 运行 121 个 Lua 文件和一个有代表性的三用例 PTY 配置 |
+| `make test-fast` | 全部 Lua 单元/夹具文件加快速 PTY 配置 |
 | `make test-55` | 132 个 Lua 5.5 单元与夹具测试文件 |
 | `make test-54` | 用系统 Lua 5.4 运行同样的 132 个文件，验证纯 Lua 兼容子集 |
 | `make test-fuzz` | 用随机按键、鼠标报告、非法转义、无效 UTF-8 和尺寸变化，针对真实终端循环测试 |
 | `make test-pty` | 场景台账，然后针对响应式尺寸、翻页切换和四种颜色/字符能力配置运行真实 PTY 冒烟测试。台账（`tests/pty_scenario_ledger.py`）是静态检查：套件运行的每个场景都必须在 `SCENARIOS` 中命名，因此矩阵中的任何失败都可以单独用 `--scenario` 重跑；它存在的原因，是一个没有自己名字、藏在 `main` 内部的步骤，正是一个失败场景变得不可诊断的方式 |
-| `make test-pty-isolation` | 18 个 PTY 场景各自独立进程单独运行——这是套件无法回答的问题，因为一个从上一个场景继承了“热”主机的场景并没有真正被测试。列表是 `SCENARIOS` 中的数据，一个没名字的步骤进不了它：八种尺寸的响应式矩阵及其翻页检查变成 `run_responsive`，正是为了这个原因 |
+| `make test-pty-isolation` | `SCENARIOS` 中的场景分别在独立进程中运行 |
 | `make test` | `test-55` 加 `test-pty` |
 | `make test-all` | 跨两种 Lua ABI、LuaRocks、onedir、onefile 及其 PTY/JSON 契约的串行发布式验证 |
 | `make luarocks-bootstrap` | 将锁定的 LuaRocks 3.13.0 构建到 `.tools/luarocks` |
-| `make rockspec-check` | 通过 LuaRocks 校验 `wtop-scm-1.rockspec` |
+| `make rockspec-check` | 生成版本 spec，并校验开发和版本 spec |
 | `make luarocks-install` | 安装到隔离的项目内 `.tools/wtop-rocks-5.5` 目录树 |
 | `make test-luarocks` | 重装隔离的 rock，并运行已安装 CLI 的冒烟测试 |
+| `make source-rock` / `make test-source-rock` | 生成版本源 rock 与源码 tar；从源 rock 安装并检查 Lua/C 版本和 CLI |
+| `make test-rock-index` | 生成本地索引，在新 tree 中按名称安装版本 rock |
 | `make luainstaller` | 引导锁定的 luainstaller 版本 |
 | `make bundle-dir` | 生成 onedir |
 | `make bundle-file` | 生成 onefile |
@@ -189,8 +212,20 @@ CI/评审还可以额外验证生成输出是否为最新：
 | `make test-bundle-file` | 原子替换 onefile，并对其运行 PTY 冒烟测试 |
 | `make checksums` | 要求两个包都已构建，并针对 onedir 携带的每个文件加上 onefile 生成 `dist/SHA256SUMS` |
 | `make test-release-notices` | 询问包是否携带其许可证文本，以及清单是否覆盖它们 |
+| `make release-archive` / `make test-release-archive` | 将完整载荷和发布证据归档；解包后检查所有摘要、权限、CLI/JSON 和快速 PTY |
+| `make test-downloaded-archive DOWNLOAD_DIR=...` | 检查真实下载的归档与外层摘要，并运行两种程序的完整 PTY；不会重建程序 |
 | `make check-native-warnings` | 在更严格的警告集（`-Wshadow -Wconversion -Wsign-conversion -Wpointer-arith -Werror`）下编译每个原生源文件 |
 | `make sanitize-native` / `make test-sanitized` | 用全部原生源文件构建一个 ASan+UBSan 模块，并对它运行采集路径和单元套件 |
+
+源包只收录 Git 跟踪的文件及生成的版本 spec，附带 `SOURCE.json` 的源码摘要
+和修订信息；未跟踪的本机文件不会进入源包。正式构建使用
+`SOURCE_ROCK_ARGS=--require-clean` 拒绝未提交的源码。
+
+`release.yml` 在本仓库 PR、版本标签或手工运行时构建两个 Linux 架构的候选，
+使用 [Sigstore 签名的 SLSA 溯源](https://github.com/actions/attest)，再由独立
+作业下载并验证程序、签名者和源提交。默认只构建候选；手工选择 publish
+才会发布现有版本标签，并使用仓库 Secret `LUAROCKS_API_KEY` 上传同一源 rock。
+公开发布和签名验收仍须以真实运行结果关闭。
 
 ## 6.1 发布物及其声明
 
@@ -458,13 +493,19 @@ wtop 没有最低 Linux 内核，这是程序的性质，不是分析的缺席�
 - [x] 携带发布据以分发的条款，并让条款缺失导致失败。已于 2026-10-02 完成：此前 SBOM 对 `wtop` 和 `wtop_native` 声明 EUPL-1.2、对 `lua` 声明 MIT、对 `luainstaller` 声明 LGPL-3.0-or-later，而发布物**三者一个文本都没带**，`SHA256SUMS` 只覆盖两个可执行文件，两个 CI 上传作业发布的都是证据和程序而没有一份许可证文件——CI 产出的发布物完整、验证过、全绿，却没有自身条款的可读陈述。现在 `make bundle-dir` 把 `LICENSE` 复制进包，生成器拒绝声明文本缺失的许可证，`make test-release-notices` 直接询问包，CI 发布它们。onefile 仍不携带 EUPL 文本，不补丁第三方 LGPL 工具就无法做到；SBOM 以 `wtop:licence-text:present-in` 按许可证记录这一点，让分发者看见缺口而不是去推断。
 - [x] 提供仅 Linux 的 LuaRocks rockspec、隔离安装目标和已安装 CLI 冒烟测试。
 - [x] 采用 EUPL-1.2，并在源码、rock 安装文档和 README 文件中声明。
+- [ ] 修复 CI 上传遗漏 `.luai` 的问题，并从实际下载构件运行完整清单核验与 CLI/PTY；上传前的测试不能关闭此项。
+- [ ] 提供固定源码的版本 rockspec 和源 rock，在公共索引验收按名称安装；同时提供按平台命名的 bin 下载。
+- [x] 为干净 LuaRocks 构建生成原生版本头文件，并核对安装后的 Lua/C 版本；无 Git 元数据的源 rock 可不带修订号。
 - [ ] 在最终发布提交上清理或隔离旧产物，并重跑每个打包目标；仓库里现有的 `dist/` 内容，不是产物与当前源码一致的证据。
 - [ ] 对最终的 onedir/onefile 产物运行 CLI、快照、PTY、干净环境、`ldd` 和 `file` 校验，并保留日志。
 - [x] 选定并验证最低 glibc 与 Linux 内核基线。glibc 下限按产物测量，并对 `tools/baseline.conf` 把门；最低内核的回答是"没有"，退化性质由 `tests/unit/test_engine.lua` 和 `MONITORING.md` 的按来源表格钉住。发行版级别的内核主张，仍需上一条中的按发行版运行。
-- [ ] 在 glibc aarch64 上原生构建并测试。
+- [x] 提供 glibc aarch64 原生构建、单元、PTY 和发布 ELF 基线 CI；当前提交已有通过记录。
+- [ ] 验收 aarch64 的实际 bin 下载；完整归档上传与独立下载作业已经接入，待真实运行。
+- [ ] 将 macOS、Windows 的原生 luainstaller 打包接入可重复构建与运行验证；其 LuaRocks 支持需另行实现平台构建入口。
 - [ ] 每个计划中的 musl 目标独立构建并测试。
 - [ ] 建立真实的 NVIDIA、AMD、Intel 和无 GPU 冒烟矩阵。
-- [x] 在最终候选上重跑 `make checksums` 和 `make sbom`。SBOM 生成器在任何发布产物缺失、**或任何声明的许可证在发布中没有文本**时拒绝写出文档，因此一次成功的 `make sbom` 同时陈述了三份被哈希的文件都在，以及四个组件上声明的条款都能从包里读到。
+- [x] 提供 `make checksums` 和 `make sbom`。SBOM 生成器在任何发布产物缺失、**或任何声明的许可证在发布中没有文本**时拒绝写出文档，因此一次成功的 `make sbom` 同时陈述了三份被哈希的文件都在，以及四个组件上声明的条款都能从本地包里读到。
+- [ ] 在最终候选上重跑校验和、SBOM 和发布基线，并在上传、下载后确认它们描述同一组完整文件。
 - [ ] 为最终候选产出签名和完整的构建溯源记录。于 2026-10-02 从上一条拆出：上一条当时自己打着勾，而它正文四行之后写着相反的话——"it says nothing about signatures, which no target produces"——`docs/PLAN.md` §10 也始终把该能力列为待决问题。清单恰好乐观在计划悲观的地方，这是存活得最久的安排：清单是照着框读的，框下面的正文是没人重读的部分。`tests/unit/test_release_checklist.lua` 现在拒绝为计划仍列为待决的任何能力打勾；反方向上，计划关闭问题后，要求存在一条调用签名器的 Makefile 配方，因为关闭的问题和答不上它的构建，是两种不同的陈述。
 
 - [x] 每份发布证据文档，拒绝为它无法测量的发布背书。门在点名的 ELF 缺失或不可测量时非零退出，报告此时**不**携带任何结论，而不是一个从没人得到的数字推出的下限。写下这条，是因为一道门曾非零退出、它的报告却仍说 `status: within the promised floor`；也是因为两个 CI 步骤无参数调用 `tools/record_baseline.sh`（自 ELF 清单成为必填起，这便是用法错误），而 shell 重定向已经创建了零字节的 `dist/BASELINE.txt`——发布作业上传的正是这个文件。`tests/unit/test_release_evidence.lua` 现在要求 `tools/` 里的每个脚本被分类，要求每个证据工具经由 Makefile 目标到达而不是被直接调用，要求 `make test-all` 依赖全部，并断言拒绝本身。

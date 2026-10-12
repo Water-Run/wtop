@@ -67,6 +67,13 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 ## 验证矩阵
 
+2026-10-12 核对：当前提交 `9868791` 的
+[CI 运行](https://github.com/Water-Run/wtop/actions/runs/38125050681)
+已完成，12 个作业全部通过。覆盖 Linux x86_64/aarch64、Lua 5.5 与 Lua 5.4
+子集、PTY、fuzz、ASan/UBSan、LuaRocks 和两种捆绑形态。
+本次下载复核另发现 onedir 上传内容不完整；CI 成功不能作为该下载包可用的
+证据，具体复现见下方开发验证记录。以下保留早期主机与提交的验证范围。
+
 2026-10-09 核对：开发树提交 `aea04ad` 对应的
 [CI 运行](https://github.com/Water-Run/wtop/actions/runs/37277030786)
 于 2026-10-05 完成，12 个作业全部通过。覆盖 x86_64/aarch64 原生构建、
@@ -98,6 +105,78 @@ macOS、Windows 的运行验证来自下表列出的主机记录。
 | 带 WSL 的 Windows | WSL 中的 Linux 运行时 | Linux 兼容性;这不构成原生 Windows 支持的证据 |
 
 ## 开发验证记录
+
+### 2026-10-12：0.2.0 交付修复的本地验收
+
+本轮以 `9868791` 为基线，将开发版本更新为用户选定的 0.2.0。`rock-build`
+现在先生成 Lua/C 版本身份，生成器只使用本项目自己的 Git 元数据。
+scm 安装、0.2.0 源 rock 安装及本地索引上的按名称安装均通过五种 CLI 检查；
+原生版本为 0.2.0，空版本会被检查拒绝。源 rock 构建时未携带 `.git` 或
+开发目录中的头文件，安装过程实际生成了自己的版本头文件。
+
+`make check test-55` 通过全部 132 个 Lua 测试文件。发布传输的八项 Python
+回归覆盖隐藏原生模块、摘要、执行权限、符号链接、路径逃逸、外层摘要与
+空的原生版本。两个 workflow 通过 SHA-256 校验的 actionlint 1.7.12 检查；
+发布证据、清单与文档计数的三个既有 Lua 文件也通过。
+
+本机新构建的 onedir / onefile 被收录到
+`dist/wtop-0.2.0-linux-x86_64-glibc.tar.gz`，包括全部隐藏载荷、项目许可证、
+SBOM、原始文件清单及发布 ELF 基线。独立外层清单覆盖包内所有文件，归档
+旁另有 SHA-256。解包到源码目录以外后，两种程序均通过五种 CLI、JSON
+契约和 quick PTY；测得的 glibc 下限为 2.38。
+
+真实 CI 上传/下载和签名链尚待运行，公共发布尚未执行。当前的本地成功
+不代替它们；也没有新增 aarch64、macOS、Windows、XP 或目标性能预算的
+实测结果。日志和任务接续记录保存在 `build/series-fixes/`。
+
+### 2026-10-12：双交付路径与实际下载包核对
+
+核对对象为 `9868791b2e8ec59abbbf53675df4626b9008cc8e`，本机为 Fedora 44、
+Linux `7.2.9-200.fc44.x86_64`、glibc 2.43。工作区起始干净；测试使用
+`git archive HEAD` 导出的独立源码目录，原有 `build/` 和 `dist/` 未充当
+新构建证据。使用仓库现有的锁定 Lua 5.5.1、LuaRocks 3.13.0 和
+luainstaller 1.5.0 工具链。
+
+干净源码经 `luarocks --lua-version=5.5 make wtop-scm-1.rockspec` 安装到
+隔离的 tree，未预先运行 `make native` 或 `make build-id`。从源码目录之外
+运行已安装的 `--version`、`--diagnose`、`--snapshot`、`--agent`、`--report`
+全部退出 0，Snapshot 与 Agent 的现有 JSON 契约检查通过。
+原生版本为空，诊断输出为 `Native: available ()`；`rock-build` 缺少版本
+头文件生成依赖，现有安装测试只检查 CLI 版本和平台，未覆盖该缺口。
+
+同一份独立源码随后完成 onedir / onefile 重建。两种产物复制到独立目录，
+在 Bubblewrap 文件系统中分别运行上述五种 CLI 模式，全部退出 0；Snapshot
+与 Agent 的 JSON 契约检查通过。该环境只有包本身、动态加载器、libc、libm
+以及只读系统数据，没有源码、Lua 工具链或外部辅助程序，PATH 指向空目录。
+已安装 rock、onedir 和 onefile 分别通过现有 quick PTY 场景，覆盖默认界面、
+Network、Compute、ASCII/无色模式和信号退出。
+新构件的发布 ELF 基线通过，glibc 下限为 2.38；SBOM、14 项文件清单和
+发布许可检查通过。本轮没有重跑完整单元、完整 PTY 或性能基准，完整套件
+结果引用上述同提交 CI。
+
+从上述 CI 下载 `wtop-bundles`，构件 ID 为 `11697601223`。ZIP 中只有
+`wtop/LICENSE`、`wtop/wtop`、`wtop/THIRD_PARTY_NOTICES.md`、`wtop-onefile`
+和 `SHA256SUMS`。清单的 14 项中，4 项存在且摘要匹配，10 项不存在，均在
+`wtop/.luai/` 下，包括原生模块、许可文本、重链接材料和清单。
+为解包后的入口设置执行权限，再运行 `--snapshot`，退出 1，标准错误为
+`wtop: native platform probe is unavailable`。
+
+上传配置使用 `actions/upload-artifact@v4`，没有启用隐藏文件上传。
+其[默认行为](https://github.com/actions/upload-artifact/tree/v4#uploading-hidden-files)
+会排除点目录。上传前的完整性检查已通过，但没有下载后的检查来发现这一
+传递过程中的缺失。该问题应通过完整归档与下载复验关闭；仅重复本地打包
+不能证明修复有效。
+
+公开入口也单独核对：GitHub API 的
+[Release 列表](https://api.github.com/repos/Water-Run/wtop/releases)为空，
+标签列表只有 `v0.1.0`；LuaRocks 公共搜索 wtop 返回 `No modules`。
+因此当前可确认的是克隆源码后本地安装，以及 CI 构建能力；尚未确认公共
+索引上的按名称安装或正式 bin 下载。aarch64 作业只上传发布 ELF 基线，
+没有上传该平台的捆绑包。此次没有增加 macOS、Windows 或 XP 的运行证据。
+
+本地核对记录保存在 `build/development-audit-20261012/`，包含
+`state.json`、干净安装与新构建日志、隔离 CLI 和 quick PTY 结果、下载 ZIP 和
+`ci-artifact-summary.json`；这些本机证据不随源码提交发布。
 
 ### 2026-10-11：sshd 当前文件配置查询
 

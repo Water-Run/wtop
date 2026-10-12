@@ -35,9 +35,12 @@ LUAROCKS_STAMP := $(LUAROCKS_PREFIX)/.wtop-ready
 CC ?= cc
 
 ROCKSPEC := wtop-scm-1.rockspec
+VERSION_ROCKSPEC := wtop-$(WTOP_VERSION)-1.rockspec
 ROCK_BUILD_DIR := $(CURDIR)/build/luarocks
 ROCK_NATIVE_MODULE := $(ROCK_BUILD_DIR)/wtop_native.so
 WTOP_ROCK_TREE ?= $(CURDIR)/.tools/wtop-rocks-5.5
+SOURCE_ROCK_TREE ?= $(CURDIR)/.tools/wtop-source-rocks-5.5
+SOURCE_ROCK_ARGS ?=
 
 NATIVE_SOURCES := native/wtop_native.c native/wtop_nvml.c native/wtop_amdsmi.c \
   native/wtop_levelzero.c
@@ -94,13 +97,15 @@ CFLAGS_NATIVE += -std=c17 -fPIC -Wall -Wextra -Werror
 	benchmark-check \
 	toolchain luainstaller luarocks-bootstrap luarocks-install bundle-dir bundle-file \
 	test-bundle-dir test-bundle-file test-release-notices check-native-warnings \
-	sanitize-native test-sanitized
+	release-archive test-release-archive test-downloaded-archive sanitize-native test-sanitized
 
 .PHONY: all resource-check resource-check-full resource-check-benchmark toolchain luainstaller native locales check test test-all test-fast \
 	benchmark-check \
 	test-54 test-55 test-pty test-pty-quick benchmark test-fuzz run \
 	diagnose snapshot bundle-dir bundle-file test-bundle-dir test-bundle-file checksums build-id sbom baseline \
 	cross-libc release-baseline rock-build rock-install rockspec-check luarocks-bootstrap luarocks-install test-luarocks
+
+.PHONY: release-archive test-release-archive test-downloaded-archive version-rockspec source-rock test-source-rock rock-index test-rock-index
 
 all: native locales
 
@@ -291,6 +296,7 @@ check: resource-check native locales
 		$(LUA) tools/check_agent_schema.lua
 	@python3 tests/test_luainstaller_bootstrap.py
 	@python3 tests/test_windows_x86_artifact.py
+	@python3 tests/test_release_archive.py
 
 test: resource-check-full test-55 test-pty
 
@@ -302,7 +308,7 @@ test: resource-check-full test-55 test-pty
 # reporting success.  Every prerequisite remains serial and gated.
 test-all: resource-check-full check check-native-warnings test-54 test-55 test-pty \
 	rockspec-check release-baseline sbom checksums test-release-notices \
-	test-luarocks test-bundle-dir test-bundle-file
+	test-luarocks test-bundle-dir test-bundle-file test-release-archive test-source-rock test-rock-index
 # `baseline` is deliberately absent, and it is the consequence of a decision
 # rather than an oversight: it measures $(BASELINE_ELFS) -- the native module
 # under build/ and the bootstrapped interpreter under .tools/, neither of which
@@ -405,7 +411,7 @@ snapshot: native locales
 
 # rock-build and rock-install are the LuaRocks "make" backend entry points.
 # End users should invoke LuaRocks (or luarocks-install), not these targets directly.
-rock-build: resource-check
+rock-build: resource-check build-id
 	@test -n "$(LUA_INCDIR)" || { echo "wtop: LUA_INCDIR is required" >&2; exit 1; }
 	@mkdir -p "$(ROCK_BUILD_DIR)"
 	$(CC) $(CFLAGS) -std=c17 -fPIC -Wall -Wextra -Werror -shared \
@@ -423,19 +429,17 @@ rock-install:
 	@chmod 755 "$(BINDIR)/wtop" "$(LIBDIR)/wtop_native.so"
 	@cp LICENSE README.md README-zh.md README-fr.md README-ru.md config.example.yml "$(PREFIX)/doc/"
 
-rockspec-check: $(LUAROCKS_STAMP)
+rockspec-check: $(LUAROCKS_STAMP) version-rockspec
 	@"$(LUAROCKS)" lint "$(ROCKSPEC)"
+	@"$(LUAROCKS)" lint "$(VERSION_ROCKSPEC)"
 
 luarocks-install: resource-check-full $(LUA_STAMP) $(LUAROCKS_STAMP)
 	"$(LUAROCKS)" --lua-version=5.5 --lua-dir="$(LUA_PREFIX)" --tree="$(WTOP_ROCK_TREE)" \
 		make "$(ROCKSPEC)" --deps-mode=none --force
 
 test-luarocks: luarocks-install
-	@"$(WTOP_ROCK_TREE)/bin/wtop" --version | sed 's/ (rev [^)]*)$$//' | \
-		grep -Fxq 'wtop $(WTOP_VERSION)'
-	@"$(WTOP_ROCK_TREE)/bin/wtop" --diagnose | grep -q 'Platform: Linux'
-	@"$(WTOP_ROCK_TREE)/bin/wtop" --snapshot | python3 tests/json_contract_smoke.py snapshot
-	@"$(WTOP_ROCK_TREE)/bin/wtop" --agent | python3 tests/json_contract_smoke.py agent
+	@python3 tests/installed_smoke.py --executable "$(WTOP_ROCK_TREE)/bin/wtop" \
+		--version "$(WTOP_VERSION)" --platform Linux
 
 build-id: $(NATIVE_REVISION_HEADER)
 	@./tools/write_build_id.sh
@@ -602,5 +606,44 @@ checksums:
 		xargs sha256sum < .wtop-files; } > SHA256SUMS
 	@rm -f dist/.wtop-files dist/.wtop-notices
 	@cd dist && cat SHA256SUMS
+
+RELEASE_ARCHIVE ?= dist/wtop-$(WTOP_VERSION)-linux-$(shell uname -m)-glibc.tar.gz
+ARCHIVE_PTY_PROFILE ?= quick
+DOWNLOAD_DIR ?=
+
+release-archive: resource-check-full test-release-notices release-baseline
+	@python3 tools/release_archive.py create --dist dist --output '$(RELEASE_ARCHIVE)'
+
+test-release-archive: release-archive
+	@python3 tools/release_archive.py verify '$(RELEASE_ARCHIVE)' \
+		--version '$(WTOP_VERSION)' --pty '$(ARCHIVE_PTY_PROFILE)'
+
+# This target runs on a new runner and never rebuilds the downloaded programs.
+test-downloaded-archive: resource-check-full
+	@test -n '$(DOWNLOAD_DIR)' || { echo 'DOWNLOAD_DIR is required' >&2; exit 1; }
+	@python3 tools/release_archive.py verify --download-dir '$(DOWNLOAD_DIR)' \
+		--version '$(WTOP_VERSION)' --pty full
+
+version-rockspec:
+	@python3 tools/make_source_rock.py --rockspec-only
+
+source-rock: resource-check-full version-rockspec
+	@python3 tools/make_source_rock.py --output dist/source $(SOURCE_ROCK_ARGS)
+
+test-source-rock: source-rock $(LUA_STAMP) $(LUAROCKS_STAMP)
+	@"$(LUAROCKS)" --lua-version=5.5 --lua-dir="$(LUA_PREFIX)" --tree="$(SOURCE_ROCK_TREE)" \
+		install "$(CURDIR)/dist/source/wtop-$(WTOP_VERSION)-1.src.rock" --deps-mode=none --force
+	@python3 tests/installed_smoke.py --executable "$(SOURCE_ROCK_TREE)/bin/wtop" \
+		--version "$(WTOP_VERSION)" --platform Linux
+
+rock-index: source-rock $(LUAROCKS_STAMP)
+	@"$(LUAROCKS_PREFIX)/bin/luarocks-admin" --lua-version=5.5 make_manifest dist/source
+
+test-rock-index: rock-index $(LUA_STAMP)
+	@"$(LUAROCKS)" --lua-version=5.5 --lua-dir="$(LUA_PREFIX)" \
+		--tree="$(CURDIR)/.tools/wtop-index-rocks-5.5" --only-server="file://$(CURDIR)/dist/source" \
+		install wtop "$(WTOP_VERSION)-1" --deps-mode=none --force
+	@python3 tests/installed_smoke.py --executable "$(CURDIR)/.tools/wtop-index-rocks-5.5/bin/wtop" \
+		--version "$(WTOP_VERSION)" --platform Linux
 
 endif

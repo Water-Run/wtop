@@ -1,24 +1,57 @@
 # wtop 实现计划与当前状态
 
-## 开发概览（2026-10-11）
+## 开发概览（2026-10-12）
 
-本次梳理基于 `origin/main` 的 `aea04ad`（2026-10-05）。
-当前版本号仍为 `0.1.0`，main 比 `v0.1.0` 标签多 53 次提交；
-下表和路线图描述当前开发树，不能当作该标签的功能清单。
+本轮修复以 `9868791`（2026-10-11）为基线，目标版本为用户选定的 `0.2.0`。
+`v0.1.0` 是既有 Linux 标签；0.2.0 的公开发布仍待完成。
+下表和路线图描述当前开发树。
+交付目标有两条：由 luainstaller 打包可直接运行的程序，或通过 LuaRocks 安装。
+Linux 两条构建路径已实现；可构建、可安装与用户能取得完整发布包分别验收。
 
 | 范围 | 当前结论 |
 | --- | --- |
 | 产品目标 | 功能完整的 top、强兼容性、逐步达到 HWiNFO 级别的硬件测绘与监控 |
-| 发布平台 | 0.1.0 和 LuaRocks 包仅 Linux；macOS、Windows 是源码开发构建 |
+| 平台范围 | 0.1.0 标签和 LuaRocks 安装入口仅 Linux；macOS、Windows 是源码开发构建 |
 | 产品能力 | 十标签页监控、进程/线程详情、布局/工作区、GPU 下钻、深度检查与十语言界面已形成完整主路径 |
 | 当前开发增量 | luainstaller 1.5.0 打包；共享硬件树及固件、内存、存储、网络来源；按需进程详情与跨资源导航；连续快照和硬件报告。具体范围见 §3 与 §7 |
-| 自动化 | 基础提交已有通过的 CI 记录；当前未提交工作以本地检查为准，覆盖与实测见 [验证矩阵](CROSS_PLATFORM.md#验证矩阵) |
-| 主要缺口 | FPM/EDO/SDR/DDR/DDR2 实机验证、SMBIOS 插槽与 SPD 的可信归属、更多固件结构与厂商深度信息；完整 top 的剩余交互；旧系统实测、目标硬件性能预算和发布溯源 |
-| 下一步 | 继续验证旧代 SPD、DIMM 槽位归属和更多固件结构；继续推进 top 交互、旧系统实测和性能门禁；见 §7 |
+| 自动化 | 基线的 12 个 CI 作业通过；本轮 132 个 Lua 测试文件、源码 rock/索引安装、归档 CLI 与快速 PTY 本地通过；新 CI 下载和签名链待验证 |
+| 主要缺口 | 0.2.0 公开发布、新 CI 下载与溯源验收；跨平台打包、旧系统实测、目标硬件性能预算；SPD 槽位归属和厂商真机验证 |
+| 下一步 | 先完成 Linux 两条交付路径的下载/安装验收，再推进 macOS、Windows 打包与既有 top、硬件路线图；见下表及 §7 |
 
-中断时保留的未提交工作包括打包器迁移、PCI/USB 设备树、十语言目录和
-对应测试、文档。后续在这批工作上接入存储、网络、CPU 频率域与 NUMA；这些变更仍
-属于开发树，不是新的发布版本。设备树自身不探测硬件，使用采集器快照。
+### 两条交付路径
+
+| 路径 | 已实现 | 距离目标的缺口 |
+| --- | --- | --- |
+| Linux bin | 锁定的 luainstaller 1.5.0 生成 onedir / onefile；完整 tar 包保留隐藏载荷、权限、项目许可证、SBOM 与发布基线；解包后 CLI/快速 PTY 本地通过 | 新 CI 实际下载验收，随后发布按架构和 libc 命名的包 |
+| Linux LuaRocks | scm 入口和固定 `v0.2.0` 的版本 rockspec 均已提供；源 rock、源码 tar、源字节清单和本地索引可生成；源 rock 与按名称安装本地通过，原生版本已修复 | 发布版本标签、公开 rock 和公共索引上的按名称安装验收 |
+| macOS / Windows bin | macOS 原生构建与 Windows x86 交叉构建会复制 Lua、原生模块及源码，提供启动脚本 | 尚未接入 luainstaller 的 onedir / onefile 目标与平台 CI；需分别在原生主机验证打包、依赖、终端与下载包 |
+| macOS / Windows LuaRocks | 共享 Lua 代码与原生后端已有开发实现 | 当前 rockspec 明确仅 Linux，macOS Make 分支没有 rock 目标，Windows 没有原生 rock 构建入口；扩展范围时需实现后端，不能只修改平台声明 |
+
+bin 用户无需另装 Lua；LuaRocks 源码安装需要 Lua 5.5、配套头文件、C17
+编译器和 make。Lua 5.4 是纯 Lua 兼容测试范围，不是当前发布 ABI。
+onefile 会解包自身载荷，仍受系统 libc 和目标架构约束。
+
+### 交付缺口与完成条件
+
+| 优先级 | 已核对的缺口 | 完成条件 |
+| --- | --- | --- |
+| P0 | 旧 CI 下载包的遗漏已复现；新代码启用隐藏文件上传并附完整 tar，独立下载作业已接入，尚待真实运行 | 下载后的外层摘要、全文件清单、Lua/C 版本、CLI/JSON 与完整 PTY 全部通过 |
+| P0 | 0.2.0 的版本 rockspec、源 rock 和 bin 候选已实现；公开 Release 与 LuaRocks 索引仍缺 | 对同一已提交版本创建标签，发布经过下载与溯源验证的原始产物，并验收公共索引安装 |
+| 已修复 | 干净 rock 构建现在生成版本头文件；从源 rock 安装后的原生版本为 0.2.0，五种 CLI 通过 | 无 Git 元数据时修订号可缺省，Lua/C 版本保持一致；空版本由安装检查拒绝 |
+| P1 | aarch64 完整 bin 上传和下载作业已接入、待运行；macOS/Windows 仍是独立开发构建 | 每个宣布支持的目标都有完整构件、构件测试与明确的安装方式 |
+| P1 | 正式候选、旧 libc/musl 范围、onefile 的 EUPL 附件、签名和完整溯源未闭合 | 固定支持范围，在相应构建主机重建并验证最终归档，把许可证、校验和、SBOM、基线和溯源与同一候选关联 |
+| P1 | XP、旧 macOS/Intel、最低硬件性能预算及 AMD SMI/Level Zero 等真机证据不足 | 在对应主机保留运行结果，校准预算并接入持续检查；历史主机记录不替代新版本验收 |
+| P2 | 完整 top 交互、可信 SPD 槽位归属、更深的存储/服务语义、跨平台指标与预览语言审校 | 按 §3 和 §7 逐项完成可操作的用户路径、夹具及相应真机验证 |
+
+依据为当前源码、[本提交 CI](https://github.com/Water-Run/wtop/actions/runs/38125050681)
+和本次下载/干净安装实测；记录见 [跨平台验证](CROSS_PLATFORM.md#开发验证记录)。
+公开可用性是 2026-10-12 的查询结果，不能用仓库内的安装脚本代替发布证据。
+
+### 已合入的开发能力
+
+打包器迁移、PCI/USB 设备树、十语言目录，以及后续的存储、网络、CPU
+频率域与 NUMA 变更均已合入上述提交，尚未成为新的发布版本。
+设备树自身不探测硬件，使用采集器快照。
 
 EDAC DIMM 与固件槽位现在可在标签两侧各唯一时建立双向引用；该引用不证明
 物理身份。SPD 到固件槽位的可信归属仍是独立缺口。
@@ -132,8 +165,8 @@ HWiNFO 是长期能力对标，当前尚未达到其完整硬件与厂商覆盖�
 | 进程操作 | 确认式 SIGTERM、SIGHUP、SIGINT、SIGKILL、SIGSTOP、SIGCONT，带 pidfd 与启动时间重验证 | renice 尚未开放：现有 `setpriority` 只按数字 PID 定位，不能复用信号操作的 pidfd 原子目标；还需解决安全身份边界，再评估 cgroup 限制与调优范围 |
 | 跨平台运行时 | Linux 发布路径；macOS arm64 与 Windows x86 源码开发构建；Server 2008 经典 CMD 已有真实控制台记录 | XP 运行、旧 macOS/Intel、Windows 大规模进程与异常介质验证 |
 | Lua | PUC Lua 5.5.1 发布 ABI，Lua 5.4 纯 Lua 子集已有 CI | 继续保持 ABI 与语法边界 |
-| LuaRocks | 仅 Linux 的 scm-1 rockspec、隔离安装与已安装 CLI 冒烟已实现 | 带版本的发布 rock |
-| luainstaller 与发布证据 | onedir/onefile、锁定载荷、完整文件校验和、SBOM 与发布 ELF 基线已有 CI | 最终发布候选、签名/完整溯源、更多架构与 libc |
+| LuaRocks | 仅 Linux 的 scm-1 rockspec、隔离安装与已安装 CLI 冒烟已实现 | 版本 rock、公开索引安装、干净构建的原生版本身份 |
+| luainstaller 与发布证据 | onedir/onefile、锁定载荷、完整文件校验和、SBOM 与发布 ELF 基线已有 CI | 上传后的完整性与运行验收、最终发布候选、签名/完整溯源、更多架构与 libc |
 
 ## 4. 当前实现基线
 
@@ -331,7 +364,8 @@ make checksums
 
 ## 7. 路线图
 
-完整 top、强兼容性和硬件测绘同步推进。性能与发布检查贯穿这些工作，
+当前先完成 Linux bin / LuaRocks 双交付的完整性与公开入口，再推进
+完整 top、强兼容性和硬件测绘。性能与发布检查贯穿这些工作，
 每次增加硬件来源都要控制采样开销。以下为建议顺序，尚未交付的能力
 按完成条件验收。
 
@@ -339,9 +373,10 @@ make checksums
 
 | 优先级 | 工作 | 完成条件 |
 | --- | --- | --- |
-| P0 | 扩展 luainstaller 1.5.0 的平台交付 | Linux 默认打包链已迁移；继续验证 Windows、macOS 的原生打包以及干净目标环境与性能 |
-| P0 | 扩展共享设备关系 | PCI/USB、磁盘/分区、网卡、挂载与 GPU/传感器关联已接入 TUI 和 JSON；CPU 拓扑/频率域、Linux NUMA、SMBIOS Type 4/7/8/9/10/16/17/19/20/22/37/38/39/41/42/43/45、Linux UEFI ESRT、TPM/看门狗/RF 开关/热区与冷却设备、EDAC 与 FPM/EDO/SDR/DDR/DDR2/DDR3/DDR4/DDR5 SPD 已接入；`coretemp` 已连接 CPU 包/核心，逐 CPU 热节流记录已连接 CPU 设备树，`spd5118`/`jc42` 已连接可信 DDR3/DDR4/DDR5 SPD 地址；继续验证旧代 SPD 与 DIMM 槽位归属 |
-| P0 | 补完整 top 的日常使用路径 | 内置标签栏与可混搭控件页面已可编辑和持久化；进程树可折叠，Linux 线程详情可按自身 cgroup 跳到工作负载，线程化子组显示 TID 并按需定位所属进程；Linux systemd unit 已可按管理器/类型搜索，并从工作负载直达，核对后打开主进程或跳回控制组；近期 journal 已按需接入 unit 详情；logind 登录会话与到 scope 的导航已接入，sshd 可读取匹配 PAM 服务的登记会话；日志优先级、OpenSSH 认证文本分类和当前文件配置查询已接入；继续扩展协议事件、守护进程启动覆盖项、服务依赖与跨平台导航，并按平台验证 renice 等新增操作 |
+| P0 | 完成 Linux bin / LuaRocks 双交付 | 修复下载包遗漏，接入上传后下载复验；提供固定源码的版本 rock 和公开安装/下载入口，补齐 rock 原生版本身份；以本页交付表验收 |
+| P1 | 扩展 luainstaller 1.5.0 的平台交付 | Linux 默认打包链已迁移；继续验证 Windows、macOS 的原生打包以及干净目标环境与性能 |
+| P2 | 扩展共享设备关系 | PCI/USB、磁盘/分区、网卡、挂载与 GPU/传感器关联已接入 TUI 和 JSON；CPU 拓扑/频率域、Linux NUMA、SMBIOS Type 4/7/8/9/10/16/17/19/20/22/37/38/39/41/42/43/45、Linux UEFI ESRT、TPM/看门狗/RF 开关/热区与冷却设备、EDAC 与 FPM/EDO/SDR/DDR/DDR2/DDR3/DDR4/DDR5 SPD 已接入；`coretemp` 已连接 CPU 包/核心，逐 CPU 热节流记录已连接 CPU 设备树，`spd5118`/`jc42` 已连接可信 DDR3/DDR4/DDR5 SPD 地址；继续验证旧代 SPD 与 DIMM 槽位归属 |
+| P2 | 补完整 top 的日常使用路径 | 内置标签栏与可混搭控件页面已可编辑和持久化；进程树可折叠，Linux 线程详情可按自身 cgroup 跳到工作负载，线程化子组显示 TID 并按需定位所属进程；Linux systemd unit 已可按管理器/类型搜索，并从工作负载直达，核对后打开主进程或跳回控制组；近期 journal 已按需接入 unit 详情；logind 登录会话与到 scope 的导航已接入，sshd 可读取匹配 PAM 服务的登记会话；日志优先级、OpenSSH 认证文本分类和当前文件配置查询已接入；继续扩展协议事件、守护进程启动覆盖项、服务依赖与跨平台导航，并按平台验证 renice 等新增操作 |
 | P1 | 验证旧系统和异常设备 | XP x86 实际运行；旧 macOS/Intel；Windows 空介质、热插拔和两个无响应设备；专用远程 SSH 场景 |
 | P1 | 校准性能并建立回归门禁 | 基准与显式预算比较器已能测完整帧并拒绝错误主机/负载；仍需在最低与典型硬件上分别测量开发树和发布包，固定预算并接入持续门禁 |
 | P1 | 补齐 GPU 厂商与设备验证 | AMD SMI、Level Zero、AMD/Intel/NVIDIA、无 GPU、多适配器与多时钟域都有可复现的真机结果 |
@@ -452,7 +487,7 @@ Linux 批量进程读取现在直接解析常规 `stat` 行，异常输入回退
 
 - 最低 Linux 内核、glibc 与发行版基线。内核一半已经以代码性质关闭:没有最低内核——`Scheduler:probe_all` 把每个探针放在 `pcall` 下,失败的探针变成能力记录而非致命错误,`Snapshot.merge` 仅在 `ok` 结果时装载数据并总是写质量记录;原生层里 `pidfd_open`/`pidfd_send_signal`(5.1、5.3)躲在 `#if defined(SYS_pidfd_open)` 后并带回降级消息,`close_range`(5.9)只是提速,会回落到 `getdents64` 加有界 `close()` 循环;`tests/unit/test_engine.lua` 对一台没有 cgroup v2、PSI、hwmon、DRM、powercap 和 cpufreq 的模拟内核钉住了全部。glibc 一半是构建主机的性质,可测而非可选:读发布的 ELF 得原生模块 GLIBC_2.34、PUC Lua 5.5.1 解释器 GLIBC_2.38,捆绑包的底线因此是 2.38;`tools/record_baseline.sh` 此前只测一个文件并把它的底线当作*唯一*底线,少报了四个次版本,现在按参数对多文件取最大值、缺失的 ELF 是硬错误、`tools/baseline.conf` 声明承诺;`tools/cross_libc_build.sh` 在发行版容器里量出同一份源码在 manylinux2014 需要 **2.17**、本机需要 **2.38**,`libdl.so.2` 如预测般重新出现在 `DT_NEEDED`。让 2.17 构建存在花了两处修复:`_DEFAULT_SOURCE` 在 glibc 2.19 之前不存在,带来六个 `IFF_* undeclared` 报错;先用的 `_GNU_SOURCE` 又会让 2.38+ 的 glibc 把 strtol 重定向到 `__isoc23_strtol`、把模块底线抬到 GLIBC_2.38,最终把 pre-2.19 默认集写全(_DEFAULT_SOURCE、_BSD_SOURCE、_SVID_SOURCE、_POSIX_C_SOURCE、_XOPEN_SOURCE 700)。捆绑测量又把同一问题抬升一级:`make release-baseline` 现在测要发布的捆绑包,因为 onefile 外层 `objdump -T` 报 GLIBC_2.34 而内嵌解释器要 2.38,`tools/elf_floors.py` 于是测一个文件及其携带的每个 ELF,`tests/unit/test_elf_floors.lua` 钉住该性质;身份方面,模块现在把自身源码修订从生成的头文件编译进去并经 `l_system_constants` 报告,而不是让 `src/wtop/build_id.lua` 独自携带。仍未关闭的是 per-distribution 内核声明:容器共享主机内核,以上只是 libc 证据,验证矩阵现在逐主机记录内核版本;system 级 CPU PSI `full` 仅 5.13 起报告这一边界已核对——解析器接受只有 `some` 的文件、导出在缺失时省略 `full`——该子问题据此关闭。
 
-- 签名与完整构建溯源记录(面向正式发布)。SBOM 半部分已不再只是名义上开放:`make sbom` 现在拒绝描述构件不全的发布,并对其发布的三份文件做哈希。剩下的仍是签名(没有任何目标产出它)、超出 git 修订与逐构件 SHA-256(`make release-baseline` 与 SBOM 已携带)之上的溯源记录,以及二进制再分发记录本身。
+- 签名与完整构建溯源记录(面向正式发布)。`release.yml` 已接入 Sigstore 签名的 SLSA 溯源，源包保留 Git 修订、dirty 状态和逐文件摘要；独立下载作业核对签名者、源码提交与产物摘要。真实签名链与最终标签候选仍待运行验收，当前不关闭此项。
 
 - 项目版本写在三处——`src/wtop/version.lua`、`tools/make_sbom.py` 里的字面量、`native/wtop_native.c` 里的字面量——而没有任何东西让它们成为一体。**已于 2026-10-02 关闭**:树顶的 `VERSION` 成为唯一人工编辑处,一次 `tools/write_build_id.sh` 生成 `src/wtop/version.lua`、`build/native/build_revision.h` 与 `build/native/build_version.h`,三个消费者都是产物而非拷贝。原因用户可见:`--version` 打印 Lua 树的版本而 `--diagnose` 打印模块的,漏改 C 侧的一次升版会让一份诊断报告说出两个版本而无人标记,`--version` 现在也像报告修订不一致那样报告版本不一致。测试断言的是出处而非相等——C 源必须完全不含版本、Lua 模块必须标记为生成——因为值检查分不清派生的数字与拷贝的数字,只有拷贝的缺席才能。
 

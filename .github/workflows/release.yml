@@ -1,0 +1,160 @@
+name: Release candidate
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit, branch or tag to build
+        required: true
+        default: main
+      publish:
+        description: Publish the verified tag to GitHub and LuaRocks
+        type: boolean
+        default: false
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.ref || github.ref }}
+  cancel-in-progress: false
+
+env:
+  WTOP_SKIP_RESOURCE_CHECK: '1'
+
+jobs:
+  resolve:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - id: source
+        env:
+          PUBLISH: ${{ inputs.publish || false }}
+        run: |
+          version=$(cat VERSION)
+          test -f "wtop-$version-1.rockspec"
+          if [ "$PUBLISH" = true ]; then
+            test "$(git describe --exact-match --tags HEAD)" = "v$version"
+          fi
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+          fetch-depth: 0
+      - name: Build and validate committed bin and source artifacts
+        run: make check test-55 rockspec-check test-luarocks test-source-rock test-rock-index test-release-archive SOURCE_ROCK_ARGS=--require-clean
+      - uses: actions/attest@v4
+        id: provenance
+        with:
+          subject-path: |
+            dist/wtop-*-linux-*-glibc.tar.gz
+            dist/source/wtop-*.tar.gz
+            dist/source/wtop-*.src.rock
+            dist/source/wtop-*.rockspec
+      - name: Keep the signed provenance bundle with the artifacts
+        env:
+          BUNDLE_PATH: ${{ steps.provenance.outputs.bundle-path }}
+          ARCH: ${{ matrix.arch }}
+        run: cp "$BUNDLE_PATH" "dist/attestation-$ARCH.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: |
+            dist/wtop-*-linux-*-glibc.tar.gz
+            dist/wtop-*-linux-*-glibc.tar.gz.sha256
+            dist/source/
+            dist/attestation-*.json
+          if-no-files-found: error
+
+  verify:
+    needs: [resolve, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: ${{ runner.temp }}/release-download
+      - name: Verify the downloaded programs and full PTY
+        env:
+          DOWNLOAD_DIR: ${{ runner.temp }}/release-download
+        run: make test-downloaded-archive
+      - name: Verify signed provenance and source digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOWNLOAD_DIR: ${{ runner.temp }}/release-download
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ needs.resolve.outputs.commit }}
+        run: |
+          (cd "$DOWNLOAD_DIR/source" && sha256sum -c --quiet SOURCE-SHA256SUMS)
+          for artifact in "$DOWNLOAD_DIR"/wtop-*-linux-*-glibc.tar.gz "$DOWNLOAD_DIR"/source/wtop-*.tar.gz "$DOWNLOAD_DIR"/source/wtop-*.src.rock "$DOWNLOAD_DIR"/source/wtop-*.rockspec; do
+            gh attestation verify "$artifact" --repo "$REPOSITORY" --signer-workflow "$REPOSITORY/.github/workflows/release.yml" --source-digest "$SOURCE_COMMIT" --deny-self-hosted-runners
+          done
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: [resolve, build, verify]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: ${{ runner.temp }}/release-publish
+          merge-multiple: true
+      - name: Publish the same verified source rock and bin archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LUAROCKS_API_KEY: ${{ secrets.LUAROCKS_API_KEY }}
+          RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+          RELEASE_DIR: ${{ runner.temp }}/release-publish
+        run: |
+          test -n "$LUAROCKS_API_KEY" || { echo 'LUAROCKS_API_KEY repository secret is required'; exit 1; }
+          (cd "$RELEASE_DIR/source" && sha256sum -c --quiet SOURCE-SHA256SUMS)
+          make luarocks-bootstrap
+          gh release create "v$RELEASE_VERSION" --verify-tag --draft --title "wtop $RELEASE_VERSION" --notes-file "docs/RELEASE_$RELEASE_VERSION.md" "$RELEASE_DIR"/wtop-*.tar.gz "$RELEASE_DIR"/wtop-*.tar.gz.sha256 "$RELEASE_DIR"/source/wtop-* "$RELEASE_DIR"/source/SOURCE-SHA256SUMS "$RELEASE_DIR"/attestation-*.json
+          .tools/luarocks/bin/luarocks upload "$RELEASE_DIR/source/wtop-$RELEASE_VERSION-1.rockspec" "$RELEASE_DIR/source/wtop-$RELEASE_VERSION-1.src.rock" --temp-key "$LUAROCKS_API_KEY"
+          gh release edit "v$RELEASE_VERSION" --draft=false

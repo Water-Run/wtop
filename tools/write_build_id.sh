@@ -29,7 +29,10 @@ header="$header_dir/build_revision.h"
 version_header="$header_dir/build_version.h"
 version_file="$project_dir/VERSION"
 
-revision=$(git -C "$project_dir" describe --always --dirty --tags 2>/dev/null || true)
+revision=
+if [ -e "$project_dir/.git" ]; then
+    revision=$(git -C "$project_dir" describe --always --dirty --tags 2>/dev/null || true)
+fi
 
 # Read with a shell builtin rather than by parsing Lua: version.lua is generated
 # *from* this file, so a parser for it would be reading its own output back, and

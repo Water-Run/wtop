@@ -147,6 +147,8 @@ jobs:
           # about this job's release artifacts, however green it comes out.  The
           # cost is a bundle build this job did not previously do.
           make release-baseline RELEASE_BASELINE_OUTPUT=dist/BASELINE-arm64.txt
+      - name: Package the aarch64 programs and evidence together
+        run: make test-release-archive
       # The document this job exists to produce left the runner in nobody's
       # hands: nothing below uploads it, so the only record that the release was
       # ever measured on aarch64 was a file on a machine that was deleted an
@@ -160,6 +162,13 @@ jobs:
           name: aarch64-baseline
           path: |
             dist/BASELINE-arm64.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aarch64-bundles
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          if-no-files-found: error
 
   # Release-artifact evidence: the onefile bundle must pass the same PTY
   # matrix from its packaged executable, locale sources must match the
@@ -205,6 +214,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: release-artifacts
+          include-hidden-files: true
           # The notices are here rather than downloaded from anywhere: they live
           # in the onedir bundle, which `make sbom` builds as a prerequisite of
           # this step.  This explanation used to sit *inside* the path block
@@ -275,13 +285,18 @@ jobs:
       # Makefile bootstraps the pinned 3.13 against the project's own Lua.
       - run: make rockspec-check
       - run: make test-luarocks
+      - run: make test-source-rock
+      - run: make test-rock-index
       - run: make test-bundle-dir
       - run: make test-bundle-file
       - name: Record artifact checksums
         run: make checksums && cat dist/SHA256SUMS
+      - name: Verify the complete transport archive
+        run: make test-release-archive
       - uses: actions/upload-artifact@v4
         with:
           name: wtop-bundles
+          include-hidden-files: true
           # Both luainstaller artifacts, which is what this job's comment above
           # has claimed since it was written: the onedir bundle was built and
           # smoke-tested here and then left behind, so SHA256SUMS named
@@ -293,4 +308,33 @@ jobs:
             dist/wtop/
             dist/wtop-onefile
             dist/SHA256SUMS
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/source/
           retention-days: 7
+          if-no-files-found: error
+
+  downloaded:
+    name: downloaded release / ${{ matrix.arch }}
+    needs: [package, arm64]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            artifact: wtop-bundles
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            artifact: aarch64-bundles
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ runner.temp }}/wtop-download
+      - name: Verify downloaded checksums, native identity, CLI and full PTY
+        env:
+          DOWNLOAD_DIR: ${{ runner.temp }}/wtop-download
+        run: make test-downloaded-archive

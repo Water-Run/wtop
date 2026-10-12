@@ -17,15 +17,13 @@ def require_list(value: object, name: str) -> list:
     return value
 
 
-def main() -> None:
-    assert len(sys.argv) == 2 and sys.argv[1] in ("snapshot", "agent"), (
-        "usage: json_contract_smoke.py snapshot|agent"
-    )
-    document = require_mapping(json.load(sys.stdin), "document")
+def validate(document: object, mode: str) -> None:
+    assert mode in ("snapshot", "agent"), "unknown structured-output contract"
+    document = require_mapping(document, "document")
     privilege = require_mapping(document.get("privilege"), "privilege")
     assert privilege.get("mode") in ("user", "root", "unknown")
 
-    if sys.argv[1] == "snapshot":
+    if mode == "snapshot":
         assert document.get("schema") == "dev.waterrun.wtop.snapshot/v1"
         cpu_info = require_mapping(document.get("cpu_info"), "cpu_info")
         require_mapping(cpu_info.get("identity"), "cpu_info.identity")
@@ -48,6 +46,13 @@ def main() -> None:
         require_list(top.get("sensors"), "top.sensors")
         require_list(document.get("signals"), "signals")
         require_list(document.get("data_quality"), "data_quality")
+
+
+def main() -> None:
+    assert len(sys.argv) == 2 and sys.argv[1] in ("snapshot", "agent"), (
+        "usage: json_contract_smoke.py snapshot|agent"
+    )
+    validate(json.load(sys.stdin), sys.argv[1])
 
 
 if __name__ == "__main__":

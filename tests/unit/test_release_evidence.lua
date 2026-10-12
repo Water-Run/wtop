@@ -291,6 +291,7 @@ local NOT_RELEASE_EVIDENCE = {
     "check_resources.sh",
     "compile_locales.lua", "cross_libc_build.sh", "elf_floors.py",
     "perf_benchmark.py", "write_build_id.sh",
+    "release_archive.py", "make_source_rock.py",
 }
 
 local classified = {}
