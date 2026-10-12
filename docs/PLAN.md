@@ -9,14 +9,19 @@ Windows 静态运行时的开发改动。它们尚未完成跨平台验收，不
 main 的 CI 终态已核对并恢复绿色：交接提交曾让发布证据守卫读到 macOS 的
 `bundle-dir` 配方，`74a6687` 已修复；独立下载验收已随
 [CI 38210309458](https://github.com/Water-Run/wtop/actions/runs/38210309458)
-在两种架构上首次真实通过。剩余工作是 macOS Network PTY 失败、
+在两种架构上首次真实通过。`v0.2.0` 标签已建，其候选链
+（[CI 38218398365](https://github.com/Water-Run/wtop/actions/runs/38218398365)）
+完成构建、下载复验与逐产物签名溯源验收；发布作业因缺少
+`LUAROCKS_API_KEY` 密钥尚未调度，开发按用户指示在该节点收尾暂停。
+剩余工作是公开发布、macOS Network PTY 失败、
 Windows 原生打包及用户提供设备上的验收；详见
 [暂停交接记录](CROSS_PLATFORM.md#2026-10-12暂停交接)。
 用户已限定实机验收范围为其提供的设备系列；XP、旧 macOS、其他架构和
 厂商硬件继续作为代码兼容目标，不要求新增测试主机。
 
 本轮修复以 `9868791`（2026-10-11）为基线，目标版本为用户选定的 `0.2.0`。
-`v0.1.0` 是既有 Linux 标签；0.2.0 的公开发布仍待完成。
+`v0.1.0` 是既有 Linux 标签；`v0.2.0` 标签已打出并通过候选链验收，
+公开发布（GitHub Release 与公共 LuaRocks）仍待完成。
 下表和路线图描述当前开发树。
 交付目标有两条：由 luainstaller 打包可直接运行的程序，或通过 LuaRocks 安装。
 Linux 两条构建路径已实现；可构建、可安装与用户能取得完整发布包分别验收。
@@ -27,16 +32,16 @@ Linux 两条构建路径已实现；可构建、可安装与用户能取得完�
 | 平台范围 | 0.1.0 标签和 LuaRocks 安装入口仅 Linux；macOS、Windows 是源码开发构建 |
 | 产品能力 | 十标签页监控、进程/线程详情、布局/工作区、GPU 下钻、深度检查与十语言界面已形成完整主路径 |
 | 当前开发增量 | luainstaller 1.5.0 打包；共享硬件树及固件、内存、存储、网络来源；按需进程详情与跨资源导航；连续快照和硬件报告。具体范围见 §3 与 §7 |
-| 自动化 | 提交 74a6687 的 14 个 CI 作业全部通过，独立下载验收在两种架构上首次真实完成；发布签名与溯源链待发布流程验证 |
-| 主要缺口 | 0.2.0 公开发布与签名/溯源验收；跨平台打包、旧系统实测、目标硬件性能预算；SPD 槽位归属和厂商真机验证 |
-| 下一步 | 下载验收已完成；发布签名/溯源与公开 Release、LuaRocks 入口完成后，推进 macOS、Windows 打包与既有 top、硬件路线图；见下表及 §7 |
+| 自动化 | 提交 74a6687 的 14 个 CI 作业全部通过；v0.2.0 标签候选链（CI 38218398365）的构建、下载复验与逐产物签名溯源验收全部通过 |
+| 主要缺口 | 0.2.0 公开发布（需配置 `LUAROCKS_API_KEY`）；跨平台打包、旧系统实测、目标硬件性能预算；SPD 槽位归属和厂商真机验证 |
+| 下一步 | 标签候选链已验收；配置发布密钥并完成公开 Release、LuaRocks 入口后，推进 macOS、Windows 打包与既有 top、硬件路线图；见下表及 §7 |
 
 ### 两条交付路径
 
 | 路径 | 已实现 | 距离目标的缺口 |
 | --- | --- | --- |
 | Linux bin | 锁定的 luainstaller 1.5.0 生成 onedir / onefile；完整 tar 包保留隐藏载荷、权限、项目许可证、SBOM 与发布基线；解包后 CLI/快速 PTY 本地通过 | 下载验收已于 2026-10-12 随 CI 通过；剩余是发布按架构和 libc 命名的包 |
-| Linux LuaRocks | scm 入口和固定 `v0.2.0` 的版本 rockspec 均已提供；源 rock、源码 tar、源字节清单和本地索引可生成；源 rock 与按名称安装本地通过，原生版本已修复 | 发布版本标签、公开 rock 和公共索引上的按名称安装验收 |
+| Linux LuaRocks | scm 入口和固定 `v0.2.0` 的版本 rockspec 均已提供；源 rock、源码 tar、源字节清单和本地索引可生成；源 rock 与按名称安装本地通过，原生版本已修复 | 版本标签已建并在其上完成候选验收；剩余公开 rock 和公共索引上的按名称安装验收 |
 | macOS / Windows bin | macOS 原生构建与 Windows x86 交叉构建会复制 Lua、原生模块及源码，提供启动脚本 | 尚未接入 luainstaller 的 onedir / onefile 目标与平台 CI；需分别在原生主机验证打包、依赖、终端与下载包 |
 | macOS / Windows LuaRocks | 共享 Lua 代码与原生后端已有开发实现 | 当前 rockspec 明确仅 Linux，macOS Make 分支没有 rock 目标，Windows 没有原生 rock 构建入口；扩展范围时需实现后端，不能只修改平台声明 |
 
@@ -49,10 +54,10 @@ onefile 会解包自身载荷，仍受系统 libc 和目标架构约束。
 | 优先级 | 已核对的缺口 | 完成条件 |
 | --- | --- | --- |
 | 已关闭 | 独立下载作业已随 CI 38210309458 首次真实运行 | 两种架构的下载包通过外层摘要、全文件清单、Lua/C 版本、CLI/JSON 与完整 PTY |
-| P0 | 0.2.0 的版本 rockspec、源 rock 和 bin 候选已实现；公开 Release 与 LuaRocks 索引仍缺 | 对同一已提交版本创建标签，发布经过下载与溯源验证的原始产物，并验收公共索引安装 |
+| P0 | v0.2.0 标签已建，候选链（CI 38218398365）在标签上完成构建、下载复验与签名溯源验收；公开 Release 与 LuaRocks 索引仍缺 | 配置 LUAROCKS_API_KEY 后调度发布，验收公开 Release 产物与公共索引按名称安装 |
 | 已修复 | 干净 rock 构建现在生成版本头文件；从源 rock 安装后的原生版本为 0.2.0，五种 CLI 通过 | 无 Git 元数据时修订号可缺省，Lua/C 版本保持一致；空版本由安装检查拒绝 |
 | P1 | aarch64 完整 bin 的上传与下载验收已随 CI 38210309458 通过；macOS/Windows 仍是独立开发构建 | 每个宣布支持的目标都有完整构件、构件测试与明确的安装方式 |
-| P1 | 正式候选、旧 libc/musl 范围、onefile 的 EUPL 附件、签名和完整溯源未闭合 | 固定支持范围，在相应构建主机重建并验证最终归档，把许可证、校验和、SBOM、基线和溯源与同一候选关联 |
+| P1 | v0.2.0 候选已在标签上验收（CI 38218398365）；旧 libc/musl 范围与 onefile 的 EUPL 附件未闭合 | 固定支持范围，在相应构建主机重建并验证最终归档，把许可证、校验和、SBOM、基线和溯源与同一候选关联 |
 | P1 | XP、旧 macOS/Intel、最低硬件性能预算及 AMD SMI/Level Zero 等真机证据不足 | 在对应主机保留运行结果，校准预算并接入持续检查；历史主机记录不替代新版本验收 |
 | P2 | 完整 top 交互、可信 SPD 槽位归属、更深的存储/服务语义、跨平台指标与预览语言审校 | 按 §3 和 §7 逐项完成可操作的用户路径、夹具及相应真机验证 |
 
@@ -500,7 +505,7 @@ Linux 批量进程读取现在直接解析常规 `stat` 行，异常输入回退
 
 - 最低 Linux 内核、glibc 与发行版基线。内核一半已经以代码性质关闭:没有最低内核——`Scheduler:probe_all` 把每个探针放在 `pcall` 下,失败的探针变成能力记录而非致命错误,`Snapshot.merge` 仅在 `ok` 结果时装载数据并总是写质量记录;原生层里 `pidfd_open`/`pidfd_send_signal`(5.1、5.3)躲在 `#if defined(SYS_pidfd_open)` 后并带回降级消息,`close_range`(5.9)只是提速,会回落到 `getdents64` 加有界 `close()` 循环;`tests/unit/test_engine.lua` 对一台没有 cgroup v2、PSI、hwmon、DRM、powercap 和 cpufreq 的模拟内核钉住了全部。glibc 一半是构建主机的性质,可测而非可选:读发布的 ELF 得原生模块 GLIBC_2.34、PUC Lua 5.5.1 解释器 GLIBC_2.38,捆绑包的底线因此是 2.38;`tools/record_baseline.sh` 此前只测一个文件并把它的底线当作*唯一*底线,少报了四个次版本,现在按参数对多文件取最大值、缺失的 ELF 是硬错误、`tools/baseline.conf` 声明承诺;`tools/cross_libc_build.sh` 在发行版容器里量出同一份源码在 manylinux2014 需要 **2.17**、本机需要 **2.38**,`libdl.so.2` 如预测般重新出现在 `DT_NEEDED`。让 2.17 构建存在花了两处修复:`_DEFAULT_SOURCE` 在 glibc 2.19 之前不存在,带来六个 `IFF_* undeclared` 报错;先用的 `_GNU_SOURCE` 又会让 2.38+ 的 glibc 把 strtol 重定向到 `__isoc23_strtol`、把模块底线抬到 GLIBC_2.38,最终把 pre-2.19 默认集写全(_DEFAULT_SOURCE、_BSD_SOURCE、_SVID_SOURCE、_POSIX_C_SOURCE、_XOPEN_SOURCE 700)。捆绑测量又把同一问题抬升一级:`make release-baseline` 现在测要发布的捆绑包,因为 onefile 外层 `objdump -T` 报 GLIBC_2.34 而内嵌解释器要 2.38,`tools/elf_floors.py` 于是测一个文件及其携带的每个 ELF,`tests/unit/test_elf_floors.lua` 钉住该性质;身份方面,模块现在把自身源码修订从生成的头文件编译进去并经 `l_system_constants` 报告,而不是让 `src/wtop/build_id.lua` 独自携带。仍未关闭的是 per-distribution 内核声明:容器共享主机内核,以上只是 libc 证据,验证矩阵现在逐主机记录内核版本;system 级 CPU PSI `full` 仅 5.13 起报告这一边界已核对——解析器接受只有 `some` 的文件、导出在缺失时省略 `full`——该子问题据此关闭。
 
-- 签名与完整构建溯源记录(面向正式发布)。`release.yml` 已接入 Sigstore 签名的 SLSA 溯源，源包保留 Git 修订、dirty 状态和逐文件摘要；独立下载作业核对签名者、源码提交与产物摘要。真实签名链与最终标签候选仍待运行验收，当前不关闭此项。
+- 签名与完整构建溯源记录(面向正式发布)。`release.yml` 已接入 Sigstore 签名的 SLSA 溯源，源包保留 Git 修订、dirty 状态和逐文件摘要；独立下载作业核对签名者、源码提交与产物摘要。真实签名链与最终标签候选仍待运行验收，当前不关闭此项。2026-10-12，`v0.2.0` 标签的候选链（CI 38218398365）对本链完成首次真实运行验收：verify 作业在独立 runner 上对每个产物执行 `gh attestation verify`，核对签名工作流与源提交摘要并拒绝自托管 runner。正式发布面向的产物发布仍是同一能力的另一半，此项在发布完成前保持开放。
 
 - 项目版本写在三处——`src/wtop/version.lua`、`tools/make_sbom.py` 里的字面量、`native/wtop_native.c` 里的字面量——而没有任何东西让它们成为一体。**已于 2026-10-02 关闭**:树顶的 `VERSION` 成为唯一人工编辑处,一次 `tools/write_build_id.sh` 生成 `src/wtop/version.lua`、`build/native/build_revision.h` 与 `build/native/build_version.h`,三个消费者都是产物而非拷贝。原因用户可见:`--version` 打印 Lua 树的版本而 `--diagnose` 打印模块的,漏改 C 侧的一次升版会让一份诊断报告说出两个版本而无人标记,`--version` 现在也像报告修订不一致那样报告版本不一致。测试断言的是出处而非相等——C 源必须完全不含版本、Lua 模块必须标记为生成——因为值检查分不清派生的数字与拷贝的数字,只有拷贝的缺席才能。
 

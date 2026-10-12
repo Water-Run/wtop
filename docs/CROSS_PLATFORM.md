@@ -108,6 +108,17 @@ macOS、Windows 的运行验证来自下表列出的主机记录。
 
 ## 开发验证记录
 
+### 2026-10-12：v0.2.0 标签与候选链验收
+
+为 `45ffae4` 打出 `v0.2.0` 标签并推送，Release candidate 流程在该标签上
+完整运行并通过（[CI 38218398365](https://github.com/Water-Run/wtop/actions/runs/38218398365)）：
+两个架构构建 bin 传输归档与源 rock，verify 作业在独立 runner 上重新下载
+产物、运行完整 PTY，并对每个产物执行 `gh attestation verify`——核对签名
+工作流、源提交摘要并拒绝自托管 runner。发布作业按设计未运行：公开发布
+需以 `publish=true` 显式调度，且依赖仓库尚未配置的 `LUAROCKS_API_KEY`
+密钥；开发按用户指示在该节点收尾暂停。剩余发布动作：配置密钥并调度
+发布，随后验收公开 Release 与 LuaRocks 按名称安装。
+
 ### 2026-10-12：main 红屏修复与首次下载验收
 
 交接提交 `1c1a41a` 推送后，main 的
