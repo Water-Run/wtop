@@ -2682,34 +2682,18 @@ def run_workspace_rename() -> None:
         assert '"alpha"' not in contents, (
             "the old name is still in the file:\n" + contents
         )
-        # The file the save produced has to be one a fresh start can read, and
-        # that is the half the string checks above cannot see: a name written as
-        # a bare key is present in the text and still unreadable.  The same
-        # reader the TUI uses, asked the same question.
-        probe = subprocess.run(
-            [LUA, "-e", """
-                package.path = %r .. "/src/?.lua;" .. %r .. "/src/?/init.lua;" .. package.path
-                local store = require("wtop.layout_store")
-                local handle = assert(io.open(%r, "rb"))
-                local text = handle:read("*a")
-                handle:close()
-                local orders, err = store.parse(text, require("wtop.workspace").default_orders(), %r)
-                if not orders then print("REFUSED: " .. tostring(err)) os.exit(1) end
-                local _, _, workspaces, active = store.parse(text,
-                    require("wtop.workspace").default_orders(), %r)
-                if type(workspaces) ~= "table" or workspaces[%r] == nil then
-                    print("NO SUCH WORKSPACE") os.exit(1)
-                end
-                print("ok:" .. tostring(active))
-            """ % (str(ROOT), str(ROOT), str(layout), str(layout), str(layout), "my qx")],
-            capture_output=True, text=True, cwd=str(ROOT),
-        )
-        assert probe.returncode == 0, (
-            "the layout the rename produced cannot be read back by the loader: "
-            + probe.stdout.strip() + probe.stderr.strip() + "\n" + contents
-        )
-        assert probe.stdout.strip() == "ok:my qx", (
-            "the loader read the file but not the renamed workspace: " + probe.stdout.strip()
+        # Restart the program being tested and ask its workspace manager. This
+        # checks the real loader and active selection without an external Lua
+        # interpreter or a second copy of the reader from the source tree.
+        restarted = run_session(160, 45, exercise=False, config_home=home, script=[
+            (b"e", None), (("sleep", .8), None),
+            (b"w", None), (("sleep", .8), None),
+            (("signal", signal.SIGTERM), ("（当前）",)),
+        ])
+        screen = VirtualScreen(160, 45)
+        screen.feed(restarted)
+        assert re.search(r"my qx\s+（当前）", screen.text()), (
+            "the restarted program did not load the renamed active workspace:\n" + screen.text()
         )
 
 
