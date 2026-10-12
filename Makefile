@@ -3,7 +3,7 @@ SHELL := /bin/sh
 HOST_OS := $(shell uname -s 2>/dev/null || echo unknown)
 ifeq ($(HOST_OS),Darwin)
 
-.PHONY: all native run snapshot diagnose bundle-dir bundle-file test-bundle-dir test-bundle-file
+.PHONY: all native run snapshot diagnose
 all: native
 native:
 	@./tools/build_macos.sh
@@ -13,20 +13,6 @@ snapshot: native
 	@./dist/macos/wtop --snapshot
 diagnose: native
 	@./dist/macos/wtop --diagnose
-bundle-dir: native
-	@./tools/package_macos.sh dir
-bundle-file: native
-	@./tools/package_macos.sh file
-test-bundle-dir: bundle-dir
-	@python3 tests/installed_smoke.py --executable dist/macos-bundle/wtop/wtop \
-		--version "$$(cat VERSION)" --platform Darwin
-	@WTOP_EXECUTABLE='$(CURDIR)/dist/macos-bundle/wtop/wtop' WTOP_ROOT='$(CURDIR)' \
-		WTOP_PTY_PROFILE=quick python3 tests/pty_smoke.py
-test-bundle-file: bundle-file
-	@python3 tests/installed_smoke.py --executable dist/macos-bundle/wtop-onefile \
-		--version "$$(cat VERSION)" --platform Darwin
-	@WTOP_EXECUTABLE='$(CURDIR)/dist/macos-bundle/wtop-onefile' WTOP_ROOT='$(CURDIR)' \
-		WTOP_PTY_PROFILE=quick python3 tests/pty_smoke.py
 
 else
 ifneq ($(HOST_OS),Linux)
@@ -659,5 +645,33 @@ test-rock-index: rock-index $(LUA_STAMP)
 		install wtop "$(WTOP_VERSION)-1" --deps-mode=none --force
 	@python3 tests/installed_smoke.py --executable "$(CURDIR)/.tools/wtop-index-rocks-5.5/bin/wtop" \
 		--version "$(WTOP_VERSION)" --platform Linux
+
+endif
+
+# The macOS packaging targets sit after the Linux ones, and that placement is
+# load-bearing.  Make parses one platform branch and never sees a collision,
+# but the release-evidence guards read a target's recipe out of the file text,
+# where the first definition by that name is the one they find:
+# tests/unit/test_release_evidence.lua asks for the recipe of `bundle-dir`
+# without knowing which platform it runs on.  Defined up top, the macOS recipe
+# was what every reader found, and the licence-copy clause failed on Linux
+# while Linux make never even saw that rule.
+ifeq ($(HOST_OS),Darwin)
+
+.PHONY: bundle-dir bundle-file test-bundle-dir test-bundle-file
+bundle-dir: native
+	@./tools/package_macos.sh dir
+bundle-file: native
+	@./tools/package_macos.sh file
+test-bundle-dir: bundle-dir
+	@python3 tests/installed_smoke.py --executable dist/macos-bundle/wtop/wtop \
+		--version "$$(cat VERSION)" --platform Darwin
+	@WTOP_EXECUTABLE='$(CURDIR)/dist/macos-bundle/wtop/wtop' WTOP_ROOT='$(CURDIR)' \
+		WTOP_PTY_PROFILE=quick python3 tests/pty_smoke.py
+test-bundle-file: bundle-file
+	@python3 tests/installed_smoke.py --executable dist/macos-bundle/wtop-onefile \
+		--version "$$(cat VERSION)" --platform Darwin
+	@WTOP_EXECUTABLE='$(CURDIR)/dist/macos-bundle/wtop-onefile' WTOP_ROOT='$(CURDIR)' \
+		WTOP_PTY_PROFILE=quick python3 tests/pty_smoke.py
 
 endif
