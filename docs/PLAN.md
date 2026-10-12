@@ -2,8 +2,8 @@
 
 ## 开发概览（2026-10-12）
 
-开发已按用户要求暂停，接续分支为 `codex/release-0.2.0-fixes`，
-[草稿 PR](https://github.com/Water-Run/wtop/pull/1) 保留本轮改动。
+开发已按用户要求暂停，本轮改动保存在 `main`。
+仓库只保留 `main` 分支，后续开发直接提交到该分支，不使用 PR。
 Linux 交付修复已提交；本次收尾同时保存共享原生版本、macOS 打包和
 Windows 静态运行时的开发改动。它们尚未完成跨平台验收，不能视为已发布。
 接续时先核对已有 CI 的终态和产物，再处理 macOS Network PTY 失败、

@@ -1,3 +1,8 @@
+# Git workflow
+
+- Keep `main` as the only local and remote branch. Commit and push work directly to `main`.
+- Do not create pull requests or development branches unless the user explicitly requests them.
+
 # Documentation style
 
 User-facing docs (`README*.md`) are written for people, not for
