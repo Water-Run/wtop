@@ -95,6 +95,7 @@ jobs:
         shell: pwsh
         run: |
           $cc = Join-Path $PWD '.tools/windows-compiler/w64devkit/bin/gcc.exe'
+          $env:PATH = "$(Split-Path $cc);$env:PATH"
           & $cc --version
           python tools/package_windows.py dir --compiler $cc --verbose
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
