@@ -500,6 +500,12 @@ python tools/package_windows.py dir --compiler C:\w64devkit\bin\gcc.exe
 python tools/package_windows.py file --compiler C:\w64devkit\bin\gcc.exe
 ```
 
+单文件的内嵌载荷编译需要较大的构建进程地址空间。原版 w64devkit 1.23.0
+i686 的 `cc1.exe` 在当前项目上会耗尽 2 GiB；Windows CI 在核对官方压缩包
+摘要后，用 MSVC `editbin /LARGEADDRESSAWARE` 修改临时解包出的 `cc1.exe`，
+记录修改前后的摘要，再在 64 位 Windows 上编译。这仅调整构建工具，
+输出仍由 PE32 / XP 导入门禁检查；本地构建也需要可处理大地址的编译器。
+
 入口分别为 `dist/windows-bundle/wtop/wtop.exe` 与
 `dist/windows-bundle/wtop-onefile.exe`。打包器使用开发运行时内配套的 Lua
 源码和构建身份，避免混用另一份源码树。每次打包都核验锁定的

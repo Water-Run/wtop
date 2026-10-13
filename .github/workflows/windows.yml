@@ -69,6 +69,18 @@ jobs:
           tar -xzf ci-inputs/runtime.tar.gz -C dist
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Expand-Archive ci-inputs/w64devkit-i686-1.23.0.zip .tools/windows-compiler
+          # The verified upstream cc1 is PE32 without LARGEADDRESSAWARE and
+          # exhausts 2 GiB compiling the onefile payload. Change only the
+          # disposable build-host compiler; produced programs still target XP.
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $editbin = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC/Tools/MSVC/**/bin/Hostx64/x64/editbin.exe' | Select-Object -First 1
+          if (-not $editbin) { throw 'MSVC editbin is required to prepare the x86 build compiler' }
+          $frontends = @(Get-ChildItem .tools/windows-compiler -Recurse -Filter cc1.exe)
+          if ($frontends.Count -ne 1) { throw 'Expected exactly one verified C compiler frontend' }
+          Get-FileHash $frontends[0].FullName -Algorithm SHA256
+          & $editbin /LARGEADDRESSAWARE $frontends[0].FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash $frontends[0].FullName -Algorithm SHA256
           python -c "from pathlib import Path; import struct; root=Path('.tools/windows-compiler'); names={'gcc.exe','cc1.exe','as.exe','ld.exe'}; [(lambda d: print(p.name, 'large-address-aware=', bool(struct.unpack_from('<H', d, struct.unpack_from('<I', d, 60)[0]+22)[0] & 32)))(p.read_bytes()) for p in root.rglob('*.exe') if p.name in names]"
       - name: Native hardware inventory regressions
         shell: pwsh
