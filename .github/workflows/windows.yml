@@ -1,0 +1,100 @@
+name: Windows development bundles
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-bundles-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      WTOP_SKIP_RESOURCE_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the XP-targeted Lua and native module
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 binutils-mingw-w64-i686
+          ./tools/build_windows_x86.sh
+          mkdir ci-inputs
+          tar -czf ci-inputs/runtime.tar.gz -C dist windows-x86
+      - name: Fetch the native x86 compiler
+        run: |
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
+            https://github.com/skeeto/w64devkit/releases/download/v1.23.0/w64devkit-i686-1.23.0.zip \
+            -o ci-inputs/w64devkit-i686-1.23.0.zip
+          test "$(stat -c %s ci-inputs/w64devkit-i686-1.23.0.zip)" = 72803726
+          cd ci-inputs
+          sha256sum runtime.tar.gz w64devkit-i686-1.23.0.zip | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-inputs
+          path: ci-inputs/
+          if-no-files-found: error
+          retention-days: 3
+
+  bundle:
+    needs: runtime
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-build-inputs
+          path: ci-inputs
+      - name: Verify inputs and prepare the native compiler
+        shell: pwsh
+        run: |
+          foreach ($line in Get-Content ci-inputs/SHA256SUMS) {
+            $hash, $name = $line -split '  ', 2
+            if ((Get-FileHash (Join-Path ci-inputs $name) -Algorithm SHA256).Hash.ToLower() -ne $hash) {
+              throw "Input checksum mismatch: $name"
+            }
+          }
+          New-Item -ItemType Directory -Force dist, build, .tools | Out-Null
+          tar -xzf ci-inputs/runtime.tar.gz -C dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Expand-Archive ci-inputs/w64devkit-i686-1.23.0.zip .tools/windows-compiler
+      - name: Package both forms and check every PE image
+        shell: pwsh
+        run: |
+          $cc = Join-Path $PWD '.tools/windows-compiler/w64devkit/bin/gcc.exe'
+          & $cc --version
+          python tools/package_windows.py dir --compiler $cc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/package_windows.py file --compiler $cc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $cc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc tools/console_harness.c -o build/console_harness.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Installed CLI and real console checks
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION).Trim()
+          foreach ($exe in 'dist/windows-bundle/wtop/wtop.exe', 'dist/windows-bundle/wtop-onefile.exe') {
+            python tests/installed_smoke.py --executable $exe --version $version --platform Windows
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            python tests/windows_console_smoke.py --executable $exe --harness build/console_harness.exe
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Archive the complete development packages
+        shell: pwsh
+        run: |
+          tar -czf dist/wtop-windows-x86.tar.gz -C dist/windows-bundle .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $hash = (Get-FileHash dist/wtop-windows-x86.tar.gz -Algorithm SHA256).Hash.ToLower()
+          "$hash  wtop-windows-x86.tar.gz" | Set-Content -Encoding ascii dist/wtop-windows-x86.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86-development
+          path: |
+            dist/wtop-windows-x86.tar.gz
+            dist/wtop-windows-x86.tar.gz.sha256
+          if-no-files-found: error

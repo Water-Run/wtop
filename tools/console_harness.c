@@ -8,6 +8,7 @@
  * usage: console_harness.exe STEPS COMMAND...
  * STEPS is a comma list of:
  *   wait:<ms>          sleep
+ *   await:<ms>:<text>  wait for visible ASCII text, fail on timeout
  *   key:<text>         type each character (\e Escape, \r Enter, ^c Ctrl+C)
  *   vk:<code>          press one virtual key (decimal), e.g. 40 for Down
  *   snap:<label>       print the visible window of the active screen buffer
@@ -94,6 +95,51 @@ static void snapshot(const char *label) {
     fflush(stdout);
     free(cells);
     CloseHandle(output);
+}
+
+static int wait_for_text(const char *text, DWORD timeout) {
+    DWORD started = GetTickCount();
+    if (!text[0] || timeout == 0 || timeout > 60000) return 0;
+    do {
+        HANDLE output = console_output();
+        CONSOLE_SCREEN_BUFFER_INFO info;
+        int found = 0;
+        if (output != INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(output, &info)) {
+            int columns = info.srWindow.Right - info.srWindow.Left + 1;
+            int rows = info.srWindow.Bottom - info.srWindow.Top + 1;
+            size_t count = (size_t)columns * (size_t)rows;
+            if (columns > 0 && rows > 0 && count <= 200000) {
+                CHAR_INFO *cells = (CHAR_INFO *)calloc(count, sizeof(CHAR_INFO));
+                char *visible = (char *)malloc(count + (size_t)rows + 1);
+                COORD size = {(SHORT)columns, (SHORT)rows}, origin = {0, 0};
+                SMALL_RECT region = info.srWindow;
+                if (cells && visible && ReadConsoleOutputA(output, cells, size, origin, &region)) {
+                    size_t used = 0;
+                    for (int row = 0; row < rows; ++row) {
+                        for (int column = 0; column < columns; ++column) {
+                            char value = cells[row * columns + column].Char.AsciiChar;
+                            visible[used++] = value ? value : ' ';
+                        }
+                        visible[used++] = '\n';
+                    }
+                    visible[used] = 0;
+                    found = strstr(visible, text) != NULL;
+                }
+                free(cells);
+                free(visible);
+            }
+        }
+        if (output != INVALID_HANDLE_VALUE) CloseHandle(output);
+        if (found) {
+            printf("----- observed: %s\n", text);
+            fflush(stdout);
+            return 1;
+        }
+        Sleep(50);
+    } while (GetTickCount() - started < timeout);
+    printf("----- timed out waiting for: %s\n", text);
+    fflush(stdout);
+    return 0;
 }
 
 static void send_key(HANDLE input, WORD virtual_key, WCHAR character, DWORD state) {
@@ -209,7 +255,7 @@ int main(int argc, char **argv) {
     PROCESS_INFORMATION process;
     WCHAR command[4096];
     char *steps, *step;
-    int length = 0;
+    int length = 0, failed = 0;
     if (argc < 3) {
         fprintf(stderr, "usage: console_harness STEPS COMMAND...\n");
         return 2;
@@ -270,6 +316,14 @@ int main(int argc, char **argv) {
         if (!value) continue;
         *value++ = 0;
         if (strcmp(step, "wait") == 0) Sleep((DWORD)atoi(value));
+        else if (strcmp(step, "await") == 0) {
+            char *text = strchr(value, ':');
+            if (!text) failed = 1;
+            else {
+                *text++ = 0;
+                if (!wait_for_text(text, (DWORD)atoi(value))) failed = 1;
+            }
+        }
         else if (strcmp(step, "key") == 0) type_text(value);
         else if (strcmp(step, "vk") == 0) press_virtual_key(atoi(value));
         else if (strcmp(step, "snap") == 0) snapshot(value);
@@ -294,5 +348,5 @@ int main(int argc, char **argv) {
     }
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
-    return 0;
+    return failed ? 1 : 0;
 }
