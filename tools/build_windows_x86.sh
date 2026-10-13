@@ -23,12 +23,13 @@ if [ ! -f "$work_dir/.lua-source-clean" ]; then
     touch "$work_dir/.lua-source-clean"
 fi
 
-if [ ! -f "$work_dir/.lua-static-runtime-large-address-aware" ]; then
+if [ ! -f "$work_dir/.lua-static-runtime-large-address-aware" ] \
+    || [ ! -f "$work_dir/lua-src/src/liblua55.dll.a" ]; then
     make -C "$work_dir/lua-src/src" clean
 fi
 make -C "$work_dir/lua-src/src" lua.exe "CC=$compiler" \
     "LUA_A=lua55.dll" "LUA_T=lua.exe" \
-    "AR=$compiler -shared -static-libgcc -o" \
+    "AR=$compiler -shared -static-libgcc -Wl,--out-implib,liblua55.dll.a -o" \
     "RANLIB=i686-w64-mingw32-strip --strip-unneeded" \
     "SYSCFLAGS=-DLUA_BUILD_AS_DLL" "SYSLIBS=" \
     "SYSLDFLAGS=-s -static-libgcc -Wl,--large-address-aware"
@@ -46,6 +47,11 @@ rm -rf "$output_dir"
 mkdir -p "$output_dir"
 cp "$work_dir/lua-src/src/lua.exe" "$output_dir/lua.exe"
 cp "$work_dir/lua-src/src/lua55.dll" "$output_dir/lua55.dll"
+cp "$work_dir/lua-src/src/liblua55.dll.a" "$output_dir/liblua55.dll.a"
+mkdir -p "$output_dir/include"
+for header in lua.h luaconf.h lualib.h lauxlib.h; do
+    cp "$source_dir/src/$header" "$output_dir/include/$header"
+done
 cp "$work_dir/wtop_native.dll" "$output_dir/wtop_native.dll"
 cp -R "$project_dir/src" "$output_dir/"
 cat > "$output_dir/wtop.cmd" <<'EOF'

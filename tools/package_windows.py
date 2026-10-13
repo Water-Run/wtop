@@ -46,7 +46,7 @@ def build(root: Path, kind: str, compiler: str | None = None) -> Path:
     runtime = root / "dist" / "windows-x86"
     source_root = runtime / "src"
     lua = runtime / "lua.exe"
-    for name in ("lua.exe", "lua55.dll", "wtop_native.dll"):
+    for name in ("lua.exe", "lua55.dll", "liblua55.dll.a", "wtop_native.dll"):
         if not (runtime / name).is_file():
             raise ValueError("build and copy dist/windows-x86 first: missing " + name)
     if not (source_root / "wtop.lua").is_file():
