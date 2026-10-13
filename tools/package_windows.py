@@ -40,7 +40,7 @@ def installer_archive(root: Path) -> Path:
     return archive
 
 
-def build(root: Path, kind: str, compiler: str | None = None) -> Path:
+def build(root: Path, kind: str, compiler: str | None = None, verbose: bool = False) -> Path:
     if os.name != "nt":
         raise ValueError("Windows packaging must run on Windows")
     runtime = root / "dist" / "windows-x86"
@@ -92,6 +92,8 @@ def build(root: Path, kind: str, compiler: str | None = None) -> Path:
                    "-b", "--" + kind, str(source_root / "wtop.lua"),
                    "-o", str(output), "--lua", str(lua), "--lua-prefix", str(runtime),
                    "--target-os", "windows", "--max-deps", "300"]
+        if verbose:
+            command.append("--verbose")
         for locale in sorted((source_root / "wtop" / "generated" / "locales").glob("*.lua")):
             command.extend(["--include", str(locale)])
         subprocess.run(command + ["--", "--version"], env=environment, cwd=root,
@@ -108,10 +110,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("kind", choices=("dir", "file"))
     parser.add_argument("--compiler", help="native x86 MinGW compiler targeting MSVCRT (or set LUAI_CC)")
+    parser.add_argument("--verbose", action="store_true", help="include compiler diagnostics")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     try:
-        output = build(root, args.kind, args.compiler)
+        output = build(root, args.kind, args.compiler, args.verbose)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         parser.exit(1, "wtop: Windows packaging failed: " + str(error) + "\n")
     print("wtop: Windows bundle ready: " + str(output))

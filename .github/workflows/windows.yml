@@ -64,14 +64,15 @@ jobs:
           tar -xzf ci-inputs/runtime.tar.gz -C dist
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Expand-Archive ci-inputs/w64devkit-i686-1.23.0.zip .tools/windows-compiler
+          python -c "from pathlib import Path; import struct; root=Path('.tools/windows-compiler'); names={'gcc.exe','cc1.exe','as.exe','ld.exe'}; [(lambda d: print(p.name, 'large-address-aware=', bool(struct.unpack_from('<H', d, struct.unpack_from('<I', d, 60)[0]+22)[0] & 32)))(p.read_bytes()) for p in root.rglob('*.exe') if p.name in names]"
       - name: Package both forms and check every PE image
         shell: pwsh
         run: |
           $cc = Join-Path $PWD '.tools/windows-compiler/w64devkit/bin/gcc.exe'
           & $cc --version
-          python tools/package_windows.py dir --compiler $cc
+          python tools/package_windows.py dir --compiler $cc --verbose
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/package_windows.py file --compiler $cc
+          python tools/package_windows.py file --compiler $cc --verbose
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $cc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc tools/console_harness.c -o build/console_harness.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -92,6 +93,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $hash = (Get-FileHash dist/wtop-windows-x86.tar.gz -Algorithm SHA256).Hash.ToLower()
           "$hash  wtop-windows-x86.tar.gz" | Set-Content -Encoding ascii dist/wtop-windows-x86.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: windows-debug-onedir
+          path: dist/windows-bundle/wtop/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 3
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x86-development
