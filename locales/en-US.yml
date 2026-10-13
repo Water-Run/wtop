@@ -673,6 +673,7 @@ messages:
   inventory.msi_allowed: "Allowed CPU list"
   inventory.bus: "Bus"
   inventory.class: "Class"
+  inventory.revision: "Revision"
   inventory.cpu_core: "CPU core {id}"
   inventory.cpu_package: "CPU package {id}"
   inventory.cpu_thread: "Logical CPU {id}"

@@ -668,6 +668,7 @@ messages:
   inventory.msi_allowed: "許可された CPU リスト"
   inventory.bus: "バス"
   inventory.class: "クラス"
+  inventory.revision: "リビジョン"
   inventory.cpu_core: "CPU コア {id}"
   inventory.cpu_package: "CPU ソケット {id}"
   inventory.cpu_thread: "論理 CPU {id}"

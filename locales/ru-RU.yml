@@ -686,6 +686,7 @@ messages:
   inventory.msi_allowed: "Список разрешённых CPU"
   inventory.bus: "Шина"
   inventory.class: "Класс"
+  inventory.revision: "Ревизия"
   inventory.cpu_core: "Ядро CPU {id}"
   inventory.cpu_package: "Сокет CPU {id}"
   inventory.cpu_thread: "Логический CPU {id}"

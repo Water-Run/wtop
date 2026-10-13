@@ -2301,6 +2301,19 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         or node.parent_id)
     add("inventory.driver", "Driver", device.driver)
     add("metrics.source", "Source", device.source)
+    local function hardware_hex(value, digits)
+        if type(value) == "number" and math.tointeger(value)
+                and value >= 0 and value < 16 ^ digits then
+            return string.format("%0" .. digits .. "x", value)
+        end
+    end
+    if node.bus == "pci" or node.bus == "usb" then
+        local vendor = hardware_hex(device.vendor_id, 4)
+        local product = hardware_hex(node.bus == "pci" and device.device_id or device.product_id, 4)
+        if vendor or product then
+            add("inventory.identifier", "ID", (vendor or "—") .. ":" .. (product or "—"))
+        end
+    end
     local quality = snapshot.quality and snapshot.quality[node.resource or "inventory"]
     if quality then
         add("inspector.quality", "Quality", Technical.state(i18n, quality.quality))
@@ -3066,6 +3079,8 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         add("inventory.usb_protocol", "Protocol", hex_byte(device.protocol_id))
     end
     if node.bus == "pci" then
+        add("inventory.class", "Class", hardware_hex(device.class_id, 6))
+        add("inventory.revision", "Revision", hardware_hex(device.revision, 2))
         local function pcie(rate, width)
             if rate == nil and width == nil then return nil end
             return format_value(rate, i18n) .. " GT/s x " .. format_value(width, i18n)

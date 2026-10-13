@@ -1430,10 +1430,10 @@ int wtop_launcher_gone(void) {
         && WaitForSingleObject(watched_launcher, 0) == WAIT_OBJECT_0;
 }
 
-/* PCI and USB device inventory through SetupAPI enumerators, mirroring the
- * Linux sysfs collector: bounded device lists with ids and the names the
- * driver reports. The PCI class code has no SetupAPI equivalent, so that one
- * column stays empty on Windows instead of carrying a made-up value. */
+/* PCI and USB inventory through SetupAPI. PCI revision and class come from
+ * the documented PCI hardware/compatible ID formats, not the setup-class
+ * GUID (which describes a driver installation category).
+ * https://learn.microsoft.com/windows-hardware/drivers/install/identifiers-for-pci-devices */
 #define MAX_INVENTORY_PCI 256
 #define MAX_INVENTORY_USB 128
 
@@ -1474,12 +1474,13 @@ typedef struct {
 
 /* A zero product/device number is valid. Missing IDs, including the hardware
  * IDs of a USB root hub, must not be confused with a numeric zero. */
-static int inventory_hex_id(const WCHAR *text, const WCHAR *key, unsigned *id) {
+static int inventory_hex_id(const WCHAR *text, const WCHAR *key, int digits,
+    unsigned *id) {
     const WCHAR *start = wcsstr(text, key);
     unsigned value = 0;
     if (!start) return 0;
     start += wcslen(key);
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < digits; ++i) {
         unsigned digit;
         if (start[i] >= L'0' && start[i] <= L'9') digit = start[i] - L'0';
         else if (start[i] >= L'A' && start[i] <= L'F') digit = start[i] - L'A' + 10;
@@ -1487,9 +1488,18 @@ static int inventory_hex_id(const WCHAR *text, const WCHAR *key, unsigned *id) {
         else return 0;
         value = value * 16 + digit;
     }
-    if (start[4] != 0 && start[4] != L'&') return 0;
+    if (start[digits] != 0 && start[digits] != L'&') return 0;
     *id = value;
     return 1;
+}
+
+/* The caller zero-terminates the REG_MULTI_SZ buffer. A four-digit CC lacks
+ * a programming-interface byte and must not be expanded into a guessed one. */
+static int inventory_hex_list(const WCHAR *ids, const WCHAR *key, int digits,
+    unsigned *id) {
+    for (const WCHAR *entry = ids; *entry; entry += wcslen(entry) + 1)
+        if (inventory_hex_id(entry, key, digits, id)) return 1;
+    return 0;
 }
 
 static void inventory_device(lua_State *L, int result, const inventory_ref *ref) {
@@ -1585,10 +1595,10 @@ static int l_collect_inventory(lua_State *L) {
         lua_createtable(L, 8, 0);
         if (set != INVALID_HANDLE_VALUE) {
             for (DWORD index = 0;; ++index) {
-                WCHAR ids[512] = { 0 }, wide[160], instance[256] = { 0 };
+                WCHAR ids[4096] = { 0 }, wide[160], instance[256] = { 0 };
                 DWORD type = 0, bus_number = 0, slot = 0;
-                unsigned vendor_id, product_id;
-                int have_address;
+                unsigned vendor_id, product_id, class_id, revision;
+                int have_address, have_class = 0;
                 memset(&device, 0, sizeof(device));
                 device.cbSize = sizeof(device);
                 if (!SetupDiEnumDeviceInfo(set, index, &device)) {
@@ -1616,15 +1626,30 @@ static int l_collect_inventory(lua_State *L) {
                 if (SetupDiGetDeviceRegistryPropertyW(set, &device,
                         SPDRP_HARDWAREID, &type, (BYTE *)ids,
                         sizeof(ids) - 2 * sizeof(WCHAR), NULL) && type == REG_MULTI_SZ) {
-                    if (inventory_hex_id(ids, buses[bus].vendor_key, &vendor_id))
+                    if (inventory_hex_list(ids, buses[bus].vendor_key, 4, &vendor_id))
                         integer_field(L, "vendor_id", (lua_Integer)vendor_id);
-                    if (inventory_hex_id(ids, buses[bus].product_key, &product_id))
+                    if (inventory_hex_list(ids, buses[bus].product_key, 4, &product_id))
                         integer_field(L, bus == 0 ? "device_id" : "product_id",
                             (lua_Integer)product_id);
+                    if (bus == 0) {
+                        if (inventory_hex_list(ids, L"REV_", 2, &revision))
+                            integer_field(L, "revision", (lua_Integer)revision);
+                        have_class = inventory_hex_list(ids, L"CC_", 6, &class_id);
+                    }
+                }
+                if (bus == 0) {
+                    if (!have_class) {
+                        memset(ids, 0, sizeof(ids));
+                        if (SetupDiGetDeviceRegistryPropertyW(set, &device,
+                                SPDRP_COMPATIBLEIDS, &type, (BYTE *)ids,
+                                sizeof(ids) - 2 * sizeof(WCHAR), NULL) && type == REG_MULTI_SZ)
+                            have_class = inventory_hex_list(ids, L"CC_", 6, &class_id);
+                    }
+                    if (have_class) integer_field(L, "class_id", (lua_Integer)class_id);
                 }
                 if (have_address) {
                     char address[40];
-                    snprintf(address, sizeof(address), "%02lu:%02lu.%lu",
+                    snprintf(address, sizeof(address), "%02lx:%02lx.%lu",
                         (unsigned long)bus_number, (unsigned long)(slot >> 16),
                         (unsigned long)(slot & 0xffff));
                     string_field(L, "address", address);
@@ -1646,6 +1671,11 @@ static int l_collect_inventory(lua_State *L) {
                     utf8_field(L, bus == 0 ? "device_name" : "product", wide);
                 }
                 string_field(L, "source", "SetupAPI");
+                memset(wide, 0, sizeof(wide));
+                if (SetupDiGetDeviceRegistryPropertyW(set, &device,
+                        SPDRP_SERVICE, &type, (BYTE *)wide,
+                        sizeof(wide) - sizeof(WCHAR), NULL) && type == REG_SZ && wide[0])
+                    utf8_field(L, "driver", wide);
                 refs[count].devinst = device.DevInst;
                 refs[count].bus = bus;
                 refs[count].index = ++pushed;

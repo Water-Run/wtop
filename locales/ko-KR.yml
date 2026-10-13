@@ -668,6 +668,7 @@ messages:
   inventory.msi_allowed: "허용 CPU 목록"
   inventory.bus: "버스"
   inventory.class: "클래스"
+  inventory.revision: "리비전"
   inventory.cpu_core: "CPU 코어 {id}"
   inventory.cpu_package: "CPU 소켓 {id}"
   inventory.cpu_thread: "논리 CPU {id}"

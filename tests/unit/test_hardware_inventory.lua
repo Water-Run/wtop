@@ -4226,7 +4226,8 @@ do
     local Hardware = require("wtop.model.hardware")
     local TUI = require("wtop.tui")
     local i18n = assert(require("wtop.i18n").new({ locale = "en-US" }))
-    local bridge = { address = "00:01.0", device_id = 0, device_name = "Bridge" }
+    local bridge = { address = "00:01.0", vendor_id = 0x1234, device_id = 0,
+        revision = 0, class_id = 0x060400, driver = "pci", device_name = "Bridge" }
     local controller = { address = "01:00.0", parent_address = bridge.address,
         parent_bus = "pci", device_name = "USB controller" }
     local root = { id = "USB\\ROOT_HUB30\\fixture", parent_id = controller.address,
@@ -4243,8 +4244,17 @@ do
     local detail = table.concat(TUI.hardware_detail_lines(state, "usb:" .. root.id, i18n), "\n")
     assert(detail:find("01:00.0", 1, true) and detail:find("p parent", 1, true),
         "Windows controller ancestry is available in the hardware inspector")
+    detail = table.concat(TUI.hardware_detail_lines(state, "pci:" .. bridge.address, i18n), "\n")
+    assert(detail:find("ID: 1234:0000", 1, true) and detail:find("Class: 060400", 1, true)
+        and detail:find("Revision: 00", 1, true) and detail:find("Driver: pci", 1, true))
+    local chinese = assert(require("wtop.i18n").new({ locale = "zh-CN" }))
+    assert(table.concat(TUI.hardware_detail_lines(state, "pci:" .. bridge.address, chinese), "\n")
+        :find("修订号: 00", 1, true), "PCI revision has a localized inspector label")
     local exported = Export.snapshot(state)
     assert(exported.inventory.pci.devices[1].device_id == 0
+        and exported.inventory.pci.devices[1].class_id == 0x060400
+        and exported.inventory.pci.devices[1].revision == 0
+        and exported.inventory.pci.devices[1].driver == "pci"
         and exported.inventory.usb.devices[1].vendor_id == nil
         and exported.inventory.usb.devices[1].parent_bus == "pci"
         and exported.inventory.usb.devices[2].product_id == 0

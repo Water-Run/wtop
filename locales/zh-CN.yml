@@ -668,6 +668,7 @@ messages:
   inventory.msi_allowed: "允许 CPU 列表"
   inventory.bus: "总线"
   inventory.class: "类别"
+  inventory.revision: "修订号"
   inventory.cpu_core: "CPU 核心 {id}"
   inventory.cpu_package: "CPU 插槽 {id}"
   inventory.cpu_thread: "逻辑 CPU {id}"

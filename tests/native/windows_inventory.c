@@ -16,14 +16,14 @@
 static WCHAR manufacturer[96], description[151], usb_instance[200];
 static unsigned destroyed, mode, parent_calls[5];
 enum { REPLACED = 1, REPARENTED = 2, ENUM_FAILED = 4, ID_FAILED = 8,
-    DUPLICATE = 16, NO_HARDWARE_IDS = 32 };
+    DUPLICATE = 16, NO_HARDWARE_IDS = 32, SHORT_CLASS = 64 };
 static const struct {
     DEVINST devinst, parent;
     DWORD bus, slot;
     const WCHAR *instance, *hardware;
 } devices[] = {
-    { 10, 99, 0, 1u << 16, L"PCI\\ROOT", L"PCI\\VEN_1234&DEV_0000" },
-    { 11, 10, 1, 0, L"PCI\\CHILD", L"PCI\\VEN_1234&DEV_5678" },
+    { 10, 99, 10, 31u << 16, L"PCI\\ROOT", L"PCI\\VEN_1234&DEV_0000&REV_00" },
+    { 11, 10, 1, 0, L"PCI\\CHILD", L"PCI\\VEN_1234&DEV_5678&REV_ABC" },
     { 20, 11, 0, 0, L"USB\\ROOT_HUB30\\fixture", L"USB\\ROOT_HUB30" },
     { 21, 20, 0, 0, usb_instance, L"USB\\VID_1234&PID_0000" },
     { 22, 21, 0, 0, L"USB\\leaf", L"USB\\VID_12345&PID_Z123" },
@@ -55,6 +55,17 @@ static BOOL WINAPI fixture_property(HDEVINFO set, PSP_DEVINFO_DATA device,
     DWORD size;
     unsigned i = (unsigned)device->Reserved;
     (void)set;
+    if (property == SPDRP_COMPATIBLEIDS) {
+        static const WCHAR compatible[] = L"PCI\\VEN_1234\0PCI\\CC_0c0330\0PCI\\CC_0c03\0";
+        static const WCHAR incomplete[] = L"PCI\\CC_0604\0PCI\\CC_0604000\0";
+        text = (mode & SHORT_CLASS) ? incomplete : compatible;
+        size = (mode & SHORT_CLASS) ? sizeof(incomplete) : sizeof(compatible);
+        if (required) *required = size;
+        if (capacity < size) return FALSE;
+        if (type) *type = REG_MULTI_SZ;
+        memcpy(output, text, size);
+        return TRUE;
+    }
     if (property == SPDRP_BUSNUMBER || property == SPDRP_ADDRESS) {
         DWORD value = property == SPDRP_BUSNUMBER ? devices[i].bus : devices[i].slot;
         if (capacity < sizeof(value)) return FALSE;
@@ -68,6 +79,7 @@ static BOOL WINAPI fixture_property(HDEVINFO set, PSP_DEVINFO_DATA device,
     }
     else if (property == SPDRP_MFG) text = manufacturer;
     else if (property == SPDRP_DEVICEDESC) text = description;
+    else if (property == SPDRP_SERVICE) text = L"fixture-driver";
     if (!text) return FALSE;
     size = (DWORD)((wcslen(text) + 1) * sizeof(WCHAR));
     if (required) *required = size;
@@ -192,13 +204,17 @@ int main(void) {
     check_absent(L, "quality");
     get_device(L, "pci", 1);
     check_number(L, "device_id", 0);
-    check_text(L, "address", L"00:01.0");
+    check_number(L, "revision", 0);
+    check_number(L, "class_id", 0x0c0330);
+    check_text(L, "driver", L"fixture-driver");
+    check_text(L, "address", L"0a:1f.0");
     check_text(L, "vendor_name", manufacturer);
     check_text(L, "device_name", description);
     check_absent(L, "parent_address");
     lua_pop(L, 1);
     get_device(L, "pci", 2);
-    check_text(L, "parent_address", L"00:01.0");
+    check_absent(L, "revision");
+    check_text(L, "parent_address", L"0a:1f.0");
     check_text(L, "parent_bus", L"pci");
     lua_pop(L, 1);
     get_device(L, "usb", 1);
@@ -221,6 +237,9 @@ int main(void) {
     check_absent(L, "product_id");
     check_text(L, "parent_id", usb_instance);
     lua_pop(L, 1);
+    collect(L, SHORT_CLASS);
+    get_device(L, "pci", 1);
+    check_absent(L, "class_id");
     for (unsigned scenario = REPLACED; scenario <= REPARENTED; scenario <<= 1) {
         collect(L, scenario);
         check_text(L, "quality", L"partial");
@@ -256,6 +275,6 @@ int main(void) {
     check_text(L, "id", devices[2].instance);
     check_absent(L, "parent_id");
     lua_close(L);
-    puts("Windows inventory: UTF-8, zero IDs, root hubs, ancestry and hotplug checks passed");
+    puts("Windows inventory: UTF-8, IDs, PCI class/revision/driver, ancestry and hotplug checks passed");
     return 0;
 }
