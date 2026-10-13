@@ -16,6 +16,7 @@
 #include <tlhelp32.h>
 #include <winsvc.h>
 #include <setupapi.h>
+#include <cfgmgr32.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1436,6 +1437,117 @@ int wtop_launcher_gone(void) {
 #define MAX_INVENTORY_PCI 256
 #define MAX_INVENTORY_USB 128
 
+typedef CONFIGRET (WINAPI *cm_parent_function)(PDEVINST, DEVINST, ULONG);
+typedef CONFIGRET (WINAPI *cm_id_function)(DEVINST, PWSTR, ULONG, ULONG);
+
+static struct {
+    int resolved;
+    cm_parent_function parent;
+    cm_id_function id;
+} inventory_cm;
+
+static int inventory_cm_ready(void) {
+    if (!inventory_cm.resolved) {
+        WCHAR path[MAX_PATH];
+        UINT length = GetSystemDirectoryW(path, MAX_PATH);
+        inventory_cm.resolved = 1;
+        if (length && length < MAX_PATH - 16) {
+            HMODULE module;
+            wcscat(path, L"\\cfgmgr32.dll");
+            module = LoadLibraryW(path);
+            if (module) {
+                inventory_cm.parent = (cm_parent_function)(void *)
+                    GetProcAddress(module, "CM_Get_Parent");
+                inventory_cm.id = (cm_id_function)(void *)
+                    GetProcAddress(module, "CM_Get_Device_IDW");
+            }
+        }
+    }
+    return inventory_cm.parent && inventory_cm.id;
+}
+
+typedef struct {
+    DEVINST devinst;
+    int bus, index;
+    WCHAR instance[256];
+} inventory_ref;
+
+/* A zero product/device number is valid. Missing IDs, including the hardware
+ * IDs of a USB root hub, must not be confused with a numeric zero. */
+static int inventory_hex_id(const WCHAR *text, const WCHAR *key, unsigned *id) {
+    const WCHAR *start = wcsstr(text, key);
+    unsigned value = 0;
+    if (!start) return 0;
+    start += wcslen(key);
+    for (int i = 0; i < 4; ++i) {
+        unsigned digit;
+        if (start[i] >= L'0' && start[i] <= L'9') digit = start[i] - L'0';
+        else if (start[i] >= L'A' && start[i] <= L'F') digit = start[i] - L'A' + 10;
+        else if (start[i] >= L'a' && start[i] <= L'f') digit = start[i] - L'a' + 10;
+        else return 0;
+        value = value * 16 + digit;
+    }
+    if (start[4] != 0 && start[4] != L'&') return 0;
+    *id = value;
+    return 1;
+}
+
+static void inventory_device(lua_State *L, int result, const inventory_ref *ref) {
+    lua_getfield(L, result, ref->bus == 0 ? "pci" : "usb");
+    lua_getfield(L, -1, "devices");
+    lua_rawgeti(L, -1, ref->index);
+    lua_remove(L, -2);
+    lua_remove(L, -2);
+}
+
+static int inventory_identity_matches(const inventory_ref *ref) {
+    WCHAR current[256] = { 0 };
+    return ref->instance[0]
+        && inventory_cm.id(ref->devinst, current, 256, 0) == CR_SUCCESS
+        && current[255] == 0 && wcscmp(current, ref->instance) == 0;
+}
+
+/* Resolve only direct parents visible in this same sample. ACPI and other
+ * uncollected parents remain outside the graph. DEVINST is transient: compare
+ * instance IDs before publishing an edge, then recheck the parent relation. */
+static int inventory_parents(lua_State *L, int result, inventory_ref *refs, int count) {
+    int partial = 0;
+    if (!count) return 0;
+    if (!inventory_cm_ready()) return 1;
+    for (int i = 0; i < count; ++i) {
+        DEVINST parent, confirmed;
+        int found = -1, duplicates = 0;
+        if (!inventory_identity_matches(&refs[i])
+                || inventory_cm.parent(&parent, refs[i].devinst, 0) != CR_SUCCESS) {
+            partial = 1;
+            continue;
+        }
+        for (int j = 0; j < count; ++j) {
+            if (refs[j].devinst == refs[i].devinst && j != i) duplicates = 1;
+            if (refs[j].devinst == parent) {
+                if (found != -1) duplicates = 1;
+                found = j;
+            }
+        }
+        if (duplicates || found == i) { partial = 1; continue; }
+        if (found == -1) continue;
+        if (!inventory_identity_matches(&refs[found])
+                || inventory_cm.parent(&confirmed, refs[i].devinst, 0) != CR_SUCCESS
+                || confirmed != parent) {
+            partial = 1;
+            continue;
+        }
+        inventory_device(L, result, &refs[i]);
+        inventory_device(L, result, &refs[found]);
+        lua_getfield(L, -1, refs[found].bus == 0 ? "address" : "id");
+        lua_remove(L, -2);
+        lua_setfield(L, -2, refs[i].bus == 0 ? "parent_address" : "parent_id");
+        string_field(L, "parent_bus", refs[found].bus == 0 ? "pci" : "usb");
+        lua_pop(L, 1);
+    }
+    return partial;
+}
+
 static void finish_inventory_bus(lua_State *L, int pushed, int total,
     const char *key) {
     /* Stack here: [result, devices-array]. Wrap the array with its counts. */
@@ -1459,7 +1571,12 @@ static int l_collect_inventory(lua_State *L) {
         { L"PCI", L"VEN_", L"DEV_", MAX_INVENTORY_PCI },
         { L"USB", L"VID_", L"PID_", MAX_INVENTORY_USB },
     };
-    lua_createtable(L, 0, 2);
+    /* Lua owns these references even if a later Lua allocation fails. */
+    inventory_ref *refs = (inventory_ref *)lua_newuserdatauv(L,
+        sizeof(inventory_ref) * (MAX_INVENTORY_PCI + MAX_INVENTORY_USB), 0);
+    int count = 0, partial = 0, result;
+    lua_createtable(L, 0, 3);
+    result = lua_gettop(L);
     for (int bus = 0; bus < 2; ++bus) {
         HDEVINFO set = SetupDiGetClassDevsW(NULL, buses[bus].enumerator, NULL,
             DIGCF_PRESENT | DIGCF_ALLCLASSES);
@@ -1468,69 +1585,79 @@ static int l_collect_inventory(lua_State *L) {
         lua_createtable(L, 8, 0);
         if (set != INVALID_HANDLE_VALUE) {
             for (DWORD index = 0;; ++index) {
-                WCHAR ids[512], wide[160], instance[256];
-                char utf8[160];
+                WCHAR ids[512] = { 0 }, wide[160], instance[256] = { 0 };
                 DWORD type = 0, bus_number = 0, slot = 0;
                 unsigned vendor_id, product_id;
+                int have_address;
                 memset(&device, 0, sizeof(device));
                 device.cbSize = sizeof(device);
-                if (!SetupDiEnumDeviceInfo(set, index, &device)) break;
-                memset(ids, 0, sizeof(ids));
-                if (!SetupDiGetDeviceRegistryPropertyW(set, &device,
-                        SPDRP_HARDWAREID, &type, (BYTE *)ids,
-                        sizeof(ids) - 2 * sizeof(WCHAR), NULL)) continue;
-                vendor_id = hex_after(ids, buses[bus].vendor_key);
-                product_id = hex_after(ids, buses[bus].product_key);
-                if (!vendor_id || !product_id) continue;
+                if (!SetupDiEnumDeviceInfo(set, index, &device)) {
+                    if (GetLastError() != ERROR_NO_MORE_ITEMS) partial = 1;
+                    break;
+                }
                 ++total;
                 if (pushed >= buses[bus].limit) continue;
-
-                lua_createtable(L, 0, 8);
-                integer_field(L, "vendor_id", (lua_Integer)vendor_id);
-                integer_field(L, bus == 0 ? "device_id" : "product_id",
-                    (lua_Integer)product_id);
-                if (bus == 0
+                if (!SetupDiGetDeviceInstanceIdW(set, &device, instance, 256, NULL)
+                        || instance[255] != 0) {
+                    instance[0] = 0;
+                    partial = 1;
+                }
+                have_address = bus == 0
                         && SetupDiGetDeviceRegistryPropertyW(set, &device,
                             SPDRP_BUSNUMBER, &type, (BYTE *)&bus_number,
                             sizeof(bus_number), NULL)
+                        && type == REG_DWORD && bus_number <= 255
                         && SetupDiGetDeviceRegistryPropertyW(set, &device,
                             SPDRP_ADDRESS, &type, (BYTE *)&slot,
-                            sizeof(slot), NULL)) {
+                            sizeof(slot), NULL)
+                        && type == REG_DWORD && (slot >> 16) <= 31 && (slot & 0xffff) <= 7;
+                if (!have_address && !instance[0]) { partial = 1; continue; }
+                lua_createtable(L, 0, 11);
+                if (SetupDiGetDeviceRegistryPropertyW(set, &device,
+                        SPDRP_HARDWAREID, &type, (BYTE *)ids,
+                        sizeof(ids) - 2 * sizeof(WCHAR), NULL) && type == REG_MULTI_SZ) {
+                    if (inventory_hex_id(ids, buses[bus].vendor_key, &vendor_id))
+                        integer_field(L, "vendor_id", (lua_Integer)vendor_id);
+                    if (inventory_hex_id(ids, buses[bus].product_key, &product_id))
+                        integer_field(L, bus == 0 ? "device_id" : "product_id",
+                            (lua_Integer)product_id);
+                }
+                if (have_address) {
                     char address[40];
                     snprintf(address, sizeof(address), "%02lu:%02lu.%lu",
                         (unsigned long)bus_number, (unsigned long)(slot >> 16),
                         (unsigned long)(slot & 0xffff));
                     string_field(L, "address", address);
-                } else if (SetupDiGetDeviceInstanceIdW(set, &device, instance,
-                        255, NULL)) {
-                    instance[255] = 0;
-                    WideCharToMultiByte(CP_UTF8, 0, instance, -1, utf8,
-                        sizeof(utf8), NULL, NULL);
-                    string_field(L, bus == 0 ? "address" : "id", utf8);
+                } else {
+                    utf8_field(L, bus == 0 ? "address" : "id", instance);
                 }
+                memset(wide, 0, sizeof(wide));
                 if (SetupDiGetDeviceRegistryPropertyW(set, &device, SPDRP_MFG,
                         &type, (BYTE *)wide, sizeof(wide) - sizeof(WCHAR),
-                        NULL)) {
-                    wide[79] = 0;
-                    WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8,
-                        sizeof(utf8), NULL, NULL);
-                    string_field(L, bus == 0 ? "vendor_name" : "manufacturer",
-                        utf8);
+                        NULL) && type == REG_SZ) {
+                    wide[sizeof(wide) / sizeof(wide[0]) - 1] = 0;
+                    utf8_field(L, bus == 0 ? "vendor_name" : "manufacturer", wide);
                 }
+                memset(wide, 0, sizeof(wide));
                 if (SetupDiGetDeviceRegistryPropertyW(set, &device,
                         SPDRP_DEVICEDESC, &type, (BYTE *)wide,
-                        sizeof(wide) - sizeof(WCHAR), NULL)) {
-                    wide[79] = 0;
-                    WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8,
-                        sizeof(utf8), NULL, NULL);
-                    string_field(L, bus == 0 ? "device_name" : "product", utf8);
+                        sizeof(wide) - sizeof(WCHAR), NULL) && type == REG_SZ) {
+                    wide[sizeof(wide) / sizeof(wide[0]) - 1] = 0;
+                    utf8_field(L, bus == 0 ? "device_name" : "product", wide);
                 }
-                lua_rawseti(L, -2, ++pushed);
+                string_field(L, "source", "SetupAPI");
+                refs[count].devinst = device.DevInst;
+                refs[count].bus = bus;
+                refs[count].index = ++pushed;
+                memcpy(refs[count++].instance, instance, sizeof(instance));
+                lua_rawseti(L, -2, pushed);
             }
             SetupDiDestroyDeviceInfoList(set);
-        }
+        } else partial = 1;
         finish_inventory_bus(L, pushed, total, bus == 0 ? "pci" : "usb");
     }
+    if (inventory_parents(L, result, refs, count)) partial = 1;
+    if (partial) string_field(L, "quality", "partial");
     return 1;
 }
 

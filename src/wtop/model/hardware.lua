@@ -167,7 +167,7 @@ function M.build(snapshot)
   snapshot = type(snapshot) == "table" and snapshot or {}
   local inventory = type(snapshot.inventory) == "table" and snapshot.inventory or {}
   local result = { nodes = {}, by_id = {}, iommu_groups_by_id = {},
-    truncated = false, partial = false }
+    truncated = false, partial = inventory.quality == "partial" }
   local unsorted = {}
   local function add_node(bus, name, device, id, parent, resource, reference)
     if result.by_id[id] then
@@ -203,7 +203,16 @@ function M.build(snapshot)
           local id = bus[1] .. ":" .. name
           local parent = identifier(device[bus[3]])
           local parent_bus = bus[1]
-          if parent and pci_address(parent) then
+          if parent and device.parent_bus ~= nil then
+            -- Windows identifies a controller by bus:slot.function or an
+            -- instance ID. Neither implies a PCI domain or a parent bus.
+            if device.parent_bus == "pci" or device.parent_bus == "usb" then
+              parent_bus = device.parent_bus
+              if parent_bus == "pci" then parent = pci_address(parent) or parent end
+            else
+              parent, result.partial = nil, true
+            end
+          elseif parent and pci_address(parent) then
             parent_bus, parent = "pci", pci_address(parent)
           end
           add_node(bus[1], name, device, id,

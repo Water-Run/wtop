@@ -1597,7 +1597,7 @@ local function export_inventory(snapshot)
     local pci_devices = devices(pci.devices, {
         "address", "vendor_id", "device_id", "class_id", "revision",
         "vendor_name", "device_name",
-        "parent_address", "source", "driver", "numa_node", "link_speed_gtps",
+        "parent_address", "parent_bus", "source", "driver", "numa_node", "link_speed_gtps",
         "link_width", "max_link_speed_gtps", "max_link_width", "iommu_group_id",
     }, 256)
     for index, device in ipairs(pci.devices or {}) do
@@ -1679,7 +1679,7 @@ local function export_inventory(snapshot)
             devices = devices(usb.devices, {
                 "id", "bus", "device", "vendor_id", "product_id",
                 "manufacturer", "product",
-                "parent_id", "source", "driver", "speed_mbps",
+                "parent_id", "parent_bus", "source", "driver", "speed_mbps",
             }, 128),
             interfaces = devices(usb.interfaces, {
                 "id", "interface_number", "alternate_setting", "endpoint_count",

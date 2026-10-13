@@ -24,6 +24,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 binutils-mingw-w64-i686
           ./tools/build_windows_x86.sh
           mkdir ci-inputs
+          i686-w64-mingw32-gcc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc \
+            -Idist/windows-x86/include -Ibuild/native \
+            tests/native/windows_inventory.c native/wtop_windows.c native/wtop_windows_net.c \
+            dist/windows-x86/liblua55.dll.a -lpsapi -liphlpapi -lsetupapi \
+            -o ci-inputs/inventory-fixture.exe
           tar -czf ci-inputs/runtime.tar.gz -C dist windows-x86
       - name: Fetch the native x86 compiler
         run: |
@@ -33,7 +38,7 @@ jobs:
           test "$(stat -c %s ci-inputs/w64devkit-i686-1.23.0.zip)" = 72803726
           cd ci-inputs
           echo '033ef6a29bfcb5ef4452ec5219ed74b64b95d56ae71c9252996e77dd777ab7bf  w64devkit-i686-1.23.0.zip' | sha256sum -c -
-          sha256sum runtime.tar.gz w64devkit-i686-1.23.0.zip | tee SHA256SUMS
+          sha256sum runtime.tar.gz w64devkit-i686-1.23.0.zip inventory-fixture.exe | tee SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: windows-build-inputs
@@ -65,6 +70,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Expand-Archive ci-inputs/w64devkit-i686-1.23.0.zip .tools/windows-compiler
           python -c "from pathlib import Path; import struct; root=Path('.tools/windows-compiler'); names={'gcc.exe','cc1.exe','as.exe','ld.exe'}; [(lambda d: print(p.name, 'large-address-aware=', bool(struct.unpack_from('<H', d, struct.unpack_from('<I', d, 60)[0]+22)[0] & 32)))(p.read_bytes()) for p in root.rglob('*.exe') if p.name in names]"
+      - name: Native hardware inventory regressions
+        shell: pwsh
+        run: |
+          Copy-Item ci-inputs/inventory-fixture.exe dist/windows-x86/
+          & ./dist/windows-x86/inventory-fixture.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item dist/windows-x86/inventory-fixture.exe
       - name: Package both forms and check every PE image
         shell: pwsh
         run: |

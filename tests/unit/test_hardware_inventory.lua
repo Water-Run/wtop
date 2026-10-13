@@ -4220,4 +4220,58 @@ do
         denied = { [base .. "/entries"] = true } }) }):probe({}).state == "denied")
 end
 
+-- Windows has no PCI domain in SetupAPI addresses. Explicit bus metadata
+-- connects USB root hubs to those addresses (and instance-ID fallbacks).
+do
+    local Hardware = require("wtop.model.hardware")
+    local TUI = require("wtop.tui")
+    local i18n = assert(require("wtop.i18n").new({ locale = "en-US" }))
+    local bridge = { address = "00:01.0", device_id = 0, device_name = "Bridge" }
+    local controller = { address = "01:00.0", parent_address = bridge.address,
+        parent_bus = "pci", device_name = "USB controller" }
+    local root = { id = "USB\\ROOT_HUB30\\fixture", parent_id = controller.address,
+        parent_bus = "pci", product = "Root hub" }
+    local leaf = { id = "USB\\fixture", parent_id = root.id, parent_bus = "usb",
+        vendor_id = 0x1234, product_id = 0, product = "Device" }
+    local state = { inventory = { pci = { devices = { bridge, controller } },
+        usb = { devices = { root, leaf } } } }
+    local graph = Hardware.build(state)
+    assert(not graph.partial and #graph.nodes == 4
+        and graph.by_id["pci:" .. controller.address].parent_id == "pci:" .. bridge.address
+        and graph.by_id["usb:" .. root.id].parent_id == "pci:" .. controller.address
+        and graph.by_id["usb:" .. leaf.id].depth == 3)
+    local detail = table.concat(TUI.hardware_detail_lines(state, "usb:" .. root.id, i18n), "\n")
+    assert(detail:find("01:00.0", 1, true) and detail:find("p parent", 1, true),
+        "Windows controller ancestry is available in the hardware inspector")
+    local exported = Export.snapshot(state)
+    assert(exported.inventory.pci.devices[1].device_id == 0
+        and exported.inventory.usb.devices[1].vendor_id == nil
+        and exported.inventory.usb.devices[1].parent_bus == "pci"
+        and exported.inventory.usb.devices[2].product_id == 0
+        and by_id(exported.inventory.topology.nodes, "usb:" .. root.id).parent_id
+            == "pci:" .. controller.address,
+        "raw inventory and exported topology agree without inventing root-hub IDs")
+    controller.address, root.parent_id = "PCI\\CONTROLLER", "PCI\\CONTROLLER"
+    graph = Hardware.build(state)
+    assert(graph.by_id["usb:" .. root.id].parent_id == "pci:PCI\\CONTROLLER")
+    root.parent_bus = "invalid"
+    graph = Hardware.build(state)
+    assert(graph.partial and graph.by_id["usb:" .. root.id].parent_id == nil)
+    root.parent_bus = "pci"
+    root.parent_id = "PCI\\removed"
+    graph = Hardware.build(state)
+    assert(graph.by_id["usb:" .. root.id].depth == 0
+        and graph.by_id["pci:PCI\\removed"] == nil,
+        "an absent parent is not synthesized from the child's reference")
+    root.parent_id = controller.address
+    state.inventory.pci.devices[3] = { address = controller.address }
+    graph = Hardware.build(state)
+    assert(graph.partial and graph.by_id["usb:" .. root.id].parent_id == nil,
+        "duplicate addresses cannot choose an arbitrary controller")
+    state.inventory.pci.devices[3] = nil
+    state.inventory.quality = "partial"
+    assert(Hardware.build(state).partial,
+        "partial native enumeration remains visible in the topology summary")
+end
+
 return true
