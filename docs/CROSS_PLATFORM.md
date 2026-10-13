@@ -209,6 +209,24 @@ DLL 执行权限；下载工具把文件权限统一为 0644，造成了首次�
 概览的 CPU/Memory、各页专属内容、无 ANSI 码与正常退出。完整 CI 的
 最终结果另行核对，不将已失败的流程记为成功。
 
+最终 [Windows CI 38377222831](https://github.com/Water-Run/wtop/actions/runs/38377222831)
+在 `3fee78c` 完整成功结束，包含原生夹具、两种打包、全部 PE 检查、
+五种 CLI、真实控制台、ZIP 归档和上传。下载其正式开发构件后，核对
+16 个文件、ZIP CRC、随包校验和和 7 项 PE 镜像，再将**同一份 ZIP**
+分别送到 Server 2008 与现代 Windows 的独立目录；两种包在两台主机上
+均通过同样的 CLI、JSON、经典控制台及硬件父设备导航检查。
+最终 ZIP 为 7206808 字节，SHA-256：
+`f0ec2703e090c8aef1118d2d15d3f597de013c683676df1ba4b4fd03ba5d193b`。
+本地交付副本为 `dist/wtop-0.2.0-dev-3fee78c-windows-x86.zip`。
+
+同一提交的主 [CI 38377222752](https://github.com/Water-Run/wtop/actions/runs/38377222752)
+中，macOS arm64 构建与独立下载复验均已成功；其余主流程仍在运行时
+不计为整体通过。XP、Intel/旧 macOS 和新增厂商硬件没有增加实测声明。
+该次 Mac 归档下载到本地后再次通过 5 项 Mach-O 检查，全部为 arm64、
+最低 macOS 11.0，大小为 6916091 字节，SHA-256 为
+`e38c9ff14f894ea0c81dd5c5f7d2edeb1c1e2dbccd7175f7ae769284b35b2b78`。
+交付副本为 `dist/wtop-0.2.0-dev-3fee78c-macos-arm64.tar.gz`。
+
 本地基线 `make check test-55` 的 132 个 Lua 文件通过，修改后的 Linux
 快速 PTY、两种平台二进制门禁回归、打包器缓存完整性回归、发布证据守卫和
 actionlint 均通过。详细状态与原始证据保存在不随 Git 分发的

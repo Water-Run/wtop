@@ -511,7 +511,8 @@ i686 的 `cc1.exe` 在当前项目上会耗尽 2 GiB；Windows CI 在核对官�
 源码和构建身份，避免混用另一份源码树。每次打包都核验锁定的
 luainstaller 1.5.0 源 rock，并对目录包或单文件内的全部 PE 做加载条件检查。
 当前 MSVC 运行库会引入较新的 Windows API，不能只靠 `/SUBSYSTEM:5.01`
-把它当作 XP 候选。最终 Windows 包仍在验收；已完成的范围见
+把它当作 XP 候选。目录包与单文件开发包已通过 Windows CI、Server 2008
+和现代 Windows 实机验收；XP 仍未运行。具体范围见
 [跨平台验证记录](CROSS_PLATFORM.md#2026-10-13恢复交接macos-打包与-windows-加载条件)。
 
 ## 10. 发布前仍需完成
