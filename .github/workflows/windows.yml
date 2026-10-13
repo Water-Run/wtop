@@ -1,6 +1,8 @@
 name: Windows development bundles
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -113,15 +115,23 @@ jobs:
       - name: Archive the complete development packages
         shell: pwsh
         run: |
-          tar -czf dist/wtop-windows-x86.tar.gz -C dist/windows-bundle .
+          @'
+          from pathlib import Path
+          import zipfile
+          root = Path('dist/windows-bundle')
+          with zipfile.ZipFile('dist/wtop-windows-x86.zip', 'w', zipfile.ZIP_DEFLATED, allowZip64=False) as archive:
+              for path in sorted(root.rglob('*')):
+                  if path.is_file():
+                      archive.write(path, path.relative_to(root).as_posix())
+          '@ | python -
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $hash = (Get-FileHash dist/wtop-windows-x86.tar.gz -Algorithm SHA256).Hash.ToLower()
-          "$hash  wtop-windows-x86.tar.gz" | Set-Content -Encoding ascii dist/wtop-windows-x86.tar.gz.sha256
+          $hash = (Get-FileHash dist/wtop-windows-x86.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  wtop-windows-x86.zip" | Set-Content -Encoding ascii dist/wtop-windows-x86.zip.sha256
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: windows-debug-onedir
-          path: dist/windows-bundle/wtop/
+          name: windows-debug-bundles
+          path: dist/windows-bundle/
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 3
@@ -129,6 +139,6 @@ jobs:
         with:
           name: windows-x86-development
           path: |
-            dist/wtop-windows-x86.tar.gz
-            dist/wtop-windows-x86.tar.gz.sha256
+            dist/wtop-windows-x86.zip
+            dist/wtop-windows-x86.zip.sha256
           if-no-files-found: error

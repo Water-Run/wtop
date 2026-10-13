@@ -159,4 +159,28 @@ assert len(Check.pe_images(bytes(pe) * 4)) == 4
 refused(lambda: Check.pe_images(bytes(pe[:300])), "truncated embedded PE")
 refused(lambda: Check.pe_images(b"prefix" + pe), "missing PE executable header")
 
+# An unstripped MinGW executable has COFF symbols/string data after its last
+# section. The complete embedded image must retain those bytes for objdump.
+symbol_pe = bytearray(pe)
+struct.pack_into("<II", symbol_pe, 76, 512, 1)
+strings = b"a_long_symbol_name\0"
+symbol_pe.extend(bytes(18) + struct.pack("<I", len(strings) + 4) + strings)
+images = Check.pe_images(bytes(pe) + bytes(symbol_pe) + bytes(pe))
+assert images[1] == (512, bytes(symbol_pe)) and len(images) == 3
+refused(lambda: Check.pe_images(bytes(symbol_pe[:-1])), "truncated embedded PE")
+bad_symbols = bytearray(symbol_pe)
+struct.pack_into("<I", bad_symbols, 76, 0)
+refused(lambda: Check.pe_images(bytes(bad_symbols)), "invalid embedded PE symbol table")
+struct.pack_into("<I", symbol_pe, 530, 3)
+refused(lambda: Check.pe_images(bytes(symbol_pe)), "invalid embedded PE string table")
+
+certificate_pe = bytearray(pe)
+struct.pack_into("<H", certificate_pe, 84, 136)
+certificate_pe[224:264] = pe[184:224]
+struct.pack_into("<I", certificate_pe, 180, 5)
+struct.pack_into("<II", certificate_pe, 216, 512, 16)
+certificate_pe.extend(bytes(16))
+assert Check.pe_images(bytes(certificate_pe))[0][1] == bytes(certificate_pe)
+refused(lambda: Check.pe_images(bytes(certificate_pe[:-1])), "truncated embedded PE")
+
 print("ok: Windows x86 artifact gate rejects loader and import regressions")

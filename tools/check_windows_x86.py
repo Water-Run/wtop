@@ -208,7 +208,7 @@ def pe_images(data: bytes) -> list[tuple[int, bytes]]:
         if offset + 64 <= len(data):
             pe = offset + struct.unpack_from("<I", data, offset + 60)[0]
             if pe >= offset + 64 and pe + 24 <= len(data) and data[pe:pe + 4] == b"PE\0\0":
-                _, sections, _, _, _, optional_size, _ = struct.unpack_from("<HHIIIHH", data, pe + 4)
+                _, sections, _, symbols, symbol_count, optional_size, _ = struct.unpack_from("<HHIIIHH", data, pe + 4)
                 table = pe + 24 + optional_size
                 if not 0 < sections <= 96 or optional_size < 64 or table + sections * 40 > len(data):
                     raise ValueError("invalid embedded PE section table")
@@ -216,6 +216,31 @@ def pe_images(data: bytes) -> list[tuple[int, bytes]]:
                 for index in range(sections):
                     raw_size, raw_offset = struct.unpack_from("<II", data, table + index * 40 + 16)
                     size = max(size, raw_offset + raw_size)
+                # MinGW leaves COFF symbols and their string table after the
+                # sections. Truncating there makes objdump reject a valid PE,
+                # including the outer onefile program itself.
+                if symbols:
+                    strings = symbols + symbol_count * 18
+                    if offset + strings + 4 > len(data):
+                        raise ValueError("truncated embedded PE symbol table")
+                    string_size = struct.unpack_from("<I", data, offset + strings)[0]
+                    if string_size < 4:
+                        raise ValueError("invalid embedded PE string table")
+                    size = max(size, strings + string_size)
+                elif symbol_count:
+                    raise ValueError("invalid embedded PE symbol table")
+                # The certificate table also uses a file offset, not an RVA.
+                magic = struct.unpack_from("<H", data, pe + 24)[0]
+                directories = 96 if magic == 0x10B else 112 if magic == 0x20B else 0
+                if directories and optional_size >= directories + 40:
+                    directory_count = struct.unpack_from("<I", data, pe + 24 + directories - 4)[0]
+                    if directory_count > 4:
+                        certificate, certificate_size = struct.unpack_from(
+                            "<II", data, pe + 24 + directories + 32)
+                        if certificate_size:
+                            if not certificate:
+                                raise ValueError("invalid embedded PE certificate table")
+                            size = max(size, certificate + certificate_size)
                 if size < table + sections * 40 - offset or offset + size > len(data):
                     raise ValueError("truncated embedded PE image")
                 images.append((offset, data[offset:offset + size]))
