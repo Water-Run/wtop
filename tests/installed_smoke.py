@@ -25,7 +25,7 @@ def run_checks(executable: Path, version: str, platform: str) -> None:
                                     env=environment, capture_output=True, timeout=30)
             assert result.returncode == 0, "%s exited %d: %s" % (
                 mode, result.returncode, result.stderr.decode(errors="replace")[:500])
-            output = result.stdout.decode("utf-8")
+            output = result.stdout.decode("utf-8").replace("\r\n", "\n")
             if mode == "--version":
                 assert re.fullmatch(r"wtop " + re.escape(version)
                                     + r"(?: \(rev [^)]+\))?\n", output), output

@@ -4,6 +4,7 @@ HOST_OS := $(shell uname -s 2>/dev/null || echo unknown)
 ifeq ($(HOST_OS),Darwin)
 
 .PHONY: all native run snapshot diagnose
+.NOTPARALLEL: native bundle-dir bundle-file test-bundle-dir test-bundle-file test-bundles
 all: native
 native:
 	@./tools/build_macos.sh
@@ -296,6 +297,7 @@ check: resource-check native locales
 		$(LUA) tools/check_agent_schema.lua
 	@python3 tests/test_luainstaller_bootstrap.py
 	@python3 tests/test_windows_x86_artifact.py
+	@python3 tests/test_macos_artifact.py
 	@python3 tests/test_release_archive.py
 
 test: resource-check-full test-55 test-pty
@@ -658,7 +660,7 @@ endif
 # while Linux make never even saw that rule.
 ifeq ($(HOST_OS),Darwin)
 
-.PHONY: bundle-dir bundle-file test-bundle-dir test-bundle-file
+.PHONY: bundle-dir bundle-file test-bundle-dir test-bundle-file test-bundles
 bundle-dir: native
 	@./tools/package_macos.sh dir
 bundle-file: native
@@ -673,5 +675,8 @@ test-bundle-file: bundle-file
 		--version "$$(cat VERSION)" --platform Darwin
 	@WTOP_EXECUTABLE='$(CURDIR)/dist/macos-bundle/wtop-onefile' WTOP_ROOT='$(CURDIR)' \
 		WTOP_PTY_PROFILE=quick python3 tests/pty_smoke.py
+
+test-bundles: test-bundle-dir test-bundle-file
+	@python3 tools/check_macos.py --bundle dist/macos-bundle
 
 endif

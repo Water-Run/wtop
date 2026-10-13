@@ -109,6 +109,9 @@ make run
 Сборка появится в `dist/macos/wtop`. Минимальная версия — macOS 11 на
 Apple silicon и 10.13 на Intel.
 
+`make test-bundles` собирает и проверяет пакеты в виде каталога и одного файла
+в `dist/macos-bundle/`.
+
 ## Использование
 
 | Клавиша | Действие |

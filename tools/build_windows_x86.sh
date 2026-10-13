@@ -23,15 +23,18 @@ if [ ! -f "$work_dir/.lua-source-clean" ]; then
     touch "$work_dir/.lua-source-clean"
 fi
 
-if [ ! -f "$work_dir/.lua-static-runtime" ]; then
+if [ ! -f "$work_dir/.lua-static-runtime-large-address-aware" ]; then
     make -C "$work_dir/lua-src/src" clean
 fi
 make -C "$work_dir/lua-src/src" lua.exe "CC=$compiler" \
     "LUA_A=lua55.dll" "LUA_T=lua.exe" \
     "AR=$compiler -shared -static-libgcc -o" \
     "RANLIB=i686-w64-mingw32-strip --strip-unneeded" \
-    "SYSCFLAGS=-DLUA_BUILD_AS_DLL" "SYSLIBS=" "SYSLDFLAGS=-s -static-libgcc"
-touch "$work_dir/.lua-static-runtime"
+    "SYSCFLAGS=-DLUA_BUILD_AS_DLL" "SYSLIBS=" \
+    "SYSLDFLAGS=-s -static-libgcc -Wl,--large-address-aware"
+# The 32-bit interpreter also runs the packager. Allow its working set to
+# exceed 2 GiB on 64-bit build hosts while keeping a PE32/XP runtime.
+touch "$work_dir/.lua-static-runtime-large-address-aware"
 "$project_dir/tools/write_build_id.sh"
 "$compiler" -std=c17 -O2 -Wall -Wextra -Werror -shared -static-libgcc \
     -I"$source_dir/src" -I"$project_dir/build/native" -o "$work_dir/wtop_native.dll" \

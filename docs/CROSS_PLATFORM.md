@@ -108,6 +108,48 @@ macOS、Windows 的运行验证来自下表列出的主机记录。
 
 ## 开发验证记录
 
+### 2026-10-13：恢复交接、macOS 打包与 Windows 加载条件
+
+从 `43c96bd` 接续开发，先核对其 CI 已成功结束，再检查保留的 Mac
+失败任务；旧 PID 已退出，退出码为 2，没有重复启动该任务。
+Network 页缺失标记的原因是测试同时要求 Linux 专属的链路变化列和
+softnet 接收积压面板，而 macOS 按设计不显示它们。修正后仍检查两个
+平台共有的接口、连接表，并在 Linux 继续要求两项专属指标。
+
+`yymac01` 的 arm64 onedir 和 onefile 均通过五种 CLI、快速 PTY。
+随后检查实际 Mach-O 发现，luainstaller 启动器的 `minos` 为 26.0，
+原生模块却为 11.0。打包脚本现在向整个编译链传递
+`MACOSX_DEPLOYMENT_TARGET`，原生模块的 install name 也不再带构建目录。
+在提供的第二台 Mac `yymaclyf` 上从干净源码重建，两个包通过相同检查；
+onedir 程序、原生模块及 onefile 的三个镜像全部为 arm64、最低 11.0，
+加载依赖仅为系统库和系统框架。归档传到本地后再传回独立目录，两个入口
+再次通过 CLI 与快速 PTY。归档 SHA-256 为
+`2870e2880565a588d69af1867a5dd1095e8e25c4943b2a2bcd47434900e70212`。
+这不是旧 macOS 或 Intel 的运行证据。
+
+`make test-bundles` 汇合 macOS 两种包的检查，静态门禁也检查单文件的
+内嵌程序和原生模块，避免只测外壳。CI 增加 macOS 构建与独立下载作业；
+本次新增作业的实际运行仍待提交后核对。便携打包器的复用检查现在从已验证
+的源 rock 重新解包作比较基准；同时修改两份缓存不能冒充锁定源码。
+
+Windows 的 binutils 2.46 导入表使用 `Ordinal Hint Member-Name` 表头。
+既有解析器只接受旧表头，结果漏读所有函数。修复同时覆盖表头和成员行，
+未知表头明确报错。当前 x86 开发包的三个 PE32 镜像与 383 个具名导入
+通过检查。原生 MSVC 目录包虽通过五种 CLI，却硬导入 XP 不提供的
+`InitializeCriticalSectionEx`，因此新门禁拒绝它；不能把它作为 XP 候选。
+Windows 打包入口改为要求 x86 MinGW，检查目录包和单文件的全部 PE。
+
+同批开发运行时在提供的 Windows Server 2008（6.0.6003）通过五种 CLI、
+Snapshot/Agent JSON 契约和原生版本检查。经典控制台在 80×25 下显示概览、
+进程，在调整为 100×30 后显示网络和系统页；各页专属内容可读、没有原始
+ANSI 转义码，按 `q` 后退出码为 0。这是开发运行时的证据，Windows
+luainstaller 候选仍需以最终产物重复验证。XP 本身仍未运行。
+
+本地基线 `make check test-55` 的 132 个 Lua 文件通过，修改后的 Linux
+快速 PTY、两种平台二进制门禁回归、打包器缓存完整性回归、发布证据守卫和
+actionlint 均通过。详细状态与原始证据保存在不随 Git 分发的
+`build/cross-platform-20261013/`。旧交接目录保留。
+
 ### 2026-10-12：v0.2.0 标签与候选链验收
 
 为 `45ffae4` 打出 `v0.2.0` 标签并推送，Release candidate 流程在该标签上

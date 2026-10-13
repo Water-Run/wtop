@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import zipfile
 
 
 def write(path, content, executable=False):
@@ -101,5 +102,41 @@ chmod +x "$tree/bin/luai"
     print("luainstaller bootstrap: reuse, repair, source integrity and overrides passed")
 
 
+def portable_source_integrity():
+    original = Path("tools/bootstrap_portable_luainstaller.sh").read_text()
+    with tempfile.TemporaryDirectory(prefix="wtop-portable-installer-") as directory:
+        root = Path(directory)
+        archive = root / ".tools/downloads/luainstaller-1.5.0-1.src.rock"
+        archive.parent.mkdir(parents=True)
+        payload = {"src/probe.lua": "return true\n", "luainstaller.lua": "return {}\n",
+                   "bin/luai.lua": "return 0\n", "bin/luainstaller.lua": "return 0\n"}
+        with zipfile.ZipFile(archive, "w") as rock:
+            for name, content in payload.items():
+                rock.writestr("luainstaller/" + name, content)
+        script, replacements = re.subn(r"^expected=[0-9a-f]{64}$",
+                                      "expected=" + hashlib.sha256(archive.read_bytes()).hexdigest(),
+                                      original, flags=re.M)
+        assert replacements == 1
+        bootstrap = root / "tools/bootstrap_portable_luainstaller.sh"
+        write(bootstrap, script, True)
+        write(root / ".tools/lua-5.5.1/bin/lua", "#!/bin/sh\nexit 0\n", True)
+        installed = root / ".tools/luainstaller-1.5.0"
+        old_cache = root / ".tools/luainstaller-source-1.5.0/luainstaller"
+        for name, content in payload.items():
+            write(installed / name, content)
+            write(old_cache / name, content)
+        write(installed / "bin/luai", "#!/bin/sh\nexit 0\n", True)
+        result = subprocess.run(["sh", str(bootstrap)], capture_output=True)
+        assert result.returncode == 0, result.stderr.decode()
+        # Editing both cached copies must not be mistaken for a verified pin.
+        for tree in (installed, old_cache):
+            write(tree / "src/probe.lua", "return false\n")
+        result = subprocess.run(["sh", str(bootstrap)], capture_output=True)
+        assert result.returncode != 0 and b"differs from its pinned source" in result.stderr
+        assert (old_cache / "src/probe.lua").read_text() == "return false\n", "keep the old cache intact"
+    print("portable luainstaller bootstrap: a matching edit in both caches is rejected")
+
+
 if __name__ == "__main__":
     main()
+    portable_source_integrity()

@@ -100,6 +100,9 @@ make run
 构建产物位于 `dist/macos/wtop`，目标平台是 Apple silicon 上的 macOS 11
 和 Intel 上的 10.13。
 
+`make test-bundles` 会构建并检查目录包与单文件包，产物位于
+`dist/macos-bundle/`。
+
 ## 使用
 
 | 按键 | 作用 |

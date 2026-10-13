@@ -288,11 +288,12 @@ local NOT_RELEASE_EVIDENCE = {
     -- no target-machine budget has been fixed for test-all yet.
     "check_perf_budget.py",
     "check_windows_x86.py",
+    "check_macos.py",
     "check_resources.sh",
     "compile_locales.lua", "cross_libc_build.sh", "elf_floors.py",
     "perf_benchmark.py", "write_build_id.sh",
     "release_archive.py", "make_source_rock.py",
-    "bootstrap_portable_luainstaller.sh", "package_macos.sh",
+    "bootstrap_portable_luainstaller.sh", "package_macos.sh", "package_windows.py",
 }
 
 local classified = {}
@@ -995,8 +996,18 @@ assert(next(named_paths) ~= nil,
     "no path under dist/ appears anywhere in .github/workflows/ci.yml, so 6b "
         .. "is passing vacuously")
 local orphans = {}
+-- A complete directory can travel inside an uploaded tar archive. Only the
+-- explicit `-C directory .` form establishes that all hidden payloads travel.
+local function archived_directories(text, uploads)
+    local result = {}
+    for archive, directory in text:gmatch("tar %-czf (dist/[%w%._%-]+) %-C (dist/[%w%._/%-]+) %.%s*\n") do
+        if publisher_of(archive, uploads) then result[directory] = archive end
+    end
+    return result
+end
+local transported = archived_directories(workflow, published)
 for path in pairs(named_paths) do
-    if publisher_of(path, published) == nil then
+    if publisher_of(path, published) == nil and transported[path] == nil then
         orphans[#orphans + 1] = path
     end
 end
@@ -1354,6 +1365,14 @@ jobs:
       - run: make sbom checksums
 ]]
 local fixture_published = published_paths(fixture)
+local transport_fixture = "tar -czf dist/bundle.tar.gz -C dist/bundle .\n"
+local transport_upload = {{ artifact = "bundle", path = "dist/bundle.tar.gz" }}
+assert(archived_directories(transport_fixture, transport_upload)["dist/bundle"]
+    == "dist/bundle.tar.gz")
+assert(next(archived_directories(transport_fixture, {})) == nil,
+    "an archive without an upload must not count as delivered")
+assert(next(archived_directories(transport_fixture:gsub(" %.\n", " *\n"), transport_upload)) == nil,
+    "a shell glob that drops hidden payloads must not count as a complete archive")
 assert(publisher_of("dist/never-published.txt", fixture_published) == nil,
     "a commented-out upload step was read as a real one")
 assert(publisher_of("dist/never-published.txt", published_paths(fixture)) == nil,

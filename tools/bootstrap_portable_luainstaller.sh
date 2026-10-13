@@ -4,7 +4,6 @@ set -eu
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 lua="$project_dir/.tools/lua-5.5.1/bin/lua"
 archive="$project_dir/.tools/downloads/luainstaller-1.5.0-1.src.rock"
-source_dir="$project_dir/.tools/luainstaller-source-1.5.0"
 prefix="$project_dir/.tools/luainstaller-1.5.0"
 expected=5d57d07e539107cc13e171e2b0a5919be692898c2627acfda4bcd12694055545
 
@@ -19,10 +18,11 @@ if [ ! -f "$archive" ]; then
 fi
 actual=$(shasum -a 256 "$archive" | awk '{print $1}')
 [ "$actual" = "$expected" ] || { echo 'wtop: luainstaller source checksum mismatch' >&2; exit 1; }
-if [ ! -d "$source_dir" ]; then
-    mkdir -p "$source_dir"
-    unzip -q "$archive" -d "$source_dir"
-fi
+# Compare installed code against a fresh extraction of the verified archive.
+# Comparing two mutable cached trees would accept the same edit in both.
+source_dir=$(mktemp -d "$project_dir/.tools/luainstaller-source-XXXXXX")
+trap 'rm -rf "$source_dir"' EXIT HUP INT TERM
+unzip -q "$archive" -d "$source_dir"
 source_root="$source_dir/luainstaller"
 if [ ! -d "$prefix" ]; then
     "$lua" "$source_root/tools/install.lua" --prefix "$prefix" --lua "$lua"

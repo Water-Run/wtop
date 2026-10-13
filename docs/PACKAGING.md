@@ -482,6 +482,32 @@ wtop 没有最低 Linux 内核，这是程序的性质，不是分析的缺席�
 
 一个值得点名的陷阱，因为构建现在依赖它：`VERSION` 是生成头文件规则的前置，而不只是脚本的输入。脚本无论版本是否变化都写 revision 头文件，于是只依赖脚本的规则会让一次版本 bump 什么都不重建——而一个到不了二进制文件的版本，正是本节所讲的失败。
 
+## macOS 与 Windows 开发打包
+
+macOS 使用 `make test-bundles`，生成 `dist/macos-bundle/wtop/wtop` 和
+`dist/macos-bundle/wtop-onefile`。该目标依次验证两个入口的 CLI、快速 PTY，
+再检查全部 Mach-O，包括单文件内嵌的程序和原生模块。arm64 目标为 11.0，
+Intel 为 10.13；整个打包链使用同一部署目标。静态检查不代替旧系统实测。
+CI 的 macOS 作业上传保留隐藏文件和权限的 tar 包，独立作业下载后在源码树
+以外解包运行。它们仍是开发构建，没有改变 Linux-only 的公开发布范围。
+
+Windows 先由 `tools/build_windows_x86.sh` 生成 `dist/windows-x86`，然后在
+Windows 上保留该目录及项目的 `tools/`、`native/`、`tests/`、`VERSION` 和
+`LICENSE`，使用 Python 3 与针对 MSVCRT 的原生 x86 MinGW 编译器打包：
+
+```powershell
+python tools/package_windows.py dir --compiler C:\w64devkit\bin\gcc.exe
+python tools/package_windows.py file --compiler C:\w64devkit\bin\gcc.exe
+```
+
+入口分别为 `dist/windows-bundle/wtop/wtop.exe` 与
+`dist/windows-bundle/wtop-onefile.exe`。打包器使用开发运行时内配套的 Lua
+源码和构建身份，避免混用另一份源码树。每次打包都核验锁定的
+luainstaller 1.5.0 源 rock，并对目录包或单文件内的全部 PE 做加载条件检查。
+当前 MSVC 运行库会引入较新的 Windows API，不能只靠 `/SUBSYSTEM:5.01`
+把它当作 XP 候选。最终 Windows 包仍在验收；已完成的范围见
+[跨平台验证记录](CROSS_PLATFORM.md#2026-10-13恢复交接macos-打包与-windows-加载条件)。
+
 ## 10. 发布前仍需完成
 
 - [x] 锁定并校验 Lua 5.5.1 工具链。
@@ -493,14 +519,14 @@ wtop 没有最低 Linux 内核，这是程序的性质，不是分析的缺席�
 - [x] 携带发布据以分发的条款，并让条款缺失导致失败。已于 2026-10-02 完成：此前 SBOM 对 `wtop` 和 `wtop_native` 声明 EUPL-1.2、对 `lua` 声明 MIT、对 `luainstaller` 声明 LGPL-3.0-or-later，而发布物**三者一个文本都没带**，`SHA256SUMS` 只覆盖两个可执行文件，两个 CI 上传作业发布的都是证据和程序而没有一份许可证文件——CI 产出的发布物完整、验证过、全绿，却没有自身条款的可读陈述。现在 `make bundle-dir` 把 `LICENSE` 复制进包，生成器拒绝声明文本缺失的许可证，`make test-release-notices` 直接询问包，CI 发布它们。onefile 仍不携带 EUPL 文本，不补丁第三方 LGPL 工具就无法做到；SBOM 以 `wtop:licence-text:present-in` 按许可证记录这一点，让分发者看见缺口而不是去推断。
 - [x] 提供仅 Linux 的 LuaRocks rockspec、隔离安装目标和已安装 CLI 冒烟测试。
 - [x] 采用 EUPL-1.2，并在源码、rock 安装文档和 README 文件中声明。
-- [ ] 修复 CI 上传遗漏 `.luai` 的问题，并从实际下载构件运行完整清单核验与 CLI/PTY；上传前的测试不能关闭此项。
+- [x] 修复 CI 上传遗漏 `.luai` 的问题；Linux x86_64/aarch64 实际下载构件已通过完整清单、CLI 与 PTY 复验。
 - [ ] 提供固定源码的版本 rockspec 和源 rock，在公共索引验收按名称安装；同时提供按平台命名的 bin 下载。
 - [x] 为干净 LuaRocks 构建生成原生版本头文件，并核对安装后的 Lua/C 版本；无 Git 元数据的源 rock 可不带修订号。
 - [ ] 在最终发布提交上清理或隔离旧产物，并重跑每个打包目标；仓库里现有的 `dist/` 内容，不是产物与当前源码一致的证据。
 - [ ] 对最终的 onedir/onefile 产物运行 CLI、快照、PTY、干净环境、`ldd` 和 `file` 校验，并保留日志。
 - [x] 选定并验证最低 glibc 与 Linux 内核基线。glibc 下限按产物测量，并对 `tools/baseline.conf` 把门；最低内核的回答是"没有"，退化性质由 `tests/unit/test_engine.lua` 和 `MONITORING.md` 的按来源表格钉住。发行版级别的内核主张，仍需上一条中的按发行版运行。
 - [x] 提供 glibc aarch64 原生构建、单元、PTY 和发布 ELF 基线 CI；当前提交已有通过记录。
-- [ ] 验收 aarch64 的实际 bin 下载；完整归档上传与独立下载作业已经接入，待真实运行。
+- [x] 验收 aarch64 的实际 bin 下载；完整归档上传与独立下载作业已有真实通过记录。
 - [ ] 将 macOS、Windows 的原生 luainstaller 打包接入可重复构建与运行验证；其 LuaRocks 支持需另行实现平台构建入口。
 - [ ] 每个计划中的 musl 目标独立构建并测试。
 - [ ] 建立真实的 NVIDIA、AMD、Intel 和无 GPU 冒烟矩阵。

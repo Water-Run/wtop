@@ -113,6 +113,9 @@ make run
 Le résultat se trouve dans `dist/macos/wtop`. Il vise macOS 11 sur Apple
 silicon et 10.13 sur Intel.
 
+`make test-bundles` construit et vérifie les paquets en dossier et en fichier
+unique dans `dist/macos-bundle/`.
+
 ## Utilisation
 
 | Touche | Action |

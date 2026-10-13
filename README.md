@@ -107,6 +107,9 @@ make run
 The build lands in `dist/macos/wtop`. It targets macOS 11 on Apple silicon
 and 10.13 on Intel.
 
+`make test-bundles` builds and checks the directory and single-file packages
+in `dist/macos-bundle/`.
+
 ## Use
 
 | Key | Action |

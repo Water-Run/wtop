@@ -33,6 +33,49 @@ env:
   WTOP_SKIP_RESOURCE_CHECK: "1"
 
 jobs:
+  macos-bundles:
+    name: macOS arm64 bundles
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native build, both bundles, CLI, PTY and deployment floors
+        run: make test-bundles
+      - name: Archive the complete development packages
+        run: |
+          tar -czf dist/wtop-macos-arm64.tar.gz -C dist/macos-bundle .
+          cd dist
+          shasum -a 256 wtop-macos-arm64.tar.gz > wtop-macos-arm64.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-bundles
+          path: |
+            dist/wtop-macos-arm64.tar.gz
+            dist/wtop-macos-arm64.tar.gz.sha256
+          if-no-files-found: error
+
+  macos-download:
+    name: macOS downloaded bundles
+    needs: macos-bundles
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-arm64-bundles
+          path: downloaded
+      - name: Verify and run from outside the checkout
+        run: |
+          cd downloaded
+          shasum -a 256 -c wtop-macos-arm64.tar.gz.sha256
+          mkdir "$RUNNER_TEMP/wtop-recipient"
+          tar -xzf wtop-macos-arm64.tar.gz -C "$RUNNER_TEMP/wtop-recipient"
+          cd ..
+          python3 tools/check_macos.py --bundle "$RUNNER_TEMP/wtop-recipient"
+          for executable in "$RUNNER_TEMP/wtop-recipient/wtop/wtop" "$RUNNER_TEMP/wtop-recipient/wtop-onefile"; do
+            python3 tests/installed_smoke.py --executable "$executable" --version "$(cat VERSION)" --platform Darwin
+            WTOP_EXECUTABLE="$executable" WTOP_PTY_PROFILE=quick python3 tests/pty_smoke.py
+          done
+
   # The compile gate a packager hits first.  No project toolchain, no vendored
   # Lua: just the distribution's compiler against the project's own flags.
   distro-gcc:

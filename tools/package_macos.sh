@@ -5,6 +5,14 @@ set -eu
 kind=${1:-}
 case "$kind" in dir|file) ;; *) echo 'usage: package_macos.sh dir|file' >&2; exit 2 ;; esac
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+case "$(uname -m)" in
+    arm64) MACOSX_DEPLOYMENT_TARGET=11.0 ;;
+    x86_64) MACOSX_DEPLOYMENT_TARGET=10.13 ;;
+    *) echo 'wtop: unsupported macOS architecture' >&2; exit 1 ;;
+esac
+# Apply the same floor to luainstaller's launcher and embedded interpreter.
+# Without this, clang defaults to the build host's macOS release.
+export MACOSX_DEPLOYMENT_TARGET
 lua_prefix="$project_dir/.tools/lua-5.5.1"
 "$project_dir/tools/bootstrap_portable_luainstaller.sh"
 output_root="$project_dir/dist/macos-bundle"

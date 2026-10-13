@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pathlib
+import struct
 import sys
 import tempfile
 
@@ -80,14 +81,20 @@ assert not any(
     for symbol in symbols
 ), "an export row was read as an import"
 
-# The other column shape objdump uses for a named import: an explicit ordinal
-# column and the address ahead of the name.  Which release prints which is not
-# the guard's question; "this row names an import" is.
-assert Check.parse_objdump(
-    report().replace("\tf388\t  275  DeleteCriticalSection",
-                     "\t00001000 <none> 0001 DeleteCriticalSection"),
-    "module.dll",
-)["imports"]["kernel32.dll"] == {"DeleteCriticalSection", "GetTickCount"}
+# Binutils 2.46 prints a different header as well as different member rows.
+# Keep both parts of its actual transcript together: changing just the rows
+# leaves a parser that never enters the new table looking green.
+ordinal_report = report().replace("Hint/Ord Member-Name", "Ordinal  Hint  Member-Name")
+ordinal_report = ordinal_report.replace("\tf388\t  275  DeleteCriticalSection",
+                                       "\t000101e4  <none>  0121  DeleteCriticalSection")
+ordinal_report = ordinal_report.replace("\tf410\t  875  GetTickCount",
+                                       "\t000101e8  <none>  0290  GetTickCount")
+ordinal_report = ordinal_report.replace("\tf4ea\t   58  lua_gettop",
+                                       "\t00010200  <none>  003a  lua_gettop")
+assert Check.parse_objdump(ordinal_report, "module.dll")["imports"] == clean["imports"]
+refused(lambda: Check.parse_objdump(
+    ordinal_report.replace("Ordinal  Hint  Member-Name", "Unknown  Columns"),
+    "module.dll"), "unrecognized objdump import header")
 
 # A row the guard cannot read is a fact about the guard and not about the
 # binary, so the message has to say so.  Reporting it as "no named imports"
@@ -128,6 +135,9 @@ assert ('python3 "$project_dir/tools/check_windows_x86.py" --bundle "$output_dir
 reports["wtop_native.dll"]["imports"]["kernel32.dll"].add("GetTickCount64")
 refused(lambda: Check.check_reports(reports, optional), "hard-imported")
 reports["wtop_native.dll"]["imports"]["kernel32.dll"].remove("GetTickCount64")
+reports["wtop_native.dll"]["imports"]["kernel32.dll"].add("InitializeCriticalSectionEx")
+refused(lambda: Check.check_reports(reports, optional), "hard-imported")
+reports["wtop_native.dll"]["imports"]["kernel32.dll"].remove("InitializeCriticalSectionEx")
 reports["libwinpthread-1.dll"]["imports"]["vcruntime140.dll"] = {"_beginthreadex"}
 refused(lambda: Check.check_reports(reports, optional), "unbundled DLL")
 
@@ -135,5 +145,18 @@ with tempfile.TemporaryDirectory() as directory:
     (pathlib.Path(directory) / "wtop_windows.c").write_text("/* no lookups */")
     refused(lambda: Check.optional_api_names(pathlib.Path(directory)),
             "optional API scan lost")
+
+# The onefile gate must see all its embedded PE headers, not just its launcher.
+pe = bytearray(512)
+pe[:2] = b"MZ"
+struct.pack_into("<I", pe, 60, 64)
+pe[64:68] = b"PE\0\0"
+struct.pack_into("<HHIIIHH", pe, 68, 0x14C, 1, 0, 0, 0, 96, 0)
+struct.pack_into("<H", pe, 88, 0x10B)
+struct.pack_into("<I", pe, 148, 256)
+struct.pack_into("<II", pe, 200, 256, 256)
+assert len(Check.pe_images(bytes(pe) * 4)) == 4
+refused(lambda: Check.pe_images(bytes(pe[:300])), "truncated embedded PE")
+refused(lambda: Check.pe_images(b"prefix" + pe), "missing PE executable header")
 
 print("ok: Windows x86 artifact gate rejects loader and import regressions")

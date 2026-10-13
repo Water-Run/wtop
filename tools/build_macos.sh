@@ -46,6 +46,7 @@ mkdir -p "$output_dir"
 "$project_dir/tools/write_build_id.sh"
 cc -std=c17 -O2 -Wall -Wextra -Werror \
     "-mmacosx-version-min=$deployment" -dynamiclib -undefined dynamic_lookup \
+    -install_name @rpath/wtop_native.so \
     -I"$work_dir/lua-5.5.1/src" \
     -I"$project_dir/build/native" \
     -o "$output_dir/wtop_native.so" "$project_dir/native/wtop_macos.c" \

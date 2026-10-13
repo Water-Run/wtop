@@ -87,12 +87,16 @@ PAGE_MARKERS = {
     3: ("逻辑 CPU", "各核心 CPU", "逐 CPU 热节流"),
     4: ("内存构成", "分页与缺页"),
     5: ("块设备", "文件系统与挂载点"),
-    6: ("网络接口", "链路变化", "接收积压", "套接字与连接"),
+    6: ("网络接口", "套接字与连接"),
     7: ("图形设备", "GPU 进程"),
     8: ("cgroup v2 工作负载",),
     9: ("主机与操作系统", "内核与启动"),
     10: ("采集器", "深度检查器"),
 }
+# Link-transition and receive-backlog counters come from Linux sysfs/procfs.
+# Other backends omit them, but must still render both network tables.
+if sys.platform.startswith("linux"):
+    PAGE_MARKERS[6] += ("链路变化", "接收积压")
 
 
 class VirtualScreen:
@@ -612,8 +616,11 @@ def _run_session(
             final_text = VirtualScreen(columns, rows)
             final_text.feed(bytes(output))
             final_screen = final_text.text()
-            assert all(marker in final_screen for marker in PAGE_MARKERS[final_page]), (
-                f"page {final_page} final screen lacks its semantic markers"
+            missing = [marker for marker in PAGE_MARKERS[final_page]
+                       if marker not in final_screen]
+            assert not missing, (
+                f"page {final_page} final screen lacks semantic markers {missing}:\n"
+                + final_screen
             )
         if frequency_click:
             final_text = VirtualScreen(columns, rows)
