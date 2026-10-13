@@ -3,6 +3,10 @@ name: Windows development bundles
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'README*.md'
+      - 'AGENTS.md'
   workflow_dispatch:
 
 permissions:
