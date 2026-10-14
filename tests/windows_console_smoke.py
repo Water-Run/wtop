@@ -18,9 +18,9 @@ def run(executable: Path, harness: Path) -> None:
         command = subprocess.list2cmdline([str(executable.resolve()), "--lang", "en-US", "--no-color"])
         # The Host tile can be below the visible Overview panels at 80x25.
         # Memory is part of the default visible layout on every tested host.
-        steps = ("await:20000:Memory,snap:overview,key:2,await:10000:Command,snap:processes,"
-                 "resize:100x30,key:6,await:10000:Sockets,snap:network,"
-                 "key:9,await:10000:Kernel,snap:system,key:q,exit:10000")
+        steps = ("capture:20000:overview:CPU|Memory,key:2,capture:10000:processes:PID|Command,"
+                 "resize:100x30,key:6,capture:10000:network:Interfaces|Sockets,"
+                 "key:9,capture:10000:system:Host|Kernel,key:q,exit:10000")
         result = subprocess.run([str(harness.resolve()), steps, command], env=environment,
                                 cwd=temporary, capture_output=True, timeout=75)
         output = result.stdout.decode("utf-8", errors="replace").replace("\r\n", "\n")

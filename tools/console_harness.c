@@ -43,7 +43,7 @@ static void print_utf8(const WCHAR *text, int count) {
     if (length > 0) fwrite(buffer, 1, (size_t)length, stdout);
 }
 
-static void snapshot(const char *label) {
+static int snapshot_if(const char *label, const char *required) {
     HANDLE output = console_output();
     CONSOLE_SCREEN_BUFFER_INFO info;
     CHAR_INFO *cells;
@@ -52,13 +52,15 @@ static void snapshot(const char *label) {
     int columns, rows, distinct = 0;
     WORD seen[64];
     if (output == INVALID_HANDLE_VALUE || !GetConsoleScreenBufferInfo(output, &info)) {
-        printf("===== %s: screen buffer unavailable (error %lu)\n", label,
+        if (!required) printf("===== %s: screen buffer unavailable (error %lu)\n", label,
             (unsigned long)GetLastError());
         if (output != INVALID_HANDLE_VALUE) CloseHandle(output);
-        return;
+        return 0;
     }
     columns = info.srWindow.Right - info.srWindow.Left + 1;
     rows = info.srWindow.Bottom - info.srWindow.Top + 1;
+    if (columns <= 0 || columns > 1023 || rows <= 0
+            || (size_t)columns * (size_t)rows > 200000) { CloseHandle(output); return 0; }
     size.X = (SHORT)columns;
     size.Y = (SHORT)rows;
     region = info.srWindow;
@@ -67,10 +69,38 @@ static void snapshot(const char *label) {
      * console returns one UTF-16 unit for a two-cell character, which shifts
      * every later cell. Bytes map one to one onto cells. */
     if (!cells || !ReadConsoleOutputA(output, cells, size, origin, &region)) {
-        printf("===== %s: read failed (error %lu)\n", label, (unsigned long)GetLastError());
+        if (!required) printf("===== %s: read failed (error %lu)\n", label, (unsigned long)GetLastError());
         free(cells);
         CloseHandle(output);
-        return;
+        return 0;
+    }
+    if (required) {
+        size_t capacity = (size_t)rows * ((size_t)columns + 1) + 1, used = 0;
+        char *visible = malloc(capacity);
+        int matches = visible != NULL;
+        if (visible) {
+            for (int y = 0; y < rows; ++y) {
+                for (int x = 0; x < columns; ++x) {
+                    char value = cells[y * columns + x].Char.AsciiChar;
+                    visible[used++] = value ? value : ' ';
+                }
+                visible[used++] = '\n';
+            }
+            visible[used] = 0;
+            const char *start = required;
+            while (*start && matches) {
+                const char *separator = strchr(start, '|');
+                size_t length = separator ? (size_t)(separator - start) : strlen(start);
+                char marker[128];
+                if (!length || length >= sizeof(marker)) { matches = 0; break; }
+                memcpy(marker, start, length); marker[length] = 0;
+                if (!strstr(visible, marker)) matches = 0;
+                if (!separator) break;
+                start = separator + 1;
+            }
+        }
+        free(visible);
+        if (!matches) { free(cells); CloseHandle(output); return 0; }
     }
     printf("===== %s (%dx%d, buffer %dx%d, cursor %d,%d)\n", label, columns, rows,
         info.dwSize.X, info.dwSize.Y, info.dwCursorPosition.X, info.dwCursorPosition.Y);
@@ -95,6 +125,22 @@ static void snapshot(const char *label) {
     fflush(stdout);
     free(cells);
     CloseHandle(output);
+    return 1;
+}
+
+static void snapshot(const char *label) { (void)snapshot_if(label, NULL); }
+
+static int capture_when(const char *label, const char *required, DWORD timeout) {
+    DWORD started = GetTickCount();
+    if (!required[0] || !timeout || timeout > 60000) return 0;
+    do {
+        /* Validate and print the same captured cells. A repaint between a
+         * separate readiness poll and screenshot must not create an empty frame. */
+        if (snapshot_if(label, required)) return 1;
+        Sleep(50);
+    } while (GetTickCount() - started < timeout);
+    printf("----- timed out capturing %s: %s\n", label, required);
+    return 0;
 }
 
 static int wait_for_text(const char *text, DWORD timeout) {
@@ -327,6 +373,14 @@ int main(int argc, char **argv) {
         else if (strcmp(step, "key") == 0) type_text(value);
         else if (strcmp(step, "vk") == 0) press_virtual_key(atoi(value));
         else if (strcmp(step, "snap") == 0) snapshot(value);
+        else if (strcmp(step, "capture") == 0) {
+            char *label = strchr(value, ':'), *required = label ? strchr(label + 1, ':') : NULL;
+            if (!label || !required) failed = 1;
+            else {
+                *label++ = 0; *required++ = 0;
+                if (!capture_when(label, required, (DWORD)atoi(value))) failed = 1;
+            }
+        }
         else if (strcmp(step, "cpu") == 0) sample_cpu(process.hProcess,
             (DWORD)atoi(value));
         else if (strcmp(step, "resize") == 0) {

@@ -453,22 +453,23 @@ assert(cancellation_checks > 0)
 
 local descendant_timeout = native.run(
     { "/bin/sh", "-c", "sleep 30 & echo $!; wait" },
-    { timeout_ms = 30, max_output_bytes = 64 }
+    -- Allow the shell to report the PID on an instrumented or busy host.
+    -- This checks deadline cleanup, rather than process startup speed.
+    { timeout_ms = 1000, max_output_bytes = 64 }
 )
 assert(descendant_timeout.status == "timeout")
 local descendant_pid = tonumber(descendant_timeout.stdout:match("(%d+)"))
-assert(descendant_pid and descendant_pid > 1)
+assert(descendant_pid and descendant_pid > 1,
+    "timed-out shell did not report its descendant: " .. descendant_timeout.stdout)
 assert_process_not_live(descendant_pid, "timed-out command descendant remained alive")
 
 -- The direct shell exits immediately while its background descendant still
 -- holds the capture pipes, so whether the deadline or the pipe bookkeeping
--- wins is a genuine race between fork/exec and a 30 ms timer.  Asserting one
--- side of that race made this file fail roughly one run in five.  The real
--- invariant is the one worth testing: however the run terminates, process
--- group cleanup must leave no descendant behind.
+-- wins depends on scheduling. However the run terminates, process group
+-- cleanup must leave no descendant behind.
 local detached_timeout = native.run(
     { "/bin/sh", "-c", "sleep 30 & echo $!" },
-    { timeout_ms = 30, max_output_bytes = 64 }
+    { timeout_ms = 1000, max_output_bytes = 64 }
 )
 assert(detached_timeout.status == "timeout" or detached_timeout.status == "ok",
     "a background descendant retaining capture pipes must end as timeout or ok, got "
