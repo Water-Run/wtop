@@ -213,7 +213,7 @@ local function disk_data(data, previous, timestamp_ns)
     if device.id then old_by_id[device.id] = device end
   end
   local elapsed_ns = elapsed_since(previous, timestamp_ns)
-  local any_gap, any_estimated = false, false
+  local any_gap, any_estimated, any_partial = false, false, false
   for _, device in ipairs(data.devices or {}) do
     local counters = device.counters
     local old = old_by_id[device.id]
@@ -241,6 +241,7 @@ local function disk_data(data, previous, timestamp_ns)
         local service_ns = delta("service_time_ns")
         if idle_ns then
           device.busy_percent = math.max(0, math.min(100, 100 - idle_ns * 100 / elapsed_ns))
+          device.busy_quality = nil
         elseif service_ns then
           -- Summed request service time counts overlapping requests twice,
           -- so it only estimates the share of time the device was busy.
@@ -257,9 +258,12 @@ local function disk_data(data, previous, timestamp_ns)
         device.reset_reason = "counter_reset"
       end
     end
+    if device.partial == true then
+      device.quality, any_partial = "partial", true
+    end
     if device.quality == "gap" then any_gap = true end
   end
-  return data, data.quality == "partial" and "partial"
+  return data, (data.quality == "partial" or any_partial) and "partial"
     or any_gap and "gap" or any_estimated and "estimated" or "fresh"
 end
 

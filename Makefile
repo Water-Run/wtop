@@ -3,7 +3,7 @@ SHELL := /bin/sh
 HOST_OS := $(shell uname -s 2>/dev/null || echo unknown)
 ifeq ($(HOST_OS),Darwin)
 
-.PHONY: all native run snapshot diagnose test-native-inventory
+.PHONY: all native run snapshot diagnose test-native-inventory test-native-disk
 .NOTPARALLEL: native bundle-dir bundle-file test-bundle-dir test-bundle-file test-bundles
 all: native
 native:
@@ -13,6 +13,11 @@ test-native-inventory: native
 		tests/native/macos_inventory.c build/macos/lua-5.5.1/src/liblua.a \
 		-framework IOKit -framework CoreFoundation -o build/macos/inventory-fixture
 	@./build/macos/inventory-fixture
+test-native-disk: native
+	@cc -std=c17 -O2 -Wall -Wextra -Werror -Ibuild/macos/lua-5.5.1/src \
+		tests/native/macos_disk.c build/macos/lua-5.5.1/src/liblua.a \
+		-framework IOKit -framework CoreFoundation -o build/macos/disk-fixture
+	@./build/macos/disk-fixture
 run: native
 	@./dist/macos/wtop
 snapshot: native

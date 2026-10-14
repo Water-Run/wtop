@@ -60,6 +60,24 @@ state.quality = { disks = { status = "ok", quality = "stale" } }
 assert(Hardware.build(state).by_id["block:ioreg:1000"].parent_id == nil)
 state.quality = nil
 
+local disk = state.disks.devices[1]
+disk.source, disk.busy_percent, disk.busy_quality = "IOKit", 25, "estimated"
+local disk_export = Export.snapshot(state).disks.devices[1]
+assert(disk_export.source == "IOKit" and disk_export.busy_percent == 25
+    and disk_export.busy_quality == "estimated")
+assert(not JSON.encode(Export.snapshot(state)):find("_registry", 1, true))
+local ViewModel = require("wtop.view_model")
+local function busy_text()
+    local model = ViewModel.build({ history_values = function() return {} end },
+        state, i18n, {}, "storage")
+    return model.disk_table.rows[1].busy
+end
+assert(busy_text():sub(1, 1) == "~", "summed request time is visibly an estimate")
+disk.busy_quality = nil
+assert(busy_text():sub(1, 1) ~= "~", "an exact idle-time reading has no estimate prefix")
+disk.busy_percent, disk.busy_quality = nil, "estimated"
+assert(busy_text() == "—", "an absent busy reading does not get an estimate prefix")
+
 -- Malformed cycles are broken by the common graph, without editing a sample.
 hub._registry_parent_id, hub._registry_parent_bus = "ioreg:9003", "usb"
 graph = Hardware.build(state)

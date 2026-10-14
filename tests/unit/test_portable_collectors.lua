@@ -303,6 +303,37 @@ do
     equal(incomplete.quality, "partial", "native disk enumeration errors survive derivation")
 end
 
+-- IOKit driver counters can outlive a removable medium, and either instance
+-- can change while the BSD name stays the same and the new counters grow.
+do
+    local samples = {}
+    for index, epoch in ipairs({ "ioreg:10:20", "ioreg:10:21", "ioreg:10:21",
+        "ioreg:11:21", "ioreg:11:21" }) do
+        samples[index] = { devices = { { name = "disk0", id = "disk0", stable_id = epoch,
+            identity_quality = "stable", counters = { bytes_read = index * 100,
+                bytes_written = index * 20, reads = index * 10, writes = index,
+                service_time_ns = index * 250000000 } } } }
+    end
+    local source = collectors(fake_native({ collect_disk = samples })).disk
+    local previous
+    for index = 1, #samples do
+        local sample = source:sample(at(index * 1000000000), previous)
+        local device = sample.data.devices[1]
+        if index == 3 or index == 5 then
+            equal(device.read_bytes_per_second, 100, "the same driver and medium restore throughput")
+            equal(device.busy_percent, 25, "request service time estimates busy time")
+            equal(device.busy_quality, "estimated", "parallel service time is not exact wall-clock busy time")
+        else
+            equal(device.read_bytes_per_second, nil, "a replaced driver or medium resets the BSD disk baseline")
+        end
+        previous = sample
+    end
+    previous.data.devices[1].partial = true
+    local incomplete = source:sample(at(6000000000), previous)
+    equal(incomplete.quality, "partial", "a partial native row stays partial during derivation")
+    equal(incomplete.data.devices[1].quality, "partial", "the row cannot be labelled fresh")
+end
+
 -- Interface indexes can be recycled, including while XP counters wrap.
 do
     local entries = {}

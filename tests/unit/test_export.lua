@@ -649,6 +649,18 @@ assert(not signal_named(mixed_alerts, "sustained_pressure"),
     "CPU pressure comes from the failed pressure collector, not the healthy CPU collector")
 
 local rows = {}
+local service_estimate = Export.agent({ quality = { disks = { status = "ok", quality = "fresh" } },
+    disks = { devices = { { id = "disk0", name = "disk0", busy_percent = 100,
+        busy_quality = "estimated", quality = "fresh" } } } })
+assert(not signal_named(service_estimate, "device_busy"),
+    "parallel request time cannot assert a wall-clock disk busy alarm")
+assert(service_estimate.top.disks[1].busy_percent == 100
+    and service_estimate.top.disks[1].busy_quality == "estimated",
+    "the estimate remains available with its own quality in Agent")
+local exact_busy = Export.agent({ disks = { devices = { { id = "disk0", name = "disk0",
+    busy_percent = 100, quality = "fresh" } } } })
+assert(signal_named(exact_busy, "device_busy"), "exact busy readings still participate in alerts")
+
 for index = 1, 5 do
     rows[#rows + 1] = { id = "old" .. index, name = "old" .. index,
         busy_percent = 98, quality = "stale" }

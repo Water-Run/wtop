@@ -8,18 +8,13 @@
 #include <stdio.h>
 #include <string.h>
 #include "wtop_macos.h"
+#include "wtop_macos_registry.h"
 
 #define MAX_PCI 256
 #define MAX_USB 128
 #define MAX_ENUMERATED 4096
-#define MAX_ANCESTORS 64
 
 enum { BUS_NONE, BUS_PCI, BUS_USB };
-struct registry_path {
-    uint64_t ids[MAX_ANCESTORS + 1];
-    unsigned count;
-    int bus;
-};
 struct bus_row {
     uint64_t entry_id, parent_id;
     uint32_t vendor, product, class_code, revision;
@@ -32,81 +27,6 @@ struct bus_rows {
     unsigned pci_count, usb_count, pci_total, usb_total;
     int partial, pci_truncated, usb_truncated;
 };
-
-static int registry_id(io_registry_entry_t entry, uint64_t *id) {
-    *id = 0;
-    return IORegistryEntryInPlane(entry, kIOServicePlane)
-        && IORegistryEntryGetRegistryEntryID(entry, id) == KERN_SUCCESS && *id;
-}
-
-/* GetParentEntry returns the first parent. Refuse multiple parents rather
- * than silently treating that first attachment as an unambiguous edge. */
-static int unique_parent(io_registry_entry_t entry, io_registry_entry_t *parent) {
-    io_iterator_t iterator = 0;
-    io_registry_entry_t extra;
-    *parent = 0;
-    if (IORegistryEntryGetParentIterator(entry, kIOServicePlane, &iterator)
-            != KERN_SUCCESS || !iterator) {
-        if (iterator) IOObjectRelease(iterator);
-        return 0;
-    }
-    *parent = IOIteratorNext(iterator);
-    extra = IOIteratorNext(iterator);
-    int valid = IOIteratorIsValid(iterator) && !extra;
-    if (extra) IOObjectRelease(extra);
-    IOObjectRelease(iterator);
-    if (!valid && *parent) { IOObjectRelease(*parent); *parent = 0; }
-    return valid;
-}
-
-static int registry_path(io_registry_entry_t entry, struct registry_path *path) {
-    io_registry_entry_t cursor = entry;
-    memset(path, 0, sizeof(*path));
-    if (!registry_id(entry, &path->ids[0])) return 0;
-    path->count = 1;
-    while (path->count <= MAX_ANCESTORS) {
-        io_registry_entry_t parent = 0;
-        uint64_t id;
-        int valid = unique_parent(cursor, &parent);
-        if (cursor != entry) IOObjectRelease(cursor);
-        if (!valid) return 0;
-        if (!parent) return 1;
-        if (!registry_id(parent, &id)) {
-            /* The registry root belongs to no plane. Recognize the actual
-             * root object, without confusing a detached service with it. */
-            io_registry_entry_t root = IORegistryGetRootEntry(MACH_PORT_NULL);
-            int is_root = root && IOObjectIsEqualTo(parent, root)
-                && IORegistryEntryGetRegistryEntryID(parent, &id) == KERN_SUCCESS && id;
-            if (root) IOObjectRelease(root);
-            IOObjectRelease(parent);
-            if (!is_root) return 0;
-            path->ids[path->count++] = id;
-            return 1;
-        }
-        for (unsigned i = 0; i < path->count; ++i) {
-            if (path->ids[i] == id) { IOObjectRelease(parent); return 0; }
-        }
-        path->ids[path->count++] = id;
-        if (IOObjectConformsTo(parent, "IOPCIDevice")) path->bus = BUS_PCI;
-        else if (IOObjectConformsTo(parent, "IOUSBHostDevice")) path->bus = BUS_USB;
-        if (path->bus) { IOObjectRelease(parent); return 1; }
-        cursor = parent;
-    }
-    if (cursor != entry) IOObjectRelease(cursor);
-    return 0;
-}
-
-static int verified_parent(io_registry_entry_t entry, uint64_t expected,
-    uint64_t *parent, int *bus) {
-    struct registry_path first, second;
-    *parent = 0; *bus = BUS_NONE;
-    if (!registry_path(entry, &first) || first.ids[0] != expected
-        || !registry_path(entry, &second) || first.count != second.count
-        || first.bus != second.bus
-        || memcmp(first.ids, second.ids, first.count * sizeof(first.ids[0]))) return 0;
-    if (first.bus) { *parent = first.ids[first.count - 1]; *bus = first.bus; }
-    return 1;
-}
 
 static int data32(CFDictionaryRef properties, CFStringRef key, uint32_t *out) {
     CFTypeRef value = CFDictionaryGetValue(properties, key);
@@ -192,7 +112,7 @@ static void collect_bus(struct bus_rows *all, int bus) {
             IOObjectRelease(entry); break;
         }
         if (*count >= limit) { *truncated = 1; IOObjectRelease(entry); continue; }
-        if (!registry_id(entry, &row.entry_id)
+        if (!wtop_registry_id(entry, &row.entry_id)
             || IORegistryEntryCreateCFProperties(entry, &properties,
                 kCFAllocatorDefault, 0) != KERN_SUCCESS || !properties) {
             all->partial = 1;
@@ -230,8 +150,8 @@ static void collect_bus(struct bus_rows *all, int bus) {
         }
         property_text(properties, CFSTR("CFBundleIdentifier"), row.driver, sizeof(row.driver));
         if (!row.has_vendor || !row.has_product) all->partial = 1;
-        if (!verified_parent(entry, row.entry_id, &row.parent_id, &row.parent_bus)) all->partial = 1;
-        if (registry_id(entry, &after) && after == row.entry_id) rows[(*count)++] = row;
+        if (!wtop_registry_parent(entry, row.entry_id, &row.parent_id, &row.parent_bus)) all->partial = 1;
+        if (wtop_registry_id(entry, &after) && after == row.entry_id) rows[(*count)++] = row;
         else all->partial = 1;
         CFRelease(properties);
         IOObjectRelease(entry);

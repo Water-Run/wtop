@@ -607,7 +607,8 @@ local function disk_rows(snapshot, format, options)
                 scheduler = identity.scheduler or "—",
                 read = rate(format, device.read_bytes_per_second),
                 write = rate(format, device.write_bytes_per_second),
-                busy = percent(format, device.busy_percent),
+                busy = (device.busy_quality == "estimated" and type(device.busy_percent) == "number"
+                    and "~" or "") .. percent(format, device.busy_percent),
                 busy_value = device.busy_percent,
                 queue = device.average_queue_size
                     and number(format, device.average_queue_size, 1) or "—",

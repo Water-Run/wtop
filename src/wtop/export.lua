@@ -314,7 +314,7 @@ local function export_disks(disks)
             "slave_refs_complete",
             "logical_sector_size_bytes", "physical_sector_size_bytes",
             "in_flight", "read_bytes_per_second", "write_bytes_per_second",
-            "read_iops", "write_iops", "busy_percent", "average_read_latency_ms",
+            "read_iops", "write_iops", "busy_percent", "busy_quality", "average_read_latency_ms",
             "average_write_latency_ms", "average_queue_size", "discard_bytes_per_second",
             "discard_iops", "average_discard_latency_ms", "flush_iops",
             "average_flush_latency_ms", "quality", "reset_reason",
@@ -1941,20 +1941,22 @@ function M.agent(snapshot, options)
     for index, device in ipairs(ranked_disks) do
         top_disks[index] = copy_fields(device, {
             "id", "name", "read_bytes_per_second", "write_bytes_per_second",
-            "read_iops", "write_iops", "busy_percent", "average_read_latency_ms",
+            "read_iops", "write_iops", "busy_percent", "busy_quality", "average_read_latency_ms",
             "average_write_latency_ms", "in_flight", "quality",
         })
     end
     local busiest_current_disk
     for _, device in ipairs(disk_devices) do
         if finite_number(device.busy_percent)
+            and device.busy_quality ~= "estimated"
+            and not Quality.UNUSABLE_FOR_ALERT[device.busy_quality]
             and not Quality.UNUSABLE_FOR_ALERT[device.quality] then
             busiest_current_disk = math.max(busiest_current_disk or device.busy_percent,
                 device.busy_percent)
         end
     end
     threshold("storage", "device_busy", busiest_current_disk, 80, 95, "percent",
-        "A block device is saturated", "disks")
+        "A block device reports high busy time", "disks")
     local nvme_no_path_failure = false
     if current_source("disks") then
         for _, device in ipairs(disk_devices) do
