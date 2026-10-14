@@ -210,10 +210,11 @@ local function disk_data(data, previous, timestamp_ns)
     if device.id then old_by_id[device.id] = device end
   end
   local elapsed_ns = elapsed_since(previous, timestamp_ns)
-  local any_gap = false
+  local any_gap, any_estimated = false, false
   for _, device in ipairs(data.devices or {}) do
     local counters = device.counters
     local old = old_by_id[device.id]
+    if old and (device.stable_id ~= old.stable_id) then old = nil end
     local old_counters = old and old.counters
     device.quality = "gap"
     if counters and old_counters and elapsed_ns and elapsed_ns > 0 then
@@ -244,13 +245,19 @@ local function disk_data(data, previous, timestamp_ns)
           device.busy_quality = "estimated"
         end
         device.quality = "fresh"
+        -- Keep the identity uncertainty separate from the measured counters.
+        if device.identity_quality == "instance" or device.identity_quality == "unavailable" then
+          device.quality = "estimated"
+          any_estimated = true
+        end
       else
         device.reset_reason = "counter_reset"
       end
     end
     if device.quality == "gap" then any_gap = true end
   end
-  return data, any_gap and "gap" or "fresh"
+  return data, data.quality == "partial" and "partial"
+    or any_gap and "gap" or any_estimated and "estimated" or "fresh"
 end
 
 -- Service hosts (Windows) and resource coalitions (macOS) carry cumulative
@@ -649,7 +656,8 @@ local function new_collector(id, description, options)
       -- vocabulary across platforms, and it belongs recorded rather than
       -- decided inside a dispatcher.
       reason = quality == "partial" and "platform_data_partial"
-        or (quality == "gap" and "platform_rate_unavailable" or nil),
+        or (quality == "gap" and "platform_rate_unavailable" or nil)
+        or (id == "disk" and quality == "estimated" and "disk_identity_estimated" or nil),
       source = "native:" .. self.method,
     })
   end

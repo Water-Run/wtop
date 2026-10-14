@@ -1112,6 +1112,7 @@ messages:
   reason.device_enumeration_truncated: "デバイス一覧が上限で切り詰められました"
   reason.device_inventory_unavailable: "デバイス一覧は利用できません"
   reason.disk_data_partial: "ディスクデータの一部を取得できませんでした"
+  reason.disk_identity_estimated: "連続するサンプルを対応付けるための一意なデバイス識別子がありません"
   reason.disk_rate_unavailable: "このサンプリングでは利用できるディスク I/O レートがありません"
   reason.duplicate_locale: "重複するロケールは無視されました"
   reason.edac_data_incomplete: "メモリー訂正データが不完全です"

@@ -22,6 +22,13 @@ local function pci_address(value)
   return identifier(value) and value:match("^%x+:%x%x:%x%x%.[0-7]$") and value:lower() or nil
 end
 
+local function pnp_identity(value)
+  if not identifier(value) then return nil end
+  return value:gsub("[a-z]", function(character)
+    return string.char(character:byte() - 32)
+  end)
+end
+
 local function iommu_group_id(value)
   return type(value) == "number" and math.type(value) == "integer"
     and value >= 0 and value <= 2147483647 and value or nil
@@ -169,6 +176,7 @@ function M.build(snapshot)
   local result = { nodes = {}, by_id = {}, iommu_groups_by_id = {},
     truncated = false, partial = inventory.quality == "partial" }
   local unsorted = {}
+  local pnp_nodes = {}
   local function add_node(bus, name, device, id, parent, resource, reference)
     if result.by_id[id] then
       result.partial = true
@@ -215,8 +223,14 @@ function M.build(snapshot)
           elseif parent and pci_address(parent) then
             parent_bus, parent = "pci", pci_address(parent)
           end
-          add_node(bus[1], name, device, id,
+          local node = add_node(bus[1], name, device, id,
             parent and parent_bus .. ":" .. parent or nil)
+          local pnp = pnp_identity(device._pnp_instance_id)
+          if pnp and node then
+            if pnp_nodes[pnp] ~= nil then
+              pnp_nodes[pnp], result.partial = false, true
+            else pnp_nodes[pnp] = node end
+          end
         else
           result.partial = true
         end
@@ -340,6 +354,17 @@ function M.build(snapshot)
           local node = add_node(source[1], name, device, source[1] .. ":" .. identity,
             M.target_id(path and path:match("^(.*)/[^/]+$"), result.by_id),
             source[2], device.id or name)
+          local pnp_parent = pnp_identity(device._pnp_parent_id)
+          if node and pnp_parent then
+            local target = pnp_nodes[pnp_parent]
+            if Quality.current_source(snapshot.quality, "inventory")
+                and Quality.current_source(snapshot.quality, source[2])
+                and target and not target.ambiguous
+                and (device._pnp_parent_bus == "pci" or device._pnp_parent_bus == "usb")
+                and target.bus == device._pnp_parent_bus then
+              node.parent_id = target.id
+            else result.partial = true end
+          end
           if source[1] == "block" then
             index_unique(blocks_by_path, path, node)
             index_unique(blocks_by_id, reference, node)

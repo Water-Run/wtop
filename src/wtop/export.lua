@@ -302,6 +302,8 @@ end
 
 local function export_disks(disks)
     local result = json.object({ devices = json.array({}),
+        total = disks and disks.total or nil,
+        truncated = disks and disks.truncated == true or false,
         nvme_diagnostics_truncated = disks and disks.nvme_diagnostics_truncated == true or false })
     for index, device in ipairs(disks and disks.devices or {}) do
         result.devices[index] = copy_fields(device, {

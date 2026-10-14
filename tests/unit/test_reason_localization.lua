@@ -106,6 +106,7 @@ local interface_reasons = {
   "device_enumeration_truncated",
   "device_inventory_unavailable",
   "disk_data_partial",
+  "disk_identity_estimated",
   "disk_rate_unavailable",
   "duplicate_locale",
   "estimated_available_out_of_range",

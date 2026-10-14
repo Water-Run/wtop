@@ -9,6 +9,11 @@
 void wtop_push_utf8(lua_State *L, const wchar_t *source);
 int wtop_push_if_table2(lua_State *L);
 int wtop_collect_connections(lua_State *L);
+int wtop_collect_disk(lua_State *L);
+int wtop_pnp_identity(uint32_t devinst, wchar_t *identity, size_t capacity);
+/* 1 verified PCI/USB ancestor, 0 outside those buses, -1 incomplete. */
+int wtop_pnp_parent(uint32_t devinst, const wchar_t *identity,
+    wchar_t *parent, char *bus);
 void wtop_register_hardware(lua_State *L);
 int wtop_launcher_gone(void);
 

@@ -1466,6 +1466,56 @@ static int inventory_cm_ready(void) {
     return inventory_cm.parent && inventory_cm.id;
 }
 
+int wtop_pnp_identity(uint32_t devinst, wchar_t *identity, size_t capacity) {
+    if (!identity || capacity < 2 || capacity > 256) return 0;
+    memset(identity, 0, capacity * sizeof(*identity));
+    int valid = inventory_cm_ready()
+        && inventory_cm.id((DEVINST)devinst, identity, (ULONG)capacity, 0) == CR_SUCCESS
+        && identity[0] && identity[capacity - 1] == 0;
+    if (!valid) identity[0] = 0;
+    return valid;
+}
+
+int wtop_pnp_parent(uint32_t devinst, const wchar_t *identity,
+    wchar_t *parent, char *bus) {
+    DEVINST nodes[64];
+    WCHAR ids[64][256], current[256];
+    int count = 1, found = 0;
+    if (!identity || !identity[0] || wcslen(identity) >= 256
+            || !parent || !bus || !inventory_cm_ready()) return -1;
+    parent[0] = 0;
+    bus[0] = 0;
+    nodes[0] = (DEVINST)devinst;
+    wcscpy(ids[0], identity);
+    while (count < 64) {
+        CONFIGRET status = inventory_cm.parent(&nodes[count], nodes[count - 1], 0);
+        if (status == CR_NO_SUCH_DEVNODE) break;
+        if (status != CR_SUCCESS) return -1;
+        for (int i = 0; i < count; ++i)
+            if (nodes[i] == nodes[count]) return -1;
+        if (!wtop_pnp_identity(nodes[count], ids[count], 256)) return -1;
+        ++count;
+        if (_wcsnicmp(ids[count - 1], L"PCI\\", 4) == 0) {
+            strcpy(bus, "pci"); found = 1; break;
+        }
+        if (_wcsnicmp(ids[count - 1], L"USB\\", 4) == 0) {
+            strcpy(bus, "usb"); found = 1; break;
+        }
+    }
+    if (count == 64 && !found) return -1;
+    /* Recheck every traversed edge and instance. A recycled DEVINST or a
+     * reparent during hotplug cannot attach a disk to the old controller. */
+    for (int i = 0; i < count; ++i) {
+        DEVINST confirmed;
+        if (!wtop_pnp_identity(nodes[i], current, 256)
+                || wcscmp(current, ids[i]) != 0) return -1;
+        if (i + 1 < count && (inventory_cm.parent(&confirmed, nodes[i], 0) != CR_SUCCESS
+                || confirmed != nodes[i + 1])) return -1;
+    }
+    if (found) wcscpy(parent, ids[count - 1]);
+    return found;
+}
+
 typedef struct {
     DEVINST devinst;
     int bus, index;
@@ -1671,6 +1721,9 @@ static int l_collect_inventory(lua_State *L) {
                     utf8_field(L, bus == 0 ? "device_name" : "product", wide);
                 }
                 string_field(L, "source", "SetupAPI");
+                /* Kept inside the snapshot for cross-collector matching;
+                 * public export uses the graph edge, not this instance ID. */
+                if (instance[0]) utf8_field(L, "_pnp_instance_id", instance);
                 memset(wide, 0, sizeof(wide));
                 if (SetupDiGetDeviceRegistryPropertyW(set, &device,
                         SPDRP_SERVICE, &type, (BYTE *)wide,

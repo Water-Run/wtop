@@ -32,9 +32,14 @@ jobs:
           mkdir ci-inputs
           i686-w64-mingw32-gcc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc \
             -Idist/windows-x86/include -Ibuild/native \
-            tests/native/windows_inventory.c native/wtop_windows.c native/wtop_windows_net.c \
+            tests/native/windows_inventory.c native/wtop_windows.c native/wtop_windows_net.c native/wtop_windows_disk.c \
             dist/windows-x86/liblua55.dll.a -lpsapi -liphlpapi -lsetupapi \
             -o ci-inputs/inventory-fixture.exe
+          i686-w64-mingw32-gcc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc \
+            -Idist/windows-x86/include -Ibuild/native \
+            tests/native/windows_disk.c native/wtop_windows.c native/wtop_windows_hw.c native/wtop_windows_net.c \
+            dist/windows-x86/liblua55.dll.a -lpsapi -liphlpapi -lsetupapi \
+            -o ci-inputs/disk-fixture.exe
           tar -czf ci-inputs/runtime.tar.gz -C dist windows-x86
       - name: Fetch the native x86 compiler
         run: |
@@ -44,7 +49,7 @@ jobs:
           test "$(stat -c %s ci-inputs/w64devkit-i686-1.23.0.zip)" = 72803726
           cd ci-inputs
           echo '033ef6a29bfcb5ef4452ec5219ed74b64b95d56ae71c9252996e77dd777ab7bf  w64devkit-i686-1.23.0.zip' | sha256sum -c -
-          sha256sum runtime.tar.gz w64devkit-i686-1.23.0.zip inventory-fixture.exe | tee SHA256SUMS
+          sha256sum runtime.tar.gz w64devkit-i686-1.23.0.zip inventory-fixture.exe disk-fixture.exe | tee SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: windows-build-inputs
@@ -95,6 +100,10 @@ jobs:
           & ./dist/windows-x86/inventory-fixture.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Remove-Item dist/windows-x86/inventory-fixture.exe
+          Copy-Item ci-inputs/disk-fixture.exe dist/windows-x86/
+          & ./dist/windows-x86/disk-fixture.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item dist/windows-x86/disk-fixture.exe
       - name: Package both forms and check every PE image
         shell: pwsh
         run: |

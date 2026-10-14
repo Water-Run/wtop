@@ -1118,6 +1118,7 @@ messages:
   reason.device_enumeration_truncated: "The device list was truncated at its cap"
   reason.device_inventory_unavailable: "The device inventory is unavailable"
   reason.disk_data_partial: "Part of the disk data could not be collected"
+  reason.disk_identity_estimated: "The device lacks a unique identity for matching consecutive samples"
   reason.disk_rate_unavailable: "No disk I/O rate is available for this sample"
   reason.duplicate_locale: "A duplicate locale was ignored"
   reason.edac_data_incomplete: "Memory correction data is incomplete"

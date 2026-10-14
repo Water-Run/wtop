@@ -1112,6 +1112,7 @@ messages:
   reason.device_enumeration_truncated: "设备列表在上限处被截断"
   reason.device_inventory_unavailable: "设备清单不可用"
   reason.disk_data_partial: "部分磁盘数据未能采集"
+  reason.disk_identity_estimated: "设备缺少用于关联连续采样的唯一标识"
   reason.disk_rate_unavailable: "本次采样没有可用的磁盘 I/O 速率"
   reason.duplicate_locale: "重复的语言已被忽略"
   reason.edac_data_incomplete: "内存纠错数据不完整"

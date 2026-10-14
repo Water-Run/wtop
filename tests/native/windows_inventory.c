@@ -14,7 +14,7 @@
 #include <lauxlib.h>
 
 static WCHAR manufacturer[96], description[151], usb_instance[200];
-static unsigned destroyed, mode, parent_calls[5];
+static unsigned destroyed, mode, parent_calls[7];
 enum { REPLACED = 1, REPARENTED = 2, ENUM_FAILED = 4, ID_FAILED = 8,
     DUPLICATE = 16, NO_HARDWARE_IDS = 32, SHORT_CLASS = 64 };
 static const struct {
@@ -27,6 +27,8 @@ static const struct {
     { 20, 11, 0, 0, L"USB\\ROOT_HUB30\\fixture", L"USB\\ROOT_HUB30" },
     { 21, 20, 0, 0, usb_instance, L"USB\\VID_1234&PID_0000" },
     { 22, 21, 0, 0, L"USB\\leaf", L"USB\\VID_12345&PID_Z123" },
+    { 30, 31, 0, 0, L"SCSI\\disk", L"" },
+    { 31, 11, 0, 0, L"STORAGE\\intermediate", L"" },
 };
 
 static HDEVINFO WINAPI fixture_devices(const GUID *guid, PCWSTR enumerator,
@@ -109,7 +111,7 @@ static BOOL WINAPI fixture_destroy(HDEVINFO set) {
 
 static CONFIGRET WINAPI fixture_parent(PDEVINST parent, DEVINST child, ULONG flags) {
     assert(flags == 0);
-    for (unsigned i = 0; i < 5; ++i) {
+    for (unsigned i = 0; i < 7; ++i) {
         if (devices[i].devinst != child) continue;
         *parent = devices[i].parent;
         if ((mode & REPARENTED) && i == 4 && parent_calls[i] > 0) *parent = 20;
@@ -121,7 +123,7 @@ static CONFIGRET WINAPI fixture_parent(PDEVINST parent, DEVINST child, ULONG fla
 
 static CONFIGRET WINAPI fixture_id(DEVINST child, PWSTR output, ULONG capacity, ULONG flags) {
     assert(flags == 0);
-    for (unsigned i = 0; i < 5; ++i) {
+    for (unsigned i = 0; i < 7; ++i) {
         const WCHAR *text = devices[i].instance;
         size_t length;
         if (devices[i].devinst != child) continue;
@@ -200,6 +202,19 @@ int main(void) {
     inventory_cm.resolved = 1;
     inventory_cm.parent = fixture_parent;
     inventory_cm.id = fixture_id;
+    {
+        WCHAR parent[256];
+        char bus[4];
+        assert(wtop_pnp_parent(30, L"SCSI\\disk", parent, bus) == 1);
+        assert(wcscmp(parent, L"PCI\\CHILD") == 0 && strcmp(bus, "pci") == 0);
+        assert(wtop_pnp_parent(30, L"SCSI\\replaced", parent, bus) == -1);
+        assert(wtop_pnp_parent(22, L"USB\\leaf", parent, bus) == 1);
+        assert(wcscmp(parent, usb_instance) == 0 && strcmp(bus, "usb") == 0);
+        mode = REPARENTED;
+        memset(parent_calls, 0, sizeof(parent_calls));
+        assert(wtop_pnp_parent(22, L"USB\\leaf", parent, bus) == -1);
+        mode = 0;
+    }
     collect(L, 0);
     check_absent(L, "quality");
     get_device(L, "pci", 1);

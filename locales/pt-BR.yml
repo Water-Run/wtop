@@ -1126,6 +1126,7 @@ messages:
   reason.device_enumeration_truncated: "A lista de dispositivos foi truncada no limite"
   reason.device_inventory_unavailable: "O inventário de dispositivos não está disponível"
   reason.disk_data_partial: "Não foi possível coletar parte dos dados dos discos"
+  reason.disk_identity_estimated: "O dispositivo não possui um identificador exclusivo para relacionar amostras consecutivas"
   reason.disk_rate_unavailable: "Não há taxa de E/S de disco disponível para esta amostra"
   reason.duplicate_locale: "Uma localidade duplicada foi ignorada"
   reason.edac_data_incomplete: "Os dados de correção de memória estão incompletos"

@@ -1119,6 +1119,7 @@ messages:
   reason.device_enumeration_truncated: "Die Geräteliste wurde an ihrer Grenze gekürzt"
   reason.device_inventory_unavailable: "Die Geräteübersicht ist nicht verfügbar"
   reason.disk_data_partial: "Ein Teil der Festplattendaten konnte nicht erfasst werden"
+  reason.disk_identity_estimated: "Dem Gerät fehlt eine eindeutige Kennung zum Zuordnen aufeinanderfolgender Messungen"
   reason.disk_rate_unavailable: "Für diese Abtastung ist keine Datenträger-I/O-Rate verfügbar"
   reason.duplicate_locale: "Ein doppeltes Locale wurde ignoriert"
   reason.edac_data_incomplete: "Speicherfehlerdaten sind unvollständig"

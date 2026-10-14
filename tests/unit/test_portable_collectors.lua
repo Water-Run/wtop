@@ -9,15 +9,11 @@ package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 -- workload, and `partial` from three unrelated places, `data.partial` for
 -- processes, a workload summary count, and a truncated scan.
 --
--- `estimated` is the interesting third case and it is **not** in the table:
--- the dispatcher can publish it (a first frame with only lifetime averages),
--- and no sentence covers it -- a value derived from a lifetime average and a
--- value derived from an unavailable interval are different facts.  So the
--- assertion below must object to it rather than skip it, which is what the
--- shared helper does: a quality nobody has decided a sentence for is refused
--- at the moment it appears, instead of silently passing.
+-- Disk rates with an instance ID but no unique device identity now publish
+-- `estimated` with their own reason. A lifetime-average estimate from another
+-- source remains a separate case; its reason must not borrow that sentence.
 local PORTABLE_REASON = { partial = "platform_data_partial",
-  gap = "platform_rate_unavailable", fresh = false }
+  gap = "platform_rate_unavailable", estimated = "disk_identity_estimated", fresh = false }
 local function portable_reason_is(result, label)
   return require("support.collector_reason").assert_reason(
     result, PORTABLE_REASON, label)
@@ -271,6 +267,41 @@ local no_idle = collectors(fake_native({ collect_disk = {
 local mac_drive = no_idle:sample(at(1000000000), no_idle:sample(at(0))).data.devices[1]
 equal(mac_drive.busy_percent, nil, "busy time is not invented without idle counters")
 equal(mac_drive.average_read_latency_ms, nil, "latency needs a time counter")
+
+-- Numbered Windows disks may be replaced while the new counters are larger
+-- than the old ones. Identity, not counter monotonicity, decides continuity.
+do
+    local samples = {}
+    for index, id in ipairs({ "epoch-A", "epoch-B", "epoch-B" }) do
+        samples[index] = { devices = { { id = "PhysicalDrive0", stable_id = id,
+            identity_quality = "stable", counters = { bytes_read = index * 1000,
+                bytes_written = index * 200, reads = index * 10, writes = index } } } }
+    end
+    local source = collectors(fake_native({ collect_disk = samples })).disk
+    local first = source:sample(at(0))
+    local replaced = source:sample(at(1000000000), first)
+    equal(replaced.data.devices[1].read_bytes_per_second, nil,
+        "a reused disk number cannot inherit the old device's rate")
+    equal(replaced.quality, "gap", "replacement starts a new rate baseline")
+    local next_sample = source:sample(at(2000000000), replaced)
+    equal(next_sample.data.devices[1].read_bytes_per_second, 1000,
+        "a second sample of the new identity restores throughput")
+    local weak = collectors(fake_native({ collect_disk = {
+        { devices = { { id = "PhysicalDrive0", stable_id = "epoch-C", identity_quality = "instance",
+            counters = { bytes_read = 0, bytes_written = 0, reads = 0, writes = 0 } } } },
+        { devices = { { id = "PhysicalDrive0", stable_id = "epoch-C", identity_quality = "instance",
+            counters = { bytes_read = 10, bytes_written = 0, reads = 1, writes = 0 } } } },
+    } })).disk
+    local estimate = weak:sample(at(1000000000), weak:sample(at(0)))
+    equal(estimate.data.devices[1].read_bytes_per_second, 10,
+        "legacy devices still expose measured counters")
+    equal(estimate.quality, "estimated", "weak identity is visible beside the rate")
+    portable_reason_is(estimate, "disk identity without a unique device ID")
+    local incomplete = collectors(fake_native({ collect_disk = {
+        { quality = "partial", devices = {} },
+    } })).disk:sample(at(0))
+    equal(incomplete.quality, "partial", "native disk enumeration errors survive derivation")
+end
 
 -- ---------------------------------------------------------------------------
 -- IPv6 text follows RFC 5952.

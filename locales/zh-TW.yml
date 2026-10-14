@@ -1112,6 +1112,7 @@ messages:
   reason.device_enumeration_truncated: "裝置清單在上限處被截斷"
   reason.device_inventory_unavailable: "裝置清單不可用"
   reason.disk_data_partial: "部分磁碟資料無法收集"
+  reason.disk_identity_estimated: "裝置缺少用於關聯連續取樣的唯一識別碼"
   reason.disk_rate_unavailable: "本次取樣沒有可用的磁碟 I/O 速率"
   reason.duplicate_locale: "重複的語言已被忽略"
   reason.edac_data_incomplete: "記憶體錯誤修正資料不完整"

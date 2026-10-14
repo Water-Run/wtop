@@ -4284,4 +4284,53 @@ do
         "partial native enumeration remains visible in the topology summary")
 end
 
+-- Windows disk references name the exact PnP instance, so the current bus
+-- node can supply its public address without guessing a PCI domain.
+do
+    local Hardware = require("wtop.model.hardware")
+    local TUI = require("wtop.tui")
+    local JSON = require("wtop.format.json")
+    local i18n = assert(require("wtop.i18n").new({ locale = "en-US" }))
+    local controller = { address = "00:14.0", device_name = "Controller",
+        _pnp_instance_id = "PCI\\PRIVATE-CONTROLLER" }
+    local usb = { id = "usb-device", product = "USB drive",
+        _pnp_instance_id = "USB\\PRIVATE-INSTANCE" }
+    local sata_disk = { id = "PhysicalDrive0", name = "Disk 0", stable_id = "disk-epoch-1",
+        _pnp_instance_id = "SCSI\\PRIVATE-DISK", _pnp_parent_id = "pci\\private-controller",
+        _pnp_parent_bus = "pci", identity = { model = "SATA disk" } }
+    local usb_disk = { id = "PhysicalDrive257", name = "Disk 257", stable_id = "disk-epoch-2",
+        _pnp_parent_id = "USB\\PRIVATE-INSTANCE", _pnp_parent_bus = "usb" }
+    local state = { inventory = { pci = { devices = { controller } }, usb = { devices = { usb } } },
+        disks = { total = 2, devices = { sata_disk, usb_disk } } }
+    local graph = Hardware.build(state)
+    assert(graph.by_id["block:disk-epoch-1"].parent_id == "pci:00:14.0"
+        and graph.by_id["block:disk-epoch-2"].parent_id == "usb:usb-device")
+    local detail = table.concat(TUI.hardware_detail_lines(state, "block:disk-epoch-1", i18n), "\n")
+    assert(detail:find("Parent device: 00:14.0", 1, true) and detail:find("p parent", 1, true))
+    local exported = Export.snapshot(state)
+    assert(exported.disks.total == 2 and exported.disks.devices[1].stable_id == "disk-epoch-1"
+        and by_id(exported.inventory.topology.nodes, "block:disk-epoch-1").parent_id == "pci:00:14.0")
+    assert(not JSON.encode(exported):find("PRIVATE", 1, true),
+        "private PnP identities are consumed by the graph and not exported")
+    state.quality = { inventory = { status = "ok", quality = "stale" } }
+    assert(Hardware.build(state).by_id["block:disk-epoch-1"].parent_id == nil,
+        "a stale controller snapshot cannot establish a current disk parent")
+    state.quality = { disks = { status = "error", quality = "stale" } }
+    assert(Hardware.build(state).by_id["block:disk-epoch-1"].parent_id == nil)
+    state.quality = nil
+    state.inventory.pci.devices[2] = { address = "01:00.0",
+        _pnp_instance_id = controller._pnp_instance_id }
+    assert(Hardware.build(state).by_id["block:disk-epoch-1"].parent_id == nil,
+        "a duplicate instance cannot pick an arbitrary controller")
+    state.inventory.pci.devices[2] = nil
+    sata_disk._pnp_parent_id = "PCI\\replaced-controller"
+    assert(Hardware.build(state).by_id["block:disk-epoch-1"].parent_id == nil)
+    sata_disk._pnp_parent_id = controller._pnp_instance_id
+    sata_disk._pnp_parent_bus = "usb"
+    assert(Hardware.build(state).by_id["block:disk-epoch-1"].parent_id == nil,
+        "the native bus assertion must agree with the matched device")
+    state.disks.truncated = true
+    assert(Export.snapshot(state).disks.truncated)
+end
+
 return true
