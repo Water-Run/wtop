@@ -108,6 +108,30 @@ macOS、Windows 的运行验证来自下表列出的主机记录。
 
 ## 开发验证记录
 
+### 2026-10-14：SMC 数值格式、只读回复与连接恢复
+
+SMC 只发送查询元数据和读取数值的命令，按实际回复长度验证结果、数据
+类型与载荷大小。整数类型要求准确的字节数，浮点拒绝 NaN/无穷值；扩展
+Intel 的 `fp`/`sp` 固定点布局，并按
+[VirtualSMC 的编码实现](https://github.com/acidanthera/VirtualSMC/blob/master/VirtualSMC/kern_vsmcapi.cpp)
+处理带独立符号位的 `sp` 值。短回复不再被当作零填充的有效数值。
+
+连接失败后每个采集批次只尝试一次，下一批可恢复；失效客户端及时关闭，
+进程退出清理仍存活的连接。重连后传感器统计开始新纪元，内部纪元不导出。
+SMC 通道以实际键为身份，其他可选键出现不会使现有通道重新编号。
+补充 12 个有温度记录的 SMC 键，保留键名作为标签与来源；
+[键描述](https://github.com/acidanthera/VirtualSMC/blob/master/Docs/SMCSensorKeys.txt)
+在不同机型间有差异，因此不直接声明 CPU/GPU 设备归属。
+
+提供的 M4 Mac 仍返回 43 个有效通道，其中 SMC 的风扇、功率、电压与电流
+共 5 个；新增温度键在这台机器上不提供读数。20 次 hwmon 采集平均约
+46.83 ms。两次真实采样验证有限数值、键身份、统计连续性和私有纪元不导出；
+五种 CLI 通过。原生夹具在实际 SDK 下通过 ASan/UBSan，覆盖全部固定点
+布局、正负值、短/异常回复、未知键、失败恢复及退出清理；本地全量 133 个
+Lua 文件通过，最新纪元与导出回归另单独通过。Intel 原生温度仍没有本轮
+实机证据，新增 SMC 增量的打包 CI 待提交后核对。
+证据保存在 `build/hardware-smc-20261014/`。
+
 ### 2026-10-14：macOS 网卡实例、计数来源与硬件关系
 
 接口 MIB 的名称与路由消息的 BSD 名称、索引必须一致。读取计数前后分别
@@ -131,8 +155,16 @@ NUL、过大计数、缓冲区增长、软件接口和分配失败。
 实机读取 25 个接口，12 个有 IOKit 实例，其中 3 个建立 PCI/USB 归属；
 20 次平均采集约 4.08 ms。两次采样、计数来源导出、五种 CLI、两个 PCI
 网卡和一个 USB 网卡的详情与父设备导航、关闭及退出均通过。库存与磁盘
-原生回归同样通过；本地全量 133 个 Lua 文件通过。当前网络增量的打包与
-下载验收仍待新提交核对，证据保存在 `build/hardware-macos-net-20261014/`。
+原生回归同样通过；本地全量 133 个 Lua 文件通过。`639c771` 的
+[主 CI 38539171521](https://github.com/Water-Run/wtop/actions/runs/38539171521)
+全部 16 个作业和
+[Windows CI 38539171236](https://github.com/Water-Run/wtop/actions/runs/38539171236)
+完整通过。Mac 归档 SHA-256 为
+`85964c3a895a05d53db966b9af13cb5308d9d29e994991d61bfb25c5a40a807a`，
+两种程序在提供的 Mac 上通过五种 CLI 和三条网卡父设备导航。Windows ZIP
+SHA-256 为 `1d3282f52d2cbc536bb4c14150c18d082bbd2bd63691d2eeda6c9b2ff4f2be6b`，
+两种程序在新旧主机通过 CLI、JSON、经典控制台和 PCI/USB 导航；静态门禁
+核对 5 个 Mach-O 和 7 个 PE。证据保存在 `build/hardware-macos-net-20261014/`。
 
 ### 2026-10-14：macOS 整盘身份、计数基线与硬件归属
 

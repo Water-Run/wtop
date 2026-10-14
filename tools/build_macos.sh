@@ -54,6 +54,7 @@ cc -std=c17 -O2 -Wall -Wextra -Werror \
     "$project_dir/native/wtop_macos_inventory.c" \
     "$project_dir/native/wtop_macos_disk.c" \
     "$project_dir/native/wtop_macos_net.c" \
+    "$project_dir/native/wtop_macos_smc.c" \
     -framework IOKit -framework CoreFoundation
 cp "$work_dir/lua-5.5.1/src/lua" "$output_dir/lua"
 cp -R "$project_dir/src" "$output_dir/"

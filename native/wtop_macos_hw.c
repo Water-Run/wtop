@@ -461,104 +461,6 @@ static int l_collect_gpu(lua_State *L) {
 }
 
 /* ------------------------------------------------------------------------
- * SMC. The AppleSMC user client answers key reads for any user. */
-
-typedef struct {
-    uint8_t major, minor, build, reserved;
-    uint16_t release;
-} smc_version;
-
-typedef struct {
-    uint16_t version, length;
-    uint32_t cpu, gpu, memory;
-} smc_limits;
-
-typedef struct {
-    uint32_t data_size;
-    uint32_t data_type;
-    uint8_t data_attributes;
-} smc_key_info;
-
-typedef struct {
-    uint32_t key;
-    smc_version version;
-    smc_limits limits;
-    smc_key_info info;
-    uint8_t result, status, command;
-    uint32_t data32;
-    uint8_t bytes[32];
-} smc_message;
-
-static io_connect_t smc_connection = 0;
-static int smc_state = 0;
-
-static uint32_t four_cc(const char *text) {
-    return ((uint32_t)(uint8_t)text[0] << 24) | ((uint32_t)(uint8_t)text[1] << 16)
-        | ((uint32_t)(uint8_t)text[2] << 8) | (uint32_t)(uint8_t)text[3];
-}
-
-static int smc_open(void) {
-    if (smc_state == 0) {
-        io_service_t service = IOServiceGetMatchingService(MACH_PORT_NULL,
-            IOServiceMatching("AppleSMC"));
-        smc_state = -1;
-        if (service) {
-            if (IOServiceOpen(service, mach_task_self(), 0, &smc_connection)
-                == KERN_SUCCESS) smc_state = 1;
-            IOObjectRelease(service);
-        }
-    }
-    return smc_state > 0;
-}
-
-/* Reads a numeric SMC key; the encodings cover Apple silicon (flt) and the
- * fixed-point types of Intel Macs. */
-static int smc_number(const char *key, double *value) {
-    smc_message input, output;
-    size_t size = sizeof(output);
-    char type[5];
-    const uint8_t *b;
-    if (!smc_open()) return 0;
-    memset(&input, 0, sizeof(input));
-    memset(&output, 0, sizeof(output));
-    input.key = four_cc(key);
-    input.command = 9; /* key information */
-    if (IOConnectCallStructMethod(smc_connection, 2, &input, sizeof(input),
-        &output, &size) != KERN_SUCCESS || output.result != 0) return 0;
-    input.info.data_size = output.info.data_size;
-    type[0] = (char)(output.info.data_type >> 24);
-    type[1] = (char)(output.info.data_type >> 16);
-    type[2] = (char)(output.info.data_type >> 8);
-    type[3] = (char)output.info.data_type;
-    type[4] = 0;
-    input.command = 5; /* read bytes */
-    memset(&output, 0, sizeof(output));
-    size = sizeof(output);
-    if (input.info.data_size == 0 || input.info.data_size > 32
-        || IOConnectCallStructMethod(smc_connection, 2, &input, sizeof(input),
-            &output, &size) != KERN_SUCCESS || output.result != 0) return 0;
-    b = output.bytes;
-    if (strcmp(type, "flt ") == 0 && input.info.data_size == 4) {
-        float number;
-        memcpy(&number, b, sizeof(number));
-        *value = number;
-    } else if (strcmp(type, "fpe2") == 0 && input.info.data_size == 2) {
-        *value = ((b[0] << 8) | b[1]) / 4.0;
-    } else if (strcmp(type, "sp78") == 0 && input.info.data_size == 2) {
-        *value = (int16_t)((b[0] << 8) | b[1]) / 256.0;
-    } else if (strcmp(type, "ui8 ") == 0) {
-        *value = b[0];
-    } else if (strcmp(type, "ui16") == 0 && input.info.data_size == 2) {
-        *value = (b[0] << 8) | b[1];
-    } else if (strcmp(type, "ui32") == 0 && input.info.data_size == 4) {
-        *value = ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) | (b[2] << 8) | b[3];
-    } else {
-        return 0;
-    }
-    return *value == *value;
-}
-
-/* ------------------------------------------------------------------------
  * Sensors: HID temperature services and SMC fans and power rails. */
 
 typedef struct __IOHIDEventSystemClient *hid_client;
@@ -661,6 +563,7 @@ static void push_channel(lua_State *L, int index, const char *type,
 }
 
 static int l_collect_hwmon(lua_State *L) {
+    wtop_smc_begin();
     hid_reading readings[MAX_HID_SENSORS];
     int reading_count = 0, device_output = 1;
     double fans = 0;
@@ -736,6 +639,10 @@ static int l_collect_hwmon(lua_State *L) {
             {"VD0R", "voltage", "volts", "DC input"},
             {"ID0R", "current", "amperes", "DC input"},
         };
+        static const char *const temperatures[] = {
+            "TC0D", "TC0P", "TC1D", "TC1P", "TG0D", "TG0P",
+            "TG1D", "TG1P", "TA0P", "TA1P", "TB0T", "TB1T",
+        };
         int channel = 1, fan_index = 1;
         double value;
         lua_createtable(L, 0, 7);
@@ -746,32 +653,50 @@ static int l_collect_hwmon(lua_State *L) {
         string_field(L, "quality", "fresh");
         string_field(L, "source", "smc");
         lua_createtable(L, 8, 0);
-        if (smc_number("FNum", &fans)) {
+        if (wtop_smc_number("FNum", &fans) && fans >= 0 && fans <= 8 && fans == (int)fans) {
             for (int fan = 0; fan < (int)fans && fan < 8; ++fan) {
                 char key[8], label[16];
                 double minimum, maximum;
                 snprintf(key, sizeof(key), "F%dAc", fan);
-                if (!smc_number(key, &value)) continue;
+                if (!wtop_smc_number(key, &value)) continue;
                 snprintf(label, sizeof(label), "Fan %d", fan + 1);
                 push_channel(L, fan_index++, "fan", "rpm", label, value);
+                string_field(L, "id", key);
+                string_field(L, "input_source", key);
                 lua_createtable(L, 0, 2);
                 snprintf(key, sizeof(key), "F%dMn", fan);
-                if (smc_number(key, &minimum)) number_field(L, "min", minimum);
+                if (wtop_smc_number(key, &minimum)) number_field(L, "min", minimum);
                 snprintf(key, sizeof(key), "F%dMx", fan);
-                if (smc_number(key, &maximum)) number_field(L, "max", maximum);
+                if (wtop_smc_number(key, &maximum)) number_field(L, "max", maximum);
                 lua_setfield(L, -2, "thresholds");
                 lua_rawseti(L, -2, channel++);
             }
         }
         for (size_t rail = 0; rail < sizeof(rails) / sizeof(rails[0]); ++rail) {
-            if (!smc_number(rails[rail].key, &value)) continue;
+            if (!wtop_smc_number(rails[rail].key, &value)) continue;
             push_channel(L, channel, rails[rail].type, rails[rail].unit,
                 rails[rail].label, value);
+            string_field(L, "id", rails[rail].key);
             string_field(L, "input_source", rails[rail].key);
             lua_rawseti(L, -2, channel++);
         }
+        for (size_t sensor = 0; sensor < sizeof(temperatures) / sizeof(temperatures[0]); ++sensor) {
+            const char *key = temperatures[sensor];
+            if (!wtop_smc_number(key, &value) || !(value > -40 && value < 150)) continue;
+            /* Key meanings can vary by Mac model. Keep the actual key as the
+             * label and source instead of declaring a CPU/GPU owner by name. */
+            push_channel(L, channel, "temperature", "celsius", key, value);
+            string_field(L, "id", key);
+            string_field(L, "input_source", key);
+            lua_rawseti(L, -2, channel++);
+        }
         lua_setfield(L, -2, "channels");
-        if (channel > 1) lua_rawseti(L, -2, device_output++);
+        if (channel > 1) {
+            char epoch[48];
+            snprintf(epoch, sizeof(epoch), "smc:%llu", (unsigned long long)wtop_smc_epoch());
+            string_field(L, "_source_epoch", epoch);
+            lua_rawseti(L, -2, device_output++);
+        }
         else lua_pop(L, 1);
     }
     lua_setfield(L, -2, "devices");
@@ -811,6 +736,7 @@ static energy_zone energy_zones[] = {
 };
 
 static int l_collect_powercap(lua_State *L) {
+    wtop_smc_begin();
     size_t count = sizeof(energy_zones) / sizeof(energy_zones[0]);
     int output = 1, first = energy_report.previous == NULL;
     double system_watts = 0;
@@ -840,7 +766,7 @@ static int l_collect_powercap(lua_State *L) {
         }
         if (owner) CFRelease(owner);
     }
-    has_system = smc_number("PSTR", &system_watts);
+    has_system = wtop_smc_number("PSTR", &system_watts);
     lua_createtable(L, 0, 4);
     string_field(L, "schema", "dev.waterrun.wtop.macos-energy/v1");
     lua_createtable(L, (int)count + 1, 0);

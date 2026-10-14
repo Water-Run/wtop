@@ -47,6 +47,7 @@ local function previous_session(unique_current, device, old_device, channel, old
       or old_device.identity_quality ~= "fresh"
       or old_device.id ~= device.id then return nil end
   if kind == "native" and (device.name ~= old_device.name
+      or device._source_epoch ~= old_device._source_epoch
       or device.class ~= old_device.class
       or device.source ~= old_device.source
       or type(channel.label) ~= "string" or channel.label == "") then return nil end

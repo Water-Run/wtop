@@ -581,6 +581,36 @@ local power_first = mac_power:sample(at(1000000000))
 local power_second = mac_power:sample(at(2000000000), power_first)
 close(power_second.data.devices[1].channels[1].session.average, 15, 1e-9,
   "a named macOS SMC source is still a direct measurement")
+do
+  local function reading(epoch, value, extra)
+    local channels = { { id = "PSTR", type = "power", unit = "watts", label = "System total",
+      input = value, input_source = "PSTR", quality = "fresh" } }
+    if extra then table.insert(channels, 1, { id = "TC0D", type = "temperature", unit = "celsius",
+      label = "TC0D", input = 40, input_source = "TC0D", quality = "fresh" }) end
+    return { devices = { { id = "smc", class = "smc", name = "SMC", source = "smc",
+      _source_epoch = epoch, identity_quality = "fresh", quality = "fresh", channels = channels } } }
+  end
+  local source = collectors(fake_native({ collect_hwmon = {
+    reading("smc:1", 10), reading("smc:1", 20, true), reading("smc:2", 30, true),
+  } })).hwmon
+  local first = source:sample(at(1000000000))
+  local second = source:sample(at(2000000000), first)
+  local function power_channel(sample)
+    for _, channel in ipairs(sample.data.devices[1].channels) do
+      if channel.id == "PSTR" then return channel end
+    end
+    error("SMC PSTR channel missing")
+  end
+  local channel = power_channel(second)
+  equal(channel.session.samples, 2, "optional SMC keys cannot renumber a stable channel")
+  close(channel.session.average, 15, 1e-9, "a key-based channel preserves statistics")
+  local third = source:sample(at(3000000000), second)
+  equal(power_channel(third).session.samples, 1,
+    "reopening an SMC source starts a new measurement session")
+  local exported = require("wtop.export").snapshot({ sensors = third.data })
+  assert(not require("wtop.format.json").encode(exported):find("_source_epoch", 1, true),
+    "private SMC connection epochs do not enter export")
+end
 
 local duplicate_native = collectors({
   collect_hwmon = function()
