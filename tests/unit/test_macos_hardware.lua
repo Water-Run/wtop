@@ -60,6 +60,17 @@ state.quality = { disks = { status = "ok", quality = "stale" } }
 assert(Hardware.build(state).by_id["block:ioreg:1000"].parent_id == nil)
 state.quality = nil
 
+state.network = { interfaces = { { id = "en0", name = "en0", ifindex = 7,
+    _registry_entry_id = "ioreg:9900", _registry_parent_id = "ioreg:9001", _registry_parent_bus = "pci",
+    counter_bits = 64, counter_source = "IFMIB_IFDATA", counter_quality = "fresh" } } }
+assert(Hardware.build(state).by_id["net:en0"].parent_id == "pci:ioreg:1001")
+local net_export = Export.snapshot(state).network.interfaces[1]
+assert(net_export.counter_bits == 64 and net_export.counter_source == "IFMIB_IFDATA")
+assert(not JSON.encode(Export.snapshot(state)):find("_registry", 1, true))
+state.quality = { network = { status = "ok", quality = "stale" } }
+assert(Hardware.build(state).by_id["net:en0"].parent_id == nil)
+state.quality = nil
+
 local disk = state.disks.devices[1]
 disk.source, disk.busy_percent, disk.busy_quality = "IOKit", 25, "estimated"
 local disk_export = Export.snapshot(state).disks.devices[1]

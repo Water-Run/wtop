@@ -389,6 +389,7 @@ local function export_network(network)
         local exported = copy_fields(interface, {
             "id", "ifindex", "name", "operstate", "mtu", "speed_mbps",
             "driver", "description", "hardware",
+            "counter_bits", "counter_source", "counter_quality",
             "source", "device_path",
             "iflink", "link_type", "carrier", "duplex", "address",
             "default_route", "aggregate", "quality", "reset_counter",
@@ -2007,6 +2008,7 @@ function M.agent(snapshot, options)
     for index, interface in ipairs(ranked_interfaces) do
         local exported = copy_fields(interface, {
             "id", "name", "operstate", "speed_mbps", "carrier", "quality",
+            "counter_bits", "counter_source", "counter_quality",
         })
         exported.rates = copy_fields(interface.rates, {
             "rx_bytes_per_second", "tx_bytes_per_second", "rx_packets_per_second",

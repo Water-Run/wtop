@@ -182,14 +182,19 @@ local function network_data(data, previous, timestamp_ns)
     old_by_id[interface.id or interface.name] = interface
   end
   local elapsed_ns = elapsed_since(previous, timestamp_ns)
-  local bits = data.counter_bits == 32 and 32 or nil
-  local any_gap = false
+  local any_gap, any_partial = false, false
   for _, interface in ipairs(data.interfaces or {}) do
     local counters = interface.counters or {}
     local old = old_by_id[interface.id or interface.name]
+    local width = interface.counter_bits or data.counter_bits
+    local old_width = old and (old.counter_bits or old_data.counter_bits)
+    local bits = width == 32 and 32 or nil
     if old and (interface._interface_guid ~= old._interface_guid
         or interface._pnp_instance_id ~= old._pnp_instance_id
-        or data.counter_bits ~= old_data.counter_bits) then old = nil end
+        or interface._registry_entry_id ~= old._registry_entry_id
+        or interface.ifindex ~= old.ifindex
+        or interface._interface_last_change ~= old._interface_last_change
+        or width ~= old_width) then old = nil end
     local old_counters = old and old.counters or {}
     local function rate(key)
       if not elapsed_ns or elapsed_ns <= 0 then return nil end
@@ -201,9 +206,10 @@ local function network_data(data, previous, timestamp_ns)
     interface.rx_bytes_per_second = rx
     interface.tx_bytes_per_second = tx
     interface.quality = rx and tx and "fresh" or "gap"
+    if interface.partial == true then interface.quality, any_partial = "partial", true end
     any_gap = any_gap or interface.quality == "gap"
   end
-  return data, data.quality == "partial" and "partial" or any_gap and "gap" or "fresh"
+  return data, (data.quality == "partial" or any_partial) and "partial" or any_gap and "gap" or "fresh"
 end
 
 local function disk_data(data, previous, timestamp_ns)

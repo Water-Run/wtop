@@ -979,89 +979,6 @@ static int push_mounts(lua_State *L) {
 
 static int l_collect_mounts(lua_State *L) { return push_mounts(L); }
 
-static int l_collect_network(lua_State *L) {
-    /* NET_RT_IFLIST2 names each interface and its link address. Its byte
-     * counters, like the if_data behind getifaddrs, wrap at 4 GiB for an
-     * unprivileged caller, so the counters come from the interface MIB. */
-    int mib[6] = {CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST2, 0};
-    size_t length = 0;
-    char *buffer, *next, *end;
-    int output_index = 1, all_wide = 1;
-    if (sysctl(mib, 6, NULL, &length, NULL, 0) != 0 || length == 0)
-        return push_errno(L, "sysctl(NET_RT_IFLIST2)");
-    length += 4096;
-    buffer = (char *)malloc(length);
-    if (!buffer) return luaL_error(L, "out of memory collecting interfaces");
-    if (sysctl(mib, 6, buffer, &length, NULL, 0) != 0) {
-        int code = errno;
-        free(buffer);
-        errno = code;
-        return push_errno(L, "sysctl(NET_RT_IFLIST2)");
-    }
-    lua_createtable(L, 0, 2);
-    lua_createtable(L, 16, 0);
-    end = buffer + length;
-    for (next = buffer; next + sizeof(struct if_msghdr) <= end; ) {
-        const struct if_msghdr *header = (const struct if_msghdr *)next;
-        const struct if_msghdr2 *message;
-        const struct sockaddr_dl *link;
-        const struct if_data64 *counters;
-        struct ifmibdata interface_mib;
-        size_t mib_length = sizeof(interface_mib);
-        int mib_query[6] = {CTL_NET, PF_LINK, NETLINK_GENERIC, IFMIB_IFDATA, 0,
-            IFDATA_GENERAL};
-        char name[IFNAMSIZ + 1];
-        size_t name_length;
-        if (header->ifm_msglen == 0 || next + header->ifm_msglen > end) break;
-        next += header->ifm_msglen;
-        if (header->ifm_type != RTM_IFINFO2
-            || header->ifm_msglen < sizeof(struct if_msghdr2) + sizeof(struct sockaddr_dl))
-            continue;
-        message = (const struct if_msghdr2 *)header;
-        link = (const struct sockaddr_dl *)(message + 1);
-        name_length = link->sdl_nlen < IFNAMSIZ ? link->sdl_nlen : IFNAMSIZ;
-        memcpy(name, link->sdl_data, name_length);
-        name[name_length] = 0;
-        if (!name[0]) continue;
-        mib_query[4] = message->ifm_index;
-        if (sysctl(mib_query, 6, &interface_mib, &mib_length, NULL, 0) == 0
-            && mib_length >= sizeof(interface_mib)) {
-            counters = &interface_mib.ifmd_data;
-        } else {
-            counters = &message->ifm_data;
-            all_wide = 0;
-        }
-        lua_createtable(L, 0, 8);
-        string_field(L, "id", name);
-        string_field(L, "name", name);
-        string_field(L, "operstate", message->ifm_flags & IFF_UP
-            && message->ifm_flags & IFF_RUNNING ? "up" : "down");
-        integer_field(L, "mtu", (lua_Integer)message->ifm_data.ifi_mtu);
-        if (message->ifm_data.ifi_baudrate > 0)
-            integer_field(L, "speed_mbps",
-                (lua_Integer)(message->ifm_data.ifi_baudrate / 1000000));
-        if (link->sdl_alen == 6) {
-            const unsigned char *mac = (const unsigned char *)LLADDR(link);
-            char text[18];
-            snprintf(text, sizeof(text), "%02x:%02x:%02x:%02x:%02x:%02x",
-                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-            string_field(L, "address", text);
-        }
-        lua_createtable(L, 0, 5);
-        integer_field(L, "rx_bytes", (lua_Integer)counters->ifi_ibytes);
-        integer_field(L, "tx_bytes", (lua_Integer)counters->ifi_obytes);
-        integer_field(L, "rx_errors", (lua_Integer)counters->ifi_ierrors);
-        integer_field(L, "tx_errors", (lua_Integer)counters->ifi_oerrors);
-        integer_field(L, "rx_drops", (lua_Integer)counters->ifi_iqdrops);
-        lua_setfield(L, -2, "counters");
-        lua_rawseti(L, -2, output_index++);
-    }
-    free(buffer);
-    lua_setfield(L, -2, "interfaces");
-    integer_field(L, "counter_bits", all_wide ? 64 : 32);
-    return 1;
-}
-
 static int l_collect_system_info(lua_State *L) {
     struct utsname identity;
     struct timeval boot;
@@ -1124,7 +1041,7 @@ static const luaL_Reg functions[] = {
     {"collect_process", l_collect_process},
     {"collect_disk", wtop_collect_disk},
     {"collect_mounts", l_collect_mounts},
-    {"collect_network", l_collect_network},
+    {"collect_network", wtop_collect_network},
     {"collect_system_info", l_collect_system_info},
     {NULL, NULL},
 };

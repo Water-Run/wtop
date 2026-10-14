@@ -337,6 +337,41 @@ end
 -- Interface indexes can be recycled, including while XP counters wrap.
 do
     local entries = {}
+    for index, specification in ipairs({ { "ioreg:10", 64, 100 },
+        { "ioreg:10", 64, 200 }, { "ioreg:11", 64, 300 }, { "ioreg:11", 64, 400 } }) do
+        entries[index] = { interfaces = {
+            { id = "en0", name = "en0", ifindex = 7, _registry_entry_id = specification[1],
+              counter_bits = specification[2], counters = { rx_bytes = specification[3], tx_bytes = specification[3] } },
+            { id = "en1", name = "en1", ifindex = 8, counter_bits = index == 1 and 32 or 64,
+              counters = { rx_bytes = index * 100, tx_bytes = index * 100 } },
+        } }
+    end
+    local source = collectors(fake_native({ collect_network = entries })).network
+    local first = source:sample(at(0))
+    local second = source:sample(at(1000000000), first)
+    equal(second.data.interfaces[1].rx_bytes_per_second, 100,
+        "another interface's fallback width does not reset a wide interface")
+    equal(second.data.interfaces[2].rx_bytes_per_second, nil,
+        "only the interface that changed width starts a new baseline")
+    local third = source:sample(at(2000000000), second)
+    equal(third.data.interfaces[1].rx_bytes_per_second, nil,
+        "IOKit instance replacement resets counters even with the same name and index")
+    local fourth = source:sample(at(3000000000), third)
+    equal(fourth.data.interfaces[1].rx_bytes_per_second, 100,
+        "a second sample of the new registry instance restores rates")
+    local software = collectors(fake_native({ collect_network = {
+        { interfaces = { { id = "utun0", ifindex = 20, _interface_last_change = "1:0",
+            counter_bits = 64, counters = { rx_bytes = 100, tx_bytes = 100 } } } },
+        { interfaces = { { id = "utun0", ifindex = 20, _interface_last_change = "2:0",
+            counter_bits = 64, counters = { rx_bytes = 300, tx_bytes = 300 } } } },
+    } })).network
+    local changed = software:sample(at(1000000000), software:sample(at(0)))
+    equal(changed.data.interfaces[1].rx_bytes_per_second, nil,
+        "a software interface transition cannot carry a previous epoch")
+end
+
+do
+    local entries = {}
     for index, spec in ipairs({ { "GUID-A", "PCI-A", 4000 }, { "GUID-B", "PCI-B", 100 },
         { "GUID-B", "PCI-B", 150 }, { "GUID-B", "PCI-C", 200 } }) do
         entries[index] = { counter_bits = 32, interfaces = { {
