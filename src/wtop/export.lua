@@ -388,6 +388,7 @@ local function export_network(network)
     for index, interface in ipairs(network and network.interfaces or {}) do
         local exported = copy_fields(interface, {
             "id", "ifindex", "name", "operstate", "mtu", "speed_mbps",
+            "driver", "description", "hardware",
             "source", "device_path",
             "iflink", "link_type", "carrier", "duplex", "address",
             "default_route", "aggregate", "quality", "reset_counter",

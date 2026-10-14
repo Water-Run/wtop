@@ -8,6 +8,9 @@
 
 void wtop_push_utf8(lua_State *L, const wchar_t *source);
 int wtop_push_if_table2(lua_State *L);
+void wtop_enrich_network(lua_State *L);
+void wtop_push_interface_guid(lua_State *L, const void *guid);
+void wtop_fill_interface_guids(lua_State *L);
 int wtop_collect_connections(lua_State *L);
 int wtop_collect_disk(lua_State *L);
 int wtop_pnp_identity(uint32_t devinst, wchar_t *identity, size_t capacity);

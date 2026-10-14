@@ -303,6 +303,41 @@ do
     equal(incomplete.quality, "partial", "native disk enumeration errors survive derivation")
 end
 
+-- Interface indexes can be recycled, including while XP counters wrap.
+do
+    local entries = {}
+    for index, spec in ipairs({ { "GUID-A", "PCI-A", 4000 }, { "GUID-B", "PCI-B", 100 },
+        { "GUID-B", "PCI-B", 150 }, { "GUID-B", "PCI-C", 200 } }) do
+        entries[index] = { counter_bits = 32, interfaces = { {
+            id = 10, name = index == 3 and "Renamed" or "Ethernet",
+            _interface_guid = spec[1], _pnp_instance_id = spec[2],
+            counters = { rx_bytes = spec[3], tx_bytes = spec[3] },
+        } } }
+    end
+    local source = collectors(fake_native({ collect_network = entries })).network
+    local first = source:sample(at(0))
+    local reused = source:sample(at(1000000000), first)
+    equal(reused.data.interfaces[1].rates.rx_bytes_per_second, nil,
+        "a new interface GUID cannot look like a 32-bit wrap of the old adapter")
+    local renamed = source:sample(at(2000000000), reused)
+    equal(renamed.data.interfaces[1].rates.rx_bytes_per_second, 50,
+        "renaming a verified interface keeps its counter baseline")
+    local replaced = source:sample(at(3000000000), renamed)
+    equal(replaced.data.interfaces[1].rates.rx_bytes_per_second, nil,
+        "a new PnP instance cannot reuse the previous adapter's counters")
+    local denied = collectors(fake_native({ collect_network = { {
+        quality = "partial", interfaces = {},
+    } } })).network:sample(at(0))
+    equal(denied.quality, "partial", "network discovery errors survive rate derivation")
+    local switched = collectors(fake_native({ collect_network = {
+        { counter_bits = 64, interfaces = { { id = 10, counters = { rx_bytes = 10, tx_bytes = 10 } } } },
+        { counter_bits = 32, interfaces = { { id = 10, counters = { rx_bytes = 20, tx_bytes = 20 } } } },
+    } })).network
+    local fallback = switched:sample(at(1000000000), switched:sample(at(0)))
+    equal(fallback.data.interfaces[1].rates.rx_bytes_per_second, nil,
+        "changing between modern and legacy counter tables resets the baseline")
+end
+
 -- ---------------------------------------------------------------------------
 -- IPv6 text follows RFC 5952.
 -- ---------------------------------------------------------------------------

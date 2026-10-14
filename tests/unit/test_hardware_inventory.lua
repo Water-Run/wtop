@@ -4333,4 +4333,27 @@ do
     assert(Export.snapshot(state).disks.truncated)
 end
 
+do
+    local Hardware = require("wtop.model.hardware")
+    local JSON = require("wtop.format.json")
+    local adapter = { address = "02:00.0", _pnp_instance_id = "PCI\\PRIVATE-NIC" }
+    local interface = { id = 17, name = "Ethernet", driver = "rtl8168",
+        description = "Ethernet controller", hardware = true,
+        _interface_guid = "PRIVATE-GUID", _pnp_instance_id = "PCI\\PRIVATE-NIC",
+        _pnp_parent_id = "PCI\\PRIVATE-NIC", _pnp_parent_bus = "pci" }
+    local state = { inventory = { pci = { devices = { adapter } } },
+        network = { interfaces = { interface } } }
+    assert(Hardware.build(state).by_id["net:17"].parent_id == "pci:02:00.0")
+    local data = Export.snapshot(state)
+    assert(data.network.interfaces[1].driver == "rtl8168"
+        and data.network.interfaces[1].description == "Ethernet controller"
+        and data.network.interfaces[1].hardware)
+    assert(not JSON.encode(data):find("PRIVATE", 1, true))
+    state.quality = { network = { status = "ok", quality = "stale" } }
+    assert(Hardware.build(state).by_id["net:17"].parent_id == nil)
+    state.quality = nil
+    state.inventory.pci.devices[2] = { address = "03:00.0", _pnp_instance_id = adapter._pnp_instance_id }
+    assert(Hardware.build(state).by_id["net:17"].parent_id == nil)
+end
+
 return true

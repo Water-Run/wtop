@@ -187,6 +187,9 @@ local function network_data(data, previous, timestamp_ns)
   for _, interface in ipairs(data.interfaces or {}) do
     local counters = interface.counters or {}
     local old = old_by_id[interface.id or interface.name]
+    if old and (interface._interface_guid ~= old._interface_guid
+        or interface._pnp_instance_id ~= old._pnp_instance_id
+        or data.counter_bits ~= old_data.counter_bits) then old = nil end
     local old_counters = old and old.counters or {}
     local function rate(key)
       if not elapsed_ns or elapsed_ns <= 0 then return nil end
@@ -200,7 +203,7 @@ local function network_data(data, previous, timestamp_ns)
     interface.quality = rx and tx and "fresh" or "gap"
     any_gap = any_gap or interface.quality == "gap"
   end
-  return data, any_gap and "gap" or "fresh"
+  return data, data.quality == "partial" and "partial" or any_gap and "gap" or "fresh"
 end
 
 local function disk_data(data, previous, timestamp_ns)

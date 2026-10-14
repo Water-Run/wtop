@@ -26,12 +26,20 @@
 
 typedef DWORD (WINAPI *if_table2_function)(PMIB_IF_TABLE2 *);
 typedef VOID (WINAPI *free_mib_table_function)(PVOID);
+typedef DWORD (WINAPI *adapter_info_function)(PIP_ADAPTER_INFO, PULONG);
 typedef DWORD (WINAPI *extended_tcp_function)(PVOID, PDWORD, BOOL, ULONG,
     TCP_TABLE_CLASS, ULONG);
 typedef DWORD (WINAPI *extended_udp_function)(PVOID, PDWORD, BOOL, ULONG,
     UDP_TABLE_CLASS, ULONG);
 typedef DWORD (WINAPI *tcp_table_function)(PMIB_TCPTABLE, PDWORD, BOOL);
 typedef DWORD (WINAPI *udp_table_function)(PMIB_UDPTABLE, PDWORD, BOOL);
+
+typedef struct { PVOID table; free_mib_table_function release; } mib_guard;
+static int close_mib_table(lua_State *L) {
+    mib_guard *guard = lua_touserdata(L, 1);
+    if (guard && guard->table) { guard->release(guard->table); guard->table = NULL; }
+    return 0;
+}
 
 static FARPROC iphlpapi_export(const char *name) {
     HMODULE module = GetModuleHandleA("iphlpapi.dll");
@@ -53,6 +61,69 @@ static void push_mac(lua_State *L, const UCHAR *address, ULONG length) {
     lua_setfield(L, -2, "address");
 }
 
+void wtop_push_interface_guid(lua_State *L, const void *value) {
+    const GUID *guid = value;
+    static const GUID zero;
+    char text[39];
+    if (!guid || memcmp(guid, &zero, sizeof(zero)) == 0) return;
+    snprintf(text, sizeof(text), "{%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}",
+        (unsigned long)guid->Data1, guid->Data2, guid->Data3,
+        guid->Data4[0], guid->Data4[1], guid->Data4[2], guid->Data4[3],
+        guid->Data4[4], guid->Data4[5], guid->Data4[6], guid->Data4[7]);
+    lua_pushstring(L, text);
+    lua_setfield(L, -2, "_interface_guid");
+}
+
+/* GetAdaptersInfo exists on XP, and fills gaps when the old table's name
+ * doesn't contain a GUID. Only the exact interface index is used. */
+void wtop_fill_interface_guids(lua_State *L) {
+    int result = lua_gettop(L);
+    adapter_info_function get_info = (adapter_info_function)(void *)iphlpapi_export("GetAdaptersInfo");
+    ULONG bytes = 0, capacity;
+    if (!get_info || get_info(NULL, &bytes) != ERROR_BUFFER_OVERFLOW
+            || bytes < sizeof(IP_ADAPTER_INFO) || bytes > 1024 * 1024) return;
+    capacity = bytes;
+    BYTE *buffer = lua_newuserdatauv(L, bytes, 0);
+    memset(buffer, 0, bytes);
+    if (get_info((IP_ADAPTER_INFO *)buffer, &bytes) != NO_ERROR || bytes > capacity) {
+        lua_pop(L, 1); return;
+    }
+    lua_getfield(L, result, "interfaces");
+    int interfaces = lua_gettop(L);
+    for (lua_Integer row = 1; row <= (lua_Integer)lua_rawlen(L, interfaces); ++row) {
+        lua_rawgeti(L, interfaces, row);
+        lua_getfield(L, -1, "_interface_guid");
+        int missing = lua_isnil(L, -1); lua_pop(L, 1);
+        lua_getfield(L, -1, "id");
+        lua_Integer wanted = lua_tointeger(L, -1); lua_pop(L, 1);
+        if (missing && wanted >= 0 && (uint64_t)wanted <= MAXDWORD) {
+            IP_ADAPTER_INFO *entry = (IP_ADAPTER_INFO *)buffer;
+            const char *guid = NULL;
+            int matches = 0, complete = 1;
+            for (int n = 0; entry && n < 1024; ++n) {
+                uintptr_t pointer = (uintptr_t)entry, start = (uintptr_t)buffer;
+                if (pointer < start || pointer - start > bytes
+                        || sizeof(*entry) > bytes - (pointer - start)) { complete = 0; break; }
+                if (entry->Index == (DWORD)wanted) {
+                    size_t length = 0;
+                    while (length < sizeof(entry->AdapterName) && entry->AdapterName[length]) ++length;
+                    if (length == 38) { guid = entry->AdapterName; ++matches; }
+                }
+                entry = entry->Next;
+            }
+            if (entry) complete = 0;
+            if (!complete) {
+                lua_pushliteral(L, "partial"); lua_setfield(L, result, "quality");
+            }
+            if (matches == 1 && complete) {
+                lua_pushlstring(L, guid, 38); lua_setfield(L, -2, "_interface_guid");
+            }
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 2);
+}
+
 /* Returns 1 with the interface table pushed, or 0 when GetIfTable2 is not
  * available so the caller can use the 32-bit XP counters instead. */
 int wtop_push_if_table2(lua_State *L) {
@@ -63,11 +134,23 @@ int wtop_push_if_table2(lua_State *L) {
     PMIB_IF_TABLE2 table = NULL;
     ULONG index;
     int output_index = 1;
-    if (!get_table || !free_table || get_table(&table) != NO_ERROR || !table)
-        return 0;
+    if (!get_table || !free_table) return 0;
+    mib_guard *guard = lua_newuserdatauv(L, sizeof(*guard), 0);
+    int guard_index = lua_gettop(L);
+    guard->table = NULL; guard->release = free_table;
+    if (luaL_newmetatable(L, "wtop.network.mib")) {
+        lua_pushcfunction(L, close_mib_table); lua_setfield(L, -2, "__close");
+        lua_pushcfunction(L, close_mib_table); lua_setfield(L, -2, "__gc");
+    }
+    lua_setmetatable(L, guard_index); lua_toclose(L, guard_index);
+    DWORD status = get_table(&table);
+    guard->table = status == NO_ERROR ? table : NULL;
+    if (status != NO_ERROR || !table) {
+        lua_closeslot(L, guard_index); lua_pop(L, 1); return 0;
+    }
     lua_createtable(L, 0, 2);
     lua_createtable(L, 16, 0);
-    for (index = 0; index < table->NumEntries; ++index) {
+    for (index = 0; index < table->NumEntries && index < 4096; ++index) {
         const MIB_IF_ROW2 *row = &table->Table[index];
         int up = row->OperStatus == IfOperStatusUp;
         /* Vista+ lists every NDIS filter layer, WAN miniport, and tunnel
@@ -78,11 +161,18 @@ int wtop_push_if_table2(lua_State *L) {
             && row->Type != IF_TYPE_SOFTWARE_LOOPBACK
             && (!up || row->InOctets + row->OutOctets == 0)) continue;
         lua_createtable(L, 0, 10);
+        lua_pushliteral(L, "GetIfTable2"); lua_setfield(L, -2, "source");
+        wtop_push_interface_guid(L, &row->InterfaceGuid);
         lua_pushinteger(L, (lua_Integer)row->InterfaceIndex);
         lua_setfield(L, -2, "id");
-        wtop_push_utf8(L, row->Alias[0] ? row->Alias : row->Description);
+        WCHAR alias[sizeof(row->Alias) / sizeof(row->Alias[0])];
+        WCHAR description[sizeof(row->Description) / sizeof(row->Description[0])];
+        memcpy(alias, row->Alias, sizeof(alias)); alias[sizeof(alias) / sizeof(alias[0]) - 1] = 0;
+        memcpy(description, row->Description, sizeof(description));
+        description[sizeof(description) / sizeof(description[0]) - 1] = 0;
+        wtop_push_utf8(L, alias[0] ? alias : description);
         lua_setfield(L, -2, "name");
-        wtop_push_utf8(L, row->Description);
+        wtop_push_utf8(L, description);
         lua_setfield(L, -2, "description");
         lua_pushstring(L, up ? "up" : "down");
         lua_setfield(L, -2, "operstate");
@@ -111,10 +201,15 @@ int wtop_push_if_table2(lua_State *L) {
         lua_setfield(L, -2, "counters");
         lua_rawseti(L, -2, output_index++);
     }
-    free_table(table);
+    if (index < table->NumEntries) {
+        lua_pushliteral(L, "partial"); lua_setfield(L, -3, "quality");
+    }
+    lua_closeslot(L, guard_index);
     lua_setfield(L, -2, "interfaces");
     lua_pushinteger(L, 64);
     lua_setfield(L, -2, "counter_bits");
+    wtop_enrich_network(L);
+    lua_remove(L, guard_index);
     return 1;
 }
 

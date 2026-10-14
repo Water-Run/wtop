@@ -2287,6 +2287,7 @@ static int l_collect_network(lua_State *L) {
     ULONG size = 0;
     DWORD status;
     MIB_IFTABLE *interfaces;
+    ULONG capacity;
     DWORD index, output_index = 1;
     if (wtop_push_if_table2(L)) return 1;
     status = GetIfTable(NULL, &size, FALSE);
@@ -2295,18 +2296,23 @@ static int l_collect_network(lua_State *L) {
         lua_pushliteral(L, "GetIfTable failed or returned too much data");
         return 2;
     }
-    interfaces = (MIB_IFTABLE *)malloc(size);
-    if (!interfaces) return luaL_error(L, "out of memory collecting interfaces");
+    capacity = size;
+    interfaces = (MIB_IFTABLE *)lua_newuserdatauv(L, size, 0);
+    memset(interfaces, 0, size);
     status = GetIfTable(interfaces, &size, FALSE);
-    if (status != NO_ERROR) {
-        free(interfaces);
+    if (status != NO_ERROR || size > capacity || size < offsetof(MIB_IFTABLE, table)) {
         lua_pushnil(L);
         lua_pushfstring(L, "GetIfTable failed (Win32 error %d)", (int)status);
         return 2;
     }
     lua_createtable(L, 0, 1);
-    lua_createtable(L, (int)interfaces->dwNumEntries, 0);
-    for (index = 0; index < interfaces->dwNumEntries; ++index) {
+    DWORD available = (size - offsetof(MIB_IFTABLE, table)) / sizeof(MIB_IFROW);
+    DWORD count = interfaces->dwNumEntries;
+    if (count > available) count = available;
+    if (count > 4096) count = 4096;
+    if (count < interfaces->dwNumEntries) string_field(L, "quality", "partial");
+    lua_createtable(L, (int)count, 0);
+    for (index = 0; index < count; ++index) {
         MIB_IFROW *entry = &interfaces->table[index];
         WCHAR name[MAX_INTERFACE_NAME_LEN];
         size_t copy_bytes = sizeof(name) < sizeof(entry->wszName)
@@ -2314,8 +2320,14 @@ static int l_collect_network(lua_State *L) {
         memcpy(name, entry->wszName, copy_bytes);
         name[MAX_INTERFACE_NAME_LEN - 1] = 0;
         lua_createtable(L, 0, 9);
+        string_field(L, "source", "GetIfTable");
         integer_field(L, "id", (lua_Integer)entry->dwIndex);
         utf8_field(L, "name", name);
+        /* XP's interface name normally carries the connection GUID. Keep
+         * it private; the shared matcher validates it before use. */
+        const WCHAR *guid_start = wcschr(name, L'{');
+        if (guid_start && wcslen(guid_start) == 38)
+            utf8_field(L, "_interface_guid", guid_start);
         string_field(L, "operstate",
             entry->dwOperStatus == IF_OPER_STATUS_OPERATIONAL ? "up" : "down");
         integer_field(L, "mtu", (lua_Integer)entry->dwMtu);
@@ -2338,9 +2350,9 @@ static int l_collect_network(lua_State *L) {
         lua_setfield(L, -2, "counters");
         lua_rawseti(L, -2, output_index++);
     }
-    free(interfaces);
     lua_setfield(L, -2, "interfaces");
     integer_field(L, "counter_bits", 32);
+    wtop_enrich_network(L);
     return 1;
 }
 

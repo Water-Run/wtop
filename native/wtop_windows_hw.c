@@ -1516,6 +1516,137 @@ int wtop_pnp_parent(uint32_t devinst, const wchar_t *identity,
     return found;
 }
 
+/* NetCfgInstanceId is the connection's GUID in the adapter software key.
+ * Join it with IP Helper's interface GUID; aliases and MACs are not identities.
+ * https://learn.microsoft.com/windows-hardware/drivers/ddi/ntddndis/ns-ntddndis-_ndis_switch_port_property_profile */
+#define MAX_NETWORK_DEVICES 128
+static const GUID network_class = { 0x4d36e972, 0xe325, 0x11ce,
+    { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } };
+typedef struct {
+    char guid[39];
+    DEVINST devinst;
+    WCHAR instance[256], parent[256], driver[160];
+    char bus[4];
+    int valid, parent_status, duplicate;
+} network_device;
+
+static int network_guid(const WCHAR *wide, char *text) {
+    if (!wide || wcslen(wide) != 38) return 0;
+    for (int i = 0; i < 38; ++i) {
+        WCHAR c = wide[i];
+        if (i == 0) { if (c != L'{') return 0; }
+        else if (i == 37) { if (c != L'}') return 0; }
+        else if (i == 9 || i == 14 || i == 19 || i == 24) { if (c != L'-') return 0; }
+        else if (!((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f')
+                || (c >= L'A' && c <= L'F'))) return 0;
+        text[i] = c >= L'A' && c <= L'F' ? (char)(c - L'A' + 'a') : (char)c;
+    }
+    text[38] = 0;
+    return strcmp(text, "{00000000-0000-0000-0000-000000000000}") != 0;
+}
+
+static int network_registry_guid(HDEVINFO set, SP_DEVINFO_DATA *device, char *text) {
+    WCHAR value[40] = { 0 };
+    DWORD bytes = sizeof(value) - sizeof(WCHAR), type = 0;
+    HKEY key = SetupDiOpenDevRegKey(set, device, DICS_FLAG_GLOBAL, 0, DIREG_DRV, KEY_QUERY_VALUE);
+    if (key == INVALID_HANDLE_VALUE) return 0;
+    LONG status = RegQueryValueExW(key, L"NetCfgInstanceId", NULL, &type, (BYTE *)value, &bytes);
+    RegCloseKey(key);
+    return status == ERROR_SUCCESS && type == REG_SZ && bytes <= sizeof(value) - sizeof(WCHAR)
+        && bytes % sizeof(WCHAR) == 0 && network_guid(value, text);
+}
+
+void wtop_enrich_network(lua_State *L) {
+    int result = lua_gettop(L), count = 0, incomplete = 0;
+    wtop_fill_interface_guids(L);
+    network_device *devices = (network_device *)lua_newuserdatauv(L,
+        sizeof(network_device) * MAX_NETWORK_DEVICES, 0);
+    HDEVINFO set = SetupDiGetClassDevsW(&network_class, NULL, NULL, DIGCF_PRESENT);
+    if (set != INVALID_HANDLE_VALUE) {
+        for (DWORD index = 0; index < 1024; ++index) {
+            SP_DEVINFO_DATA device;
+            network_device row;
+            WCHAR current[256];
+            DWORD type = 0;
+            memset(&device, 0, sizeof(device)); device.cbSize = sizeof(device);
+            if (!SetupDiEnumDeviceInfo(set, index, &device)) {
+                if (GetLastError() != ERROR_NO_MORE_ITEMS) incomplete = 1;
+                break;
+            }
+            if (index == 1023 || count == MAX_NETWORK_DEVICES) { incomplete = 1; continue; }
+            memset(&row, 0, sizeof(row));
+            if (!network_registry_guid(set, &device, row.guid)) continue;
+            row.devinst = device.DevInst;
+            row.valid = wtop_pnp_identity(device.DevInst, row.instance, 256);
+            if (row.valid) {
+                if (_wcsnicmp(row.instance, L"PCI\\", 4) == 0) {
+                    wcscpy(row.parent, row.instance); strcpy(row.bus, "pci"); row.parent_status = 1;
+                } else if (_wcsnicmp(row.instance, L"USB\\", 4) == 0) {
+                    wcscpy(row.parent, row.instance); strcpy(row.bus, "usb"); row.parent_status = 1;
+                } else row.parent_status = wtop_pnp_parent(device.DevInst, row.instance, row.parent, row.bus);
+                if (!wtop_pnp_identity(device.DevInst, current, 256)
+                        || wcscmp(current, row.instance) != 0) row.valid = 0;
+            }
+            if (!SetupDiGetDeviceRegistryPropertyW(set, &device, SPDRP_SERVICE, &type,
+                    (BYTE *)row.driver, sizeof(row.driver) - sizeof(WCHAR), NULL) || type != REG_SZ)
+                row.driver[0] = 0;
+            char confirmed_guid[39];
+            if (!network_registry_guid(set, &device, confirmed_guid)
+                    || strcmp(row.guid, confirmed_guid) != 0) row.valid = 0;
+            for (int i = 0; i < count; ++i)
+                if (strcmp(devices[i].guid, row.guid) == 0)
+                    devices[i].duplicate = row.duplicate = 1;
+            devices[count++] = row;
+        }
+        SetupDiDestroyDeviceInfoList(set);
+    } else incomplete = 1;
+    /* Handles are closed before mutating Lua rows, including allocation errors. */
+    lua_getfield(L, result, "interfaces");
+    int interfaces = lua_gettop(L);
+    for (lua_Integer i = 1; i <= (lua_Integer)lua_rawlen(L, interfaces); ++i) {
+        char text[39];
+        WCHAR wide[39] = { 0 }, current[256];
+        lua_rawgeti(L, interfaces, i);
+        lua_getfield(L, -1, "_interface_guid");
+        size_t length;
+        const char *value = lua_tolstring(L, -1, &length);
+        if (value && length == 38) for (size_t c = 0; c < length; ++c) wide[c] = (unsigned char)value[c];
+        lua_pop(L, 1);
+        if (network_guid(wide, text)) {
+            string_field(L, "_interface_guid", text);
+            int matched = 0;
+            for (int d = 0; d < count; ++d) {
+                const network_device *device = &devices[d];
+                if (strcmp(device->guid, text) != 0) continue;
+                matched = 1;
+                if (!device->valid || device->duplicate
+                        || !wtop_pnp_identity(device->devinst, current, 256)
+                        || wcscmp(current, device->instance) != 0) {
+                    incomplete = 1; break;
+                }
+                utf8_field(L, "_pnp_instance_id", device->instance);
+                if (device->parent_status > 0) {
+                    utf8_field(L, "_pnp_parent_id", device->parent);
+                    string_field(L, "_pnp_parent_bus", device->bus);
+                } else if (device->parent_status < 0) incomplete = 1;
+                if (device->driver[0]) utf8_field(L, "driver", device->driver);
+                break;
+            }
+            if (!matched) {
+                lua_getfield(L, -1, "hardware");
+                if (lua_toboolean(L, -1)) incomplete = 1;
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
+    if (incomplete) {
+        lua_pushliteral(L, "partial"); lua_setfield(L, result, "quality");
+    }
+    lua_pop(L, 1); /* temporary device references */
+}
+
 typedef struct {
     DEVINST devinst;
     int bus, index;
