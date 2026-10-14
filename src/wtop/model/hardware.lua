@@ -29,6 +29,11 @@ local function pnp_identity(value)
   end)
 end
 
+local function registry_identity(value)
+  return type(value) == "string" and #value <= 26
+    and value:match("^ioreg:[1-9]%d*$") and value or nil
+end
+
 local function iommu_group_id(value)
   return type(value) == "number" and math.type(value) == "integer"
     and value >= 0 and value <= 2147483647 and value or nil
@@ -177,6 +182,7 @@ function M.build(snapshot)
     truncated = false, partial = inventory.quality == "partial" }
   local unsorted = {}
   local pnp_nodes = {}
+  local registry_nodes = {}
   local function add_node(bus, name, device, id, parent, resource, reference)
     if result.by_id[id] then
       result.partial = true
@@ -231,11 +237,37 @@ function M.build(snapshot)
               pnp_nodes[pnp], result.partial = false, true
             else pnp_nodes[pnp] = node end
           end
+          local registry = registry_identity(device._registry_entry_id)
+          if registry and node then
+            if registry_nodes[registry] ~= nil then
+              registry_nodes[registry], result.partial = false, true
+            else registry_nodes[registry] = node end
+          end
         else
           result.partial = true
         end
       end
     end
+  end
+  local function registry_parent(node, device, resource)
+    local parent = registry_identity(device._registry_parent_id)
+    if not parent or node.ambiguous then
+      if device._registry_parent_id ~= nil then
+        node.parent_id, result.partial = nil, true
+      end
+      return
+    end
+    local target = registry_nodes[parent]
+    if Quality.current_source(snapshot.quality, "inventory")
+        and Quality.current_source(snapshot.quality, resource)
+        and target and not target.ambiguous
+        and (device._registry_parent_bus == "pci" or device._registry_parent_bus == "usb")
+        and target.bus == device._registry_parent_bus then
+      node.parent_id = target.id
+    else node.parent_id, result.partial = nil, true end
+  end
+  for _, node in ipairs(unsorted) do
+    registry_parent(node, node.device, "inventory")
   end
   local pci_inventory = type(inventory.pci) == "table" and inventory.pci or {}
   for _, group in ipairs(type(pci_inventory.iommu_groups) == "table"
@@ -365,6 +397,7 @@ function M.build(snapshot)
               node.parent_id = target.id
             else result.partial = true end
           end
+          if node then registry_parent(node, device, source[2]) end
           if source[1] == "block" then
             index_unique(blocks_by_path, path, node)
             index_unique(blocks_by_id, reference, node)

@@ -38,6 +38,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Native IOKit inventory regressions
+        run: make test-native-inventory
       - name: Native build, both bundles, CLI, PTY and deployment floors
         run: make test-bundles
       - name: Archive the complete development packages

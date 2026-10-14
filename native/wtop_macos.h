@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 void wtop_register_hardware(lua_State *L);
+int wtop_collect_inventory(lua_State *L);
 uint64_t wtop_mach_to_ns(uint64_t value);
 
 #endif
