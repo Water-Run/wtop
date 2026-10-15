@@ -69,6 +69,7 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/syscall.h>
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
@@ -1483,6 +1484,44 @@ static int l_readfile_at(lua_State *L) {
     return 1;
 }
 
+/* One fixed, read-only Intel performance-status register. Model support is
+ * checked by the collector; the generic regular-file readers stay unchanged. */
+static int l_read_cpu_perf_limits(lua_State *L) {
+    lua_Integer cpu = luaL_checkinteger(L, 1);
+    char path[64], bytes[8];
+    struct stat metadata;
+    io_guard *guard;
+    ssize_t count;
+    luaL_argcheck(L, cpu >= 0 && cpu <= 8191, 1, "CPU must be in 0..8191");
+    (void)snprintf(path, sizeof(path), "/dev/cpu/%u/msr", (unsigned int)cpu);
+    guard = push_io_guard(L);
+    guard->descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW);
+    if (guard->descriptor < 0) return push_errno(L, "open CPU MSR");
+    if (fstat(guard->descriptor, &metadata) != 0) return push_errno(L, "stat CPU MSR");
+    if (!S_ISCHR(metadata.st_mode) || major(metadata.st_rdev) != 202
+        || minor(metadata.st_rdev) != (unsigned int)cpu) {
+        errno = EINVAL;
+        return push_errno(L, "unexpected CPU MSR device");
+    }
+    do {
+        count = pread(guard->descriptor, bytes, sizeof(bytes), (off_t)0x64f);
+    } while (count < 0 && errno == EINTR);
+    if (count < 0) return push_errno(L, "read CPU performance limits");
+    if (count != (ssize_t)sizeof(bytes)) {
+        errno = EIO;
+        return push_errno(L, "short CPU MSR read");
+    }
+    if (close(guard->descriptor) != 0) {
+        int saved = errno;
+        guard->descriptor = -1;
+        errno = saved;
+        return push_errno(L, "close CPU MSR");
+    }
+    guard->descriptor = -1;
+    lua_pushlstring(L, bytes, sizeof(bytes));
+    return 1;
+}
+
 /* Batch /proc reader: one Lua->C crossing for a whole process sample.
  * The per-process stat fetch is the collector's floor (open+read+close per
  * PID, ~11 us each through the guarded single-file reader); doing it from Lua
@@ -2143,6 +2182,7 @@ static const luaL_Reg functions[] = {
     {"listdir", l_listdir},
     {"readfile", l_readfile},
     {"readfile_at", l_readfile_at},
+    {"read_cpu_perf_limits", l_read_cpu_perf_limits},
     {"proc_batch", l_proc_batch},
     {"process_stat_fields", l_process_stat_fields},
     {"readlink", l_readlink},

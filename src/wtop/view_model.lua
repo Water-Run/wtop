@@ -959,7 +959,66 @@ function M.disk_mount_join(snapshot)
     return by_disk
 end
 
-local function gpu_rows(snapshot, format)
+local function limit_quality(domain, state)
+    if Power.unusable(state) then
+        return type(state) == "table" and (state.quality or state.status) or state
+    end
+    return domain.quality
+end
+
+local function limit_names(domain, field, i18n)
+    local names = {}
+    for _, reason in ipairs(domain.reasons or {}) do
+        if reason[field] == true then
+            names[#names + 1] = translated(i18n, "limits.reason." .. reason.id, reason.id)
+        end
+    end
+    return names
+end
+
+local function limit_status(domain, state, i18n)
+    local q = limit_quality(domain, state)
+    if Power.unusable(q) then return Technical.state(i18n, q) end
+    if domain.active == false then return translated(i18n, "limits.inactive", "Not asserted") end
+    if domain.active == true then
+        local names = limit_names(domain, "active", i18n)
+        return #names > 0 and table.concat(names, ", ")
+            or translated(i18n, "limits.unknown_reason", "Asserted; reason unavailable")
+    end
+    return translated(i18n, "status.unknown", "Unknown")
+end
+
+function M.performance_limit_rows(snapshot, i18n)
+    local rows, total = {}, 0
+    local function add(limits, owner, state)
+        for _, domain in ipairs(limits and limits.domains or {}) do
+            total = total + 1
+            if #rows < TABLE_ROW_LIMIT then
+                local recorded = limit_names(domain, "logged", i18n)
+                local history
+                for _, reason in ipairs(domain.reasons or {}) do
+                    if reason.logged ~= nil then history = true; break end
+                end
+                rows[#rows + 1] = { name = owner .. " [" .. tostring(domain.id) .. "]",
+                    current = limit_status(domain, state, i18n),
+                    recorded = history and (#recorded > 0 and table.concat(recorded, ", ")
+                        or translated(i18n, "limits.no_recorded", "No flags recorded")) or nil,
+                    quality = limit_quality(domain, state) or "unknown",
+                    scope = translated(i18n, "limits.scope." .. tostring(domain.scope), domain.scope or "—"),
+                    source = domain.source or domain.source_kind or "—",
+                }
+            end
+        end
+    end
+    add(snapshot.cpu_limits, "CPU", snapshot.quality and snapshot.quality.cpu_limits)
+    for _, gpu in ipairs(snapshot.gpus and snapshot.gpus.devices or {}) do
+        add(gpu.performance_limits, "GPU " .. tostring(gpu.card or gpu.id),
+            snapshot.quality and snapshot.quality.gpus)
+    end
+    return rows, total
+end
+
+local function gpu_rows(snapshot, format, i18n)
     local rows = {}
     local joins = M.gpu_sensor_join(snapshot)
     local by_gpu = {}
@@ -1026,6 +1085,24 @@ local function gpu_rows(snapshot, format)
         if clock_count > 1 and metrics.frequency_current_hz ~= nil then
             frequency_text = frequency_text .. " +" .. tostring(clock_count - 1)
         end
+        local limits = gpu.performance_limits and gpu.performance_limits.domains or {}
+        local limit_text, all_inactive, asserted, degraded = "—",
+            #limits > 0 and not gpu.performance_limits.truncated, false, nil
+        for _, domain in ipairs(limits) do
+            local state = snapshot.quality and snapshot.quality.gpus
+            local q = limit_quality(domain, state)
+            all_inactive = all_inactive and domain.active == false and not Power.unusable(q)
+            if domain.active == true and not Power.unusable(q) then
+                limit_text = limit_status(domain, state, i18n)
+                asserted = true
+                break
+            elseif Power.unusable(q) then degraded = Technical.state(i18n, q) end
+        end
+        if not asserted and all_inactive then
+            limit_text = translated(i18n, "limits.inactive", "Not asserted")
+        elseif not asserted and #limits > 0 then
+            limit_text = degraded or translated(i18n, "status.unknown", "Unknown")
+        end
         rows[#rows + 1] = {
             gpu = gpu.model_name or gpu.card or gpu.id,
             -- The name of the card itself, which is the one string that tells two
@@ -1051,6 +1128,7 @@ local function gpu_rows(snapshot, format)
             power_usage = power_usage(format, power_budget.comparison),
             power_percent = power_budget.comparison and power_budget.comparison.percent,
             power_budget_source = power_budget.source,
+            limits = limit_text,
             -- The channel the figures came from, so a reader can tell a
             -- package power from a rail and an edge sensor from a hot spot.
             fan = fan_rpm and formatted(function()
@@ -1560,7 +1638,7 @@ end
 
 function M.power_detail_rows(snapshot, i18n)
     local zones, total = power_rows(snapshot, i18n.format, i18n)
-    return zones, gpu_rows(snapshot, i18n.format), total
+    return zones, gpu_rows(snapshot, i18n.format, i18n), total
 end
 
 -- ---------------------------------------------------------------------------
@@ -2073,7 +2151,7 @@ local COLLECTOR_RESOURCE = {
     thermal_zones = "thermal_zones",
     host_interfaces = "host_interfaces",
     processor_firmware = "processor_firmware",
-    edac = "edac", spd = "spd", thermal_throttle = "thermal_throttle",
+    edac = "edac", spd = "spd", thermal_throttle = "thermal_throttle", cpu_limits = "cpu_limits",
     cpuidle = "cpuidle",
     pressure = "pressure",
     disk = "disks", network = "network", connections = "connections",
@@ -2596,7 +2674,14 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         connection_selected_index = 1
     end
     local addresses = on("network", "address_table") and address_rows(snapshot) or {}
-    local gpu_table_rows = on("gpu", "gpu_table") and gpu_rows(snapshot, format) or {}
+    local gpu_table_rows = on("gpu", "gpu_table") and gpu_rows(snapshot, format, i18n) or {}
+    local gpu_has_power, gpu_has_cap, gpu_has_frequency, gpu_has_limits = false, false, false, false
+    for _, row in ipairs(gpu_table_rows) do
+        gpu_has_power = gpu_has_power or row.power ~= "—"
+        gpu_has_cap = gpu_has_cap or row.power_limit ~= "—"
+        gpu_has_frequency = gpu_has_frequency or row.frequency ~= "—"
+        gpu_has_limits = gpu_has_limits or row.limits ~= "—"
+    end
     local gpu_process_table_rows, gpu_process_total = {}, 0
     local gpu_process_table_ids, gpu_process_selected_index = {}, nil
     if on("gpu", "gpu_process_table") then
@@ -3211,12 +3296,13 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "driver", label = translated(i18n, "metrics.driver", "Driver"), width = 12, min_width = 8, priority = 45 },
                 { key = "utilization", label = translated(i18n, "metrics.utilization", "Util"), width = 9, min_width = 7, align = "right", priority = 90 },
                 { key = "memory", label = translated(i18n, "metrics.memory", "Memory"), width = 20, min_width = 12, align = "right", priority = 85 },
-                { key = "frequency", label = translated(i18n, "metrics.frequency", "Frequency"), width = 13, min_width = 9, align = "right", priority = 35, full_only = true },
+                { key = "frequency", label = translated(i18n, "metrics.frequency", "Frequency"), width = 13, min_width = 9, align = "right", priority = gpu_has_frequency and 82 or 15, full_only = not gpu_has_frequency },
                 { key = "pcie", label = "PCIe", width = 18, min_width = 9, priority = 25, full_only = true },
                 { key = "temperature", label = translated(i18n, "metrics.temperature", "Temp"), width = 9, min_width = 7, align = "right", priority = 70 },
-                { key = "power", label = translated(i18n, "metrics.power", "Power"), width = 10, min_width = 8, align = "right", priority = 80 },
-                { key = "power_limit", label = translated(i18n, "power.limit", "Power cap"), width = 12, min_width = 8, align = "right", priority = 78 },
-                { key = "power_usage", label = translated(i18n, "power.of_limit", "% of cap"), width = 22, min_width = 18, align = "right", priority = 77 },
+                { key = "power", label = translated(i18n, "metrics.power", "Power"), width = 10, min_width = 8, align = "right", priority = gpu_has_power and 80 or 14, full_only = not gpu_has_power },
+                { key = "power_limit", label = translated(i18n, "power.limit", "Power cap"), width = 12, min_width = 8, align = "right", priority = gpu_has_cap and 78 or 13, full_only = not gpu_has_cap },
+                { key = "power_usage", label = translated(i18n, "power.of_limit", "% of cap"), width = 22, min_width = 18, align = "right", priority = gpu_has_cap and 77 or 12, full_only = not gpu_has_cap },
+                { key = "limits", label = translated(i18n, "limits.current", "Current limits"), width = 24, min_width = 12, priority = gpu_has_limits and 76 or 11, full_only = not gpu_has_limits },
                 { key = "fan", label = translated(i18n, "metrics.fan", "Fan"), width = 10, min_width = 7, align = "right", priority = 30, full_only = true },
             },
             rows = gpu_table_rows,

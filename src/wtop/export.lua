@@ -148,6 +148,43 @@ local function export_cpu_info(cpu_info)
     return result
 end
 
+local function export_performance_limits(limits, maximum, summary, quality)
+    limits = limits or {}
+    local domains = limits.domains or {}
+    local result = copy_fields(limits, { "schema", "source", "source_kind", "denied_domains" })
+    result.domains, result.domains_total = json.array({}), #domains
+    result.truncated = limits.truncated == true or #domains > (maximum or #domains)
+    for index = 1, math.min(#domains, maximum or #domains) do
+        local domain = domains[index]
+        local output = copy_fields(domain, { "id", "scope", "cpu_id", "package_id", "family", "model",
+            "active", "quality", "source", "source_kind", "observed_at_ns", "register", "reason",
+            "raw_hex", "unknown_status_mask", "unknown_log_mask", "reserved_high" })
+        local stale = Power.unusable(quality) or Power.unusable(domain.quality)
+        if Power.unusable(quality) then
+            output.quality = type(quality) == "table" and (quality.quality or quality.status) or quality
+        end
+        if stale then output.active = nil end
+        if summary then
+            output.active_reasons, output.recorded_reasons = json.array({}), json.array({})
+            for _, reason in ipairs(domain.reasons or {}) do
+                if reason.active == true and not stale then output.active_reasons[#output.active_reasons + 1] = reason.id end
+                if reason.logged == true then output.recorded_reasons[#output.recorded_reasons + 1] = reason.id end
+            end
+        else
+            output.logical_cpu_ids = json.array({})
+            for i, id in ipairs(domain.logical_cpu_ids or {}) do output.logical_cpu_ids[i] = id end
+            output.reasons = json.array({})
+            for i, reason in ipairs(domain.reasons or {}) do
+                output.reasons[i] = copy_fields(reason, { "id", "active", "logged" })
+                if stale then output.reasons[i].active = nil end
+            end
+            output.issues = export_issues(domain.issues)
+        end
+        result.domains[index] = output
+    end
+    return result
+end
+
 local function export_power(power, quality)
     local result = json.object({
         schema = power and power.schema,
@@ -738,6 +775,7 @@ local function export_gpus(gpus, quality)
         exported.pci = copy_object(device.pci)
         exported.capabilities = copy_object(device.capabilities)
         exported.metrics = copy_object(device.metrics)
+        exported.performance_limits = export_performance_limits(device.performance_limits, nil, false, quality)
         local power_budget = Power.gpu(device.metrics, nil,
             Power.unusable(device.quality) and device.quality or quality)
         if power_budget.comparison then
@@ -1737,6 +1775,8 @@ function M.snapshot(snapshot, options)
         quality = export_quality(snapshot.quality, snapshot.timestamp_ns),
         cpu = export_cpu(snapshot.cpu),
         cpu_info = export_cpu_info(snapshot.cpu_info),
+        cpu_limits = export_performance_limits(snapshot.cpu_limits, nil, false,
+            snapshot.quality and snapshot.quality.cpu_limits),
         memory = export_memory(snapshot.memory),
         pressure = export_pressure(snapshot.pressure),
         disks = export_disks(snapshot.disks),
@@ -2116,6 +2156,7 @@ function M.agent(snapshot, options)
             "temperature_celsius", "power_watts", "power_source", "power_limit_watts", "power_limit_source",
             "power_limit_percent", "power_headroom_watts",
         })
+        output.performance_limits = export_performance_limits(device.performance_limits, device_limit, true)
         -- The full clock set, in the same shape the snapshot uses.  This
         -- summary is what an agent or an insight reads, and it is also the
         -- only view that survives into whatever consumes it, so dropping the
@@ -2386,6 +2427,7 @@ function M.agent(snapshot, options)
                 zones = power_zone_summaries,
                 zones_total = #power_zones,
                 zones_truncated = #power_zones > #power_zone_summaries,
+                cpu_limits = export_performance_limits(full.cpu_limits, device_limit, true),
             }),
             sensors = json.object({
                 temperature_count = temperature_count,

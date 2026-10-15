@@ -97,6 +97,9 @@ local interface_reasons = {
   "cpu_counters_missing",
   "cpu_info_data_incomplete",
   "cpu_info_value_not_stated",
+  "cpu_limits_data_incomplete",
+  "cpu_limits_not_supported",
+  "cpu_limits_reader_unavailable",
   "cpuidle_data_incomplete",
   "cpufreq_data_incomplete",
   "cpufreq_value_derived",
@@ -323,8 +326,13 @@ local IO_RATE_INTERNAL = "process I/O rate reason stays in the collector; the de
 local SOFTNET_MACHINE = "nested network.softnet reason is JSON-only; the Network card and Agent render status, quality and counters"
 local LINK_MACHINE = "nested interface link-events reason is JSON-only; the table and detail render status, quality and counts"
 local CPUIDLE_FIELD_MACHINE = "per-state cpuidle issue reason is Snapshot-only; the Compute table renders counters and the resource-level quality"
+local LIMIT_FIELD_MACHINE = "per-domain CPU/GT limit read diagnostics are Snapshot-only; power details and the report render the domain quality, while the collector uses cpu_limits_data_incomplete"
 
 local machine_only = {
+  invalid_cpu_msr_read = LIMIT_FIELD_MACHINE,
+  cpu_msr_read_failed = LIMIT_FIELD_MACHINE,
+  cpu_roster_changed = LIMIT_FIELD_MACHINE,
+  invalid_limit_status = LIMIT_FIELD_MACHINE,
   calls = EXPORT_ONLY,
   time = EXPORT_ONLY,
   invalid_position = ARGUMENT_GUARD,

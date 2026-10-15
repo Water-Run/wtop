@@ -600,13 +600,22 @@ local function power_detail_lines(snapshot, i18n)
         lines[#lines + 1] = inspector_text("  " .. translated(i18n, id, label)
             .. ": " .. tostring(value or "—"), INSPECTOR_ROW_WIDTH)
     end
+    local limit_rows, limits_total = ViewModel.performance_limit_rows(snapshot, i18n)
+    for index = 1, math.min(#limit_rows, 4) do
+        local row = limit_rows[index]
+        lines[#lines + 1] = inspector_text(row.name .. ": " .. row.current
+            .. " · " .. Technical.state(i18n, row.quality), INSPECTOR_ROW_WIDTH)
+    end
+    if snapshot.cpu_limits and (snapshot.cpu_limits.denied_domains or 0) > 0 then
+        lines[#lines + 1] = translated(i18n, "limits.denied_note", "CPU limit status needs root and the msr driver.")
+    end
     local previous
     for _, row in ipairs(zones) do
         local identity = row.zone_id or (row.domain .. ":" .. row.zone)
         if identity ~= previous then
             lines[#lines + 1] = ""
             lines[#lines + 1] = inspector_text(row.zone .. " [" .. identity .. "]", INSPECTOR_ROW_WIDTH)
-            field("metrics.source", "Source", row.domain)
+            field("metrics.source", "Source", row.domain .. " · " .. row.source)
             field("metrics.power", "Power", row.power .. " · "
                 .. translated(i18n, "power.interval", "Sample window") .. ": " .. row.interval)
             field("power.controls", "Controls", Technical.state(i18n, row.controls)
@@ -627,10 +636,30 @@ local function power_detail_lines(snapshot, i18n)
         field("power.of_limit", "% of cap", row.power_usage)
         field("metrics.source", "Source", row.power_budget_source)
     end
+    local has_history = false
+    for _, row in ipairs(limit_rows) do
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = inspector_text(row.name, INSPECTOR_ROW_WIDTH)
+        field("limits.current", "Current limits", row.current)
+        field("limits.scope", "Scope", row.scope .. " · " .. Technical.state(i18n, row.quality))
+        field("metrics.source", "Source", row.source)
+        if row.recorded then
+            has_history = true
+            field("limits.recorded", "Recorded flags", row.recorded)
+        end
+    end
+    if has_history then
+        lines[#lines + 1] = translated(i18n, "limits.history_note",
+            "Recorded flags remain until cleared; the clear time is unknown.")
+    end
+    if limits_total > #limit_rows then
+        lines[#lines + 1] = translated(i18n, "ui.rows_capped", "showing {visible} of {total}",
+            { visible = #limit_rows, total = limits_total })
+    end
     if total > #zones then
         lines[#lines + 1] = translated(i18n, "ui.rows_capped", "showing {visible} of {total}",
             { visible = #zones, total = total })
-    elseif #zones == 0 and #gpus == 0 then
+    elseif #zones == 0 and #gpus == 0 and #limit_rows == 0 then
         lines[#lines + 1] = translated(i18n, "ui.no_data", "No data")
     end
     return lines
@@ -8449,7 +8478,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             or workspace:content_page() == "compute" or workspace:content_page() == "gpu") then
             show_overlay(function()
                 return power_detail_lines(engine.snapshot, translator)
-            end, { powercap = true, gpu = true, hwmon = true })
+            end, { powercap = true, cpu_limits = true, gpu = true, hwmon = true })
             dirty = true
         elseif key == "h" then
             show_overlay(function()

@@ -58,6 +58,7 @@ local INTERVAL_FLOORS_MS = {
     edac = 5000,
     spd = 60000,
     cpu_info = 30000,
+    cpu_limits = 1000,
     thermal_throttle = 5000,
     cpuidle = 5000,
     process = 1000,
@@ -99,6 +100,7 @@ local BACKGROUND_INTERVALS_MS = {
     cpu = 2000,
     cpu_info = 60000,
     thermal_throttle = 30000,
+    cpu_limits = 5000,
     cpuidle = 30000,
     memory = 5000,
     pressure = 2000,
@@ -121,13 +123,13 @@ local TAB_COLLECTORS = {
     overview = {
         cpu = true, memory = true, pressure = true, disk = true,
         network = true, gpu = true, cpufreq = true, hwmon = true, powercap = true,
-        system_info = true,
+        system_info = true, cpu_limits = true,
     },
     processes = { cpu = true, memory = true, process = true },
     compute = {
         cpu = true, cpu_info = true, memory = true, pressure = true,
         cpufreq = true, thermal_throttle = true, cpuidle = true,
-        hwmon = true, powercap = true,
+        hwmon = true, powercap = true, cpu_limits = true,
     },
     memory = { memory = true, numa = true, memory_devices = true, edac = true, spd = true,
         pressure = true, system_info = true },
@@ -168,7 +170,7 @@ local TAB_WIDGET_COLLECTORS = {
         pressure_overview = { "pressure" }, disk_overview = { "disk" },
         network_overview = { "network" }, gpu_overview = { "gpu" },
         frequency_overview = { "cpufreq" }, temperature_overview = { "hwmon" },
-        power_overview = { "powercap" },
+        power_overview = { "powercap", "cpu_limits" },
     },
     processes = { process_table = { "cpu", "memory", "process" } },
     compute = {
@@ -177,7 +179,7 @@ local TAB_WIDGET_COLLECTORS = {
         core_table = { "cpu" }, cpufreq_table = { "cpufreq", "cpu_info", "hwmon" },
         cpuidle_table = { "cpuidle" },
         thermal_throttle_table = { "thermal_throttle" }, sensor_table = { "hwmon" },
-        power_table = { "powercap" },
+        power_table = { "powercap", "cpu_limits" },
     },
     memory = {
         memory_total = { "memory" }, memory_segments = { "memory" },
@@ -440,7 +442,7 @@ function Engine.new(options)
         return Users.default:user(uid, clock.now_ns())
     end
     local ordered = {
-        "cpu", "cpu_info", "memory", "numa", "memory_devices", "expansion_slots",
+        "cpu", "cpu_info", "cpu_limits", "memory", "numa", "memory_devices", "expansion_slots",
         "port_connectors",
         "onboard_devices", "firmware_batteries",
         "firmware_power_supplies",

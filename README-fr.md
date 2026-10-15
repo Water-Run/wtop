@@ -130,7 +130,7 @@ unique dans `dist/macos-bundle/`.
 | `u` | Examiner les sessions de connexion sous Linux |
 | `s` dans le journal ou les détails de sshd | Afficher un résumé du journal sous Linux |
 | `f` | Changer la fréquence de rafraîchissement |
-| `p` dans Vue d’ensemble, Calcul ou GPU | Puissance, limites, pourcentages et barres en direct |
+| `p` dans Vue d’ensemble, Calcul ou GPU | Puissance, limites, pourcentages, barres et causes de limitation |
 | `B` | Basculer entre graphiques en blocs et en braille |
 | `z` / `Z` | Afficher plus / moins de temps dans les graphiques |
 | `L` | Changer de langue |

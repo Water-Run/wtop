@@ -124,7 +124,7 @@ in `dist/macos-bundle/`.
 | `u` | Inspect login sessions on Linux |
 | `s` in journal or sshd details | Show a log summary on Linux |
 | `f` | Change the update rate |
-| `p` on Overview, Compute or GPU | Live power, caps, percentages and bars |
+| `p` on Overview, Compute or GPU | Live power, caps, percentages, bars and limit reasons |
 | `B` | Switch block and Braille charts |
 | `z` / `Z` | Show more / less time in charts |
 | `L` | Change language |

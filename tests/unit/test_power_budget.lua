@@ -153,13 +153,17 @@ local fallback_snapshot = { gpus = { devices = {
 near(ViewModel.build(engine, fallback_snapshot, en, {}, "gpu").gpu_table.rows[1].power_percent, 75)
 
 for _, provider in ipairs({ "nvml", "amdsmi" }) do
-    local devices = {}
-    require("wtop.collectors." .. provider).merge(devices, { by_bdf = {} }, {
+    local existing = { id = "0000:01:00.0", card = "card0", metrics = {},
+        quality = { power = "unavailable" }, capabilities = { power = false } }
+    local devices = { existing }
+    require("wtop.collectors." .. provider).merge(devices,
+      { by_bdf = { ["0000:01:00.0"] = existing } }, {
         devices = { { index = 0, pci_bdf = "0000:01:00.0", name = "Fixture GPU",
             power_watts = 25, power_limit_watts = 100 } },
     }, { used_ids = {} })
     assert(devices[1].metrics.power_source == provider)
     assert(devices[1].metrics.power_limit_source == provider)
+    assert(devices[1].quality.power == "fresh" and devices[1].capabilities.power)
     local gpu_snapshot = { gpus = { devices = devices } }
     near(ViewModel.build(engine, gpu_snapshot, en, {}, "gpu").gpu_table.rows[1].power_percent, 25)
     near(Export.snapshot(gpu_snapshot).gpus.devices[1].metrics.power_limit_percent, 25)

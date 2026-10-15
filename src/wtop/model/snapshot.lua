@@ -3,6 +3,7 @@ local Snapshot = {}
 local RESOURCE_KEYS = {
   cpu = true,
   cpu_info = true,
+  cpu_limits = true,
   thermal_throttle = true,
   cpuidle = true,
   memory = true,
@@ -103,6 +104,7 @@ function Snapshot.new(sequence, timestamp_ns)
     timestamp_ns = timestamp_ns,
     cpu = {},
     cpu_info = {},
+    cpu_limits = {},
     thermal_throttle = {},
     cpuidle = {},
     memory = {},

@@ -350,6 +350,34 @@ function M.render(snapshot)
         end, gpus)
 
     local power = object(snapshot.power_supplies)
+    local performance_limits, limits_truncated = {}, false
+    local function add_limits(owner, limits)
+        limits = object(limits)
+        limits_truncated = limits_truncated or limits.truncated == true
+        for _, domain in ipairs(list(limits.domains)) do
+            if #performance_limits < 512 then
+                performance_limits[#performance_limits + 1] = { owner = owner, domain = domain }
+            else limits_truncated = true end
+        end
+    end
+    add_limits("CPU", snapshot.cpu_limits)
+    for _, gpu in ipairs(list(gpus.devices)) do add_limits(gpu.card or gpu.id, gpu.performance_limits) end
+    table_section(lines, "Performance limit status",
+        { "Device", "Domain", "Scope", "Asserted", "Current reasons", "Recorded flags", "Quality", "Source" },
+        performance_limits, function(entry)
+            local domain, active, recorded = entry.domain, {}, {}
+            for _, reason in ipairs(list(entry.domain.reasons)) do
+                if reason.active == true then active[#active + 1] = reason.id end
+                if reason.logged == true then recorded[#recorded + 1] = reason.id end
+            end
+            return { entry.owner, domain.id, domain.scope, domain.active,
+                #active > 0 and table.concat(active, ", ") or nil,
+                #recorded > 0 and table.concat(recorded, ", ") or nil, domain.quality, domain.source }
+        end, { truncated = limits_truncated })
+    if #performance_limits > 0 then
+        lines[#lines + 1] = "Recorded flags remain until cleared; their clear time is unknown. Current flags describe the recorded sample."
+        lines[#lines + 1] = ""
+    end
     table_section(lines, "Live batteries", { "Battery", "State", "Charge", "Health", "Design energy" },
         power.batteries, function(battery)
             return { battery.name or battery.id, battery.status,

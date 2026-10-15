@@ -173,8 +173,15 @@ function M.merge(devices, lookup, data, options)
       set_missing(metrics, "memory_total_bytes", entry.memory_total_bytes)
       set_missing(metrics, "memory_used_bytes", entry.memory_used_bytes)
       set_missing(metrics, "temperature_celsius", entry.temperature_celsius)
-      if set_missing(metrics, "power_watts", entry.power_watts) then metrics.power_source = "nvml" end
-      if set_missing(metrics, "power_limit_watts", entry.power_limit_watts) then
+      if finite_number(entry.power_watts) and entry.power_watts >= 0
+          and set_missing(metrics, "power_watts", entry.power_watts) then
+        metrics.power_source = "nvml"
+        device.quality = type(device.quality) == "table" and device.quality or {}
+        device.capabilities = device.capabilities or {}
+        device.quality.power, device.capabilities.power = "fresh", true
+      end
+      if finite_number(entry.power_limit_watts) and entry.power_limit_watts > 0
+          and set_missing(metrics, "power_limit_watts", entry.power_limit_watts) then
         metrics.power_limit_source = "nvml"
       end
       set_missing(metrics, "frequency_current_hz", entry.graphics_clock_hz)

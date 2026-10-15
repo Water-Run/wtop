@@ -6,6 +6,7 @@ local Common = require("wtop.collectors.common")
 local NVML = require("wtop.collectors.nvml")
 local AMDSMI = require("wtop.collectors.amdsmi")
 local LEVELZERO = require("wtop.collectors.levelzero")
+local GPULimits = require("wtop.collectors.gpu_limits")
 
 local GPU = {}
 GPU.__index = GPU
@@ -1341,7 +1342,7 @@ local function finalize_processes(device, scan)
   end
 end
 
-local function build_device(self, fs, drm_path, card_name, used_ids)
+local function build_device(self, fs, drm_path, card_name, used_ids, now_ns)
   local issues = {}
   local primary = describe_node(fs, drm_path, card_name, "primary", issues)
   local uevent = primary.uevent
@@ -1517,6 +1518,11 @@ local function build_device(self, fs, drm_path, card_name, used_ids)
   if memory_hz then device.metrics.frequency_memory_hz = memory_hz end
 
   device.hwmon_refs, device.hwmon_truncated = hwmon_references(self, fs, device, issues)
+  if device.driver == "i915" then
+    device.performance_limits = GPULimits.i915(fs, device.class_path, self.max_frequency_domains, now_ns)
+    device.capabilities.performance_limits = #device.performance_limits.domains > 0
+    device.quality.performance_limits = device.performance_limits.quality
+  end
   device.capabilities.utilization = device.metrics.utilization_percent ~= nil
   device.capabilities.memory = device.metrics.memory_total_bytes ~= nil or device.metrics.memory_used_bytes ~= nil
   device.capabilities.frequency = #device.frequencies.domains > 0
@@ -1723,7 +1729,8 @@ function GPU:sample(context, previous)
   local used_ids = {}
   local lookup = { by_bdf = {}, by_device_key = {}, by_driver = {}, by_node = {} }
   for _, card in ipairs(found.cards) do
-    local device = build_device(self, fs, self.drm_path, card, used_ids)
+    local device = build_device(self, fs, self.drm_path, card, used_ids,
+      function() return Common.now_ns(context) end)
     devices[#devices + 1] = device
     by_id[device.id] = device
     lookup.by_node[card] = device

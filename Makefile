@@ -322,7 +322,15 @@ test-sanitized: resource-check $(LUA_STAMP) $(NATIVE_REVISION_HEADER) \
 	$(SAN_RUN_ENV) $(LUA) tests/run.lua \
 		$(filter-out $(SANITIZER_EXCLUDED),$(TEST_FILES))
 
-check: resource-check native locales
+.PHONY: test-native-cpu-limits
+test-native-cpu-limits: $(LUA_STAMP) $(NATIVE_REVISION_HEADER) $(NATIVE_VERSION_HEADER)
+	@mkdir -p $(NATIVE_DIR)
+	@$(CC) $(CFLAGS_NATIVE) -I$(NATIVE_DIR) -I$(LUA_PREFIX)/include \
+		tests/native/linux_cpu_limits.c $(filter-out native/wtop_native.c,$(NATIVE_SOURCES)) \
+		$(LUA_PREFIX)/lib/liblua.a -lm -ldl -o $(NATIVE_DIR)/cpu-limits-fixture
+	@$(NATIVE_DIR)/cpu-limits-fixture
+
+check: resource-check native locales test-native-cpu-limits
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAC) -p $$(find src tools tests -type f -name '*.lua' -print)
 	@sh -n tools/*.sh
 	@python3 -c 'import pathlib; [compile(path.read_bytes(), str(path), "exec") for path in pathlib.Path("tests").rglob("*.py")]'
