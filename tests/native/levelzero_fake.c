@@ -16,6 +16,11 @@
 static int mode,stage,walk,manual;
 static uint64_t tick=1000000;
 static void hang(void) {for(;;)pause();}
+static void fixture_control(void) {
+    const char *path=getenv("WTOP_LEVELZERO_FIXTURE_CONTROL");if(!path)return;
+    FILE *file=fopen(path,"r");if(!file)return;
+    int value;if(fscanf(file,"%d",&value)==1)mode=value;fclose(file);
+}
 __attribute__((constructor)) static void setup(void) {
     const char *s=getenv("WTOP_LEVELZERO_FIXTURE_MODE");mode=s?atoi(s):0;
     if(mode==40)hang();
@@ -44,6 +49,7 @@ ze_result_t zesInit(zes_init_flags_t flags) {
 #endif
 static unsigned device_id(uintptr_t handle) {assert(stage);uintptr_t start=stage==2?0x4000u:0x2000u;assert(handle>=start&&handle<start+3);return (unsigned)(handle-start);}
 static ze_result_t drivers(uint32_t *n,void **out) {
+    fixture_control();
     assert(stage&&n);if(mode==42)hang();
     if(!out){*n=2;++walk;return ZE_RESULT_SUCCESS;}
     unsigned take=*n<2?*n:2;for(unsigned i=0;i<take;++i)out[i]=(void *)(uintptr_t)(0x100u+i);*n=take;return ZE_RESULT_SUCCESS;

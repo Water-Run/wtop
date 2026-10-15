@@ -40,6 +40,16 @@ wtop --agent
 完整快照的 `quality[resource].timestamp_ns` 仍是最近一次采集尝试的时间，
 不能用它计算保留值的年龄。
 
+Linux GPU 的 `top.gpus[].observations` 按来源记录观测时间、接收时间和
+是否保留；`metric_observations` 将这些信息关联到具体指标。
+提供方等待、失败或枚举不完整时，保留的旧指标明确标为 `stale`。
+`metrics.gpu.maximum_utilization_percent` 汇总当前可用读数，过期设备不会
+挤掉 `top.gpus` 中有当前利用率或其他当前读数的设备，也不生成当前功耗百分比。
+完整 Snapshot 的设备携带同样的元数据；整体只有旧 GPU 观测时，资源的
+`value_timestamp_ns` 保留原观测时间。
+界面可优先使用同一当前设备的有效 hwmon 功耗通道；厂商原始观测及其质量
+仍在导出中保留，通道读数和上限可在 `sensors` 中核对。
+
 每条 `signals` 条目使用稳定的 `resource`、`code`、`severity` 字段；
 有数值时再提供 `value` 和 `unit`，`message` 仅供展示。当前阈值为
 保守提示，例如 CPU 75/90%、内存 85/95%、设备忙 80/95%、PSI

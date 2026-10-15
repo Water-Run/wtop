@@ -18,6 +18,11 @@
 static int scenario, active, initializations, shutdowns, queries;
 static int socket_ids[2], processor_ids[4];
 static void fixture_hang(void) {for(;;)pause();}
+static void fixture_control(void) {
+    const char *path=getenv("WTOP_AMDSMI_FIXTURE_CONTROL");if(!path)return;
+    FILE *file=fopen(path,"r");if(!file)return;
+    int value;if(fscanf(file,"%d",&value)==1)scenario=value;fclose(file);
+}
 __attribute__((constructor)) static void fixture_start(void) {
     const char *setting=getenv("WTOP_AMDSMI_FIXTURE_MODE");scenario=setting?atoi(setting):0;
     if(scenario==40)fixture_hang();
@@ -37,6 +42,7 @@ static int id(amdsmi_processor_handle h) {
     assert(!"invalid opaque processor handle"); return 0;
 }
 amdsmi_status_t amdsmi_init(uint64_t flags) {
+    fixture_control();
     if(scenario==41)fixture_hang();
     assert(flags == 2 && !active); initializations++;
     if (scenario == 1) return 1;

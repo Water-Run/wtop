@@ -8,8 +8,62 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
+
+def tui_continuity(lua: Path, env: dict[str,str], source: str, baseline: dict, output: Path) -> None:
+    previous_environment=os.environ.copy()
+    os.environ.update(env)
+    os.environ.update(WTOP_ROOT=str(ROOT),WTOP_LUA=str(lua/'bin/lua'))
+    candidates={}
+    for device in baseline['gpus']['devices']:
+        vendor=device.get('metrics',{}).get('power_source')
+        if vendor in ['nvml','amdsmi','levelzero'] and vendor not in candidates:
+            candidates[vendor]=device
+    assert len(candidates)==3
+    card=candidates[source]['card']
+    sys.path.insert(0,str(ROOT/'tests'))
+    import pty_smoke as pty
+    original=pty._markers_visible
+    captured={}
+    with tempfile.TemporaryDirectory(prefix='gpu-pty-continuity-',dir=output) as temporary:
+        control=Path(temporary)/'control';control.write_text('0\n')
+        os.environ['WTOP_'+source.upper()+'_FIXTURE_CONTROL']=str(control)
+        armed=False
+        def visible(markers, data, columns, rows):
+            nonlocal armed
+            if not markers:return True
+            screen=pty.VirtualScreen(columns,rows);screen.feed(bytes(data));text=screen.text()
+            if markers==('continuity-ready',):
+                lines=[line for line in text.splitlines() if card in line]
+                watts=f"{candidates[source]['metrics']['power_watts']:.1f} W"
+                if not any(watts in line and 'Stale' not in line for line in lines):return False
+                if not armed:
+                    control.write_text({'nvml':'47\n','amdsmi':'41\n','levelzero':'42\n'}[source]);armed=True
+                return True
+            if markers==('continuity-stale',):
+                if not any(card in line and 'Stale' in line for line in text.splitlines()):return False
+                for vendor,device in candidates.items():
+                    if vendor!=source and not any(device['card'] in line and 'Stale' not in line
+                                                 for line in text.splitlines()):return False
+                captured['stale']=text
+                return True
+            return all(marker in text for marker in markers)
+        pty._markers_visible=visible
+        try:
+            data=pty.run_session(240,60,exercise=False,cli_options=('--lang','en-US','--no-color'),script=[
+                (b'7',('CPU','Memory')),(('sleep',0.2),('continuity-ready',)),
+                (('sleep',2.5),('continuity-stale',)),(b'p',('continuity-stale',)),
+                (b'\x1b',('Power and limits',)),(b'2',None),(b'9',('PID','Command')),
+                (b'q',('Host','Kernel'))])
+            assert armed and 'stale' in captured
+            for suffix,content in [('pty',data),('txt',captured['stale'].encode())]:
+                path=output/(source+'-warmed-stale.'+suffix);path.write_bytes(content);path.chmod(0o600)
+        finally:
+            pty._markers_visible=original
+            os.environ.clear();os.environ.update(previous_environment)
+    print('ok: '+source+' warmed then hung: stale GPU stays visible, other vendors fresh, power/process/system/quit responsive',flush=True)
 
 def main() -> None:
     p=argparse.ArgumentParser(description=__doc__)
@@ -47,6 +101,13 @@ def main() -> None:
         cards=[d for d in data['gpus']['devices'] if d.get('model_name','').startswith('SDK GPU ')]
         assert len(cards)==3 and {d['metrics']['power_limit_percent'] for d in cards}=={75,100,125}
         print('ok: three SDKs in real Snapshot, counter warmup, 75/100/125% configured-cap comparisons and private outputs')
+        for source in ['nvml','amdsmi','levelzero']:
+            with tempfile.TemporaryDirectory(prefix='gpu-continuity-',dir=work) as temporary:
+                control=Path(temporary)/'control';control.write_text('0\n')
+                live_env={**env,'WTOP_'+source.upper()+'_FIXTURE_CONTROL':str(control)}
+                subprocess.run([str(lua/'bin/lua'),str(ROOT/'tests/native/gpu_continuity_smoke.lua'),
+                                source,str(control)],cwd=ROOT,env=live_env,check=True,timeout=25)
+            tui_continuity(lua,env,source,data,work)
         sys.path.insert(0,str(ROOT/'tests'))
         from test_linux_nvml_worker import tui_hang
         for source in ['amdsmi','levelzero']:

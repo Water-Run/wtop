@@ -205,6 +205,20 @@ local recovered = Snapshot.merge(failed_again, {
 }, 4, 102000000000)
 equal(recovered.quality.cpu.value_timestamp_ns, 102000000000,
   "a newly installed value gets its own collection time")
+local retained_success = Snapshot.merge(recovered, {
+  gpu = {status="ok",quality="stale",data={devices={}},timestamp_ns=103000000000,
+    value_timestamp_ns=1000000000},
+}, 5, 103000000000)
+equal(retained_success.quality.gpus.timestamp_ns,103000000000)
+equal(retained_success.quality.gpus.value_timestamp_ns,1000000000,
+  "an updated per-provider status cannot renew a retained measurement")
+for _,invalid in ipairs({-1,math.huge,0/0,104000000000,"old"}) do
+  local invalid_time=Snapshot.merge(retained_success,{
+    gpu={status="ok",quality="fresh",data={devices={}},timestamp_ns=103000000000,
+      value_timestamp_ns=invalid},
+  },6,103000000000)
+  equal(invalid_time.quality.gpus.value_timestamp_ns,103000000000)
+end
 local never_measured = Snapshot.merge(Snapshot.new(0, 0), {
   cpu = { status = "error", quality = "error", timestamp_ns = 100000000000 },
 }, 1, 100000000000)

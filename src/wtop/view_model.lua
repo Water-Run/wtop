@@ -792,8 +792,9 @@ function M.gpu_sensor_join(snapshot)
     local gpus = snapshot and snapshot.gpus and snapshot.gpus.devices or {}
     for _, gpu in ipairs(gpus) do
         local matched, seen = {}, {}
+        local can_join = gpu.identity_quality ~= "stale" and Quality.current_source(snapshot.quality,"gpus")
         local function add_sensor(sensor)
-            if sensor and not seen[sensor] then
+            if can_join and sensor and not seen[sensor] then
                 seen[sensor] = true
                 matched[#matched + 1] = sensor
             end
@@ -1036,6 +1037,15 @@ local function gpu_rows(snapshot, format, i18n)
     end
     for _, gpu in ipairs(snapshot.gpus and snapshot.gpus.devices or {}) do
         local metrics = gpu.metrics or {}
+        local function qualified(text, value, key, group)
+            local state = snapshot.quality and snapshot.quality.gpus
+            local q = Power.unusable(state) and (type(state)=="table" and (state.quality or state.status) or state)
+                or Quality.gpu_metric_quality(gpu, key, group)
+            if value ~= nil and Power.unusable(q) then
+                return Technical.state(i18n, q) .. " · " .. text
+            end
+            return text
+        end
         local matched, seen = {}, {}
         local temperature_channel, power_channel, fan_channel
         local power_channels = 0
@@ -1055,9 +1065,34 @@ local function gpu_rows(snapshot, format, i18n)
             or (temperature_channel and temperature_channel.input)
         local vendor_power = Power.reading(metrics.power_watts) ~= nil
         local power_state = snapshot.quality and snapshot.quality[vendor_power and "gpus" or "sensors"]
+        local vendor_quality = Quality.gpu_metric_quality(gpu,"power_watts","power")
+        local vendor_state = Power.unusable(vendor_quality) and vendor_quality or power_state
+        local sensor_state = snapshot.quality and snapshot.quality.sensors
+        local sensor_current = power_channel and Power.reading(power_channel.input) ~= nil
+            and not Power.unusable(power_channel.quality) and not Power.unusable(sensor_state)
+            and Quality.current_source(snapshot.quality,"sensors")
+        local use_sensor = vendor_power and Power.unusable(vendor_state) and sensor_current
+            and gpu.identity_quality ~= "stale" and Quality.current_source(snapshot.quality,"gpus")
         local power_budget = Power.gpu(metrics, power_channel,
-            vendor_power and Power.unusable(gpu.quality) and gpu.quality or power_state)
+            vendor_power and vendor_state or power_state)
+        if use_sensor then power_budget=Power.gpu({},power_channel,sensor_state);vendor_power=false end
+        local power_from_sensor = power_channel and not vendor_power
+        local function qualified_power(text,value,key)
+            if not power_from_sensor then return qualified(text,value,key,key=="power_watts" and "power" or nil) end
+            local q = Power.unusable(sensor_state) and (type(sensor_state)=="table"
+                and (sensor_state.quality or sensor_state.status) or sensor_state) or power_channel.quality
+            if value ~= nil and Power.unusable(q) then return Technical.state(i18n,q) .. " · " .. text end
+            return text
+        end
         local power_watts = power_budget.watts
+        local power_observation = not power_from_sensor and gpu.metric_observations
+            and gpu.metric_observations.power_watts
+        local power_age_ns
+        if power_observation and power_observation.retained
+            and type(snapshot.timestamp_ns)=="number" and type(power_observation.observed_at_ns)=="number"
+            and snapshot.timestamp_ns>=power_observation.observed_at_ns then
+            power_age_ns=(snapshot.timestamp_ns+0.0)-power_observation.observed_at_ns
+        end
         local fan_rpm = fan_channel and fan_channel.input
         local memory_used = metrics.memory_used_bytes or metrics.process_memory_bytes
         local memory_total = metrics.memory_total_bytes
@@ -1065,6 +1100,12 @@ local function gpu_rows(snapshot, format, i18n)
         if memory_used then
             memory_text = bytes(format, memory_used)
             if memory_total then memory_text = memory_text .. " / " .. bytes(format, memory_total) end
+        end
+        memory_text = qualified(memory_text, memory_used, metrics.memory_used_bytes ~= nil
+            and "memory_used_bytes" or "process_memory_bytes", "memory")
+        if memory_total and Power.unusable(Quality.gpu_metric_quality(gpu, "memory_total_bytes", "memory"))
+            and not Power.unusable(Quality.gpu_metric_quality(gpu, "memory_used_bytes", "memory")) then
+            memory_text = qualified(memory_text, memory_total, "memory_total_bytes", "memory")
         end
         local pci = gpu.pci or {}
         local pcie = pci.current_link_speed
@@ -1089,6 +1130,7 @@ local function gpu_rows(snapshot, format, i18n)
         if clock_count > 1 and metrics.frequency_current_hz ~= nil then
             frequency_text = frequency_text .. " +" .. tostring(clock_count - 1)
         end
+        frequency_text = qualified(frequency_text, metrics.frequency_current_hz, "frequency_current_hz", "frequency")
         local limits = gpu.performance_limits and gpu.performance_limits.domains or {}
         local limit_text, all_inactive, asserted, degraded = "—",
             #limits > 0 and not gpu.performance_limits.truncated, false, nil
@@ -1108,7 +1150,8 @@ local function gpu_rows(snapshot, format, i18n)
             limit_text = degraded or translated(i18n, "status.unknown", "Unknown")
         end
         rows[#rows + 1] = {
-            gpu = gpu.model_name or gpu.card or gpu.id,
+            gpu = gpu.identity_quality=="stale" and (Technical.state(i18n,"stale") .. " · "
+                .. tostring(gpu.model_name or gpu.card or gpu.id or "?")) or (gpu.model_name or gpu.card or gpu.id),
             -- The name of the card itself, which is the one string that tells two
             -- devices apart when they are the same device.  A four-GPU box
             -- reports four rows of "NVIDIA GeForce RTX 4090" with the same
@@ -1120,31 +1163,34 @@ local function gpu_rows(snapshot, format, i18n)
             card = tostring(gpu.card or gpu.id or "?"),
             vendor = gpu.vendor_name or gpu.vendor or "?",
             driver = gpu.driver or "?",
-            utilization = percent(format, metrics.utilization_percent),
+            utilization = qualified(percent(format, metrics.utilization_percent),
+                metrics.utilization_percent, "utilization_percent", "utilization"),
             memory = memory_text,
             frequency = frequency_text,
             pcie = pcie or "—",
-            temperature = temperature_celsius
+            temperature = qualified(temperature_celsius
                 and formatted(function() return assert(format:temperature(temperature_celsius)) end)
-                or "—",
-            power = power_watts and (string.format("%.1f W", power_watts)
-                .. (metrics.power_source == "nvml" and Power.unusable(gpu.quality)
-                    and (" · " .. Technical.state(i18n, type(gpu.quality)=="table"
-                        and gpu.quality.power or gpu.quality)) or "")) or "—",
-            power_limit = power_budget.limit and string.format("%.1f W", power_budget.limit) or "—",
+                or "—", metrics.temperature_celsius, "temperature_celsius", "temperature"),
+            power = qualified_power(power_watts and string.format("%.1f W", power_watts) or "—",
+                power_watts, "power_watts"),
+            power_limit = qualified_power(power_budget.limit and string.format("%.1f W",power_budget.limit) or "—",
+                power_budget.limit,"power_limit_watts"),
             power_usage = power_usage(format, power_budget.comparison),
             power_percent = power_budget.comparison and power_budget.comparison.percent,
             power_budget_source = power_budget.source or power_budget.limit_source,
-            power_measurement = (metrics.power_measurement == "current" or metrics.power_measurement == "average"
+            power_measurement = not power_from_sensor and (metrics.power_measurement == "current" or metrics.power_measurement == "average"
                 or metrics.power_measurement == "device_sample") and translated(i18n,
                     "power.measurement." .. metrics.power_measurement, metrics.power_measurement) or nil,
-            power_interval_ns = metrics.power_interval_ns,
+            power_interval_ns = not power_from_sensor and metrics.power_interval_ns or nil,
+            power_age_ns = power_age_ns,
+            power_reason = power_observation and power_observation.retained and power_observation.reason or nil,
             limits = limit_text,
             -- The channel the figures came from, so a reader can tell a
             -- package power from a rail and an edge sensor from a hot spot.
             fan = fan_rpm and formatted(function()
                 return assert(format:number(fan_rpm, { precision = 0 }))
-            end) .. " RPM" or "—",
+            end) .. " RPM" or qualified(percent(format,metrics.fan_speed_percent),
+                metrics.fan_speed_percent,"fan_speed_percent","fan"),
             temperature_source = temperature_channel,
             power_source = power_channel,
             power_channels = power_channels,

@@ -21,6 +21,11 @@ static int mode, refs, inits, shutdowns, calls, count_calls, uuid_calls[2], lega
 static unsigned long long last_seen[2];
 static int cards[2];
 static void fixture_hang(void){for(;;)pause();}
+static void fixture_control(void) {
+    const char *path=getenv("WTOP_NVML_FIXTURE_CONTROL");if(!path)return;
+    FILE *file=fopen(path,"r");if(!file)return;
+    int value;if(fscanf(file,"%d",&value)==1)mode=value;fclose(file);
+}
 __attribute__((constructor)) static void fixture_constructor(void) {
     const char *setting=getenv("WTOP_NVML_FIXTURE_MODE");int scenario=setting?atoi(setting):0;
     if(scenario==45)fixture_hang();
@@ -66,6 +71,7 @@ nvmlReturn_t nvmlDeviceGetCount(unsigned int *count)
 nvmlReturn_t nvmlDeviceGetCount_v2(unsigned int *count)
 #endif
 {
+    fixture_control();
     assert(refs > 0); count_calls++;
     if(mode==47)fixture_hang();
     if (mode == 2) return 9;

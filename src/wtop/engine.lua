@@ -6,6 +6,7 @@ local Snapshot = require("wtop.model.snapshot")
 local Runner = require("wtop.core.runner")
 local native = require("wtop.native")
 local UpdateFrequency = require("wtop.update_frequency")
+local Quality = require("wtop.model.quality")
 
 local Engine = {}
 Engine.__index = Engine
@@ -595,7 +596,10 @@ function Engine:_record_history(snapshot, completed)
     local gpu
     for _, device in ipairs(snapshot.gpus and snapshot.gpus.devices or {}) do
         local utilization = device.metrics and device.metrics.utilization_percent
-        if finite_number(utilization) then gpu = gpu and math.max(gpu, utilization) or utilization end
+        if finite_number(utilization) and not Quality.UNUSABLE_FOR_ALERT[
+            Quality.gpu_metric_quality(device, "utilization_percent", "utilization")] then
+            gpu = gpu and math.max(gpu, utilization) or utilization
+        end
     end
 
     local function record(key, source, value)

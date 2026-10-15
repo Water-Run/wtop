@@ -1563,7 +1563,7 @@ function M.build(snapshot)
             and target.bus == gpu._registry_parent_bus then node = target
         elseif gpu._registry_parent_id ~= nil then result.partial = true end
       end
-      if node and not node.ambiguous and id
+      if node and not node.ambiguous and id and gpu.identity_quality ~= "stale"
           and gpu_ids[id] == 1
           and (gpu.vendor_id == nil or node.device.vendor_id == nil
             or gpu.vendor_id == node.device.vendor_id)

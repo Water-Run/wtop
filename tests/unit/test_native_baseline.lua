@@ -224,10 +224,14 @@ assert(not version_gt(combined, declared),
 --    This is the same class of defect as measuring one file of two: a report
 --    that quietly measures less than it claims to is worse than no report.
 
-local _, missing_status = run(
+local missing_report, missing_status = run(
     "sh tools/record_baseline.sh " .. native_module .. " build/native/absent.so")
 assert(missing_status ~= 0,
     "naming an ELF that does not exist must fail the gate, not shorten the report")
+assert(missing_report:find("status: within the promised floor",1,true)==nil
+    and missing_report:find("undetermined",1,true),
+    "a missing named ELF cannot certify the remaining artifacts:\n"..missing_report)
+assert(missing_report:match("combined glibc floor: (%d[%.%d]*)")==nil)
 
 -- ---------------------------------------------------------------------------
 -- 4b. A file that cannot be measured is the same defect wearing a different
@@ -246,7 +250,7 @@ assert(missing_status ~= 0,
 --     contain a verdict.  A test that only checked the exit code would pass
 --     against the broken version, which is why it is written this way.
 
-local not_an_elf = (os.getenv("TMPDIR") or "/tmp") .. "/wtop-not-an-elf.bin"
+local not_an_elf = os.tmpname()
 local junk = assert(io.open(not_an_elf, "wb"))
 junk:write("this is not an ELF image, it is 64 bytes of nothing much\n")
 junk:close()

@@ -76,12 +76,13 @@ unmeasurable=0
 status=0
 
 for module in "$@"; do
+    measured=$((measured + 1))
     if [ ! -f "$module" ]; then
         echo "MISSING: $module" >&2
+        unmeasurable=$((unmeasurable + 1))
         status=1
         continue
     fi
-    measured=$((measured + 1))
     file "$module"
     ldd "$module" || true
     # A hash per artifact, so that "these two files are the same build" is a

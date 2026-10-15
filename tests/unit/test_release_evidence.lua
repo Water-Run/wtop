@@ -428,8 +428,9 @@ if not Artifacts.require_file("build/native/wtop_native.so",
     return true
 end
 
-local scratch = "build/native/.wtop-evidence-fixture"
-os.execute("rm -rf " .. scratch .. " && mkdir -p " .. scratch)
+local scratch = os.tmpname()
+assert(os.remove(scratch))
+assert(os.execute("mkdir " .. scratch))
 local not_an_elf = scratch .. "/not-an-elf.bin"
 local handle = assert(io.open(not_an_elf, "wb"))
 handle:write("this is not an ELF image\n")

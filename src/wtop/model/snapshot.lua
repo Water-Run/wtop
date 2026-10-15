@@ -193,7 +193,9 @@ function Snapshot.merge(previous, results, sequence, timestamp_ns)
         and previous.quality[resource].value_timestamp_ns
     local value_timestamp_ns
     if installed then
-      value_timestamp_ns = math.min(attempt_ns, snapshot.timestamp_ns)
+      local observed = nonnegative_number(result.value_timestamp_ns)
+        and result.value_timestamp_ns <= attempt_ns and result.value_timestamp_ns or attempt_ns
+      value_timestamp_ns = math.min(observed, snapshot.timestamp_ns)
     elseif nonnegative_number(previous_value_ns)
         and previous_value_ns <= snapshot.timestamp_ns then
       value_timestamp_ns = previous_value_ns

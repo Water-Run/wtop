@@ -811,6 +811,22 @@ local function export_gpu_processes(processes)
     return result
 end
 
+local function export_gpu_observations(observations)
+    local result = json.object({})
+    local count = 0
+    for name, observation in pairs(observations or {}) do
+        if type(name) == "string" and type(observation) == "table" then
+            count = count + 1
+            if count > 128 then break end
+            result[name] = copy_fields(observation, {
+                "source", "quality", "retained", "reason", "observed_at_ns",
+                "sample_started_ns", "sample_finished_ns", "received_at_ns", "attempted_at_ns",
+            })
+        end
+    end
+    return result
+end
+
 local function export_gpu_providers(providers)
     local result = json.object({})
     for _, name in ipairs({ "nvml", "amdsmi", "levelzero" }) do
@@ -820,6 +836,7 @@ local function export_gpu_providers(providers)
                 "status", "reason", "source", "api_version", "driver_version",
                 "transport", "sample_started_ns", "sample_finished_ns",
                 "device_count", "merged_devices", "added_devices", "incomplete_devices", "truncated",
+                "quality", "retained", "retained_device_count", "retention_truncated", "attempted_at_ns",
             })
         end
     end
@@ -852,6 +869,8 @@ local function export_gpus(gpus, quality)
         exported.pci = copy_object(device.pci)
         exported.capabilities = copy_object(device.capabilities)
         exported.metrics = copy_object(device.metrics)
+        exported.observations = export_gpu_observations(device.observations)
+        exported.metric_observations = export_gpu_observations(device.metric_observations)
         exported.performance_limits = export_performance_limits(device.performance_limits, nil, false, quality)
         local power_budget = Power.gpu(device.metrics, nil,
             Power.unusable(device.quality) and device.quality or quality)
@@ -1936,6 +1955,21 @@ end
 -- A token-conscious, deterministic context document for automation and LLM
 -- agents. The full snapshot remains the source of truth; this projection keeps
 -- only decision-relevant metrics, bounded top lists, quality and signals.
+local GPU_CURRENT_METRICS = {power_watts="power",temperature_celsius="temperature",
+    frequency_current_hz="frequency",memory_used_bytes="memory"}
+local function gpu_score(device)
+    local metrics=device.metrics or {}
+    local utilization=metrics.utilization_percent
+    if finite_number(utilization) and not Quality.UNUSABLE_FOR_ALERT[
+        Quality.gpu_metric_quality(device,"utilization_percent","utilization")] then return utilization end
+    for key,group in pairs(GPU_CURRENT_METRICS) do
+        if finite_number(metrics[key]) and not Quality.UNUSABLE_FOR_ALERT[
+            Quality.gpu_metric_quality(device,key,group)] then return -1 end
+    end
+    if device.identity_quality=="fresh" or device.identity_quality=="estimated" then return -2 end
+    return -3
+end
+
 function M.agent(snapshot, options)
     if type(options) ~= "table" then options = {} end
     -- These maxima are part of agent-v1.schema.json, not merely defaults.
@@ -2201,21 +2235,18 @@ function M.agent(snapshot, options)
     for _, device in ipairs(gpu_devices) do
         local utilization = device.metrics and device.metrics.utilization_percent
         if finite_number(utilization) then
-            maximum_gpu_utilization = math.max(maximum_gpu_utilization or utilization, utilization)
-            local quality = type(device.quality) == "table"
-                and device.quality.utilization or device.quality
+            local quality = Quality.gpu_metric_quality(device, "utilization_percent", "utilization")
             if not Quality.UNUSABLE_FOR_ALERT[quality] then
                 maximum_current_gpu_utilization = math.max(
                     maximum_current_gpu_utilization or utilization, utilization)
             end
         end
     end
-    local ranked_gpus = top_by(gpu_devices, device_limit, function(device)
-        return device.metrics and device.metrics.utilization_percent
-    end)
+    if current_source("gpus") then maximum_gpu_utilization = maximum_current_gpu_utilization end
+    local ranked_gpus = top_by(gpu_devices, device_limit, gpu_score)
     for index, device in ipairs(ranked_gpus) do
         local output = copy_fields(device, {
-            "id", "card", "vendor", "vendor_name", "model_name", "driver", "quality", "partial",
+            "id", "card", "vendor", "vendor_name", "model_name", "driver", "quality", "partial", "identity_quality",
         })
         output.pci = copy_fields(device.pci, {
             "class_id", "class_name", "revision", "subsystem_vendor_id", "subsystem_device_id",
@@ -2237,6 +2268,8 @@ function M.agent(snapshot, options)
             "power_instant_quality", "power_average_quality",
         })
         output.performance_limits = export_performance_limits(device.performance_limits, device_limit, true)
+        output.observations = export_gpu_observations(device.observations)
+        output.metric_observations = export_gpu_observations(device.metric_observations)
         -- The full clock set, in the same shape the snapshot uses.  This
         -- summary is what an agent or an insight reads, and it is also the
         -- only view that survives into whatever consumes it, so dropping the

@@ -113,4 +113,12 @@ function M.current_source(quality, resource)
     and not M.UNUSABLE_FOR_ALERT[state.quality])
 end
 
+function M.gpu_metric_quality(device, metric, group)
+  local observation = device.metric_observations and device.metric_observations[metric]
+  if type(observation) == "table" then return observation.quality end
+  local quality = device.quality
+  if type(quality) == "table" then return quality[group] end
+  return quality
+end
+
 return M

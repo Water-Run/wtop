@@ -8,6 +8,7 @@ local AMDSMI = require("wtop.collectors.amdsmi")
 local LEVELZERO = require("wtop.collectors.levelzero")
 local GPULimits = require("wtop.collectors.gpu_limits")
 local GPUWorker = require("wtop.collectors.gpu_worker")
+local Observations = require("wtop.collectors.gpu_observations")
 
 local GPU = {}
 GPU.__index = GPU
@@ -1623,6 +1624,7 @@ function GPU.new(options)
     levelzero = type(options.levelzero) == "function" and options.levelzero or nil,
     levelzero_default = options.levelzero == nil,
     _pci_name_cache = {},
+    _observations = Observations.new(),
     _method_style = true,
   }, GPU)
 end
@@ -1663,6 +1665,7 @@ end
 
 function GPU:probe(context)
   local fs = Common.fs(context, self.fs)
+  self._observations:begin(fs, Common.now_ns(context), context and context.safe_mode)
   local found, err = inventory(fs, self.drm_path, self.max_class_entries, self.max_cards, self.max_render_nodes)
   if not found then
     local status = FS.error_status(err)
@@ -1672,17 +1675,21 @@ function GPU:probe(context)
     return Capability.unavailable(err and err.message or "drm_unavailable", { source = self.drm_path })
   end
   if #found.cards == 0 then
-    -- No DRM card can still mean a working vendor-managed GPU, so ask both
+    -- No DRM card can still mean a working vendor-managed GPU, so ask all
     -- providers before declaring the page unavailable.
     local nvml_data, nvml_reason
     if not (context and context.safe_mode) then nvml_data, nvml_reason = NVML.query(self:_nvml_provider(fs), false) end
-    if nvml_data and #nvml_data.devices > 0 then
-      return Capability.available({ source = "nvml", details = { devices = #nvml_data.devices } })
-    end
     local amdsmi_data, amdsmi_reason, levelzero_data, levelzero_reason
     if not (context and context.safe_mode) then
       amdsmi_data, amdsmi_reason = AMDSMI.query(self:_amdsmi_provider(fs), false)
       levelzero_data, levelzero_reason = LEVELZERO.query(self:_levelzero_provider(fs))
+    end
+    local now = Common.now_ns(context)
+    for source, data in pairs({ nvml=nvml_data, amdsmi=amdsmi_data, levelzero=levelzero_data }) do
+      self._observations:observe(source, data, {}, now)
+    end
+    if nvml_data and #nvml_data.devices > 0 then
+      return Capability.available({ source = "nvml", details = { devices = #nvml_data.devices } })
     end
     if amdsmi_data and #amdsmi_data.devices > 0 then
       return Capability.available({ source = "amdsmi", details = { devices = #amdsmi_data.devices } })
@@ -1702,6 +1709,7 @@ end
 function GPU:sample(context, previous)
   local started = Common.now_ns(context)
   local fs = Common.fs(context, self.fs)
+  self._observations:begin(fs, started, context and context.safe_mode)
   if context and context.scan_gpu_processes ~= nil
       and type(context.scan_gpu_processes) ~= "boolean" then
     return Common.result("error", started, nil, {
@@ -1728,9 +1736,16 @@ function GPU:sample(context, previous)
     amdsmi_data, amdsmi_reason = AMDSMI.query(self:_amdsmi_provider(fs), false)
     levelzero_data, levelzero_reason = LEVELZERO.query(self:_levelzero_provider(fs))
   end
-  if #found.cards == 0 and not (nvml_data and #nvml_data.devices > 0)
-    and not (amdsmi_data and #amdsmi_data.devices > 0)
-    and not (levelzero_data and #levelzero_data.devices > 0) then
+  local vendor_data = { nvml=nvml_data, amdsmi=amdsmi_data, levelzero=levelzero_data }
+  local vendor_reasons = { nvml=nvml_reason, amdsmi=amdsmi_reason, levelzero=levelzero_reason }
+  if #found.cards == 0 then
+    for source, data in pairs(vendor_data) do
+      self._observations:observe(source, data, {}, Common.now_ns(context))
+    end
+  end
+  local cached = false
+  for _, state in pairs(self._observations.sources) do cached = cached or #state.records > 0 end
+  if #found.cards == 0 and not cached and next(vendor_data) == nil then
     local finished = Common.now_ns(context)
     local source_reason, retry, failed = GPUWorker.retry(nvml_reason, amdsmi_reason, levelzero_reason)
     local reason = source_reason or "no_drm_card_devices"
@@ -1769,6 +1784,12 @@ function GPU:sample(context, previous)
     estimated_render_links = 0,
   }
   attach_render_nodes(fs, self.drm_path, found.render_nodes, devices, lookup, drm_scan)
+  local anchors = Observations.anchors(devices)
+  if #found.cards > 0 then
+    for source, data in pairs(vendor_data) do
+      self._observations:observe(source, data, anchors, Common.now_ns(context))
+    end
+  end
 
   local previous_data = Common.previous_data(previous)
   local previous_scan = previous_data and previous_data.process_scan
@@ -1791,6 +1812,7 @@ function GPU:sample(context, previous)
     levelzero = { status = "unavailable", reason = levelzero_reason },
   }
   if nvml_data then
+    local before = Observations.before(devices)
     providers.nvml = NVML.merge(devices, lookup, nvml_data, {
       used_ids = used_ids, now_ns = Common.now_ns(context),
       include_processes = process_scan.enabled == true,
@@ -1799,17 +1821,42 @@ function GPU:sample(context, previous)
         return type(comm) == "string" and Common.safe_text(Common.trim(comm), 64) or nil
       end,
     })
+    Observations.mark(devices, before, "nvml", nvml_data, Common.now_ns(context))
     for _, device in ipairs(devices) do by_id[device.id] = device end
   end
   if amdsmi_data then
+    local before = Observations.before(devices)
     providers.amdsmi = AMDSMI.merge(devices, lookup, amdsmi_data, { used_ids = used_ids })
+    Observations.mark(devices, before, "amdsmi", amdsmi_data, Common.now_ns(context))
     for _, device in ipairs(devices) do by_id[device.id] = device end
   end
   if levelzero_data then
+    local before = Observations.before(devices)
     providers.levelzero = LEVELZERO.merge(devices, levelzero_data, lookup,
       { used_ids = used_ids, now_ns = Common.now_ns(context) })
+    Observations.mark(devices, before, "levelzero", levelzero_data, Common.now_ns(context))
     for _, device in ipairs(devices) do by_id[device.id] = device end
   end
+  local retained = 0
+  for _, source in ipairs({ "nvml", "amdsmi", "levelzero" }) do
+    local count, state = self._observations:apply(source, devices, lookup, used_ids,
+      anchors, Common.now_ns(context), vendor_reasons[source])
+    retained = retained + count
+    if count > 0 then
+      local provider = providers[source]
+      provider.retained, provider.retained_device_count = true, count
+      provider.quality = vendor_data[source] and "partial" or "stale"
+      provider.attempted_at_ns = Common.now_ns(context)
+      provider.retention_truncated = state.truncated
+      if not vendor_data[source] then
+        provider.sample_started_ns, provider.sample_finished_ns = state.data.sample_started_ns, state.data.sample_finished_ns
+        provider.transport = state.data.transport
+      end
+      partial = true
+      truncated = truncated or state.truncated
+    end
+  end
+  for _, device in ipairs(devices) do by_id[device.id] = device end
   for _, provider in pairs(providers) do
     partial = partial or provider.status == "partial"
     truncated = truncated or provider.truncated == true
@@ -1825,6 +1872,9 @@ function GPU:sample(context, previous)
   end)
 
   local finished = Common.now_ns(context)
+  local current = #found.cards > 0
+  for _, data in pairs(vendor_data) do current = current or #data.devices > 0 end
+  local source_reason, retry = GPUWorker.retry(nvml_reason, amdsmi_reason, levelzero_reason)
   local result = Common.result("ok", finished, {
     schema = "dev.waterrun.wtop.gpu/v2",
     devices = devices,
@@ -1832,9 +1882,11 @@ function GPU:sample(context, previous)
     process_scan = process_scan,
     drm_scan = drm_scan,
     providers = providers,
+    partial = partial,
     truncated = truncated,
   }, {
-    quality = partial and "partial" or (estimated and "estimated" or "fresh"),
+    quality = not current and (retained > 0 and "stale" or "unavailable")
+      or (partial and "partial" or (estimated and "estimated" or "fresh")),
     -- Two categories, and the measurement that chose them is in the tests
     -- rather than here: instrumenting the two locals above across the whole
     -- GPU suite showed ten distinct causes reaching `partial`, and they are not
@@ -1858,7 +1910,8 @@ function GPU:sample(context, previous)
     -- relationship shown on screen that was inferred, and the two things
     -- inferred are exactly an identity and a link -- which is what the sentence
     -- names, so a user told it looks in the right place.
-    reason = partial and "gpu_data_incomplete"
+    reason = not current and (source_reason or "no_drm_card_devices")
+      or (partial and "gpu_data_incomplete")
       or (estimated and "gpu_identity_inferred" or nil),
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = { self.drm_path, self.proc_path },
@@ -1868,15 +1921,29 @@ function GPU:sample(context, previous)
   if process_scan.enabled and process_scan.status == "ok" then
     self._last_process_result = result
   end
-  result.capability = Capability.available({source = self.drm_path,
-    details = {cards = #devices, truncated = truncated}})
-  local _, retry = GPUWorker.retry(nvml_reason, amdsmi_reason, levelzero_reason)
+  if current then
+    result.capability = Capability.available({source = self.drm_path,
+      details = {cards = #devices, truncated = truncated}})
+  else
+    result.capability = Capability.unavailable(source_reason or "no_drm_card_devices",
+      {source = self.drm_path, retry_after_ms = retry})
+    if retained > 0 then
+      local latest = 0
+      for _, device in ipairs(devices) do
+        for _, observation in pairs(device.observations or {}) do
+          latest = math.max(latest, observation.observed_at_ns or 0)
+        end
+      end
+      result.value_timestamp_ns = latest
+    end
+  end
   result.sampling_pending = retry == 250 or providers.levelzero.pending_measurements == true
   if result.sampling_pending then result.retry_after_ms = 100 end
   return result
 end
 
 function GPU:stop()
+  self._observations:clear()
   for _, source in ipairs({ "nvml", "amdsmi", "levelzero" }) do
     local close = self["_" .. source .. "_close"]
     if close then close(); self["_" .. source .. "_close"] = nil end

@@ -152,6 +152,50 @@ local fallback_snapshot = { gpus = { devices = {
 } } } } }
 near(ViewModel.build(engine, fallback_snapshot, en, {}, "gpu").gpu_table.rows[1].power_percent, 75)
 
+-- A retained SDK reading cannot hide a current hwmon measurement on the same
+-- live DRM device, or lend its stale cap/window to that sensor reading.
+local mixed_power={timestamp_ns=2000000000,
+  quality={gpus={status="ok",quality="partial"},sensors={status="ok",quality="fresh"}},
+  gpus={devices={{id="card0",identity_quality="fresh",hwmon_refs={{class="hwmon0"}},
+    metrics={power_watts=30,power_source="nvml",power_limit_watts=40,power_limit_source="nvml",
+      power_measurement="average",power_interval_ns=1000000000},quality={power="stale"},
+    metric_observations={power_watts={quality="stale",retained=true,observed_at_ns=1000000000},
+      power_limit_watts={quality="stale",retained=true,observed_at_ns=1000000000}}}}},
+  sensors={devices={{class="hwmon0",channels={{type="power",input=15,quality="fresh",
+    source="/sys/class/hwmon/hwmon0/power1_input",thresholds={cap=20}}}}}}}
+local function mixed_row()
+  return ViewModel.build(engine,mixed_power,en,{},"gpu").gpu_table.rows[1]
+end
+local measured=mixed_row()
+assert(measured.power=="15.0 W" and measured.power_limit=="20.0 W")
+near(measured.power_percent,75)
+assert(measured.power_budget_source=="/sys/class/hwmon/hwmon0/power1_input")
+assert(measured.power_measurement==nil and measured.power_interval_ns==nil and measured.power_age_ns==nil)
+mixed_power.sensors.devices[1].channels[1].thresholds.cap=nil
+assert(mixed_row().power_percent==nil,"a current hwmon wattage borrowed a stale SDK cap")
+mixed_power.sensors.devices[1].channels[1].thresholds.cap=20
+mixed_power.quality.sensors.quality="stale"
+assert(mixed_row().power:find("30.0 W",1,true) and mixed_row().power_percent==nil)
+mixed_power.quality.sensors.quality="fresh"
+mixed_power.sensors.devices[1].channels[1].quality="stale"
+assert(mixed_row().power:find("30.0 W",1,true))
+mixed_power.sensors.devices[1].channels[1].quality="fresh"
+mixed_power.gpus.devices[1].identity_quality="stale"
+assert(mixed_row().power:find("30.0 W",1,true),"an old GPU identity joined a current sensor")
+mixed_power.gpus.devices[1].metrics.power_watts=nil
+assert(mixed_row().power=="—" and #ViewModel.gpu_sensor_join(mixed_power)==0)
+mixed_power.gpus.devices[1].metrics.power_watts=30
+mixed_power.gpus.devices[1].identity_quality="fresh"
+mixed_power.quality.gpus.quality="stale"
+assert(mixed_row().power:find("30.0 W",1,true),"an old inventory joined a current sensor")
+mixed_power.quality.gpus.quality="partial"
+mixed_power.gpus.devices[1].quality.power="fresh"
+mixed_power.gpus.devices[1].metric_observations.power_watts.quality="fresh"
+mixed_power.gpus.devices[1].metric_observations.power_limit_watts.quality="fresh"
+mixed_power.gpus.devices[1].metric_observations.power_watts.retained=false
+mixed_power.gpus.devices[1].metric_observations.power_limit_watts.retained=false
+assert(mixed_row().power=="30.0 W");near(mixed_row().power_percent,75)
+
 for _, provider in ipairs({ "nvml", "amdsmi" }) do
     local existing = { id = "0000:01:00.0", card = "card0", metrics = {},
         quality = { power = "unavailable" }, capabilities = { power = false } }
