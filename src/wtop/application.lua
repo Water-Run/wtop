@@ -40,6 +40,7 @@ local REPORT_COLLECTORS = {
 -- this number read as a total, and it was wrong by about five times.  A caller
 -- budgeting from it is budgeting from a figure that never included the work.
 M.ONESHOT_SAMPLE_DELAY_CAP_MS = 250
+M.ONESHOT_ASYNC_SETTLE_CAP_MS = 2250
 
 local function resolve_options(options)
     options = options or {}
@@ -101,6 +102,18 @@ local function collect(options, process_io_rate, selected_collectors)
             engine.context.force_process_io_refresh = true
         end
         local snapshot = engine:tick(true)
+        -- Pending SDK initialization and energy warmup are separate from the
+        -- normal rate-sample delay. Poll only scheduled work; don't force every
+        -- collector to resample while an optional reader is still starting.
+        if engine.has_pending_samples and engine:has_pending_samples() then
+            local deadline = engine.clock:now_ns() + M.ONESHOT_ASYNC_SETTLE_CAP_MS * 1000000
+            while engine:has_pending_samples() and engine.clock:now_ns() < deadline do
+                local remaining = math.ceil((deadline - engine.clock:now_ns()) / 1000000)
+                local slept, value, why = pcall(native.sleep_ms, math.max(1, math.min(50, remaining)))
+                if not slept or not value then error("sampling delay failed: " .. tostring(slept and why or value), 0) end
+                snapshot = engine:tick(false)
+            end
+        end
         return { snapshot = snapshot, capabilities = capabilities }
     end, debug.traceback)
     engine:stop()

@@ -511,6 +511,7 @@ function Engine.new(options)
         sequence = 0,
         paused = false,
         capabilities = nil,
+        pending_collectors = {},
     }, Engine)
 end
 
@@ -656,6 +657,9 @@ function Engine:tick(force)
         end
     end
     local completed = self.scheduler:tick(self.context)
+    for id, result in pairs(completed) do
+        self.pending_collectors[id] = result.sampling_pending == true or nil
+    end
     -- Asynchronous discovery can finish after the initial probe. Keep the
     -- capability table shared with one-shot exports current as sources settle.
     if self.capabilities then
@@ -678,6 +682,10 @@ function Engine:tick(force)
         self:_record_history(self.snapshot, completed)
     end
     return self.snapshot, completed
+end
+
+function Engine:has_pending_samples()
+    return next(self.pending_collectors) ~= nil
 end
 
 function Engine:tick_visible()
@@ -722,6 +730,7 @@ end
 
 function Engine:stop()
     self.scheduler:stop(self.context)
+    self.pending_collectors = {}
 end
 
 Engine.pressure_value = pressure_value

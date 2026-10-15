@@ -94,7 +94,7 @@ assert(plain:find("embedded ELF images found: 0", 1, true) ~= nil,
     "a plain interpreter must be reported as carrying no ELF image:\n" .. plain)
 local native_report = run("python3 tools/elf_floors.py " .. module_path)
 assert(native_report:find("embedded ELF images found: 1",1,true),
-    "the isolated NVML reader must be measured inside the native module:\n" .. native_report)
+    "the isolated GPU SDK reader must be measured inside the native module:\n" .. native_report)
 
 -- The assembled file has the shape of a onefile: the *lower*-requirement image
 -- at offset 0 with the higher-requirement one appended, so that a scanner

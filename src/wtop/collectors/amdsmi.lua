@@ -44,16 +44,7 @@ function M.normalize_bdf(value)
 end
 
 function M.default_provider()
-  local ok, native = pcall(require, "wtop.native")
-  if not ok or type(native) ~= "table" or type(native.amdsmi_query) ~= "function" then
-    return nil
-  end
-  return function(include_processes)
-    -- Process rows remain on the DRM path; accept the common provider argument.
-    local called, data, reason = pcall(native.amdsmi_query, include_processes == true)
-    if not called then return nil, "amdsmi_query_failed" end
-    return data, reason
-  end
+  return require("wtop.collectors.gpu_worker").default_provider("amdsmi")
 end
 
 -- Returns the provider result, or nil and a reason, without raising.
@@ -174,6 +165,8 @@ function M.merge(devices, lookup, data, options)
     api_version = text(data.api_version, 48),
     truncated = data.truncated == true,
     source = "amdsmi",
+    transport = data.transport, sample_started_ns = data.sample_started_ns,
+    sample_finished_ns = data.sample_finished_ns,
     driver_version = text(data.driver_version, 32),
     device_count = #(data.devices or {}),
     merged_devices = merged,

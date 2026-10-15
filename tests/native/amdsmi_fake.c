@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /* Fake AMD SMI DSO, compiled against either independent public-header excerpts
  * or an original SDK header. There is no dependency on wtop's ABI header. */
 #ifdef WTOP_AMDSMI_SDK_HEADER
@@ -9,9 +10,22 @@
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <signal.h>
+#include <time.h>
 
 static int scenario, active, initializations, shutdowns, queries;
 static int socket_ids[2], processor_ids[4];
+static void fixture_hang(void) {for(;;)pause();}
+__attribute__((constructor)) static void fixture_start(void) {
+    const char *setting=getenv("WTOP_AMDSMI_FIXTURE_MODE");scenario=setting?atoi(setting):0;
+    if(scenario==40)fixture_hang();
+    if(scenario==46){puts("AMD driver stdout");fputs("AMD driver stderr\n",stderr);fflush(stdout);fflush(stderr);}
+    if(scenario==47){const char bad[]="bad driver frame";ssize_t sent=write(3,bad,sizeof(bad));(void)sent;}
+    if(scenario==48){uint32_t bad[16]={0x4d4e5457,2,UINT32_MAX};ssize_t sent=write(3,bad,sizeof(bad));(void)sent;}
+    if(scenario==49){struct timespec delay={0,800000000};nanosleep(&delay,NULL);}
+}
 void fixture_reset(int mode) { assert(!active); scenario = mode; initializations = shutdowns = queries = 0; }
 int fixture_active(void) { return active; }
 int fixture_inits(void) { return initializations; }
@@ -23,11 +37,13 @@ static int id(amdsmi_processor_handle h) {
     assert(!"invalid opaque processor handle"); return 0;
 }
 amdsmi_status_t amdsmi_init(uint64_t flags) {
+    if(scenario==41)fixture_hang();
     assert(flags == 2 && !active); initializations++;
     if (scenario == 1) return 1;
     active = 1; return 0;
 }
 amdsmi_status_t amdsmi_shut_down(void) {
+    if(scenario==45)fixture_hang();
     assert(active); active = 0; shutdowns++;
     return scenario == 21 ? 1 : 0;
 }
@@ -48,6 +64,7 @@ amdsmi_status_t amdsmi_get_lib_version(amdsmi_version_t *v) {
     return 0;
 }
 amdsmi_status_t amdsmi_get_socket_handles(uint32_t *n, amdsmi_socket_handle *out) {
+    if(scenario==42)fixture_hang();
     assert(active); queries++;
     if (!out) { if (scenario == 4) return 1; *n = scenario == 7 ? 1000 : 2; return 0; }
     assert(*n >= 2 && *n <= 32);
@@ -141,6 +158,8 @@ amdsmi_status_t amdsmi_get_temp_metric(amdsmi_processor_handle h, amdsmi_tempera
     *out = scenario == 11 ? INT64_MIN : scenario == 12 ? 0 : 58; return 0;
 }
 amdsmi_status_t amdsmi_get_power_info(amdsmi_processor_handle h, amdsmi_power_info_t *out) {
+    if(scenario==43)raise(SIGSEGV);
+    if(scenario==44)fixture_hang();
     if (optional(h)) return 1;
     memset(out, 0xff, sizeof(*out));
 #if WTOP_AMDSMI_PROFILE >= 255

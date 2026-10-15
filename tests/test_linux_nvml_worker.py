@@ -11,12 +11,15 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
-def tui_hang(lua: Path, env: dict[str, str]) -> None:
+def tui_hang(lua: Path, env: dict[str, str], source: str = 'nvml') -> None:
     # The script gates each key on the current screen, so a stream of redraws
     # cannot pass as responsive navigation while the driver is stuck.
     os.environ.update(env)
-    os.environ.update(WTOP_ROOT=str(ROOT), WTOP_LUA=str(lua/'bin/lua'),
-                      WTOP_NVML_FIXTURE_MODE='45')
+    os.environ.update(WTOP_ROOT=str(ROOT), WTOP_LUA=str(lua/'bin/lua'))
+    fault={'nvml':('WTOP_NVML_FIXTURE_MODE','45'),
+           'amdsmi':('WTOP_AMDSMI_FIXTURE_MODE','40'),
+           'levelzero':('WTOP_LEVELZERO_FIXTURE_MODE','40')}[source]
+    os.environ[fault[0]]=fault[1]
     sys.path.insert(0,str(ROOT/'tests'))
     import pty_smoke as pty
     original=pty._markers_visible
@@ -33,7 +36,7 @@ def tui_hang(lua: Path, env: dict[str, str]) -> None:
             (b'q',('CPU','Memory')),
         ])
     finally:pty._markers_visible=original
-    print('ok: hung NVML constructor leaves overview/process/system/GPU/power navigation and quit responsive')
+    print('ok: hung '+source+' constructor leaves overview/process/system/GPU/power navigation and quit responsive')
 
 def main() -> None:
     p=argparse.ArgumentParser(description=__doc__)

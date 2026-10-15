@@ -38,7 +38,7 @@
  * queries are used. */
 #define _GNU_SOURCE
 
-#ifndef WTOP_NVML_CORE_ONLY
+#ifndef WTOP_GPU_WORKER
 #include <lua.h>
 #include <lauxlib.h>
 #endif
@@ -52,10 +52,10 @@
 #include <math.h>
 #include <time.h>
 
-#ifndef WTOP_NVML_CORE_ONLY
+#ifndef WTOP_GPU_WORKER
 #include "wtop_nvml.h"
 #endif
-#include "wtop_nvml_output.h"
+#include "wtop_gpu_output.h"
 
 const char wtop_nvml_interface_license[] =
     "Copyright 1993-2026 NVIDIA Corporation.  All rights reserved.\n"
@@ -198,7 +198,7 @@ typedef struct {
     nvml_fields_function fields;
     sample_cursor cursors[NVML_MAX_DEVICES];
 } nvml_api;
-#ifndef WTOP_NVML_CORE_ONLY
+#ifndef WTOP_GPU_WORKER
 static char nvml_registry_key;
 #endif
 
@@ -207,7 +207,7 @@ NVML_ABI static void nvml_close(nvml_api *a) {
     if (a->library) dlclose(a->library);
     memset(a, 0, sizeof(*a));
 }
-#ifndef WTOP_NVML_CORE_ONLY
+#ifndef WTOP_GPU_WORKER
 static int nvml_gc(lua_State *L) { nvml_close(lua_touserdata(L, 1)); return 0; }
 static nvml_api *nvml_context(lua_State *L) {
     lua_rawgetp(L, LUA_REGISTRYINDEX, &nvml_registry_key);
@@ -454,20 +454,20 @@ NVML_ABI static nvml_return mask_query(nvml_device device, nvml_mask_function cu
     }
     return status;
 }
-NVML_ABI static void clock_events(nvml_output *L, nvml_api *a, nvml_device device) {
+NVML_ABI static void clock_events(gpu_output *L, nvml_api *a, nvml_device device) {
     unsigned long long active = ~0ULL, supported = ~0ULL;
     const char *active_source, *supported_source;
     nvml_return status = mask_query(device, a->current_events, a->current_throttle, &active,
         &active_source, "nvmlDeviceGetCurrentClocksEventReasons", "nvmlDeviceGetCurrentClocksThrottleReasons");
     nvml_return support_status = mask_query(device, a->supported_events, a->supported_throttle,
         &supported, &supported_source, "nvmlDeviceGetSupportedClocksEventReasons", "nvmlDeviceGetSupportedClocksThrottleReasons");
-    nvml_table(L, 0, 6);
+    gpu_table(L, 0, 6);
     integer_field(L, "status_code", status); integer_field(L, "supported_status_code", support_status);
     string_field(L, "source", active_source); string_field(L, "supported_source", supported_source);
     char text[19];
     if (status == 0) { snprintf(text, sizeof(text), "0x%016llx", active); string_field(L, "raw_hex", text); }
     if (support_status == 0) { snprintf(text, sizeof(text), "0x%016llx", supported); string_field(L, "supported_hex", text); }
-    nvml_field_attach(L, "clock_events");
+    gpu_field_attach(L, "clock_events");
 }
 static int field_power(const nvml_field *field, unsigned int expected, double *watts) {
     if (field->field_id != expected || field->scope != 0 || field->status != 0) return 0;
@@ -496,7 +496,7 @@ static const char *field_freshness(const nvml_field *field) {
     if (age < -1000000) return "gap";
     return age > 5000000 ? "stale" : "fresh";
 }
-NVML_ABI static void device_power(nvml_output *L, nvml_api *a, nvml_device device) {
+NVML_ABI static void device_power(gpu_output *L, nvml_api *a, nvml_device device) {
     nvml_field fields[2]; memset(fields, 0xff, sizeof(fields));
     fields[0].field_id = 186; fields[1].field_id = 185;
     fields[0].scope = fields[1].scope = 0; /* GPU, not module/CPU+GPU scope. */
@@ -545,7 +545,7 @@ NVML_ABI static void device_power(nvml_output *L, nvml_api *a, nvml_device devic
  * are retryable. Cursors are keyed by UUID and committed only after every Lua
  * allocation succeeds, so an OOM or index reorder cannot consume another
  * device's samples. */
-NVML_ABI static const char *nvml_collect(nvml_api *a, nvml_output *L, int include_processes) {
+NVML_ABI static const char *nvml_collect(nvml_api *a, gpu_output *L, int include_processes) {
     const char *reason = nvml_open(a);
     if (reason) return reason;
     unsigned int total = 0;
@@ -557,11 +557,11 @@ NVML_ABI static const char *nvml_collect(nvml_api *a, nvml_output *L, int includ
     unsigned int count = total > NVML_MAX_DEVICES ? NVML_MAX_DEVICES : total;
     int truncated = total > count, partial = truncated, returned = 0;
     sample_cursor pending[NVML_MAX_DEVICES]; memset(pending, 0, sizeof(pending));
-    nvml_table(L, 0, 5);
+    gpu_table(L, 0, 5);
     char text[256]; memset(text, 0xff, sizeof(text));
     if (a->driver_version && a->driver_version(text, sizeof(text)) == 0 && valid_text(text, sizeof(text)))
         string_field(L, "driver_version", text);
-    nvml_table(L, (int)count, 0);
+    gpu_table(L, (int)count, 0);
     for (unsigned int index = 0; index < count; ++index) {
         nvml_device device = NULL;
         if (a->handle(index, &device) != 0 || !device) { partial = 1; continue; }
@@ -576,7 +576,7 @@ NVML_ABI static const char *nvml_collect(nvml_api *a, nvml_output *L, int includ
                 if (strcmp(a->cursors[i].uuid, uuid) == 0) previous = a->cursors[i].timestamp;
         }
         if (duplicate) { partial = 1; continue; }
-        nvml_table(L, 0, 28);
+        gpu_table(L, 0, 28);
         integer_field(L, "index", index);
         if (uuid[0]) string_field(L, "uuid", uuid);
         memset(text, 0xff, sizeof(text));
@@ -632,9 +632,9 @@ NVML_ABI static const char *nvml_collect(nvml_api *a, nvml_output *L, int includ
             allocation allocations[NVML_MAX_PROCESSES * 2]; int records_count = 0;
             int amount = collect_processes(a, device, previous, &next, rows, &process_truncated,
                 allocations, &records_count);
-            nvml_table(L, amount, 0);
+            gpu_table(L, amount, 0);
             for (int i = 0; i < amount; ++i) {
-                nvml_table(L, 0, 10);
+                gpu_table(L, 0, 10);
                 integer_field(L, "pid", rows[i].pid); string_field(L, "kind", rows[i].kind);
                 if (rows[i].has_memory) {
                     integer_field(L, "memory_bytes", (int64_t)rows[i].memory);
@@ -642,19 +642,19 @@ NVML_ABI static const char *nvml_collect(nvml_api *a, nvml_output *L, int includ
                     string_field(L, "memory_scope", rows[i].memory_estimated ? "largest_reported_context"
                         : rows[i].has_whole ? "whole_device" : "reported_context");
                 }
-                nvml_table(L, 0, 0); int contexts = 0;
+                gpu_table(L, 0, 0); int contexts = 0;
                 for (int j = 0; j < records_count; ++j) {
                     nvml_process p = allocations[j].value;
                     if (p.pid != rows[i].pid) continue;
-                    nvml_table(L, 0, 4);
+                    gpu_table(L, 0, 4);
                     if (p.gpu_instance_id != UINT_MAX) integer_field(L, "gpu_instance_id", p.gpu_instance_id);
                     if (p.compute_instance_id != UINT_MAX) integer_field(L, "compute_instance_id", p.compute_instance_id);
                     if (p.used_gpu_memory < (1ULL << 50)) integer_field(L, "memory_bytes", (int64_t)p.used_gpu_memory);
                     string_field(L, "kind", allocations[j].sources == 3 ? "compute+graphics"
                         : allocations[j].sources == 1 ? "compute" : "graphics");
-                    nvml_index(L, ++contexts);
+                    gpu_index(L, ++contexts);
                 }
-                nvml_field_attach(L, "memory_contexts");
+                gpu_field_attach(L, "memory_contexts");
                 if (rows[i].has_sample) {
                     integer_field(L, "sm_percent", rows[i].sm);
                     integer_field(L, "memory_percent", rows[i].memory_utilization);
@@ -663,9 +663,9 @@ NVML_ABI static const char *nvml_collect(nvml_api *a, nvml_output *L, int includ
                     integer_field(L, "sample_timestamp_us", (int64_t)rows[i].timestamp);
                     string_field(L, "sample_window", previous ? "since_last_query" : "driver_buffer");
                 }
-                nvml_index(L, i + 1);
+                gpu_index(L, i + 1);
             }
-            nvml_field_attach(L, "processes");
+            gpu_field_attach(L, "processes");
             boolean_field(L, "processes_truncated", process_truncated);
             if (process_truncated) partial = truncated = 1;
         }
@@ -674,14 +674,14 @@ NVML_ABI static const char *nvml_collect(nvml_api *a, nvml_output *L, int includ
         if (uuid[0]) {
             memset(text, 0xff, sizeof(text));
             if (a->uuid(device, text, sizeof(text)) != 0 || !valid_text(text, sizeof(text)) || strcmp(text, uuid) != 0) {
-                partial = 1; nvml_discard(L); continue;
+                partial = 1; gpu_discard(L); continue;
             }
             memcpy(pending[returned].uuid, uuid, strlen(uuid) + 1);
             pending[returned].timestamp = next;
         }
-        nvml_index(L, ++returned);
+        gpu_index(L, ++returned);
     }
-    nvml_field_attach(L, "devices");
+    gpu_field_attach(L, "devices");
     unsigned int after = 0;
     if (a->count(&after) != 0 || after != total) partial = 1;
     string_field(L, "source", "nvml");
@@ -693,28 +693,21 @@ NVML_ABI static const char *nvml_collect(nvml_api *a, nvml_output *L, int includ
     return NULL;
 }
 
-#ifndef WTOP_NVML_CORE_ONLY
-static void nvml_lua_emit(nvml_output *out,enum nvml_operation op,const char *key,
-    int64_t integer,double number,const char *text) {
-    lua_State *L=out->context;
-    switch(op) {
-    case NVML_TABLE:lua_createtable(L,(int)(integer>>32),(int)(integer&0xffffffff));return;
-    case NVML_FIELD:lua_setfield(L,-2,key);return;
-    case NVML_INDEX:lua_rawseti(L,-2,(lua_Integer)integer);return;
-    case NVML_DISCARD:lua_pop(L,1);return;
-    case NVML_INTEGER:lua_pushinteger(L,(lua_Integer)integer);break;
-    case NVML_NUMBER:lua_pushnumber(L,number);break;
-    case NVML_STRING:lua_pushstring(L,text);break;
-    case NVML_BOOLEAN:lua_pushboolean(L,integer!=0);break;
-    }
-    lua_setfield(L,-2,key);
-}
+#ifndef WTOP_GPU_WORKER
+#include "wtop_gpu_lua.h"
 int wtop_nvml_query(lua_State *L) {
     int processes=lua_toboolean(L,1);
     nvml_api *api=nvml_context(L);
-    nvml_output output={L,0,nvml_lua_emit};
+    gpu_output output={L,0,gpu_lua_emit};
     const char *reason=nvml_collect(api,&output,processes);
     if(reason){lua_pushnil(L);lua_pushstring(L,reason);return 2;}
     return 1;
 }
+#else
+#include "wtop_gpu_worker.h"
+static nvml_api worker_api;
+const char *wtop_nvml_collect(gpu_output *out,int processes) {
+    return nvml_collect(&worker_api,out,processes);
+}
+void wtop_nvml_finish(void) {nvml_close(&worker_api);}
 #endif

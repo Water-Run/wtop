@@ -239,3 +239,15 @@ local process_export=Export.snapshot(averaged).gpus.devices[1].processes.list[1]
 assert(process_export.sample_window=="driver_buffer" and process_export.sample_timestamp_us==200)
 
 print("ok: CPU, GT and NVML limit status, recorded flags, source scope, permissions, model support, races and stale exports")
+
+-- Sysman flags are current-only, use the native sample time, and do not
+-- invent per-reason support bits from a global throttle capability.
+local sysman=GPU.levelzero({{index=0,kind="gpu",throttle_quality="fresh",throttle_raw_hex="0x00000000000003ff"}},123)[1]
+assert(sysman.active and sysman.observed_at_ns==123 and #sysman.reasons==10)
+for _,reason in ipairs(sysman.reasons) do assert(reason.active==true and reason.supported==nil) end
+local unknown=GPU.levelzero({{throttle_quality="fresh",throttle_raw_hex="0x0000000000000400"}},123)[1]
+assert(unknown.quality=="partial" and unknown.unknown_status_hex=="0x0000000000000400")
+for _,locale in ipairs({"en-US","zh-CN","zh-TW","ja-JP","ko-KR","fr-FR","de-DE","es-ES","pt-BR","ru-RU"}) do
+    local i=assert(I18n.new({locale=locale}))
+    for _,reason in ipairs(sysman.reasons) do assert(i:has("limits.reason."..reason.id)) end
+end

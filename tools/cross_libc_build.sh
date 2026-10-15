@@ -2,11 +2,12 @@
 # Build wtop inside a distribution container and report the glibc floor of the
 # artifacts that come out.
 #
-# Usage: tools/cross_libc_build.sh <image> [suite]
+# Usage: tools/cross_libc_build.sh <image> [suite|native]
 #
 #   suite   additionally run the Lua unit suite in the container, which is the
 #           only way to show the older-libc artifacts work rather than merely
 #           compile.
+#   native  run the isolated SDK lifecycle fixtures without the full Lua suite.
 #
 # Why this exists.  The glibc floor of a wtop artifact is a property of the
 # machine that compiled it, not of the source, so "which glibc does wtop need"
@@ -38,6 +39,10 @@ if [ "$#" -lt 1 ]; then
 fi
 image=$1
 run_suite=${2:-}
+case "$run_suite" in
+    ""|suite|native) ;;
+    *) echo "$0: expected suite or native" >&2; exit 2 ;;
+esac
 
 # The suite compares collectors against the procfs of whatever kernel it runs
 # on, and one of those tests insists a live host has more than five processes.
@@ -76,7 +81,7 @@ cp -r "$project_dir/native" "$stage/"
 cp "$lua_archive" "$stage/"
 cp "$project_dir/Makefile" "$project_dir/VERSION" "$stage/"
 mkdir -p "$stage/tools"
-cp "$project_dir/tools/embed_nvml_worker.sh" "$stage/tools/"
+cp "$project_dir/tools/embed_gpu_worker.sh" "$stage/tools/"
 
 # The build identity travels with the sources.  The container has no .git, so it
 # cannot run tools/write_build_id.sh, and without the header the module it builds
@@ -100,7 +105,7 @@ done
 mkdir -p "$stage/build/native"
 cp "$revision_header" "$version_header" "$stage/build/native/"
 
-if [ "$run_suite" = "suite" ]; then
+if [ "$run_suite" = "suite" ] || [ "$run_suite" = "native" ]; then
     mkdir -p "$stage/full"
     # docs/ and .github/ are not optional here.  Two of the unit tests assert on
     # what the documents say -- the declared glibc floor and the published test
@@ -214,9 +219,9 @@ make -C "/b/lua-$LUA_VERSION" install INSTALL_TOP=/opt/lua >/dev/null 2>&1
 
 mkdir -p /b/native-build
 native_sources=$(make -s -f /b/Makefile --eval="print-native-sources:;@echo \$(NATIVE_SOURCES)" print-native-sources)
-worker_source=$(make -s -f /b/Makefile --eval="print-worker-source:;@echo \$(NVML_WORKER_SOURCE)" print-worker-source)
-gcc $native_flags -s "$worker_source" -ldl -lm -o /b/native-build/wtop_nvml_worker
-sh /b/tools/embed_nvml_worker.sh /b/native-build/wtop_nvml_worker /b/native-build/wtop_nvml_worker_image.h
+worker_sources=$(make -s -f /b/Makefile --eval="print-worker-source:;@echo \$(GPU_WORKER_SOURCES)" print-worker-source)
+gcc $native_flags -s -DWTOP_GPU_WORKER $worker_sources -ldl -lm -o /b/native-build/wtop_gpu_worker
+sh /b/tools/embed_gpu_worker.sh /b/native-build/wtop_gpu_worker /b/native-build/wtop_gpu_worker_image.h
 gcc $native_flags -shared -I/b/native-build -I/b/build/native -I/opt/lua/include \
     -o /b/native-build/wtop_native.so \
     $native_sources -ldl -pthread
@@ -238,11 +243,11 @@ report() {
 echo "== required GLIBC symbol versions"
 report "lua interpreter" /opt/lua/bin/lua
 report "native module   " /b/native-build/wtop_native.so
-report "NVML reader     " /b/native-build/wtop_nvml_worker
+report "GPU SDK reader     " /b/native-build/wtop_gpu_worker
 echo
 
 echo "== shared library dependencies"
-for f in /b/native-build/wtop_native.so /b/native-build/wtop_nvml_worker /opt/lua/bin/lua; do
+for f in /b/native-build/wtop_native.so /b/native-build/wtop_gpu_worker /opt/lua/bin/lua; do
     readelf -d "$f" | sed -n "s/.*(NEEDED).*\[\(.*\)\]/  \1/p"
 done
 echo
@@ -250,12 +255,12 @@ echo
 combined=$(printf "%s\n" $floors | sort -Vu | tail -1)
 echo "combined glibc floor: $combined"
 
-if [ "$run_suite" = "suite" ]; then
+if [ "$run_suite" = "suite" ] || [ "$run_suite" = "native" ]; then
     echo
     echo "== unit suite in this container"
     mkdir -p /b/full/build/native
     cp /b/native-build/wtop_native.so /b/full/build/native/wtop_native.so
-    cp /b/native-build/wtop_nvml_worker /b/native-build/wtop_nvml_worker_image.h /b/full/build/native/
+    cp /b/native-build/wtop_gpu_worker /b/native-build/wtop_gpu_worker_image.h /b/full/build/native/
     # The revision header has to be where the staged tree expects it, not only
     # where it was compiled: tests/unit/test_build_identity.lua reads the file
     # to confirm the module was compiled against the header the Lua half agrees
@@ -281,10 +286,12 @@ if [ "$run_suite" = "suite" ]; then
     ln -sf /opt/lua/bin/lua "/b/full/.tools/lua-$LUA_VERSION/bin/lua"
     ln -sf /opt/lua/bin/luac "/b/full/.tools/lua-$LUA_VERSION/bin/luac"
     cd /b/full
+    if [ "$run_suite" = "suite" ]; then
     LUA_PATH="./src/?.lua;./src/?/init.lua;./tests/?.lua;" \
     LUA_CPATH="/b/full/build/native/?.so;;" \
         /opt/lua/bin/lua tests/run.lua tests/unit/test_*.lua
     echo "--version: $(/opt/lua/bin/lua src/wtop.lua --version 2>&1 | head -1)"
+    fi
     echo "== isolated NVML lifecycle with this libc"
     mkdir -p /b/fake-nvml
     gcc $native_flags -shared -DWTOP_NVML_VARIANT=0 tests/native/nvml_fake.c -o /b/fake-nvml/libnvidia-ml.so.1
@@ -292,6 +299,15 @@ if [ "$run_suite" = "suite" ]; then
         -Wl,-E,--whole-archive /opt/lua/lib/liblua.a -Wl,--no-whole-archive -lm -ldl -pthread \
         -o /b/native-build/worker-fixture
     LD_LIBRARY_PATH=/b/fake-nvml /b/native-build/worker-fixture /b/native-build/wtop_native.so
+    echo "== all GPU SDK lifecycles with this libc"
+    gcc $native_flags -shared -DWTOP_AMDSMI_PROFILE=262 -DWTOP_AMDSMI_VERSION_RELEASE=2 \
+        tests/native/amdsmi_fake.c tests/native/amdsmi_layout.c -o /b/fake-nvml/libamd_smi.so
+    gcc $native_flags -shared tests/native/levelzero_fake.c tests/native/levelzero_layout.c \
+        -o /b/fake-nvml/libze_loader.so.1
+    gcc $native_flags -I/opt/lua/include tests/native/linux_gpu_worker.c \
+        -Wl,-E,--whole-archive /opt/lua/lib/liblua.a -Wl,--no-whole-archive -lm -ldl -pthread \
+        -o /b/native-build/gpu-fixture
+    LD_LIBRARY_PATH=/b/fake-nvml /b/native-build/gpu-fixture /b/native-build/wtop_native.so
 fi
 '
 

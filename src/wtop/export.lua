@@ -729,7 +729,7 @@ local function export_gpu_frequencies(frequencies)
         local output = copy_fields(domain, {
             "id", "actual_hz", "current_hz", "minimum_hz", "maximum_hz",
             "hardware_minimum_hz", "efficient_hz", "hardware_maximum_hz",
-            "source_kind", "source", "quality",
+            "source_kind", "source", "quality", "requested_hz", "kind", "on_subdevice", "subdevice_id",
         })
         output.states = json.array({})
         for state_index, state in ipairs(domain.states or {}) do
@@ -872,6 +872,7 @@ local function export_gpus(gpus, quality)
                 "class", "pci_bdf", "device_target", "source",
             })
         end
+        exported.sysman = copy_object(device.sysman)
         exported.frequencies = export_gpu_frequencies(device.frequencies)
         exported.processes = export_gpu_processes(device.processes)
         exported.issues = export_issues(device.issues)

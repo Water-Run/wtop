@@ -45,6 +45,7 @@
 #include <lauxlib.h>
 
 #include "wtop_nvml.h"
+#include "wtop_gpu_worker.h"
 #include "wtop_amdsmi.h"
 #include "wtop_levelzero.h"
 
@@ -2197,6 +2198,9 @@ static const luaL_Reg functions[] = {
     {"uname", l_uname},
     {"wcwidth", l_wcwidth},
     {"nvml_query", wtop_nvml_query},
+    {"gpu_worker_open", wtop_gpu_worker_open},
+    {"gpu_worker_query", wtop_gpu_worker_query},
+    {"gpu_worker_close", wtop_gpu_worker_close},
     {"nvml_worker_open", wtop_nvml_worker_open},
     {"nvml_worker_query", wtop_nvml_worker_query},
     {"nvml_worker_close", wtop_nvml_worker_close},

@@ -192,8 +192,8 @@ CI/评审还可以额外验证生成输出是否为最新：
 | `make snapshot` | 输出一份 JSON 快照 |
 | `make check` | 校验 Lua、POSIX shell 和 Python，解析 Agent JSON schema，并**将其应用到一次实时的 `--agent` 采集** |
 | `make test-fast` | 全部 Lua 单元/夹具文件加快速 PTY 配置 |
-| `make test-55` | 138 个 Lua 5.5 单元与夹具测试文件 |
-| `make test-54` | 用系统 Lua 5.4 运行同样的 138 个文件，验证纯 Lua 兼容子集 |
+| `make test-55` | 139 个 Lua 5.5 单元与夹具测试文件 |
+| `make test-54` | 用系统 Lua 5.4 运行同样的 139 个文件，验证纯 Lua 兼容子集 |
 | `make test-fuzz` | 用随机按键、鼠标报告、非法转义、无效 UTF-8 和尺寸变化，针对真实终端循环测试 |
 | `make test-pty` | 场景台账，然后针对响应式尺寸、翻页切换和四种颜色/字符能力配置运行真实 PTY 冒烟测试。台账（`tests/pty_scenario_ledger.py`）是静态检查：套件运行的每个场景都必须在 `SCENARIOS` 中命名，因此矩阵中的任何失败都可以单独用 `--scenario` 重跑；它存在的原因，是一个没有自己名字、藏在 `main` 内部的步骤，正是一个失败场景变得不可诊断的方式 |
 | `make test-pty-isolation` | `SCENARIOS` 中的场景分别在独立进程中运行 |
@@ -301,7 +301,7 @@ onefile 把同一载荷包进一个自解压可执行文件。它仍依赖目标
 
 ### 8.1 源码与 PTY
 
-先确认资源余量，然后运行这 138 个 Lua 文件：
+先确认资源余量，然后运行这 139 个 Lua 文件：
 
 ```bash
 make check
@@ -309,11 +309,11 @@ make test
 make test-54
 ```
 
-`make test-54` 用系统 Lua 5.4 运行同样的 138 个文件，验证纯 Lua 兼容子集。
+`make test-54` 用系统 Lua 5.4 运行同样的 139 个文件，验证纯 Lua 兼容子集。
 
 PTY 矩阵目前覆盖 `40×10`、`60×20`、`80×24/25`、`80×50`、`160×24`、`200×22`、`180×45` 和 `200×45` 翻页切换，检查中文帧、交互路径、备用屏幕进入/恢复、完整帧和干净退出。额外的配置断言 truecolor、256 色、16 色和无色 ASCII 输出，覆盖 Water Light、High Contrast 和 Colorblind。第 2–8 页各自作为带页面专属语义标记的最终完整帧校验。
 
-Lua 测试还覆盖 JSON 的 4 MiB/深度/100000 节点预算、线性数值解析冒烟、无效 UTF-8 值与键的 U+FFFD 替换、连接导出 ID 的默认脱敏、有界常规文件读取、异构 CPU 标识/拓扑/缓存夹具、powercap 能量差值/回绕/重置/约束、GPU PCI ID/PCIe/fdinfo 利用率、hwmon 哨兵过滤、感知 cgroup 的资源预检，以及 sudo 特权元数据。通过 138 个夹具文件并不是形式化证明——它不覆盖内核、硬件或恶意输入类别。
+Lua 测试还覆盖 JSON 的 4 MiB/深度/100000 节点预算、线性数值解析冒烟、无效 UTF-8 值与键的 U+FFFD 替换、连接导出 ID 的默认脱敏、有界常规文件读取、异构 CPU 标识/拓扑/缓存夹具、powercap 能量差值/回绕/重置/约束、GPU PCI ID/PCIe/fdinfo 利用率、hwmon 哨兵过滤、感知 cgroup 的资源预检，以及 sudo 特权元数据。通过 139 个夹具文件并不是形式化证明——它不覆盖内核、硬件或恶意输入类别。
 
 ### 8.2 打包后的 PTY
 
@@ -358,7 +358,7 @@ strings build/native/wtop_native.so dist/wtop/wtop dist/wtop-onefile
 
 包的源码/构建目录不应夹带额外的 ELF 文件。意外的共享库、RPATH/RUNPATH 或错误的架构，都必须让一次发布失败。该检查针对运行时 ELF 文件；`.luai/generated-output.txt` 的 onedir 例外见上文，其他文本载荷仍需逐一审查。
 
-Linux 原生模块内嵌一个独立 NVML 读取器，onedir、onefile 和 LuaRocks 使用同一构建规则。读取器只链接 libc、libdl 和 libm，不携带 Lua 运行时；主模块另链接 pthread。厂商库仍由驱动提供，NVML 在读取进程中用 `dlopen` 打开。读取器的 ELF 也计入 glibc 下限扫描与模块的项目代码、许可证覆盖范围。优先从 memfd 执行；缺少该系统调用时使用已取消目录链接的临时文件。两条路径均需要可访问的 `/proc/self/fd`，执行被主机策略拒绝时只将该来源报告为不可用。
+Linux 原生模块内嵌一个共用 GPU SDK 读取器，onedir、onefile 和 LuaRocks 使用同一构建规则。读取器只链接 libc、libdl 和 libm，不携带 Lua 运行时；主模块另链接 pthread。厂商库仍由驱动提供，NVML、AMD SMI 和 Level Zero 在各自的读取进程中用 `dlopen` 打开。读取器的 ELF 也计入 glibc 下限扫描与模块的项目代码、许可证覆盖范围。优先从 memfd 执行；缺少该系统调用时使用已取消目录链接的临时文件。两条路径均需要可访问的 `/proc/self/fd`，执行被主机策略拒绝时只将该来源报告为不可用。
 
 sudo 冒烟校验不要在自动化中打开不受控的密码提示。先用 `sudo -n true`；仅当非交互 sudo 已经可用时，再运行有界的 `sudo -n <installed-wtop> --diagnose`。单元测试验证构造和元数据，不需要 root。
 
@@ -425,7 +425,7 @@ onefile 包无法与在它旁边构建的模块做字节比较：luainstaller �
 - `dlopen`/`dlsym@GLIBC_2.34`，来自原生模块，它加载可选的 NVML、AMD SMI 和 Level Zero 厂商库。glibc 2.34 把 `libdl` 并入 `libc`，2.34 或更新的构建从 `libc.so.6` 解析这些名字，二进制不再携带 `libdl.so.2` 依赖；更旧的主机上，同一条 `-ldl` 链接对 `libdl.so.2@GLIBC_2.2.5` 解析。
 - `stat`/`lstat`/`fstat@GLIBC_2.33`，同样是导出形状的变化，不是新函数。
 
-原生模块和内嵌 NVML 读取器均可用 glibc 2.17 构建。memfd、pidfd 与较新的 spawn 文件描述符清理接口有运行时回退，不将这些接口作为旧系统的必备条件；实际下限仍以整个交付包的 ELF 扫描结果为准。
+原生模块和内嵌 GPU SDK 读取器共用工具链；旧 libc 构建的实际结果记录在 `docs/CROSS_PLATFORM.md`。memfd、pidfd 与较新的 spawn 文件描述符清理接口有运行时回退，不将这些接口作为旧系统的必备条件；实际下限仍以整个交付包的 ELF 扫描结果为准。
 
 ### 9.1.1 是测出来的，不是争出来的
 

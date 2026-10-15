@@ -287,7 +287,7 @@ local NOT_RELEASE_EVIDENCE = {
     -- Host-specific performance verdict, not a universal release document;
     -- no target-machine budget has been fixed for test-all yet.
     "check_perf_budget.py",
-    "check_windows_x86.py", "embed_cpuid_helpers.py", "embed_nvml_worker.sh",
+    "check_windows_x86.py", "embed_cpuid_helpers.py", "embed_gpu_worker.sh",
     "check_macos.py",
     "check_resources.sh",
     "compile_locales.lua", "cross_libc_build.sh", "elf_floors.py",
@@ -475,6 +475,7 @@ for _, name in ipairs({ "LICENSE",
                         ".luai/licenses/Lua-MIT.txt",
                         ".luai/licenses/AMD-SMI-MIT.txt",
                         ".luai/licenses/NVML-NVIDIA.txt",
+                        ".luai/licenses/Level-Zero-MIT.txt",
                         ".luai/licenses/LGPL-3.0-or-later.txt" }) do
     local path = scratch .. "/bundle/" .. name
     local directory = name:match("^(.*)/[^/]+$")

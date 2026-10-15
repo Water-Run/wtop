@@ -106,6 +106,8 @@ LICENCE_TEXTS = (
      "the AMD SMI public interface declarations in the native module"),
     ("NVIDIA-NVML", ".luai/licenses/NVML-NVIDIA.txt",
      "the NVIDIA NVML interface declarations in the native module"),
+    ("MIT-Level-Zero", ".luai/licenses/Level-Zero-MIT.txt",
+     "the complete Level Zero Sysman public interface declarations"),
     ("LGPL-3.0-or-later", ".luai/licenses/LGPL-3.0-or-later.txt",
      "the packaging tool the generated launcher derives from"),
 )
@@ -319,6 +321,11 @@ def main() -> int:
                   + notice_sentence(licences["NVIDIA-NVML"]),
                   license_name="NVIDIA NVML header license",
                   properties=licence_properties(licences["NVIDIA-NVML"])),
+        component("level-zero-abi@1.5.0-1.34.0", "level_zero_interface", "1.5.0-1.34.0", "MIT",
+                  "Complete Level Zero Sysman public interface layouts and function declarations; "
+                  "the driver implementation is loaded from the host in the isolated reader."
+                  + notice_sentence(licences["MIT-Level-Zero"]),
+                  properties=licence_properties(licences["MIT-Level-Zero"])),
         component(lua_ref, "lua", LUA_VERSION, "MIT",
                   "PUC Lua runtime. It is linked into the onedir launcher, whose "
                   "measured glibc floor is the interpreter's, and carried as a "
@@ -354,9 +361,10 @@ def main() -> int:
         "components": components,
         "dependencies": [
             {"ref": launcher_ref, "dependsOn": [module_ref, lua_ref]},
-            {"ref": module_ref, "dependsOn": ["amd-smi-abi@ROCm-5.7.1-7.2.4", "nvml-interface@13.4.92"]},
+            {"ref": module_ref, "dependsOn": ["amd-smi-abi@ROCm-5.7.1-7.2.4", "nvml-interface@13.4.92", "level-zero-abi@1.5.0-1.34.0"]},
             {"ref": "amd-smi-abi@ROCm-5.7.1-7.2.4", "dependsOn": []},
             {"ref": "nvml-interface@13.4.92", "dependsOn": []},
+            {"ref": "level-zero-abi@1.5.0-1.34.0", "dependsOn": []},
             {"ref": lua_ref, "dependsOn": []},
         ],
     }

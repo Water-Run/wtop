@@ -84,6 +84,7 @@ local LICENCES = {
     { path = ".luai/licenses/Lua-MIT.txt", bytes = MIT_TEXT },
     { path = ".luai/licenses/AMD-SMI-MIT.txt", bytes = "AMD interface MIT fixture\n" },
     { path = ".luai/licenses/NVML-NVIDIA.txt", bytes = "NVIDIA interface fixture\n" },
+    { path = ".luai/licenses/Level-Zero-MIT.txt", bytes = "Level Zero interface MIT fixture\n" },
     { path = ".luai/licenses/LGPL-3.0-or-later.txt",
       bytes = "LGPL-3.0-or-later fixture text\n" },
 }
@@ -481,13 +482,16 @@ end
 
 -- The recorded hash has to be the hash of the file it names.  Comparing the
 -- document against itself would pass on a hash computed from anything.
+local licence_hashes = {}
+local parsed_document = assert(require("wtop.core.json").decode(document))
+for _, component in ipairs(parsed_document.components or {}) do
+    for _, property in ipairs(component.properties or {}) do
+        if property.name == "wtop:licence-text:sha256" then licence_hashes[property.value] = true end
+    end
+end
 for _, entry in ipairs(LICENCES) do
     local expected = sha256(fixture .. "/bundle/" .. entry.path)
-    assert(properties_of("lua", "sha256") == expected
-        or properties_of("wtop", "sha256") == expected
-        or properties_of("luainstaller", "sha256") == expected
-        or properties_of("amd_smi_interface", "sha256") == expected
-        or properties_of("nvml_interface", "sha256") == expected,
+    assert(licence_hashes[expected],
         "no component records " .. expected .. ", the hash of "
             .. entry.path .. ", so the notice text is described but unverifiable")
 end

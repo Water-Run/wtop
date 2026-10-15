@@ -33,33 +33,19 @@ function M.normalize_bdf(value)
 end
 
 function M.default_provider()
-  local ok, native = pcall(require, "wtop.native")
-  if not ok or type(native) ~= "table" or type(native.nvml_worker_open) ~= "function"
-      or type(native.nvml_worker_query) ~= "function" or type(native.nvml_worker_close) ~= "function" then
-    return nil
-  end
-  local session, closed
-  local function query(include_processes)
-    if closed then return nil, "nvml_worker_closed" end
-    if not session then
-      local created, value = pcall(native.nvml_worker_open)
-      if not created then return nil, "nvml_allocation_failed" end
-      if not value then return nil, "nvml_worker_unavailable" end
-      session = value
-    end
-    local called, data, reason = pcall(native.nvml_worker_query, session, include_processes == true)
-    if not called then return nil, "nvml_query_failed" end
+  local query, stop = require("wtop.collectors.gpu_worker").default_provider("nvml")
+  if not query then return nil end
+  return function(include_processes)
+    local data, reason = query(include_processes)
     if type(data) == "table" then
-      local read, realtime = pcall(native.realtime_ns)
-      if read and type(realtime) == "number" then M.refresh_power(data, realtime / 1000) end
+      local ok, native = pcall(require, "wtop.native")
+      if ok and type(native.realtime_ns) == "function" then
+        local read, realtime = pcall(native.realtime_ns)
+        if read and finite_number(realtime) then M.refresh_power(data, realtime / 1000) end
+      end
     end
     return data, reason
-  end
-  return query, function()
-    closed = true
-    if session then return native.nvml_worker_close(session) end
-    return true
-  end
+  end, stop
 end
 
 -- A response can wait for the next collector tick. Re-evaluate SDK UTC field

@@ -7,14 +7,10 @@ local NVML = require("wtop.collectors.nvml")
 local AMDSMI = require("wtop.collectors.amdsmi")
 local LEVELZERO = require("wtop.collectors.levelzero")
 local GPULimits = require("wtop.collectors.gpu_limits")
+local GPUWorker = require("wtop.collectors.gpu_worker")
 
 local GPU = {}
 GPU.__index = GPU
-local NVML_WORKER_FAILURES = {
-  nvml_query_timeout=true, nvml_worker_unavailable=true, nvml_worker_busy=true,
-  nvml_worker_exited=true, nvml_invalid_response=true, nvml_allocation_failed=true,
-  nvml_output_too_large=true,
-}
 
 local MAX_DIRECTORY_LIMIT = 2147483647
 local PCI_IDS_PATHS = {
@@ -1648,7 +1644,10 @@ end
 function GPU:_amdsmi_provider(fs)
   if self.amdsmi then return self.amdsmi end
   if not self.amdsmi_default or fs ~= FS.default then return nil end
-  if self._amdsmi_host == nil then self._amdsmi_host = AMDSMI.default_provider() or false end
+  if self._amdsmi_host == nil then
+    self._amdsmi_host, self._amdsmi_close = AMDSMI.default_provider()
+    self._amdsmi_host = self._amdsmi_host or false
+  end
   return self._amdsmi_host or nil
 end
 
@@ -1656,7 +1655,8 @@ function GPU:_levelzero_provider(fs)
   if self.levelzero then return self.levelzero end
   if not self.levelzero_default or fs ~= FS.default then return nil end
   if self._levelzero_host == nil then
-    self._levelzero_host = LEVELZERO.default_provider() or false
+    self._levelzero_host, self._levelzero_close = LEVELZERO.default_provider()
+    self._levelzero_host = self._levelzero_host or false
   end
   return self._levelzero_host or nil
 end
@@ -1679,14 +1679,19 @@ function GPU:probe(context)
     if nvml_data and #nvml_data.devices > 0 then
       return Capability.available({ source = "nvml", details = { devices = #nvml_data.devices } })
     end
-    local amdsmi_data = not (context and context.safe_mode)
-      and AMDSMI.query(self:_amdsmi_provider(fs), false)
+    local amdsmi_data, amdsmi_reason, levelzero_data, levelzero_reason
+    if not (context and context.safe_mode) then
+      amdsmi_data, amdsmi_reason = AMDSMI.query(self:_amdsmi_provider(fs), false)
+      levelzero_data, levelzero_reason = LEVELZERO.query(self:_levelzero_provider(fs))
+    end
     if amdsmi_data and #amdsmi_data.devices > 0 then
       return Capability.available({ source = "amdsmi", details = { devices = #amdsmi_data.devices } })
     end
-    local retry = nvml_reason == "nvml_query_pending" and 250 or NVML_WORKER_FAILURES[nvml_reason] and 5000 or nil
-    return Capability.unavailable(retry and nvml_reason or "no_drm_card_devices",
-      { source = self.drm_path, retry_after_ms = retry })
+    if levelzero_data and #levelzero_data.devices > 0 then
+      return Capability.available({ source = "levelzero", details = { devices = #levelzero_data.devices } })
+    end
+    local reason, retry = GPUWorker.retry(nvml_reason, amdsmi_reason, levelzero_reason)
+    return Capability.unavailable(reason or "no_drm_card_devices", { source = self.drm_path, retry_after_ms = retry })
   end
   return Capability.available({
     source = self.drm_path,
@@ -1724,20 +1729,20 @@ function GPU:sample(context, previous)
     levelzero_data, levelzero_reason = LEVELZERO.query(self:_levelzero_provider(fs))
   end
   if #found.cards == 0 and not (nvml_data and #nvml_data.devices > 0)
-    and not (amdsmi_data and #amdsmi_data.devices > 0) then
+    and not (amdsmi_data and #amdsmi_data.devices > 0)
+    and not (levelzero_data and #levelzero_data.devices > 0) then
     local finished = Common.now_ns(context)
-    local pending = nvml_reason == "nvml_query_pending"
-    local failed = NVML_WORKER_FAILURES[nvml_reason] == true
-    local reason = (pending or failed) and nvml_reason or "no_drm_card_devices"
+    local source_reason, retry, failed = GPUWorker.retry(nvml_reason, amdsmi_reason, levelzero_reason)
+    local reason = source_reason or "no_drm_card_devices"
     local result = Common.result(failed and "error" or "unavailable", finished, nil, {
       quality = failed and "error" or "unavailable",
       reason = reason,
-      retry_after_ms = pending and 250 or failed and 5000 or nil,
+      retry_after_ms = retry,
       duration_ns = Common.elapsed_ns(finished, started) or 0,
       source = self.drm_path,
     })
-    result.capability = Capability.unavailable(reason, { source = self.drm_path,
-      retry_after_ms = pending and 250 or failed and 5000 or nil })
+    result.capability = Capability.unavailable(reason, { source = self.drm_path, retry_after_ms = retry })
+    result.sampling_pending = retry == 250
     return result
   end
 
@@ -1801,14 +1806,8 @@ function GPU:sample(context, previous)
     for _, device in ipairs(devices) do by_id[device.id] = device end
   end
   if levelzero_data then
-    -- Level Zero carries no bus address wtop can read, so its devices are
-    -- matched to the DRM cards by enumeration order.
-    local drm_order = {}
-    for _, device in ipairs(devices) do
-      if device.driver == "i915" then drm_order[#drm_order + 1] = device end
-    end
-    providers.levelzero = LEVELZERO.merge(devices, levelzero_data, drm_order,
-      { used_ids = used_ids })
+    providers.levelzero = LEVELZERO.merge(devices, levelzero_data, lookup,
+      { used_ids = used_ids, now_ns = Common.now_ns(context) })
     for _, device in ipairs(devices) do by_id[device.id] = device end
   end
   for _, provider in pairs(providers) do
@@ -1871,13 +1870,18 @@ function GPU:sample(context, previous)
   end
   result.capability = Capability.available({source = self.drm_path,
     details = {cards = #devices, truncated = truncated}})
-  if nvml_reason == "nvml_query_pending" then result.retry_after_ms = 250 end
+  local _, retry = GPUWorker.retry(nvml_reason, amdsmi_reason, levelzero_reason)
+  result.sampling_pending = retry == 250 or providers.levelzero.pending_measurements == true
+  if result.sampling_pending then result.retry_after_ms = 100 end
   return result
 end
 
 function GPU:stop()
-  if self._nvml_close then self._nvml_close(); self._nvml_close = nil end
-  self._nvml_host = nil
+  for _, source in ipairs({ "nvml", "amdsmi", "levelzero" }) do
+    local close = self["_" .. source .. "_close"]
+    if close then close(); self["_" .. source .. "_close"] = nil end
+    self["_" .. source .. "_host"] = nil
+  end
 end
 
 GPU.enumerate = enumerate

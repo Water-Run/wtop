@@ -3,13 +3,18 @@
  * passing shorter prefixes to functions that write complete structures.
  * Process counters continue to come from DRM fdinfo. */
 #define _GNU_SOURCE
+#ifndef WTOP_GPU_WORKER
 #include <lua.h>
 #include <lauxlib.h>
+#endif
 #include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#ifndef WTOP_GPU_WORKER
 #include "wtop_amdsmi.h"
+#endif
+#include "wtop_gpu_output.h"
 #include "wtop_amdsmi_abi.h"
 
 /* AMD SDK interface-declaration notice. An exported constant keeps the
@@ -368,15 +373,15 @@ SDK_ABI static void collect_device(api *a, handle h, int profile, device *d) {
         reading(d, FAN_PERCENT, (double)fan * 100.0 / (double)maximum);
 }
 
-static void string_field(lua_State *L, const char *name, const char *value) {
+static void amdsmi_text_field(gpu_output *L, const char *name, const char *value) {
     if (!value || !*value) return;
-    lua_pushstring(L, value); lua_setfield(L, -2, name);
+    string_field(L, name, value);
 }
 
 /* Collect all vendor outputs before allocating Lua objects. Every successfully
  * initialized session is shut down and the DSO closed even if Lua later OOMs.
  * Opening a fresh session also recovers after driver startup/reset/hotplug. */
-SDK_ABI int wtop_amdsmi_query(lua_State *L) {
+SDK_ABI static const char *amdsmi_collect(gpu_output *L) {
     snapshot s; memset(&s, 0, sizeof(s));
     api a;
     const char *reason = open_api(&a);
@@ -399,25 +404,40 @@ SDK_ABI int wtop_amdsmi_query(lua_State *L) {
     }
     if (initialized && a.shutdown() != 0) reason = "amdsmi_shutdown_failed";
     if (a.library) dlclose(a.library);
-    if (reason) { lua_pushnil(L); lua_pushstring(L, reason); return 2; }
-    lua_createtable(L, 0, 6);
-    string_field(L, "api_version", s.version);
-    string_field(L, "status", s.partial ? "partial" : "ok");
-    if (s.partial) string_field(L, "reason", "amdsmi_enumeration_incomplete");
-    lua_pushboolean(L, s.truncated); lua_setfield(L, -2, "truncated");
-    lua_createtable(L, s.count, 0);
+    if (reason) return reason;
+    gpu_table(L, 0, 6);
+    amdsmi_text_field(L, "api_version", s.version);
+    amdsmi_text_field(L, "status", s.partial ? "partial" : "ok");
+    if (s.partial) amdsmi_text_field(L, "reason", "amdsmi_enumeration_incomplete");
+    boolean_field(L, "truncated", s.truncated);
+    gpu_table(L, s.count, 0);
     for (int i = 0; i < s.count; ++i) {
         device *d = &s.devices[i];
-        lua_createtable(L, 0, 20);
-        lua_pushinteger(L, i); lua_setfield(L, -2, "index");
-        string_field(L, "name", d->name); string_field(L, "uuid", d->uuid);
-        string_field(L, "pci_bdf", d->bdf); string_field(L, "driver_version", d->driver);
-        string_field(L, "power_measurement", d->power_measurement);
+        gpu_table(L, 0, 20);
+        integer_field(L, "index", i);
+        amdsmi_text_field(L, "name", d->name); amdsmi_text_field(L, "uuid", d->uuid);
+        amdsmi_text_field(L, "pci_bdf", d->bdf); amdsmi_text_field(L, "driver_version", d->driver);
+        amdsmi_text_field(L, "power_measurement", d->power_measurement);
         for (int m = 0; m < METRIC_COUNT; ++m) if (d->present & (1u << m)) {
-            lua_pushnumber(L, d->metrics[m]); lua_setfield(L, -2, metric_names[m]);
+            number_field(L, metric_names[m], d->metrics[m]);
         }
-        lua_rawseti(L, -2, i + 1);
+        gpu_index(L, i + 1);
     }
-    lua_setfield(L, -2, "devices");
+    gpu_field_attach(L, "devices");
+    return L->failed ? (L->failed == 2 ? "amdsmi_allocation_failed" : "amdsmi_output_too_large") : NULL;
+}
+
+#ifndef WTOP_GPU_WORKER
+#include "wtop_gpu_lua.h"
+int wtop_amdsmi_query(lua_State *L) {
+    gpu_output output={L,0,gpu_lua_emit};
+    const char *reason=amdsmi_collect(&output);
+    if(reason){lua_pushnil(L);lua_pushstring(L,reason);return 2;}
     return 1;
 }
+#else
+#include "wtop_gpu_worker.h"
+const char *wtop_amdsmi_collect(gpu_output *out,int processes) {
+    (void)processes;return amdsmi_collect(out);
+}
+#endif

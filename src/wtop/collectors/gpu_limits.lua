@@ -164,4 +164,34 @@ function M.nvml(data, observed_at_ns)
     return domain
 end
 
+local SYSMAN_REASONS = {
+    "pl1", "pl2", "pl4", "thermal", "psu_alert", "software_frequency_range",
+    "hardware_frequency_range", "voltage_limit", "thermal_conditions", "power_constraint",
+}
+function M.levelzero(data, observed_at_ns)
+    local domains = {}
+    for index, entry in ipairs(data or {}) do
+        if index > 32 then break end
+        local active = entry.throttle_quality == "fresh" and mask(entry.throttle_raw_hex) or nil
+        local domain = {
+            id = "sysman-frequency:" .. tostring(entry.index or index - 1), scope = "gpu_clock",
+            source_kind = "levelzero_frequency", source = "zesFrequencyGetState",
+            observed_at_ns = observed_at_ns, reasons = {}, raw_hex = entry.throttle_raw_hex,
+            quality = active ~= nil and "fresh" or "unavailable",
+        }
+        if active ~= nil and active >= 0 and active < 0xffffffff then
+            domain.active = active ~= 0
+            domain.unknown_status_hex = string.format("0x%016x", active & ~0x3ff)
+            if active & ~0x3ff ~= 0 then domain.quality = "partial" end
+        elseif active ~= nil then active = nil; domain.quality = "error" end
+        for bit, name in ipairs(SYSMAN_REASONS) do
+            local reason = { id = name }
+            if active ~= nil then reason.active = active & (1 << (bit - 1)) ~= 0 end
+            domain.reasons[#domain.reasons + 1] = reason
+        end
+        domains[#domains + 1] = domain
+    end
+    return domains
+end
+
 return M

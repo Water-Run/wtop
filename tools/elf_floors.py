@@ -26,7 +26,7 @@ affect objdump's table offsets.
 
 The one thing this cannot do is see inside a compressed payload, and the
 onefile's payload is stored uncompressed, including the native module's own
-NVML reader image. If a future bundler compressed it, this scan would find
+GPU SDK reader image. If a future bundler compressed it, this scan would find
 nothing and report the outer binary's floor again, which is the failure this
 tool exists to prevent.  The count of embedded images is therefore always
 printed, so "found none" is visible in a report rather than something a reader
@@ -94,7 +94,7 @@ def inspect(path, workdir):
     offset = data.find(MAGIC, 1)
     while offset != -1:
         following = data.find(MAGIC, offset + 1)
-        # A native module can itself contain the isolated NVML executable.
+        # A native module can itself contain the isolated GPU SDK executable.
         # Cutting at the next magic would truncate that module before its
         # dynamic/section tables and silently under-measure the onefile.
         payload = data[offset:]

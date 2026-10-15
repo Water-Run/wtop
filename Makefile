@@ -81,15 +81,15 @@ WTOP_ROCK_TREE ?= $(CURDIR)/.tools/wtop-rocks-5.5
 SOURCE_ROCK_TREE ?= $(CURDIR)/.tools/wtop-source-rocks-5.5
 SOURCE_ROCK_ARGS ?=
 
-NATIVE_SOURCES := native/wtop_native.c native/wtop_nvml.c native/wtop_nvml_client.c native/wtop_amdsmi.c \
+NATIVE_SOURCES := native/wtop_native.c native/wtop_nvml.c native/wtop_gpu_client.c native/wtop_amdsmi.c \
   native/wtop_levelzero.c
-NATIVE_HEADERS := native/wtop_nvml.h native/wtop_nvml_output.h native/wtop_nvml_protocol.h native/wtop_amdsmi.h native/wtop_amdsmi_abi.h native/licenses/AMD-SMI-MIT.txt native/licenses/NVML-NVIDIA.txt native/wtop_levelzero.h native/wtop_build.h
+NATIVE_HEADERS := native/wtop_nvml.h native/wtop_gpu_output.h native/wtop_gpu_protocol.h native/wtop_gpu_lua.h native/wtop_gpu_worker.h native/wtop_amdsmi.h native/wtop_amdsmi_abi.h native/licenses/AMD-SMI-MIT.txt native/licenses/NVML-NVIDIA.txt native/wtop_levelzero.h native/wtop_levelzero_abi.h native/licenses/Level-Zero-MIT.txt native/wtop_build.h
 NATIVE_DIR := $(CURDIR)/build/native
 NATIVE_MODULE := $(NATIVE_DIR)/wtop_native.so
-NVML_WORKER_SOURCE := native/wtop_nvml_worker.c
-NVML_WORKER := $(NATIVE_DIR)/wtop_nvml_worker
-NVML_WORKER_HEADER := $(NATIVE_DIR)/wtop_nvml_worker_image.h
-NVML_WORKER_INPUTS := $(NVML_WORKER_SOURCE) native/wtop_nvml.c native/wtop_nvml_output.h native/wtop_nvml_protocol.h native/licenses/NVML-NVIDIA.txt
+GPU_WORKER_SOURCES := native/wtop_gpu_worker.c native/wtop_nvml.c native/wtop_amdsmi.c native/wtop_levelzero.c
+GPU_WORKER := $(NATIVE_DIR)/wtop_gpu_worker
+GPU_WORKER_HEADER := $(NATIVE_DIR)/wtop_gpu_worker_image.h
+GPU_WORKER_INPUTS := $(GPU_WORKER_SOURCES) $(NATIVE_HEADERS)
 NATIVE_REVISION_HEADER := $(NATIVE_DIR)/build_revision.h
 NATIVE_VERSION_HEADER := $(NATIVE_DIR)/build_version.h
 LUA_PATH_DEV := $(CURDIR)/src/?.lua;$(CURDIR)/src/?/init.lua;;
@@ -202,14 +202,14 @@ $(NATIVE_REVISION_HEADER): tools/write_build_id.sh VERSION
 $(NATIVE_VERSION_HEADER): $(NATIVE_REVISION_HEADER)
 	@test -f $@ || ./tools/write_build_id.sh
 
-$(NVML_WORKER): $(NVML_WORKER_INPUTS) Makefile
+$(GPU_WORKER): $(GPU_WORKER_INPUTS) Makefile
 	@mkdir -p $(NATIVE_DIR)
-	@$(CC) $(CFLAGS) -std=c17 -O2 -Wall -Wextra -Werror -s -o $@ $(NVML_WORKER_SOURCE) -ldl -lm
+	@$(CC) $(CFLAGS) -std=c17 -O2 -Wall -Wextra -Werror -s -DWTOP_GPU_WORKER -o $@ $(GPU_WORKER_SOURCES) -ldl -lm
 
-$(NVML_WORKER_HEADER): $(NVML_WORKER) tools/embed_nvml_worker.sh
-	@sh tools/embed_nvml_worker.sh $(NVML_WORKER) $@
+$(GPU_WORKER_HEADER): $(GPU_WORKER) tools/embed_gpu_worker.sh
+	@sh tools/embed_gpu_worker.sh $(GPU_WORKER) $@
 
-$(NATIVE_MODULE): $(NATIVE_SOURCES) $(NATIVE_HEADERS) $(NATIVE_REVISION_HEADER) $(NVML_WORKER_HEADER) \
+$(NATIVE_MODULE): $(NATIVE_SOURCES) $(NATIVE_HEADERS) $(NATIVE_REVISION_HEADER) $(GPU_WORKER_HEADER) \
 		$(NATIVE_VERSION_HEADER) Makefile $(LUA_STAMP)
 	@mkdir -p $(NATIVE_DIR)
 	@$(CC) $(CFLAGS_NATIVE) -shared -I$(NATIVE_DIR) -I$(LUA_PREFIX)/include \
@@ -243,9 +243,9 @@ STRICT_NATIVE_CFLAGS := -std=c17 -fPIC -Wall -Wextra -Werror -Wshadow \
   -Wconversion -Wsign-conversion -Wpointer-arith -O2 -shared \
   -I$(NATIVE_DIR) -I$(LUA_PREFIX)/include
 
-check-native-warnings: $(LUA_STAMP) $(NATIVE_REVISION_HEADER) $(NATIVE_VERSION_HEADER) $(NVML_WORKER_HEADER)
+check-native-warnings: $(LUA_STAMP) $(NATIVE_REVISION_HEADER) $(NATIVE_VERSION_HEADER) $(GPU_WORKER_HEADER)
 	@$(CC) $(STRICT_NATIVE_CFLAGS) -o /dev/null $(NATIVE_SOURCES) -ldl -pthread
-	@$(CC) $(filter-out -fPIC -shared,$(STRICT_NATIVE_CFLAGS)) -o /dev/null $(NVML_WORKER_SOURCE) -ldl -lm
+	@$(CC) $(filter-out -fPIC -shared,$(STRICT_NATIVE_CFLAGS)) -DWTOP_GPU_WORKER -o /dev/null $(GPU_WORKER_SOURCES) -ldl -lm
 	@echo "wtop: $(words $(NATIVE_SOURCES)) native sources clean under: $(STRICT_NATIVE_CFLAGS)"
 
 # The sanitized module is a separate file on purpose.  Overwriting
@@ -254,19 +254,19 @@ check-native-warnings: $(LUA_STAMP) $(NATIVE_REVISION_HEADER) $(NATIVE_VERSION_H
 # against an instrumented build it did not ask for.
 SANITIZED_DIR := build/native-san
 SANITIZED_MODULE := $(SANITIZED_DIR)/wtop_native.so
-SANITIZED_NVML_WORKER := $(SANITIZED_DIR)/wtop_nvml_worker
-SANITIZED_NVML_HEADER := $(SANITIZED_DIR)/wtop_nvml_worker_image.h
+SANITIZED_GPU_WORKER := $(SANITIZED_DIR)/wtop_gpu_worker
+SANITIZED_GPU_HEADER := $(SANITIZED_DIR)/wtop_gpu_worker_image.h
 SANITIZER_CFLAGS := -std=c17 -fPIC -Wall -Wextra -Werror -O1 -g \
   -fsanitize=address,undefined -fno-omit-frame-pointer
 
-$(SANITIZED_NVML_WORKER): $(NVML_WORKER_INPUTS) Makefile
+$(SANITIZED_GPU_WORKER): $(GPU_WORKER_INPUTS) Makefile
 	@mkdir -p $(SANITIZED_DIR)
-	@$(CC) $(SANITIZER_CFLAGS) -o $@ $(NVML_WORKER_SOURCE) -ldl -lm
+	@$(CC) $(SANITIZER_CFLAGS) -DWTOP_GPU_WORKER -o $@ $(GPU_WORKER_SOURCES) -ldl -lm
 
-$(SANITIZED_NVML_HEADER): $(SANITIZED_NVML_WORKER) tools/embed_nvml_worker.sh
-	@sh tools/embed_nvml_worker.sh $(SANITIZED_NVML_WORKER) $@
+$(SANITIZED_GPU_HEADER): $(SANITIZED_GPU_WORKER) tools/embed_gpu_worker.sh
+	@sh tools/embed_gpu_worker.sh $(SANITIZED_GPU_WORKER) $@
 
-sanitize-native: $(LUA_STAMP) $(NATIVE_REVISION_HEADER) $(NATIVE_VERSION_HEADER) $(SANITIZED_NVML_HEADER)
+sanitize-native: $(LUA_STAMP) $(NATIVE_REVISION_HEADER) $(NATIVE_VERSION_HEADER) $(SANITIZED_GPU_HEADER)
 	@mkdir -p $(SANITIZED_DIR)
 	@$(CC) $(SANITIZER_CFLAGS) -shared -I$(SANITIZED_DIR) -I$(NATIVE_DIR) -I$(LUA_PREFIX)/include \
 		-o $(SANITIZED_MODULE) $(NATIVE_SOURCES) -ldl -pthread
@@ -334,7 +334,7 @@ SAN_RUN_ENV = ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
 SANITIZER_EXCLUDED := tests/unit/test_benchmark_record.lua
 
 test-sanitized: resource-check $(LUA_STAMP) $(NATIVE_REVISION_HEADER) \
-		$(NATIVE_VERSION_HEADER) sanitize-native test-native-amdsmi-sanitized test-native-nvml-sanitized test-native-nvml-worker-sanitized
+		$(NATIVE_VERSION_HEADER) sanitize-native test-native-amdsmi-sanitized test-native-levelzero-sanitized test-native-nvml-sanitized test-native-nvml-worker-sanitized test-native-gpu-worker-sanitized
 	@if [ -z '$(SAN_ASAN_RUNTIME)' ]; then echo "wtop: the sanitized module names no ASan runtime to preload, so the suite cannot run on the uninstrumented interpreter"; exit 1; fi
 	@for mode in --snapshot --agent --diagnose; do \
 		echo "wtop: sanitized $$mode"; \
@@ -344,7 +344,7 @@ test-sanitized: resource-check $(LUA_STAMP) $(NATIVE_REVISION_HEADER) \
 		$(filter-out $(SANITIZER_EXCLUDED),$(TEST_FILES))
 
 .PHONY: test-native-cpu-limits
-test-native-cpu-limits: $(LUA_STAMP) $(NATIVE_REVISION_HEADER) $(NATIVE_VERSION_HEADER) $(NVML_WORKER_HEADER)
+test-native-cpu-limits: $(LUA_STAMP) $(NATIVE_REVISION_HEADER) $(NATIVE_VERSION_HEADER) $(GPU_WORKER_HEADER)
 	@mkdir -p $(NATIVE_DIR)
 	@$(CC) $(CFLAGS_NATIVE) -I$(NATIVE_DIR) -I$(LUA_PREFIX)/include \
 		tests/native/linux_cpu_limits.c $(filter-out native/wtop_native.c,$(NATIVE_SOURCES)) \
@@ -358,6 +358,14 @@ test-native-amdsmi: $(LUA_STAMP)
 test-native-amdsmi-sanitized: $(LUA_STAMP)
 	@python3 tests/test_linux_amdsmi.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)' \
 		--cflags='$(SANITIZER_CFLAGS)' --output build/native-amdsmi-san
+
+.PHONY: test-native-levelzero test-native-levelzero-sanitized
+test-native-levelzero: $(LUA_STAMP)
+	@python3 tests/test_linux_levelzero.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)'
+
+test-native-levelzero-sanitized: $(LUA_STAMP)
+	@python3 tests/test_linux_levelzero.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)' \
+		--cflags='$(SANITIZER_CFLAGS)' --output build/native-levelzero-san
 
 .PHONY: test-native-nvml test-native-nvml-sanitized test-native-nvml-worker test-native-nvml-worker-sanitized
 test-native-nvml: $(LUA_STAMP)
@@ -375,7 +383,16 @@ test-native-nvml-worker-sanitized: sanitize-native $(LUA_STAMP)
 		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' \
 		--output build/native-nvml-worker-san --native-only
 
-check: resource-check native locales test-native-cpu-limits test-native-amdsmi test-native-nvml test-native-nvml-worker
+.PHONY: test-native-gpu-worker test-native-gpu-worker-sanitized
+test-native-gpu-worker: native $(LUA_STAMP)
+	@python3 tests/test_linux_gpu_worker.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)'
+
+test-native-gpu-worker-sanitized: sanitize-native $(LUA_STAMP)
+	@python3 tests/test_linux_gpu_worker.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)' \
+		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' \
+		--output build/native-gpu-worker-san --native-only
+
+check: resource-check native locales test-native-cpu-limits test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAC) -p $$(find src tools tests -type f -name '*.lua' -print)
 	@sh -n tools/*.sh
 	@python3 -c 'import pathlib; [compile(path.read_bytes(), str(path), "exec") for path in pathlib.Path("tests").rglob("*.py")]'
@@ -504,7 +521,7 @@ snapshot: native locales
 
 # rock-build and rock-install are the LuaRocks "make" backend entry points.
 # End users should invoke LuaRocks (or luarocks-install), not these targets directly.
-rock-build: resource-check build-id $(NVML_WORKER_HEADER)
+rock-build: resource-check build-id $(GPU_WORKER_HEADER)
 	@test -n "$(LUA_INCDIR)" || { echo "wtop: LUA_INCDIR is required" >&2; exit 1; }
 	@mkdir -p "$(ROCK_BUILD_DIR)"
 	$(CC) $(CFLAGS) -std=c17 -fPIC -Wall -Wextra -Werror -shared \
@@ -615,6 +632,7 @@ bundle-dir: build-id native locales luainstaller
 	@cp $(RELEASE_LICENCE) dist/wtop/$(RELEASE_LICENCE)
 	@cp native/licenses/AMD-SMI-MIT.txt dist/wtop/.luai/licenses/AMD-SMI-MIT.txt
 	@cp native/licenses/NVML-NVIDIA.txt dist/wtop/.luai/licenses/NVML-NVIDIA.txt
+	@cp native/licenses/Level-Zero-MIT.txt dist/wtop/.luai/licenses/Level-Zero-MIT.txt
 	@find dist/wtop -type d -exec chmod 0755 {} +
 	@find dist/wtop -type f -exec chmod a+r {} +
 	@chmod 0755 dist/wtop/wtop
@@ -652,7 +670,7 @@ test-bundle-file: resource-check-full bundle-file
 # not the other.
 test-release-notices: resource-check-full sbom checksums
 	@for required in $(RELEASE_LICENCE) THIRD_PARTY_NOTICES.md \
-		.luai/licenses/Lua-MIT.txt .luai/licenses/AMD-SMI-MIT.txt .luai/licenses/NVML-NVIDIA.txt .luai/licenses/LGPL-3.0-or-later.txt; do \
+		.luai/licenses/Lua-MIT.txt .luai/licenses/AMD-SMI-MIT.txt .luai/licenses/NVML-NVIDIA.txt .luai/licenses/Level-Zero-MIT.txt .luai/licenses/LGPL-3.0-or-later.txt; do \
 		test -f "dist/wtop/$$required" || { \
 			echo "wtop: the onedir bundle does not carry $$required, and the"; \
 			echo "     release is documented as being distributed under terms"; \

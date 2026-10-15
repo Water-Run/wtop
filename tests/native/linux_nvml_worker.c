@@ -17,7 +17,7 @@
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <stddef.h>
-#include "../../native/wtop_nvml_protocol.h"
+#include "../../native/wtop_gpu_protocol.h"
 typedef int (*entry)(lua_State *);
 static entry open_worker,query_worker,close_worker;
 static long budget=-1;
@@ -93,15 +93,15 @@ static void close_vm(lua_State *L) {
     lua_close(L);idle();
 }
 static void stream_validation(void) {
-    unsigned char valid[64]={NVML_TABLE};size_t n=9;
-    valid[n++]=NVML_INTEGER;valid[n++]=1;valid[n++]='x';nvml_put64(valid+n,42);n+=8;
-    assert(nvml_wire_valid(valid,n));
-    for(size_t i=0;i<n;++i)if(i!=9)assert(!nvml_wire_valid(valid,i));
-    unsigned char changed[64];memcpy(changed,valid,n);changed[0]=255;assert(!nvml_wire_valid(changed,n));
-    memcpy(changed,valid,n);changed[11]='!';assert(!nvml_wire_valid(changed,n));
-    memcpy(changed,valid,n);changed[9]=NVML_NUMBER;nvml_put64(changed+12,UINT64_C(0x7ff0000000000000));assert(!nvml_wire_valid(changed,n));
+    unsigned char valid[64]={GPU_TABLE};size_t n=9;
+    valid[n++]=GPU_INTEGER;valid[n++]=1;valid[n++]='x';gpu_put64(valid+n,42);n+=8;
+    assert(gpu_wire_valid(valid,n));
+    for(size_t i=0;i<n;++i)if(i!=9)assert(!gpu_wire_valid(valid,i));
+    unsigned char changed[64];memcpy(changed,valid,n);changed[0]=255;assert(!gpu_wire_valid(changed,n));
+    memcpy(changed,valid,n);changed[11]='!';assert(!gpu_wire_valid(changed,n));
+    memcpy(changed,valid,n);changed[9]=GPU_NUMBER;gpu_put64(changed+12,UINT64_C(0x7ff0000000000000));assert(!gpu_wire_valid(changed,n));
     unsigned seed=1;
-    for(unsigned i=0;i<20000;++i){for(size_t j=0;j<sizeof(changed);++j){seed=seed*1664525u+1013904223u;changed[j]=(unsigned char)(seed>>24);} (void)nvml_wire_valid(changed,i%sizeof(changed));}
+    for(unsigned i=0;i<20000;++i){for(size_t j=0;j<sizeof(changed);++j){seed=seed*1664525u+1013904223u;changed[j]=(unsigned char)(seed>>24);} (void)gpu_wire_valid(changed,i%sizeof(changed));}
 }
 int main(int argc,char **argv) {
     assert(argc==2||(argc==3&&!strcmp(argv[2],"--legacy-syscalls")));
