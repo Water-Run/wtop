@@ -46,6 +46,7 @@
 
 #include "wtop_nvml.h"
 #include "wtop_gpu_worker.h"
+#include "wtop_hardware_worker.h"
 #include "wtop_amdsmi.h"
 #include "wtop_levelzero.h"
 
@@ -2197,6 +2198,7 @@ static const luaL_Reg functions[] = {
     {"pid", l_pid},
     {"uname", l_uname},
     {"wcwidth", l_wcwidth},
+#ifndef WTOP_HARDWARE_WORKER
     {"nvml_query", wtop_nvml_query},
     {"gpu_worker_open", wtop_gpu_worker_open},
     {"gpu_worker_query", wtop_gpu_worker_query},
@@ -2206,6 +2208,10 @@ static const luaL_Reg functions[] = {
     {"nvml_worker_close", wtop_nvml_worker_close},
     {"amdsmi_query", wtop_amdsmi_query},
     {"levelzero_query", wtop_levelzero_query},
+    {"hardware_worker_open", wtop_hardware_worker_open},
+    {"hardware_worker_query", wtop_hardware_worker_query},
+    {"hardware_worker_close", wtop_hardware_worker_close},
+#endif
     {NULL, NULL},
 };
 

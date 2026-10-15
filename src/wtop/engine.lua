@@ -439,6 +439,17 @@ function Engine.new(options)
         collector_options.system_info = { native = native.available and native or nil }
     end
     local collectors = options.collectors or Collectors.new_all(collector_options)
+    -- Injected collectors, clocks and filesystems keep their explicit execution
+    -- contract. The selected default Linux sources cross a process boundary.
+    local HardwareWorker = require("wtop.collectors.hardware_worker")
+    if not options.collectors and not options.clock and not options.context
+        and HardwareWorker.available() then
+        for id in pairs(HardwareWorker.sources) do
+            if collectors[id] and not collector_options[id] and not collector_options.common then
+                collectors[id] = HardwareWorker.new(collectors[id])
+            end
+        end
+    end
     context.resolve_username = context.resolve_username or function(uid)
         return Users.default:user(uid, clock.now_ns())
     end
@@ -606,8 +617,9 @@ function Engine:_record_history(snapshot, completed)
         local result = completed[source]
         if not result then return end
         if result.status ~= "ok" then value = nil end
-        local timestamp_ns = finite_number(result.timestamp_ns)
-            and result.timestamp_ns or snapshot.timestamp_ns
+        local timestamp_ns = finite_number(result.value_timestamp_ns)
+            and result.value_timestamp_ns or (finite_number(result.timestamp_ns)
+            and result.timestamp_ns or snapshot.timestamp_ns)
         timestamp_ns = math.min(timestamp_ns, snapshot.timestamp_ns)
         -- A boolean sentinel preserves the ring's dense array shape while the
         -- chart renderer still treats it as a visible sampling gap.
@@ -663,6 +675,7 @@ function Engine:tick(force)
     local completed = self.scheduler:tick(self.context)
     for id, result in pairs(completed) do
         self.pending_collectors[id] = result.sampling_pending == true or nil
+        if result.defer_publish == true then completed[id] = nil end
     end
     -- Asynchronous discovery can finish after the initial probe. Keep the
     -- capability table shared with one-shot exports current as sources settle.

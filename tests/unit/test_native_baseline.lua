@@ -135,10 +135,19 @@ local module_floor, interpreter_floor
 for _, module in ipairs({ native_module, interpreter }) do
     local expected = assert(highest_required(module),
         "objdump reported no versioned glibc symbol in " .. module)
+    if module == native_module then
+        -- objdump inspects the outer DSO only. The report correctly includes
+        -- both executable images embedded in that DSO; measure the standalone
+        -- build inputs independently to check its aggregate requirement.
+        for _, worker in ipairs({ "build/native/wtop_gpu_worker", "build/native/wtop_hardware_worker" }) do
+            local floor = assert(highest_required(worker), "cannot measure " .. worker)
+            if version_gt(floor, expected) then expected = floor end
+        end
+    end
     local claimed = report:match("== " .. quoted(module)
         .. "\n.-" .. REPORTED .. ": (%d[%.%d]*)")
     assert(claimed == expected, "the report says " .. tostring(claimed)
-        .. " for " .. module .. " but objdump says " .. expected)
+        .. " for " .. module .. " but its executable images require " .. expected)
     if module == native_module then
         module_floor = expected
     else

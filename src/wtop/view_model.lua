@@ -1350,7 +1350,8 @@ local function cpufreq_rows(snapshot, format, i18n)
             maximum = frequency(format, frequencies.scaling_maximum_hz or frequencies.hardware_maximum_hz),
             governor = policy.governor or "—",
             driver = policy.driver or "—",
-            quality = policy.quality or frequencies.current_quality or "—",
+            quality = not Quality.current_source(snapshot.quality, "cpu_frequency")
+                and quality(snapshot, "cpu_frequency") or policy.quality or frequencies.current_quality or "—",
         }
     end
     return rows
@@ -1358,12 +1359,13 @@ end
 
 local function thermal_throttle_rows(snapshot, format)
     local rows = {}
+    local current = Quality.current_source(snapshot.quality, "thermal_throttle")
     for _, cpu in ipairs(snapshot.thermal_throttle and snapshot.thermal_throttle.cpus or {}) do
         if #rows >= TABLE_ROW_LIMIT then break end
         rows[#rows + 1] = {
             cpu = "cpu" .. cpu.id,
-            core_new = number(format, cpu.core_new),
-            package_new = number(format, cpu.package_new),
+            core_new = number(format, current and cpu.core_new or nil),
+            package_new = number(format, current and cpu.package_new or nil),
             core_total = number(format, cpu.core_count),
             package_total = number(format, cpu.package_count),
             core_ms = number(format, cpu.core_total_time_ms),
@@ -1375,6 +1377,7 @@ end
 
 local function cpuidle_rows(snapshot, format, i18n)
     local rows, total = {}, 0
+    local current = Quality.current_source(snapshot.quality, "cpuidle")
     for _, cpu in ipairs(snapshot.cpuidle and snapshot.cpuidle.cpus or {}) do
         for _, state in ipairs(cpu.states or {}) do
             total = total + 1
@@ -1382,12 +1385,12 @@ local function cpuidle_rows(snapshot, format, i18n)
                 rows[#rows + 1] = {
                     cpu = "cpu" .. cpu.id,
                     state = state.name or ("state" .. state.id),
-                    usage_delta = number(format, state.usage_delta),
+                    usage_delta = number(format, current and state.usage_delta or nil),
                     reported_ms = number(format,
-                        state.new_time_us and state.new_time_us / 1000, 1),
-                    rejected_delta = number(format, state.rejected_delta),
-                    above_delta = number(format, state.above_delta),
-                    below_delta = number(format, state.below_delta),
+                        current and state.new_time_us and state.new_time_us / 1000 or nil, 1),
+                    rejected_delta = number(format, current and state.rejected_delta or nil),
+                    above_delta = number(format, current and state.above_delta or nil),
+                    below_delta = number(format, current and state.below_delta or nil),
                     rejected_delta_quality = state.rejected_delta_quality,
                     above_delta_quality = state.above_delta_quality,
                     below_delta_quality = state.below_delta_quality,
@@ -1396,8 +1399,8 @@ local function cpuidle_rows(snapshot, format, i18n)
                     disabled = state.disabled == nil and "—" or translated(i18n,
                         state.disabled and "cpuidle.yes" or "cpuidle.no",
                         state.disabled and "Yes" or "No"),
-                    quality = state.time_delta_quality == "fresh"
-                        and state.usage_delta_quality or state.time_delta_quality,
+                    quality = not current and quality(snapshot, "cpuidle") or (state.time_delta_quality == "fresh"
+                        and state.usage_delta_quality or state.time_delta_quality),
                 }
             end
         end
@@ -1427,6 +1430,7 @@ end
 
 local function sensor_rows(snapshot, format)
     local rows = {}
+    local current = Quality.current_source(snapshot.quality, "sensors")
     local function better(left, right)
         if left.alarm ~= right.alarm then return left.alarm end
         if left.device == right.device then return left.sensor < right.sensor end
@@ -1439,8 +1443,9 @@ local function sensor_rows(snapshot, format)
                 sensor = channel.label or (channel.type .. " " .. tostring(channel.index)),
                 type = channel.type,
                 value = sensor_value(channel, format),
-                status = channel.fault and "FAULT" or (channel.alarm and "ALARM" or channel.quality or "—"),
-                alarm = channel.alarm == true or channel.fault == true,
+                status = not current and quality(snapshot, "sensors")
+                    or (channel.fault and "FAULT" or (channel.alarm and "ALARM" or channel.quality or "—")),
+                alarm = current and (channel.alarm == true or channel.fault == true),
             })
         end
     end

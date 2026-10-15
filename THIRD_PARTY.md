@@ -5,7 +5,7 @@ it; the repository carries no other third-party runtime code.
 
 | Component | Version | License | Role |
 | --- | --- | --- | --- |
-| [PUC Lua](https://www.lua.org/) | 5.5.1 | MIT © 1994–2026 Lua.org, PUC-Rio | The runtime. Bundled with the onedir/onefile and platform development bundles |
+| [PUC Lua](https://www.lua.org/) | 5.5.1 | MIT © 1994–2026 Lua.org, PUC-Rio | The runtime. Bundled with the onedir/onefile and platform development bundles; also embedded in the Linux hardware reader |
 | [NVIDIA NVML interface declarations](https://github.com/NVIDIA/go-nvml) | 13.4.92 | NVIDIA NVML header license | Runtime API declarations and SDK test excerpts; the NVIDIA implementation is loaded from the host |
 | [AMD SMI public interface declarations](https://github.com/ROCm/amdsmi) | ROCm 5.7.1–7.2.4 | MIT © Advanced Micro Devices, Inc. | Complete versioned ABI declarations; the vendor library is loaded from the host |
 | [Level Zero Sysman interface declarations](https://github.com/oneapi-src/level-zero) | 1.5.0–1.34.0 | MIT © 2019–2026 Intel Corporation | Complete ABI layouts and SDK test declarations; the implementation is loaded in the isolated reader |
@@ -17,6 +17,9 @@ contains. A path in quotes is being talked about, not shipped.
 The Level Zero interface notice is embedded in the Linux native module and
 reader, and ships at `.luai/licenses/Level-Zero-MIT.txt` in the onedir bundle.
 The Intel runtime itself is not bundled.
+
+The Linux LuaRocks installation copies `native/licenses/Lua-MIT.txt` and the
+other native interface notices into `doc/licenses/`.
 
 The Lua license text ships inside the onedir bundle at
 `.luai/licenses/Lua-MIT.txt`, placed there by the packaging tool. This file

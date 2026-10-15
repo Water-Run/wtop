@@ -26,6 +26,16 @@ local Technical = require("wtop.i18n.technical")
 -- to it at line 476 and renders it through `Technical.reason` at line 1023, so
 -- the field name cannot be the criterion, only the rendering is.
 local interface_reasons = {
+  "hardware_allocation_failed",
+  "hardware_collector_error",
+  "hardware_invalid_response",
+  "hardware_query_pending",
+  "hardware_query_timeout",
+  "hardware_worker_busy",
+  "hardware_worker_closed",
+  "hardware_worker_exited",
+  "hardware_worker_unavailable",
+
   "no_memory_devices",
   "smbios_unavailable",
   "smbios_invalid",

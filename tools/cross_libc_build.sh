@@ -82,6 +82,8 @@ cp "$lua_archive" "$stage/"
 cp "$project_dir/Makefile" "$project_dir/VERSION" "$stage/"
 mkdir -p "$stage/tools"
 cp "$project_dir/tools/embed_gpu_worker.sh" "$stage/tools/"
+cp "$project_dir/tools/embed_hardware_lua.lua" "$stage/tools/"
+cp -r "$project_dir/src" "$stage/"
 
 # The build identity travels with the sources.  The container has no .git, so it
 # cannot run tools/write_build_id.sh, and without the header the module it builds
@@ -186,7 +188,19 @@ command -v gcc >/dev/null 2>&1 || { echo "no C compiler available in this image"
 # is what the suite needs before its results mean anything.  The floor
 # measurement above does not use Python at all, so this is required for the
 # suite specifically and not for the measurement.
-if [ "$run_suite" = "suite" ] && ! command -v python3 >/dev/null 2>&1; then
+if [ "$run_suite" = "suite" ] || [ "$run_suite" = "native" ]; then
+    # manylinux carries current interpreters outside PATH. Use one before
+    # adding a package dependency to this otherwise self-contained image.
+    if ! command -v python3 >/dev/null 2>&1; then
+        for candidate in /opt/python/cp3*/bin/python3; do
+            if [ -x "$candidate" ]; then
+                PATH="$(dirname -- "$candidate"):$PATH"
+                export PATH
+                break
+            fi
+        done
+    fi
+if ! command -v python3 >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
         apt-get update -qq >/dev/null 2>&1 || true
         apt-get install -y -qq python3 >/dev/null 2>&1 || true
@@ -199,11 +213,12 @@ if [ "$run_suite" = "suite" ] && ! command -v python3 >/dev/null 2>&1; then
     fi
     command -v python3 >/dev/null 2>&1 || {
         echo "no python3 available in this image and it could not be installed;" >&2
-        echo "the unit suite needs it for tools/elf_floors.py and tools/make_sbom.py." >&2
+        echo "the runtime fixtures and unit tools require Python 3." >&2
         echo "The glibc floor above was still measured; only the suite is missing." >&2
         exit 1
     }
-    echo "installed python3 $(python3 -V 2>&1) for the unit suite"
+    echo "installed python3 $(python3 -V 2>&1) for runtime verification"
+fi
 fi
 
 build_glibc=$(ldd --version 2>/dev/null | head -1 | grep -o "[0-9.]*$" || echo unknown)
@@ -222,6 +237,10 @@ native_sources=$(make -s -f /b/Makefile --eval="print-native-sources:;@echo \$(N
 worker_sources=$(make -s -f /b/Makefile --eval="print-worker-source:;@echo \$(GPU_WORKER_SOURCES)" print-worker-source)
 gcc $native_flags -s -DWTOP_GPU_WORKER $worker_sources -ldl -lm -o /b/native-build/wtop_gpu_worker
 sh /b/tools/embed_gpu_worker.sh /b/native-build/wtop_gpu_worker /b/native-build/wtop_gpu_worker_image.h
+/opt/lua/bin/lua /b/tools/embed_hardware_lua.lua /b/native-build/wtop_hardware_lua.h
+gcc $native_flags -s -DWTOP_HARDWARE_WORKER -I/b/native-build -I/b/build/native -I/opt/lua/include \
+    native/wtop_hardware_worker.c native/wtop_native.c /opt/lua/lib/liblua.a -ldl -lm -pthread -o /b/native-build/wtop_hardware_worker
+sh /b/tools/embed_gpu_worker.sh /b/native-build/wtop_hardware_worker /b/native-build/wtop_hardware_worker_image.h wtop_hardware_worker_image
 gcc $native_flags -shared -I/b/native-build -I/b/build/native -I/opt/lua/include \
     -o /b/native-build/wtop_native.so \
     $native_sources -ldl -pthread
@@ -243,11 +262,12 @@ report() {
 echo "== required GLIBC symbol versions"
 report "lua interpreter" /opt/lua/bin/lua
 report "native module   " /b/native-build/wtop_native.so
+report "hardware reader" /b/native-build/wtop_hardware_worker
 report "GPU SDK reader     " /b/native-build/wtop_gpu_worker
 echo
 
 echo "== shared library dependencies"
-for f in /b/native-build/wtop_native.so /b/native-build/wtop_gpu_worker /opt/lua/bin/lua; do
+for f in /b/native-build/wtop_native.so /b/native-build/wtop_gpu_worker /b/native-build/wtop_hardware_worker /opt/lua/bin/lua; do
     readelf -d "$f" | sed -n "s/.*(NEEDED).*\[\(.*\)\]/  \1/p"
 done
 echo
@@ -261,6 +281,7 @@ if [ "$run_suite" = "suite" ] || [ "$run_suite" = "native" ]; then
     mkdir -p /b/full/build/native
     cp /b/native-build/wtop_native.so /b/full/build/native/wtop_native.so
     cp /b/native-build/wtop_gpu_worker /b/native-build/wtop_gpu_worker_image.h /b/full/build/native/
+    cp /b/native-build/wtop_hardware_worker /b/native-build/wtop_hardware_worker_image.h /b/native-build/wtop_hardware_lua.h /b/full/build/native/
     # The revision header has to be where the staged tree expects it, not only
     # where it was compiled: tests/unit/test_build_identity.lua reads the file
     # to confirm the module was compiled against the header the Lua half agrees
@@ -308,6 +329,9 @@ if [ "$run_suite" = "suite" ] || [ "$run_suite" = "native" ]; then
         -Wl,-E,--whole-archive /opt/lua/lib/liblua.a -Wl,--no-whole-archive -lm -ldl -pthread \
         -o /b/native-build/gpu-fixture
     LD_LIBRARY_PATH=/b/fake-nvml /b/native-build/gpu-fixture /b/native-build/wtop_native.so
+    echo "== isolated hardware I/O with this libc"
+    python3 tests/test_linux_hardware_worker.py --lua-prefix /opt/lua \
+        --module /b/native-build/wtop_native.so --output /b/fake-hardware --native-only
 fi
 '
 

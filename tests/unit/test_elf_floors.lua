@@ -83,7 +83,17 @@ local module_floor = assert(quiet_floor(module_path),
     "the native module reported no glibc floor")
 local interpreter_floor = assert(quiet_floor(interpreter_path),
     "the interpreter reported no glibc floor")
-assert(module_floor ~= interpreter_floor,
+-- The hardware reader now embeds the same pinned Lua as the interpreter, so
+-- their aggregate floors can agree. Keep two *different* real ELF requirements
+-- in this regression by using the standalone SDK reader in that case.
+local other_path, other_floor, other_embedded = module_path, module_floor, 2
+if module_floor == interpreter_floor then
+    other_path = "build/native/wtop_gpu_worker"
+    assert(Artifacts.require_file(other_path, "the standalone SDK reader", "run `make native`"))
+    other_floor = assert(quiet_floor(other_path))
+    other_embedded = 0
+end
+assert(other_floor ~= interpreter_floor,
     "this test needs two files with different floors, and both are now "
         .. module_floor .. "; pick another pair or the property is untested")
 
@@ -93,19 +103,19 @@ local plain = run("python3 tools/elf_floors.py " .. interpreter_path)
 assert(plain:find("embedded ELF images found: 0", 1, true) ~= nil,
     "a plain interpreter must be reported as carrying no ELF image:\n" .. plain)
 local native_report = run("python3 tools/elf_floors.py " .. module_path)
-assert(native_report:find("embedded ELF images found: 1",1,true),
-    "the isolated GPU SDK reader must be measured inside the native module:\n" .. native_report)
+assert(native_report:find("embedded ELF images found: 2",1,true),
+    "both the isolated GPU and Lua hardware readers must be measured inside the native module:\n" .. native_report)
 
 -- The assembled file has the shape of a onefile: the *lower*-requirement image
 -- at offset 0 with the higher-requirement one appended, so that a scanner
 -- reading only the first image produces the other number and the test can see
 -- it.  Which file that is depends on the host, so the order is decided here
 -- rather than assumed.
-local lower, higher = module_path, interpreter_path
-local lower_floor, higher_floor = module_floor, interpreter_floor
-if version_at_least(module_floor, interpreter_floor) then
-    lower, higher = interpreter_path, module_path
-    lower_floor, higher_floor = interpreter_floor, module_floor
+local lower, higher = other_path, interpreter_path
+local lower_floor, higher_floor = other_floor, interpreter_floor
+if version_at_least(other_floor, interpreter_floor) then
+    lower, higher = interpreter_path, other_path
+    lower_floor, higher_floor = interpreter_floor, other_floor
 end
 
 local combined = "build/native/.wtop-embedded-baseline.so"
@@ -123,7 +133,7 @@ assert(combined_floor == higher_floor,
         .. "defect this test exists for")
 
 local report = run("python3 tools/elf_floors.py " .. combined)
-assert(report:find("embedded ELF images found: 2", 1, true) ~= nil,
+assert(report:find("embedded ELF images found: " .. (other_embedded + 1), 1, true) ~= nil,
     "the appended image must be counted, so that a bundler compressing its "
         .. "payload and hiding the images shows up as a zero rather than as a "
         .. "quietly lower floor:\n" .. report)

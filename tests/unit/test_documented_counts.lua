@@ -80,6 +80,7 @@ end
 -- strips the qualification is caught rather than silently making the number
 -- look current.
 local historical = {
+    { "docs/CROSS_PLATFORM.md", "`6702c31` 当时的 139 个 Lua 文件" },
     { "docs/CROSS_PLATFORM.md", "当时运行时为 50 个文件" },
     { "docs/MONITORING.md", "在此功能之前断言表格形状的 73 个单元测试" },
     { "docs/PACKAGING.md", "2026-10-02 那次在 glibc 2.17 上 **通过 120 个测试文件**" },
@@ -143,6 +144,7 @@ for line in (matrix .. "\n"):gmatch("[^\n]+") do
                 local guarded = number == tostring(total)
                     or (number == "120" and historical_matrix_rows[row] == true)
                     or line:find("当时运行时为 50 个文件", 1, true) ~= nil
+                    or line:find("`6702c31` 当时的 139 个 Lua 文件", 1, true) ~= nil
                 assert(guarded,
                     "the validation matrix states a suite size of " .. number ..
                         " files and nothing accounts for it: a size that is "
