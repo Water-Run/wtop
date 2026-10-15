@@ -52,6 +52,8 @@ cc -std=c17 -O2 -Wall -Wextra -Werror \
     -o "$output_dir/wtop_native.so" "$project_dir/native/wtop_macos.c" \
     "$project_dir/native/wtop_macos_hw.c" \
     "$project_dir/native/wtop_macos_gpu.c" \
+    "$project_dir/native/wtop_macos_report.c" \
+    "$project_dir/native/wtop_macos_ioreport.c" \
     "$project_dir/native/wtop_macos_inventory.c" \
     "$project_dir/native/wtop_macos_disk.c" \
     "$project_dir/native/wtop_macos_net.c" \

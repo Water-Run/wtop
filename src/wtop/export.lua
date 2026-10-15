@@ -160,7 +160,7 @@ local function export_power(power)
         local output = copy_fields(zone, {
             "id", "name", "source_kind", "parent_id", "enabled", "energy_joules",
             "maximum_energy_range_joules", "observed_at_ns", "power_watts",
-            "power_source", "power_quality", "quality", "truncated", "aggregate", "source",
+            "power_source", "power_quality", "power_interval_ns", "quality", "truncated", "aggregate", "source",
             "platform_aggregate", "aggregate_domain",
         })
         output.constraints = json.array({})

@@ -1166,12 +1166,17 @@ local function cpufreq_rows(snapshot, format, i18n)
         cpuinfo_cur_freq = translated(i18n, "cpufreq.source_hardware_current", "HW current"),
         cpuinfo_avg_freq = translated(i18n, "cpufreq.source_hardware_average", "HW average"),
         scaling_cur_freq = translated(i18n, "cpufreq.source_scaling", "Scaling"),
+        ioreport_residency = "IOReport",
     }
     for _, policy in ipairs(snapshot.cpu_frequency and snapshot.cpu_frequency.policies or {}) do
         local cpus = policy.affected_cpus or policy.related_cpus or {}
         local labels = {}
         for index, cpu in ipairs(cpus) do labels[index] = tostring(cpu) end
         local frequencies = policy.frequencies or {}
+        local current_text = frequency(format, frequencies.current_hz)
+        if frequencies.current_quality == "estimated" and frequencies.current_hz ~= nil then
+            current_text = "~" .. current_text
+        end
         local linked = policy.id and graph.by_id["cpufreq:" .. policy.id]
         local reading = linked and linked.temperature
         local scope = reading and reading.scope
@@ -1182,7 +1187,7 @@ local function cpufreq_rows(snapshot, format, i18n)
         rows[#rows + 1] = {
             policy = policy.policy or policy.id,
             cpus = table.concat(labels, ","),
-            current = frequency(format, frequencies.current_hz),
+            current = current_text,
             source = sources[frequencies.current_source] or "—",
             temperature = scope_label and (scope_label .. " "
                 .. temperature(format, reading.celsius)) or "—",

@@ -387,6 +387,9 @@ end
 -- Cumulative energy counters per zone become average power over the
 -- sampling interval, with the same first-sample and reset rules as powercap.
 local function power_data(data, previous, timestamp_ns)
+  local function finite_nonnegative(value)
+    return type(value) == "number" and value == value and value >= 0 and value < math.huge
+  end
   local old_data = previous_ok(previous)
   local old_by_id = {}
   for _, zone in ipairs(old_data and old_data.zones or {}) do
@@ -396,17 +399,38 @@ local function power_data(data, previous, timestamp_ns)
   local any_gap, total, total_count = false, 0, 0
   for _, zone in ipairs(data.zones or {}) do
     local old = old_by_id[zone.id]
+    local same_epoch = old and zone._source_epoch == old._source_epoch
+    local interval_ns = elapsed_ns
+    if zone._sample_timestamp_ns ~= nil or (old and old._sample_timestamp_ns ~= nil) then
+      local current_time, old_time = zone._sample_timestamp_ns, old and old._sample_timestamp_ns
+      interval_ns = type(current_time) == "number" and type(old_time) == "number"
+        and current_time == current_time and old_time == old_time
+        and current_time < math.huge and old_time >= 0
+        and current_time > old_time and current_time - old_time or nil
+    end
     local delta = old and type(zone.energy_joules) == "number"
       and type(old.energy_joules) == "number"
+      and finite_nonnegative(zone.energy_joules) and finite_nonnegative(old.energy_joules)
       and zone.energy_joules - old.energy_joules or nil
-    if type(zone.power_watts) == "number" then
+    local usable_quality = zone.power_quality == nil or zone.power_quality == "fresh"
+      or zone.power_quality == "measured" or zone.power_quality == "estimated"
+    if finite_nonnegative(zone.power_watts) and usable_quality then
       zone.power_quality = zone.power_quality or "fresh"
-    elseif delta and delta >= 0 and elapsed_ns and elapsed_ns > 0 then
-      zone.power_watts = delta / (elapsed_ns / 1e9)
-      zone.power_source = zone.power_source or "energy_delta"
-      zone.power_quality = "fresh"
+    elseif same_epoch and (zone.power_quality == nil or zone.power_quality == "fresh")
+        and delta and delta >= 0 and delta < math.huge and interval_ns and interval_ns > 0 then
+      local watts = delta / (interval_ns / 1e9)
+      if finite_nonnegative(watts) then
+        zone.power_watts = watts
+        zone.power_interval_ns = interval_ns
+        zone.power_source = zone.power_source or "energy_delta"
+        zone.power_quality = "fresh"
+      else
+        zone.power_watts, zone.power_quality, any_gap = nil, "gap", true
+      end
     else
-      zone.power_quality = delta and delta < 0 and "reset" or "gap"
+      zone.power_watts = nil
+      zone.power_quality = not usable_quality and zone.power_quality
+        or delta and delta < 0 and "reset" or "gap"
       any_gap = true
     end
     zone.quality = zone.power_quality
@@ -421,7 +445,8 @@ local function power_data(data, previous, timestamp_ns)
     data.aggregate_zone_count = total_count
     data.aggregate_complete = not any_gap
   end
-  return data, any_gap and "gap" or "fresh"
+  return data, (data.quality == "partial" or data.partial == true) and "partial"
+    or any_gap and "gap" or "fresh"
 end
 
 -- RFC 5952 text: lowercase, no leading zeros, longest zero run compressed.

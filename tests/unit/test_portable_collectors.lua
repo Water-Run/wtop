@@ -714,4 +714,46 @@ do
     "private source instances are not exported")
 end
 
+-- IOReport deltas must remain within one observation epoch and actual window.
+do
+  local function energy(epoch, value, stamp, quality)
+    return { zones = {
+      { id = "cpu", energy_joules = value, aggregate = true, _source_epoch = epoch,
+        _sample_timestamp_ns = stamp, power_quality = quality or "fresh" },
+      { id = "system", power_watts = 20, power_quality = "fresh", aggregate = false },
+    } }
+  end
+  local failed = { quality = "partial", zones = { { id = "system", power_watts = 20 } } }
+  local source = collectors(fake_native({ collect_powercap = {
+    energy("epoch1",0,1000000000,"gap"), energy("epoch1",10,3000000000), failed,
+    energy("epoch2",0,5000000000,"gap"), energy("epoch2",10,6000000000),
+    energy("epoch3",100,7000000000), energy("epoch3",120,8000000000,"gap"),
+  } })).powercap
+  local first = source:sample(at(1000000000))
+  equal(first.data.zones[1].power_watts,nil,"warmup does not fabricate zero watts")
+  local second = source:sample(at(2000000000),first)
+  equal(second.data.zones[1].power_watts,5,"power uses the actual two-second IOReport interval")
+  equal(second.data.zones[1].power_interval_ns,2000000000,"the observed averaging window is retained")
+  local third = source:sample(at(3000000000),second)
+  equal(third.quality,"partial","failed energy and fresh independent SMC remain partial")
+  equal(#third.data.zones,1,"failed energy zones disappear rather than repeat old counters")
+  local fourth = source:sample(at(4000000000),third)
+  equal(fourth.data.zones[1].power_watts,nil,"reopen first establishes a new baseline")
+  local fifth = source:sample(at(5000000000),fourth)
+  equal(fifth.data.zones[1].power_watts,10,"a second valid observation restores power")
+  local sixth = source:sample(at(6000000000),fifth)
+  equal(sixth.data.zones[1].power_watts,nil,"even an increasing counter cannot cross source epochs")
+  local seventh = source:sample(at(7000000000),sixth)
+  equal(seventh.data.zones[1].power_watts,nil,"an explicit source gap cannot turn unchanged or new totals into watts")
+  local backwards = collectors({collect_powercap=function()return energy("epoch2",30,5000000000)end}).powercap:sample(at(6000000000),fifth)
+  equal(backwards.data.zones[1].power_watts,nil,"a backwards native sample clock cannot use the outer timestamp as fallback")
+  local stale = energy("epoch2",20,7000000000,"stale");stale.zones[1].power_watts=123
+  local held = collectors({collect_powercap=function()return stale end}).powercap:sample(at(6000000000),fifth)
+  equal(held.data.zones[1].power_watts,nil,"a retained direct power reading does not become current")
+  local exported=require("wtop.export").snapshot({power=second.data})
+  equal(exported.power.zones[1].power_interval_ns,2000000000,"Snapshot exposes the actual averaging interval")
+  local text=require("wtop.format.json").encode(exported)
+  assert(not text:find("_source_epoch",1,true) and not text:find("_sample_timestamp_ns",1,true),"private counter identity and clock are not exported")
+end
+
 return true
