@@ -67,6 +67,21 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 ## 验证矩阵
 
+2026-10-16 核对：`dcbd971` 的
+[主 CI](https://github.com/Water-Run/wtop/actions/runs/38772147745) 16 个作业与
+[Windows CI](https://github.com/Water-Run/wtop/actions/runs/38772147754) 两个作业
+全部通过，包括 GCC ASan/UBSan、两个 Linux 架构下载最终归档后的完整 PTY。
+Linux x86_64 精确归档 `21cb8a5a` 在本机另验两形态五 CLI、quick PTY、
+独立 NVML 读取器、假驱动的功耗/占比与挂死驱动导航；普通权限的拒绝状态与
+提权后的真实 CPU 限制、功耗条、三个功耗入口均通过。
+aarch64 归档 `b56bb923` 的本机检查仅为摘要和包内清单，运行证据来自原生 CI。
+两种 Linux 归档的执行下限均为 glibc 2.38；glibc 2.17 的源码构建另有实测。
+M4 的精确归档 `2f0edbaf` 两形态通过五 CLI、原 200 列 GPU 时钟、功耗、
+43 传感器与 10 个 Mach CPU 身份验收。Windows 归档 `b60a8696` 在
+Windows 11 与 Server 2008 两形态通过五 CLI、80×25 无 ANSI 控制台、
+CPUID/缓存父级导航与三个功耗入口。完整摘要与记录保存在
+`build/hardware-nvml-worker-20261015/`。XP 与更早 macOS 仍缺少真机证据。
+
 2026-10-15 核对：`4c8a09d` 的
 [主 CI](https://github.com/Water-Run/wtop/actions/runs/38748001998) 16 个作业与
 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/38748002139) 两个作业
@@ -174,10 +189,11 @@ macOS、Windows 的运行验证来自下表列出的主机记录。
   浮层并退出，已纳入 `make check`。glibc 2.17 容器构建、138 个 Lua 文件
   和原生生命周期测试通过；模块与内嵌读取器的符号下限均为 2.17。
   容器共享现代内核，拒绝新系统调用的夹具也不等于旧内核真机验证。
-- 本机缺少 GCC 的 ASan 运行库，完整 GCC 消毒器套件需由 CI 验证。
+- 本机缺少 GCC 的 ASan 运行库；CI 的完整 GCC ASan/UBSan 已通过，
+  包括两条原生执行路径和 137 个非 benchmark Lua 测试文件。
   AMD SMI、Level Zero 和同步 sysfs 读取仍不在本次进程隔离范围内。
   证据保存在 `build/hardware-nvml-worker-20261015/`。
-- 本机 Lua 5.5 的 138 个文件、严格原生警告检查和源码 rock 隔离安装通过。
+- 本机 Lua 5.5 与 Lua 5.4 各 138 个文件、严格原生警告检查和源码 rock 隔离安装通过。
   Linux onedir、onefile 和 rock 实际运行内嵌读取器，假驱动的 300 W / 355.5 W
   对应 84.39%，限制原因保留原采样时间；三种入口均通过挂死驱动下的导航
   与退出检查。两种二进制包的五 CLI 通过，包内全部 ELF 的组合下限仍为
