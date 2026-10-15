@@ -56,7 +56,16 @@ ssize_t read(int fd,void *buffer,size_t size) {
         const char *marker=getenv("WTOP_HARDWARE_FIXTURE_ENTERED");
         if(marker){int file=real_open(marker,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0600);
             if(file>=0){char pid[32];int n=snprintf(pid,sizeof(pid),"%ld\n",(long)getpid());
-                (void)write(file,pid,(size_t)n);real_close(file);}}
+                if(n>0&&(size_t)n<sizeof(pid)){
+                    size_t offset=0;
+                    while(offset<(size_t)n){
+                        ssize_t written=write(file,pid+offset,(size_t)n-offset);
+                        if(written<0&&errno==EINTR)continue;
+                        if(written<=0)break;
+                        offset+=(size_t)written;
+                    }
+                }
+                real_close(file);}}
         while(blocked()){struct timespec delay={0,10000000};(void)nanosleep(&delay,NULL);}
     }
     return real_read(fd,buffer,size);
