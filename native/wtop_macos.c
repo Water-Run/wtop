@@ -48,6 +48,7 @@
 #include <wchar.h>
 
 #include "wtop_macos.h"
+#include "wtop_macos_cpu.h"
 #include "wtop_build.h"
 
 #define MAX_PROCESS_COUNT 8192
@@ -489,219 +490,6 @@ static int l_wcwidth(lua_State *L) {
     return 1;
 }
 
-static int l_collect_cpu(lua_State *L) {
-    host_cpu_load_info_data_t cpu;
-    mach_msg_type_number_t count = HOST_CPU_LOAD_INFO_COUNT;
-    mach_msg_type_number_t processor_info_count = 0;
-    natural_t processor_count = 0;
-    processor_info_array_t processor_info = NULL;
-    processor_cpu_load_info_t processors;
-    uint64_t busy, total;
-    if (host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO,
-        (host_info_t)&cpu, &count) != KERN_SUCCESS) {
-        lua_pushnil(L);
-        lua_pushliteral(L, "host_statistics(HOST_CPU_LOAD_INFO) failed");
-        return 2;
-    }
-    busy = (uint64_t)cpu.cpu_ticks[CPU_STATE_USER]
-        + cpu.cpu_ticks[CPU_STATE_SYSTEM] + cpu.cpu_ticks[CPU_STATE_NICE];
-    total = busy + cpu.cpu_ticks[CPU_STATE_IDLE];
-    lua_createtable(L, 0, 2);
-    lua_createtable(L, 0, 2);
-    integer_field(L, "busy", (lua_Integer)busy);
-    integer_field(L, "total", (lua_Integer)total);
-    lua_setfield(L, -2, "raw");
-    if (host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO,
-        &processor_count, &processor_info, &processor_info_count) != KERN_SUCCESS)
-        processor_count = 0;
-    processors = (processor_cpu_load_info_t)processor_info;
-    lua_createtable(L, (int)processor_count, 0);
-    for (natural_t index = 0; index < processor_count; ++index) {
-        uint64_t core_busy = (uint64_t)processors[index].cpu_ticks[CPU_STATE_USER]
-            + processors[index].cpu_ticks[CPU_STATE_SYSTEM]
-            + processors[index].cpu_ticks[CPU_STATE_NICE];
-        uint64_t core_total = core_busy
-            + processors[index].cpu_ticks[CPU_STATE_IDLE];
-        lua_createtable(L, 0, 2);
-        lua_pushfstring(L, "cpu%d", (int)index);
-        lua_setfield(L, -2, "name");
-        lua_createtable(L, 0, 5);
-        integer_field(L, "busy", (lua_Integer)core_busy);
-        integer_field(L, "total", (lua_Integer)core_total);
-        integer_field(L, "user", processors[index].cpu_ticks[CPU_STATE_USER]);
-        integer_field(L, "nice", processors[index].cpu_ticks[CPU_STATE_NICE]);
-        integer_field(L, "system", processors[index].cpu_ticks[CPU_STATE_SYSTEM]);
-        lua_setfield(L, -2, "raw");
-        lua_rawseti(L, -2, (lua_Integer)index + 1);
-    }
-    lua_setfield(L, -2, "cores");
-    {
-        double loads[3];
-        if (getloadavg(loads, 3) == 3) {
-            lua_createtable(L, 0, 3);
-            number_field(L, "one", loads[0]);
-            number_field(L, "five", loads[1]);
-            number_field(L, "fifteen", loads[2]);
-            lua_setfield(L, -2, "load");
-        }
-    }
-    if (processor_info != NULL)
-        (void)vm_deallocate(mach_task_self(), (vm_address_t)processor_info,
-            (vm_size_t)processor_info_count * sizeof(integer_t));
-    return 1;
-}
-
-static int sysctl_text(const char *name, char *output, size_t size) {
-    size_t length = size - 1;
-    memset(output, 0, size);
-    if (sysctlbyname(name, output, &length, NULL, 0) != 0 || length == 0) return 0;
-    output[size - 1] = 0;
-    return output[0] != 0;
-}
-
-static int sysctl_integer(const char *name, int64_t *value) {
-    unsigned char buffer[8] = {0};
-    size_t length = sizeof(buffer);
-    *value = 0;
-    if (sysctlbyname(name, buffer, &length, NULL, 0) != 0) return 0;
-    if (length == sizeof(int32_t)) {
-        int32_t narrow;
-        memcpy(&narrow, buffer, sizeof(narrow));
-        *value = narrow;
-    } else if (length == sizeof(int64_t)) {
-        memcpy(value, buffer, sizeof(*value));
-    } else {
-        return 0;
-    }
-    return 1;
-}
-
-typedef struct {
-    int level;
-    const char *type;
-    int64_t instances;
-    int64_t total;
-} cache_total;
-
-static void add_cache(cache_total *caches, int *count, int level, const char *type,
-    int64_t size, int64_t instances) {
-    if (size <= 0 || instances <= 0) return;
-    for (int index = 0; index < *count; ++index) {
-        if (caches[index].level == level && strcmp(caches[index].type, type) == 0) {
-            caches[index].instances += instances;
-            caches[index].total += size * instances;
-            return;
-        }
-    }
-    if (*count >= 8) return;
-    caches[*count].level = level;
-    caches[*count].type = type;
-    caches[*count].instances = instances;
-    caches[*count].total = size * instances;
-    ++*count;
-}
-
-static int l_collect_cpu_info(lua_State *L) {
-    int64_t logical = 0, physical = 0, packages = 0, levels = 0, value = 0;
-    char text[256];
-    cache_total caches[8];
-    int cache_count = 0;
-    if (!sysctl_integer("hw.logicalcpu", &logical))
-        return push_errno(L, "sysctlbyname(hw.logicalcpu)");
-    (void)sysctl_integer("hw.physicalcpu", &physical);
-    (void)sysctl_integer("hw.packages", &packages);
-    (void)sysctl_integer("hw.nperflevels", &levels);
-    lua_createtable(L, 0, 4);
-    lua_createtable(L, 0, 6);
-    if (sysctl_text("machdep.cpu.brand_string", text, sizeof(text)))
-        string_field(L, "model_name", text);
-    if (sysctl_text("machdep.cpu.vendor", text, sizeof(text)))
-        string_field(L, "vendor", text);
-#if defined(__arm64__)
-    else
-        string_field(L, "vendor", "Apple");
-#endif
-    if (sysctl_integer("machdep.cpu.family", &value)) integer_field(L, "family", value);
-    if (sysctl_integer("machdep.cpu.model", &value)) integer_field(L, "model", value);
-    if (sysctl_integer("machdep.cpu.stepping", &value)) integer_field(L, "stepping", value);
-    lua_pushboolean(L, levels > 1);
-    lua_setfield(L, -2, "heterogeneous");
-    lua_setfield(L, -2, "identity");
-    lua_createtable(L, 0, 3);
-    integer_field(L, "threads", logical);
-    if (physical > 0) integer_field(L, "physical_cores", physical);
-    if (packages > 0) integer_field(L, "sockets", packages);
-    lua_setfield(L, -2, "topology");
-    lua_createtable(L, (int)(levels > 0 ? levels : 0), 0);
-    if (levels > 0) {
-        /* Apple silicon groups cores into performance levels, each with its
-         * own core count and cache sizes. */
-        for (int64_t level = 0; level < levels && level < 8; ++level) {
-            char name[64];
-            int64_t level_logical = 0, level_physical = 0, size = 0, sharing = 0;
-            snprintf(name, sizeof(name), "hw.perflevel%lld.logicalcpu", (long long)level);
-            (void)sysctl_integer(name, &level_logical);
-            snprintf(name, sizeof(name), "hw.perflevel%lld.physicalcpu", (long long)level);
-            (void)sysctl_integer(name, &level_physical);
-            lua_createtable(L, 0, 4);
-            lua_pushfstring(L, "type-%d", (int)level + 1);
-            lua_setfield(L, -2, "id");
-            snprintf(name, sizeof(name), "hw.perflevel%lld.name", (long long)level);
-            if (sysctl_text(name, text, sizeof(text))) string_field(L, "model_name", text);
-            integer_field(L, "logical_cpu_count", level_logical);
-            integer_field(L, "physical_core_count", level_physical);
-            lua_rawseti(L, -2, (lua_Integer)level + 1);
-            snprintf(name, sizeof(name), "hw.perflevel%lld.l1dcachesize", (long long)level);
-            if (sysctl_integer(name, &size)) add_cache(caches, &cache_count, 1, "Data", size, level_physical);
-            snprintf(name, sizeof(name), "hw.perflevel%lld.l1icachesize", (long long)level);
-            if (sysctl_integer(name, &size)) add_cache(caches, &cache_count, 1, "Instruction", size, level_physical);
-            snprintf(name, sizeof(name), "hw.perflevel%lld.cpusperl2", (long long)level);
-            (void)sysctl_integer(name, &sharing);
-            snprintf(name, sizeof(name), "hw.perflevel%lld.l2cachesize", (long long)level);
-            if (sysctl_integer(name, &size) && sharing > 0)
-                add_cache(caches, &cache_count, 2, "Unified", size, level_logical / sharing);
-            snprintf(name, sizeof(name), "hw.perflevel%lld.cpusperl3", (long long)level);
-            sharing = 0;
-            (void)sysctl_integer(name, &sharing);
-            snprintf(name, sizeof(name), "hw.perflevel%lld.l3cachesize", (long long)level);
-            if (sysctl_integer(name, &size) && sharing > 0)
-                add_cache(caches, &cache_count, 3, "Unified", size, level_logical / sharing);
-        }
-    } else {
-        /* hw.cacheconfig lists how many logical CPUs share each cache level. */
-        uint64_t sharing[8] = {0};
-        size_t length = sizeof(sharing);
-        int64_t size = 0;
-        if (sysctlbyname("hw.cacheconfig", sharing, &length, NULL, 0) != 0) length = 0;
-        if (length >= 2 * sizeof(uint64_t) && sharing[1] > 0) {
-            if (sysctl_integer("hw.l1dcachesize", &size))
-                add_cache(caches, &cache_count, 1, "Data", size, logical / (int64_t)sharing[1]);
-            if (sysctl_integer("hw.l1icachesize", &size))
-                add_cache(caches, &cache_count, 1, "Instruction", size, logical / (int64_t)sharing[1]);
-        }
-        if (length >= 3 * sizeof(uint64_t) && sharing[2] > 0
-            && sysctl_integer("hw.l2cachesize", &size))
-            add_cache(caches, &cache_count, 2, "Unified", size, logical / (int64_t)sharing[2]);
-        if (length >= 4 * sizeof(uint64_t) && sharing[3] > 0
-            && sysctl_integer("hw.l3cachesize", &size))
-            add_cache(caches, &cache_count, 3, "Unified", size, logical / (int64_t)sharing[3]);
-    }
-    lua_setfield(L, -2, "core_types");
-    lua_createtable(L, cache_count, 0);
-    for (int index = 0; index < cache_count; ++index) {
-        lua_createtable(L, 0, 5);
-        lua_pushfstring(L, "L%d:%s", caches[index].level, caches[index].type);
-        lua_setfield(L, -2, "id");
-        integer_field(L, "level", caches[index].level);
-        string_field(L, "type", caches[index].type);
-        integer_field(L, "instances", caches[index].instances);
-        integer_field(L, "total_size_bytes", caches[index].total);
-        lua_rawseti(L, -2, index + 1);
-    }
-    lua_setfield(L, -2, "cache_summary");
-    return 1;
-}
-
 static int l_collect_memory(lua_State *L) {
     uint64_t total, used, cache, free_bytes, app, wired, compressed;
     uint64_t swap_total = 0, swap_used = 0;
@@ -712,7 +500,7 @@ static int l_collect_memory(lua_State *L) {
     uint64_t page_size = (uint64_t)sysconf(_SC_PAGESIZE);
     if (sysctlbyname("hw.memsize", &total, &length, NULL, 0) != 0)
         return push_errno(L, "sysctlbyname(hw.memsize)");
-    if (host_statistics64(mach_host_self(), HOST_VM_INFO64,
+    if (host_statistics64(wtop_macos_host_port(), HOST_VM_INFO64,
         (host_info64_t)&vm, &count) != KERN_SUCCESS) {
         lua_pushnil(L);
         lua_pushliteral(L, "host_statistics64(HOST_VM_INFO64) failed");
@@ -1035,8 +823,8 @@ static const luaL_Reg functions[] = {
     {"mkdir", l_mkdir},
     {"atomic_write", l_atomic_write},
     {"wcwidth", l_wcwidth},
-    {"collect_cpu", l_collect_cpu},
-    {"collect_cpu_info", l_collect_cpu_info},
+    {"collect_cpu", wtop_collect_cpu},
+    {"collect_cpu_info", wtop_collect_cpu_info},
     {"collect_memory", l_collect_memory},
     {"collect_process", l_collect_process},
     {"collect_disk", wtop_collect_disk},

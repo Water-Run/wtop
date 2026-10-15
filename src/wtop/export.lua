@@ -40,13 +40,15 @@ local function copy_object(source)
 end
 
 local CPU_FIELDS = {
-    "name", "utilization", "user", "nice", "system", "iowait", "irq", "steal", "quality",
+    "id", "name", "online", "identity_quality", "source",
+    "utilization", "user", "nice", "system", "iowait", "irq", "steal", "quality",
 }
 
 local function export_cpu(cpu)
     local result = copy_fields(cpu, {
         "context_switches", "interrupts", "processes_created",
         "processes_running", "processes_blocked", "boot_time_seconds",
+        "counter_bits", "counter_source", "truncated",
     })
     if cpu and cpu.load then
         result.load = copy_fields(cpu.load, { "one", "five", "fifteen", "running", "total", "last_pid" })
@@ -90,6 +92,7 @@ local function export_cpu_info(cpu_info)
     result.topology = copy_fields(topology, {
         "sockets", "physical_cores", "threads", "online_threads",
         "threads_per_core_minimum", "threads_per_core_maximum", "quality", "truncated",
+        "source", "identity_quality",
     })
     for _, key in ipairs({
         "online_cpu_list", "present_cpu_list", "possible_cpu_list", "isolated_cpu_list",
@@ -103,6 +106,7 @@ local function export_cpu_info(cpu_info)
             "package_id_known", "core_id_known", "online_known",
             "cpu_capacity", "kernel_core_type", "maximum_frequency_hz", "threads_in_core",
             "core_type_id", "source",
+            "mach_cpu_type", "mach_cpu_subtype", "is_main", "identity_quality",
         })
         output.thread_siblings = copy_array(cpu.thread_siblings)
         result.topology.logical_cpus[index] = output

@@ -41,6 +41,19 @@ local function elapsed_since(previous, timestamp_ns)
       and timestamp_ns - previous.timestamp_ns or nil
 end
 
+local function counter_delta(current, previous, bits)
+  local delta = Common.delta(current, previous)
+  if delta or not bits or type(current) ~= "number" or type(previous) ~= "number" then
+    return delta
+  end
+  -- Mach CPU ticks and 32-bit network counters wrap within a long-running session.
+  local modulus = 1 << bits
+  if previous < modulus and current < previous then
+    return current + modulus - previous
+  end
+  return nil
+end
+
 local function cpu_data(data, previous)
   local current = data.raw
   -- No `raw` table means the native payload is not the shape this derivation
@@ -52,9 +65,34 @@ local function cpu_data(data, previous)
   -- a result and therefore the side that owns the reason vocabulary.
   if type(current) ~= "table" then return nil, nil end
   local old_data = previous_ok(previous)
+  local bits = data.counter_bits
+  local function deltas(raw, old_raw, width)
+    if not raw or not old_raw then return nil, nil, {} end
+    if width == 32 then
+      local parts = {}
+      for _, key in ipairs({ "user", "system", "nice", "idle" }) do
+        local value, before = raw[key], old_raw[key]
+        if type(value) ~= "number" or type(before) ~= "number"
+            or value % 1 ~= 0 or before % 1 ~= 0
+            or value < 0 or value >= 4294967296 or before < 0 or before >= 4294967296 then
+          return nil, nil, {}
+        end
+        parts[key] = counter_delta(value, before, 32)
+        if parts[key] == nil then return nil, nil, {} end
+      end
+      local busy = parts.user + parts.system + parts.nice
+      return busy, busy + parts.idle, parts
+    end
+    local parts = {}
+    for _, key in ipairs({ "user", "system", "nice", "irq" }) do
+      parts[key] = Common.delta(raw[key], old_raw[key])
+    end
+    return Common.delta(raw.busy, old_raw.busy), Common.delta(raw.total, old_raw.total), parts
+  end
   local old = old_data and old_data.raw or nil
-  local used = old and Common.delta(current.busy, old.busy)
-  local total = old and Common.delta(current.total, old.total)
+  if old_data and (data._source_epoch ~= old_data._source_epoch
+      or bits ~= old_data.counter_bits) then old = nil end
+  local used, total = deltas(current, old, bits)
   data.total = {
     utilization = used and total and total > 0
         and math.max(0, math.min(100, used * 100 / total)) or nil,
@@ -69,15 +107,19 @@ local function cpu_data(data, previous)
     local raw = core.raw
     local old_core = old_cores[core.name]
     local old_raw = old_core and old_core.raw
-    local core_used = raw and old_raw and Common.delta(raw.busy, old_raw.busy)
-    local core_total = raw and old_raw and Common.delta(raw.total, old_raw.total)
-    if core_used and core_total and core_total > 0 then
+    if old_core and (core._source_instance ~= old_core._source_instance
+        or core.online ~= old_core.online
+        or (core.counter_bits or bits) ~= (old_core.counter_bits or (old_data and old_data.counter_bits))) then old_raw = nil end
+    local core_used, core_total, parts = deltas(raw, old_raw, core.counter_bits or bits)
+    if core.online == false then
+      core.quality = "unavailable"
+    elseif core_used and core_total and core_total > 0 then
       core.utilization = math.max(0, math.min(100,
         core_used * 100 / core_total))
       -- Optional time classes; a platform that does not split them leaves
       -- the columns unavailable rather than zero.
       for _, key in ipairs({"user", "nice", "system", "irq"}) do
-        local part = Common.delta(raw[key], old_raw[key])
+        local part = parts[key]
         if part then core[key] = math.max(0, math.min(100, part * 100 / core_total)) end
       end
       core.quality = "fresh"
@@ -87,7 +129,8 @@ local function cpu_data(data, previous)
     end
   end
   data.cores = data.cores or {}
-  return data, any_gap and "gap" or "fresh"
+  return data, (data.partial == true or data.quality == "partial") and "partial"
+    or any_gap and "gap" or "fresh"
 end
 
 -- Process creation timestamps use different epochs and tick sizes. Convert to
@@ -160,19 +203,6 @@ local function process_data(data, previous, timestamp_ns, realtime_ns)
     or (data.parse_errors or 0) > 0 or any_partial
   local quality = data.partial and "partial" or (any_fresh and "fresh" or "gap")
   return data, quality
-end
-
-local function counter_delta(current, previous, bits)
-  local delta = Common.delta(current, previous)
-  if delta or not bits or type(current) ~= "number" or type(previous) ~= "number" then
-    return delta
-  end
-  -- A 32-bit interface counter wraps every few seconds at gigabit speed.
-  local modulus = 1 << bits
-  if previous < modulus and current < previous then
-    return current + modulus - previous
-  end
-  return nil
 end
 
 local function network_data(data, previous, timestamp_ns)

@@ -137,6 +137,65 @@ close(cpu_second.data.total.utilization, 30, 1e-9, "300 of 1000 ticks busy")
 close(cpu_second.data.cores[1].utilization, 50, 1e-9, "cpu0 utilization")
 close(cpu_second.data.cores[2].utilization, 10, 1e-9, "cpu1 utilization")
 
+-- Mach exposes one unsigned 32-bit counter for each time class. A wrap in
+-- user/idle must be resolved before summing, against the same CPU identity.
+local function mach_cpu(user, system, nice, idle, epoch, instance, online)
+    local raw = { user = user, system = system, nice = nice, idle = idle,
+        busy = user + system + nice, total = user + system + nice + idle }
+    return { raw = raw, counter_bits = 32, _source_epoch = epoch or "mach:1",
+        cores = { { id = 7, name = "cpu7", online = online ~= false,
+            _source_instance = instance or "mach:7:7:3", raw = raw } } }
+end
+local mach_before = mach_cpu(4294967285, 100, 6, 4294967275)
+local mach_after = mach_cpu(9, 110, 11, 44)
+local mach = collectors(fake_native({ collect_cpu = { mach_before, mach_after } })).cpu
+local mach_first = mach:sample(at(0))
+local mach_second = mach:sample(at(1000000000), mach_first)
+equal(mach_second.quality, "fresh", "wrapped Mach time classes stay fresh")
+close(mach_second.data.total.utilization, 35, 1e-9, "independently wrapped aggregate ticks")
+close(mach_second.data.cores[1].user, 20, 1e-9, "wrapped per-core user ticks")
+close(mach_second.data.cores[1].system, 10, 1e-9, "unwrapped per-core system ticks")
+close(mach_second.data.cores[1].nice, 5, 1e-9, "unwrapped per-core nice ticks")
+
+local function mach_pair(first, second)
+    local source = collectors(fake_native({ collect_cpu = { first, second } })).cpu
+    return source:sample(at(1000000000), source:sample(at(0)))
+end
+local changed_roster = mach_pair(mach_cpu(100, 10, 0, 100),
+    mach_cpu(120, 20, 0, 170, "mach:2"))
+equal(changed_roster.data.total.utilization, nil, "a changed roster resets aggregate ticks")
+equal(changed_roster.data.cores[1].utilization, 30, "an unchanged logical CPU retains its baseline")
+local changed_type = mach_pair(mach_cpu(100, 10, 0, 100),
+    mach_cpu(120, 20, 0, 170, "mach:2", "mach:7:7:4"))
+equal(changed_type.data.cores[1].quality, "gap", "a changed Mach subtype resets the slot baseline")
+equal(changed_type.data.cores[1].utilization, nil, "replacement identity has no inherited utilization")
+local offline = mach_pair(mach_cpu(100, 10, 0, 100),
+    mach_cpu(120, 20, 0, 170, "mach:2", nil, false))
+equal(offline.data.cores[1].quality, "unavailable", "an offline logical CPU has no current reading")
+equal(offline.data.cores[1].utilization, nil, "offline counters do not become current utilization")
+local online = mach_pair(mach_cpu(100, 10, 0, 100, "mach:1", nil, false),
+    mach_cpu(120, 20, 0, 170, "mach:2"))
+equal(online.data.cores[1].quality, "gap", "returning online requires a new interval")
+for _, invalid in ipairs({ -1, 4294967296, 0.5, math.huge, 0/0, "100" }) do
+    local bad = mach_cpu(120, 20, 0, 170)
+    bad.raw.user = invalid
+    local result = mach_pair(mach_cpu(100, 10, 0, 100), bad)
+    equal(result.data.total.utilization, nil, "invalid Mach ticks cannot produce utilization")
+    equal(result.data.cores[1].quality, "gap", "invalid Mach time class is a gap")
+end
+local missing_class = mach_cpu(120, 20, 0, 170)
+missing_class.raw.idle = nil
+equal(mach_pair(mach_cpu(100, 10, 0, 100), missing_class).quality, "gap",
+    "32-bit counters without every time class cannot infer a wrapped sum")
+local partial_cpu = mach_cpu(120, 20, 0, 170)
+partial_cpu.partial = true
+equal(mach_pair(mach_cpu(100, 10, 0, 100), partial_cpu).quality, "partial",
+    "a native partial roster remains visible to the scheduler")
+local narrower = mach_cpu(120, 20, 0, 170)
+narrower.counter_bits = nil
+equal(mach_pair(mach_cpu(100, 10, 0, 100), narrower).data.total.utilization, nil,
+    "changing the counter representation starts a new baseline")
+
 -- ---------------------------------------------------------------------------
 -- Processes: identity, PID maps, CPU share, first-frame estimate, denial.
 -- ---------------------------------------------------------------------------

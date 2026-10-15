@@ -108,6 +108,39 @@ macOS、Windows 的运行验证来自下表列出的主机记录。
 
 ## 开发验证记录
 
+### 2026-10-15：Mach 逻辑 CPU 身份、计数回绕与主机端口
+
+macOS CPU 计数按 Mach 返回的真实 `slot_num` 命名，不再把数组位置当作
+逻辑编号。采样前后读取 `PROCESSOR_BASIC_INFO`，核对数量、顺序、槽号、
+CPU 类型、在线状态和主 CPU 标记，再关联同一轮的负载数组。短回复、
+异常长度、重复编号、中途变更和超过 512 个 CPU 的结果不建立逐核读数，
+并报告部分数据或截断。Mach 数组在创建 Lua 结果前释放，内存不足不会
+跳过清理。实现依据 Apple 的 [host_processor_info 源码](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/host.c)
+和 [processor_info 源码](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/processor.c)。
+
+CPU 信息增加真实逻辑 CPU、在线/主 CPU 状态、Mach 类型与来源，接入共享
+硬件树和 JSON。物理核心、插槽和 P/E 逐核归属没有公开依据时不建立关系；
+性能级别与缓存仍是 sysctl 汇总。两次身份读取不一致时只保留可用汇总，
+缺少 sysctl 逻辑数量时仍可使用已核对的 Mach 槽号。缓存求和和乘法检查
+溢出，共享数量不整除时不推算实例数，异常字符串和整数长度不进入结果。
+
+Mach 的 user/system/nice/idle 分别是 32 位计数，先逐类处理回绕，再派生
+总利用率；身份、计数宽度、在线状态或总 CPU 名册改变后重建相应基线。
+离线 CPU 不显示当前利用率。CPU、CPU 信息和内存采集共享一个有所有权的
+主机发送权，退出时释放，避免每次 `mach_host_self()` 都增加未释放引用。
+内部采样纪元和身份匹配键不进入 JSON。
+
+提供的 M4 独立 Mach 探针返回 10 个槽号 0–9，CPU 类型/子类型均相同，
+主 CPU 为槽 6，不能以此识别 P/E。实际程序连续采集 2,000 轮 CPU＋内存、
+20 次 CPU 信息，主机发送权引用在模块加载后为 2，首次 CPU 信息后为 3，
+循环结束仍为 3，平均每轮约 0.039 ms。原生故障夹具与 ASan/UBSan 通过，
+覆盖长度/数量、稀疏和重排编号、身份变更、512 个 CPU、异常 sysctl、缓存
+溢出、重复清理及 Lua OOM。Lua 回归覆盖逐类回绕、上下线、身份/宽度变化、
+真实逻辑树和私有字段排除。本地 `make check test-55` 全部 133 个 Lua 文件、
+工作流 actionlint 与差异检查通过。M4 的八组原生硬件回归、五种 CLI 和真实
+CPU 详情/来源/在线状态的 PTY 导航、刷新与正常退出均通过。证据在
+`build/hardware-cpu-20261015/`。
+
 ### 2026-10-15：IOReport 恢复、采样纪元与功率真实性
 
 GPU、CPU 和能耗分别维护只读订阅、当前身份元数据与上一帧。库加载、分组、
@@ -145,7 +178,13 @@ ASan/UBSan。20 轮联合采集验证 2 个 CPU 频率策略、6 个能耗区域
 ASan/UBSan 均通过。本地完整 133 个 Lua 文件和最新功率/导出目标检查通过。
 Compute 页的 IOReport 估算频率和当前 CPU/系统功率、GPU 频率详情、43 通道
 传感器详情及干净退出也通过 PTY；五种 CLI 和七组原生硬件回归通过。
-其他 Mac 机型仍缺本轮恢复证据。记录在 `build/hardware-ioreport-20261015/`。
+`ff3608f` 的 [主 CI 38676059533](https://github.com/Water-Run/wtop/actions/runs/38676059533)
+全部 16 个作业及 [Windows CI 38676059562](https://github.com/Water-Run/wtop/actions/runs/38676059562)
+均已成功结束。精确下载归档中的目录包和单文件在提供的 M4、现代 Windows
+和 Server 2008 再次通过五种 CLI、JSON 与平台交互验收。Mac 另通过三条
+网卡父设备导航、Compute 频率/功率、GPU 与传感器详情；Windows 通过经典
+控制台和 PCI/USB 导航。其他 Mac 机型仍缺本轮恢复证据。记录在
+`build/hardware-ioreport-20261015/`。
 
 ### 2026-10-15：GPU 实例身份、数值校验与驻留频率
 

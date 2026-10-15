@@ -4,6 +4,39 @@ local JSON = require("wtop.format.json")
 local TUI = require("wtop.tui")
 local i18n = assert(require("wtop.i18n").new({ locale = "en-US" }))
 
+-- Mach logical slots are exact identities, even when physical containment and
+-- Apple performance-level membership are not exposed by the OS.
+local mach_state = {
+    cpu = { counter_bits = 32, counter_source = "mach:HOST_CPU_LOAD_INFO",
+        _source_epoch = "private-epoch", cores = {
+            { id = 8, name = "cpu8", online = true, identity_quality = "fresh",
+                source = "mach:PROCESSOR_CPU_LOAD_INFO", _source_instance = "private-instance",
+                raw = { user = 1 }, utilization = 25, quality = "fresh" },
+        } },
+    cpu_info = { topology = { threads = 2, online_threads = 1, quality = "partial",
+        identity_quality = "fresh", source = "mach:PROCESSOR_BASIC_INFO",
+        present_cpu_list = { 2, 8 }, online_cpu_list = { 8 }, logical_cpus = {
+            { id = 2, online = false, online_known = true, package_id_known = false,
+                core_id_known = false, identity_quality = "fresh", source = "mach:PROCESSOR_BASIC_INFO" },
+            { id = 8, online = true, online_known = true, package_id_known = false,
+                core_id_known = false, identity_quality = "fresh", is_main = true,
+                mach_cpu_type = 16777228, mach_cpu_subtype = 2, source = "mach:PROCESSOR_BASIC_INFO" },
+        } } },
+}
+local mach_graph = Hardware.build(mach_state)
+assert(mach_graph.by_id["cpu:2"] and mach_graph.by_id["cpu:8"])
+assert(mach_graph.by_id["cpu:8"].parent_id == nil and not mach_graph.by_id["package:0"])
+local mach_detail = table.concat(TUI.hardware_detail_lines(mach_state, "cpu:8", i18n), "\n")
+assert(mach_detail:find("mach:PROCESSOR_BASIC_INFO", 1, true))
+local mach_export = Export.snapshot(mach_state)
+assert(mach_export.cpu.counter_bits == 32 and mach_export.cpu.counter_source == "mach:HOST_CPU_LOAD_INFO")
+assert(mach_export.cpu.cores[1].id == 8 and mach_export.cpu.cores[1].online)
+assert(mach_export.cpu_info.topology.identity_quality == "fresh")
+assert(mach_export.cpu_info.topology.logical_cpus[2].is_main
+    and mach_export.cpu_info.topology.logical_cpus[2].mach_cpu_type == 16777228)
+local mach_json = JSON.encode(mach_export)
+assert(not mach_json:find("private-", 1, true) and not mach_json:find('"raw"', 1, true))
+
 local controller = { address = "ioreg:1001", device_name = "Controller",
     device_id = 0, revision = 0, _registry_entry_id = "ioreg:9001" }
 local hub = { id = "00000000", product = "Hub", _registry_entry_id = "ioreg:9002",
