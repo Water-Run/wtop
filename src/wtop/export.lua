@@ -4,6 +4,7 @@ local json = require("wtop.format.json")
 local Privacy = require("wtop.privacy")
 local Hardware = require("wtop.model.hardware")
 local Quality = require("wtop.model.quality")
+local Power = require("wtop.model.power")
 local NVMe = require("wtop.linux.nvme_diagnostics")
 
 local M = {}
@@ -147,7 +148,7 @@ local function export_cpu_info(cpu_info)
     return result
 end
 
-local function export_power(power)
+local function export_power(power, quality)
     local result = json.object({
         schema = power and power.schema,
         total_power_watts = power and power.total_power_watts,
@@ -169,7 +170,7 @@ local function export_power(power)
             "id", "name", "source_kind", "parent_id", "enabled", "energy_joules",
             "maximum_energy_range_joules", "observed_at_ns", "power_watts",
             "power_source", "power_quality", "power_interval_ns", "quality", "truncated", "aggregate", "source",
-            "platform_aggregate", "aggregate_domain",
+            "platform_aggregate", "aggregate_domain", "control_enabled", "controls_enabled", "control_source",
         })
         output.constraints = json.array({})
         for constraint_index, constraint in ipairs(zone.constraints or {}) do
@@ -178,6 +179,11 @@ local function export_power(power)
                 "minimum_power_watts", "time_window_seconds", "maximum_time_window_seconds",
                 "minimum_time_window_seconds", "source",
             })
+            local comparison = Power.zone(zone, constraint, quality)
+            if comparison then
+                output.constraints[constraint_index].usage_percent = comparison.percent
+                output.constraints[constraint_index].headroom_watts = comparison.headroom_watts
+            end
         end
         output.issues = export_issues(zone.issues)
         result.zones[index] = output
@@ -706,7 +712,7 @@ local function export_gpu_processes(processes)
     return result
 end
 
-local function export_gpus(gpus)
+local function export_gpus(gpus, quality)
     local result = json.object({
         schema = gpus and gpus.schema,
         truncated = gpus and gpus.truncated == true or false,
@@ -732,6 +738,12 @@ local function export_gpus(gpus)
         exported.pci = copy_object(device.pci)
         exported.capabilities = copy_object(device.capabilities)
         exported.metrics = copy_object(device.metrics)
+        local power_budget = Power.gpu(device.metrics, nil,
+            Power.unusable(device.quality) and device.quality or quality)
+        if power_budget.comparison then
+            exported.metrics.power_limit_percent = power_budget.comparison.percent
+            exported.metrics.power_headroom_watts = power_budget.comparison.headroom_watts
+        end
         exported.quality = copy_object(device.quality)
         exported.drm_nodes = json.array({})
         for node_index, node in ipairs(device.drm_nodes or {}) do
@@ -1732,7 +1744,7 @@ function M.snapshot(snapshot, options)
         connections = export_connections(snapshot.connections, options.connection_limit,
             options.include_remote_addresses == true),
         processes = export_processes(snapshot.processes, options.process_limit),
-        gpus = export_gpus(snapshot.gpus),
+        gpus = export_gpus(snapshot.gpus, snapshot.quality and snapshot.quality.gpus),
         cpu_frequency = export_cpu_frequency(snapshot.cpu_frequency),
         thermal_throttle = export_thermal_throttle(snapshot.thermal_throttle),
         cpuidle = export_cpuidle(snapshot.cpuidle),
@@ -1756,7 +1768,7 @@ function M.snapshot(snapshot, options)
         edac = export_edac(snapshot.edac),
         spd = export_spd(snapshot.spd),
         sensors = export_sensors(snapshot.sensors),
-        power = export_power(snapshot.power),
+        power = export_power(snapshot.power, snapshot.quality and snapshot.quality.power),
         mounts = export_mounts(snapshot.mounts),
         workloads = export_workloads(snapshot.workloads, options.workload_limit),
         system = export_system(snapshot.system),
@@ -2045,6 +2057,25 @@ function M.agent(snapshot, options)
         })
     end
 
+    local power_zones = full.power and full.power.zones or {}
+    local power_zone_summaries = json.array({})
+    for index = 1, math.min(#power_zones, device_limit) do
+        local zone = power_zones[index]
+        local summary = copy_fields(zone, { "id", "name", "source_kind", "parent_id",
+            "enabled", "control_enabled", "controls_enabled", "power_watts", "power_quality",
+            "power_interval_ns", "aggregate", "aggregate_domain" })
+        summary.constraints = json.array({})
+        local constraints = zone.constraints or {}
+        for constraint_index = 1, math.min(#constraints, 8) do
+            summary.constraints[constraint_index] = copy_fields(constraints[constraint_index], {
+                "id", "name", "power_limit_watts", "time_window_seconds", "usage_percent", "headroom_watts",
+            })
+        end
+        summary.constraints_total = #constraints
+        summary.constraints_truncated = #constraints > 8
+        power_zone_summaries[index] = summary
+    end
+
     local gpu_devices = full.gpus and full.gpus.devices or {}
     local gpu_summaries = json.array({})
     local maximum_gpu_utilization
@@ -2082,7 +2113,8 @@ function M.agent(snapshot, options)
             -- different quantities, and a summary carrying one of them
             -- unnamed reads as "the" frequency of the device.
             "frequency_current_hz", "frequency_domain", "frequency_source_kind",
-            "temperature_celsius", "power_watts",
+            "temperature_celsius", "power_watts", "power_source", "power_limit_watts", "power_limit_source",
+            "power_limit_percent", "power_headroom_watts",
         })
         -- The full clock set, in the same shape the snapshot uses.  This
         -- summary is what an agent or an insight reads, and it is also the
@@ -2351,6 +2383,9 @@ function M.agent(snapshot, options)
                 platform_aggregate_strategy = full.power and full.power.platform_aggregate_strategy,
                 platform_aggregate_source_kind = full.power and full.power.platform_aggregate_source_kind,
                 denied_zones = full.power and full.power.denied_zones,
+                zones = power_zone_summaries,
+                zones_total = #power_zones,
+                zones_truncated = #power_zones > #power_zone_summaries,
             }),
             sensors = json.object({
                 temperature_count = temperature_count,

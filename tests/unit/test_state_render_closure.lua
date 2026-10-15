@@ -427,13 +427,9 @@ end
 -- German, Spanish and French words instead of being shortened to fit, which was
 -- the alternative the open item weighed.
 --
--- `unknown` is deliberately absent from the value list below.  It is the
--- renderer's fallback for a record that carries *no* state, and it is shown on
--- the inspector's status and field lines, which have no column width to
--- exceed; asserting a width on it would be testing a constraint the renderer
--- does not have, which is the stricter-than-the-code mistake this file's first
--- clause warns about.  What matters for it is only that it is translated, and
--- clause 3 says so.
+-- Power controls can be enabled, disabled or unknown. A wrapped energy
+-- counter is also displayed in the power table; these labels need the same
+-- width guarantee as the collector vocabulary.
 -- ---------------------------------------------------------------------------
 local Table = require("wtop.ui.widgets.table")
 local Width = require("wtop.ui.renderer.width")
@@ -445,6 +441,9 @@ local function state_values()
   for status in pairs(Quality.VALID_STATUS) do values[#values + 1] = status end
   values[#values + 1] = "ready"
   values[#values + 1] = "partial"
+  for _, value in ipairs({ "enabled", "disabled", "unknown", "wrapped" }) do
+    values[#values + 1] = value
+  end
   table.sort(values)
   return values
 end
@@ -504,8 +503,8 @@ end
 local names = {}
 for name in pairs(widest_by_model) do names[#names + 1] = name end
 table.sort(names)
-assert(#names == 12,
-  "the state columns found are " .. #names .. ", not the 12 this file was "
+assert(#names == 13,
+  "the state columns found are " .. #names .. ", not the 13 this file was "
   .. "measured against: " .. table.concat(names, ", "))
 
 for _, name in ipairs(names) do

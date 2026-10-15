@@ -8,6 +8,23 @@ _meta:
   catalog_version: 1
 
 messages:
+  power.title: "功耗与上限"
+  power.help: "在概览、计算和 GPU 页查看功耗与上限"
+  power.long_term: "持续"
+  power.short_term: "短时"
+  power.peak_power: "峰值"
+  power.constraint: "限制类型"
+  power.limit: "功耗上限"
+  power.of_limit: "上限占比"
+  power.window: "限制窗口"
+  power.interval: "采样窗口"
+  power.controls: "功耗控制"
+  power.headroom: "距上限"
+  power.comparison_note: "采样功耗 / 配置上限；此比例不代表已发生节流。"
+  power.denied_note: "功耗读数需要 root 权限（--sudo）。"
+  status.enabled: "已启用"
+  status.disabled: "已禁用"
+  status.wrapped: "计数回绕"
   sshd_config.current_files: "读取当前文件；守护进程可能采用启动覆盖项或较早的内容。"
   sshd_config.file: "配置文件"
   sshd_config.connection: "指定连接（已应用 Match 规则）"

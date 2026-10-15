@@ -8,6 +8,23 @@ _meta:
   catalog_version: 1
 
 messages:
+  power.title: "Potencia y límites"
+  power.help: "potencia y límites en Resumen, Cómputo y GPU"
+  power.long_term: "Sostenida"
+  power.short_term: "Breve"
+  power.peak_power: "Pico"
+  power.constraint: "Restricción"
+  power.limit: "Límite W"
+  power.of_limit: "% del límite"
+  power.window: "Ventana límite"
+  power.interval: "Ventana medida"
+  power.controls: "Controles"
+  power.headroom: "Margen W"
+  power.comparison_note: "Medición / límite configurado; esta proporción no indica limitación de rendimiento."
+  power.denied_note: "La lectura de potencia requiere root (--sudo)."
+  status.enabled: "Activado"
+  status.disabled: "Desactivado"
+  status.wrapped: "Vuelta del contador"
   sshd_config.current_files: "Evalúa los archivos actuales. El demonio puede usar opciones de inicio o contenido anterior."
   sshd_config.file: "Archivo de configuración"
   sshd_config.connection: "Conexión indicada (reglas Match aplicadas)"

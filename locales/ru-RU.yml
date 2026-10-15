@@ -8,6 +8,23 @@ _meta:
   catalog_version: 1
 
 messages:
+  power.title: "Мощность и лимиты"
+  power.help: "мощность и лимиты на страницах Обзор, Вычисления и GPU"
+  power.long_term: "Длительный"
+  power.short_term: "Краткий"
+  power.peak_power: "Пиковый"
+  power.constraint: "Ограничение"
+  power.limit: "Лимит, Вт"
+  power.of_limit: "% лимита"
+  power.window: "Окно лимита"
+  power.interval: "Окно замера"
+  power.controls: "Управление"
+  power.headroom: "Запас, Вт"
+  power.comparison_note: "Замер / заданный лимит; это отношение не означает троттлинг."
+  power.denied_note: "Для чтения мощности нужны права root (--sudo)."
+  status.enabled: "Включено"
+  status.disabled: "Отключено"
+  status.wrapped: "Оборот счётчика"
   sshd_config.current_files: "Проверяются текущие файлы. Демон может использовать параметры запуска или прежнее содержимое."
   sshd_config.file: "Файл конфигурации"
   sshd_config.connection: "Заданное соединение (правила Match применены)"

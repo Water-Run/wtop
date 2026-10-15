@@ -6,6 +6,7 @@ local ConnectionFilter = require("wtop.model.connection_filter")
 local WorkloadFilter = require("wtop.model.workload_filter")
 local MountFilter = require("wtop.model.mount_filter")
 local Quality = require("wtop.model.quality")
+local Power = require("wtop.model.power")
 local Hardware = require("wtop.model.hardware")
 local HardwareFilter = require("wtop.model.hardware_filter")
 local Privacy = require("wtop.privacy")
@@ -100,6 +101,15 @@ local function percent(format, value)
     return formatted(function()
         return assert(format:percent(value, { precision = 1 }))
     end)
+end
+
+local function power_usage(format, comparison)
+    if not comparison then return "—" end
+    local filled = math.floor(math.min(100, comparison.percent) * 8 / 100 + 0.5)
+    if comparison.percent > 0 then filled = math.max(1, filled) end
+    -- Visible with TERM=dumb, monochrome output and classic Windows consoles.
+    return "[" .. string.rep("#", filled) .. string.rep("-", 8 - filled) .. "] "
+        .. percent(format, comparison.percent)
 end
 
 local function bytes(format, value)
@@ -980,7 +990,11 @@ local function gpu_rows(snapshot, format)
         end
         local temperature_celsius = metrics.temperature_celsius
             or (temperature_channel and temperature_channel.input)
-        local power_watts = metrics.power_watts or (power_channel and power_channel.input)
+        local vendor_power = Power.reading(metrics.power_watts) ~= nil
+        local power_state = snapshot.quality and snapshot.quality[vendor_power and "gpus" or "sensors"]
+        local power_budget = Power.gpu(metrics, power_channel,
+            vendor_power and Power.unusable(gpu.quality) and gpu.quality or power_state)
+        local power_watts = power_budget.watts
         local fan_rpm = fan_channel and fan_channel.input
         local memory_used = metrics.memory_used_bytes or metrics.process_memory_bytes
         local memory_total = metrics.memory_total_bytes
@@ -1033,6 +1047,10 @@ local function gpu_rows(snapshot, format)
                 and formatted(function() return assert(format:temperature(temperature_celsius)) end)
                 or "—",
             power = power_watts and string.format("%.1f W", power_watts) or "—",
+            power_limit = power_budget.limit and string.format("%.1f W", power_budget.limit) or "—",
+            power_usage = power_usage(format, power_budget.comparison),
+            power_percent = power_budget.comparison and power_budget.comparison.percent,
+            power_budget_source = power_budget.source,
             -- The channel the figures came from, so a reader can tell a
             -- package power from a rail and an edge sensor from a hot spot.
             fan = fan_rpm and formatted(function()
@@ -1464,12 +1482,41 @@ local function workload_rows(snapshot, format, collapsed, selected_id, query)
     return rows, ids, selected_index, matched, direct_count
 end
 
-local function power_rows(snapshot, format)
-    local rows = {}
-    for _, zone in ipairs(snapshot.power and snapshot.power.zones or {}) do
-        if #rows >= TABLE_ROW_LIMIT then break end
-        local constraint = zone.constraints and zone.constraints[1]
-        local power = type(zone.power_watts) == "number"
+local function power_rows(snapshot, format, i18n)
+    local rows, total = {}, 0
+    local function seconds(value)
+        if not Power.reading(value) then return "—" end
+        if value > 0 and value < 1 then return number(format, value * 1000, 3) .. " ms" end
+        return number(format, value, 3) .. " s"
+    end
+    local names = {
+        long_term = translated(i18n, "power.long_term", "Sustained"),
+        short_term = translated(i18n, "power.short_term", "Short"),
+        peak_power = translated(i18n, "power.peak_power", "Peak"),
+    }
+    local rank = { long_term = 1, short_term = 2, peak_power = 3 }
+    local zones = {}
+    for _, zone in ipairs(snapshot.power and snapshot.power.zones or {}) do zones[#zones + 1] = zone end
+    table.sort(zones, function(left, right)
+        if (left.parent_id ~= nil) ~= (right.parent_id ~= nil) then return left.parent_id == nil end
+        if (left.aggregate == true) ~= (right.aggregate == true) then return left.aggregate == true end
+        if (left.source_kind or "") ~= (right.source_kind or "") then
+            return (left.source_kind or "") < (right.source_kind or "")
+        end
+        return tostring(left.id or left.name) < tostring(right.id or right.name)
+    end)
+    for _, zone in ipairs(zones) do
+        local constraints = {}
+        for _, constraint in ipairs(zone.constraints or {}) do constraints[#constraints + 1] = constraint end
+        table.sort(constraints, function(left, right)
+            if (rank[left.name] or 4) ~= (rank[right.name] or 4) then
+                return (rank[left.name] or 4) < (rank[right.name] or 4)
+            end
+            return tostring(left.id or left.name) < tostring(right.id or right.name)
+        end)
+        if #constraints == 0 then constraints[1] = {} end
+        total = total + #constraints
+        local power = Power.reading(zone.power_watts)
             and formatted(function()
                 return assert(format:number(zone.power_watts, { precision = 2 }))
             end) .. " W" or "—"
@@ -1477,27 +1524,43 @@ local function power_rows(snapshot, format)
             and formatted(function()
                 return assert(format:number(zone.energy_joules, { precision = 1 }))
             end) .. " J" or "—"
-        local limit = constraint and type(constraint.power_limit_watts) == "number"
-            and formatted(function()
-                return assert(format:number(constraint.power_limit_watts, { precision = 1 }))
-            end) .. " W" or "—"
-        rows[#rows + 1] = {
-            zone = zone.name or zone.id or "?",
-            domain = zone.source_kind or "—",
-            power = power,
-            energy = energy,
-            limit = limit,
-            source = zone.power_source or zone.power_quality or "—",
-            state = zone.enabled == false and "disabled" or (zone.quality or "—"),
-            aggregate = zone.aggregate == true,
-        }
+        for _, constraint in ipairs(constraints) do
+            if #rows >= TABLE_ROW_LIMIT then break end
+            local power_state = snapshot.quality and snapshot.quality.power
+            local comparison = Power.zone(zone, constraint, power_state)
+            local limit = Power.limit(constraint.power_limit_watts)
+                and formatted(function()
+                    return assert(format:number(constraint.power_limit_watts, { precision = 1 }))
+                end) .. " W" or "—"
+            rows[#rows + 1] = {
+                zone = zone.name or zone.id or "?",
+                domain = zone.source_kind or "—",
+                zone_id = zone.id,
+                constraint = names[constraint.name] or constraint.name
+                    or (constraint.id ~= nil and "#" .. tostring(constraint.id)) or "—",
+                power = power,
+                energy = energy,
+                limit = limit,
+                usage = power_usage(format, comparison),
+                power_percent = comparison and comparison.percent,
+                headroom = comparison and number(format, comparison.headroom_watts, 2) .. " W" or "—",
+                window = seconds(constraint.time_window_seconds),
+                interval = seconds(zone.power_interval_ns and zone.power_interval_ns / 1e9),
+                source = zone.power_source or zone.power_quality or "—",
+                state = Power.unusable(power_state) and (power_state.quality or power_state.status)
+                    or zone.power_quality or zone.quality or "—",
+                controls = (zone.enabled == false or zone.control_enabled == false) and "disabled"
+                    or zone.controls_enabled == true and "enabled" or "unknown",
+                aggregate = zone.aggregate == true,
+            }
+        end
     end
-    table.sort(rows, function(left, right)
-        if left.aggregate ~= right.aggregate then return left.aggregate end
-        if left.domain ~= right.domain then return left.domain < right.domain end
-        return left.zone < right.zone
-    end)
-    return rows
+    return rows, total
+end
+
+function M.power_detail_rows(snapshot, i18n)
+    local zones, total = power_rows(snapshot, i18n.format, i18n)
+    return zones, gpu_rows(snapshot, i18n.format), total
 end
 
 -- ---------------------------------------------------------------------------
@@ -2554,7 +2617,10 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         cpuidle_table_rows, cpuidle_table_total = cpuidle_rows(snapshot, format, i18n)
     end
     local sensor_table_rows = on("compute", "sensor_table") and sensor_rows(snapshot, format) or {}
-    local power_table_rows = on("compute", "power_table") and power_rows(snapshot, format) or {}
+    local power_table_rows, power_table_total = {}, 0
+    if on("compute", "power_table") then
+        power_table_rows, power_table_total = power_rows(snapshot, format, i18n)
+    end
     local mount_table_rows, mounts_hidden, mounts_total, mounts_matching = {}, 0, 0, 0
     if on("storage", "mount_table") then
         mount_table_rows, mounts_hidden, mounts_total, mounts_matching =
@@ -2849,16 +2915,29 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         },
         power_table = {
             columns = {
-                { key = "zone", label = translated(i18n, "metrics.device", "Zone"), width = 18, min_width = 10, priority = 90 },
-                { key = "domain", label = translated(i18n, "metrics.type", "Domain"), width = 15, min_width = 9, priority = 70 },
-                { key = "power", label = translated(i18n, "metrics.power", "Power"), width = 12, min_width = 9, align = "right", priority = 95 },
-                { key = "energy", label = translated(i18n, "metrics.energy", "Energy"), width = 14, min_width = 9, align = "right", priority = 50 },
-                { key = "limit", label = translated(i18n, "metrics.maximum", "Limit"), width = 12, min_width = 9, align = "right", priority = 60 },
+                { key = "zone", label = translated(i18n, "metrics.device", "Zone"), width = 18, min_width = 10, priority = 100 },
+                { key = "domain", label = translated(i18n, "metrics.source", "Source"), width = 15, min_width = 15, priority = 98 },
+                { key = "constraint", label = translated(i18n, "power.constraint", "Constraint"), width = 16, min_width = 9, priority = 97 },
+                { key = "power", label = translated(i18n, "metrics.power", "Power"), width = 12, min_width = 9, align = "right", priority = 100 },
+                { key = "limit", label = translated(i18n, "power.limit", "Power cap"), width = 12, min_width = 9, align = "right", priority = 96 },
+                { key = "usage", label = translated(i18n, "power.of_limit", "% of cap"), width = 22, min_width = 18, align = "right", priority = 95 },
+                { key = "window", label = translated(i18n, "power.window", "Cap window"), width = 15, min_width = 11, align = "right", priority = 75 },
+                { key = "interval", label = translated(i18n, "power.interval", "Sample window"), width = 15, min_width = 11, align = "right", priority = 65 },
+                { key = "controls", label = translated(i18n, "power.controls", "Controls"), width = STATE_COLUMN_WIDTH, min_width = 8, priority = 50,
+                    format = function(value) return Technical.state(i18n, value) end },
+                { key = "headroom", label = translated(i18n, "power.headroom", "To cap"), width = 12, min_width = 9, align = "right", priority = 45 },
+                { key = "energy", label = translated(i18n, "metrics.energy", "Energy"), width = 14, min_width = 9, align = "right", priority = 30, full_only = true },
                 { key = "source", label = translated(i18n, "metrics.source", "Source"), width = 14, min_width = 9, priority = 20, full_only = true },
-                { key = "state", label = translated(i18n, "metrics.state", "State"), width = STATE_COLUMN_WIDTH, min_width = 8, priority = 25, full_only = true,
+                { key = "state", label = translated(i18n, "metrics.state", "State"), width = STATE_COLUMN_WIDTH, min_width = 8, priority = 80,
                     format = function(value) return Technical.state(i18n, value) end },
             },
             rows = power_table_rows,
+            status_text = translated(i18n, "power.comparison_note",
+                "Sample / configured cap; this does not indicate throttling.")
+                .. ((snapshot.power and (snapshot.power.denied_zones or 0) > 0)
+                    and " " .. translated(i18n, "power.denied_note", "Power readings need root (--sudo).") or "")
+                .. (power_table_total > #power_table_rows and " " .. translated(i18n, "ui.rows_capped",
+                    "showing {visible} of {total}", { visible = #power_table_rows, total = power_table_total }) or ""),
         },
 
         -- Memory ---------------------------------------------------------
@@ -3135,7 +3214,9 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 { key = "frequency", label = translated(i18n, "metrics.frequency", "Frequency"), width = 13, min_width = 9, align = "right", priority = 35, full_only = true },
                 { key = "pcie", label = "PCIe", width = 18, min_width = 9, priority = 25, full_only = true },
                 { key = "temperature", label = translated(i18n, "metrics.temperature", "Temp"), width = 9, min_width = 7, align = "right", priority = 70 },
-                { key = "power", label = translated(i18n, "metrics.power", "Power"), width = 10, min_width = 8, align = "right", priority = 40, full_only = true },
+                { key = "power", label = translated(i18n, "metrics.power", "Power"), width = 10, min_width = 8, align = "right", priority = 80 },
+                { key = "power_limit", label = translated(i18n, "power.limit", "Power cap"), width = 12, min_width = 8, align = "right", priority = 78 },
+                { key = "power_usage", label = translated(i18n, "power.of_limit", "% of cap"), width = 22, min_width = 18, align = "right", priority = 77 },
                 { key = "fan", label = translated(i18n, "metrics.fan", "Fan"), width = 10, min_width = 7, align = "right", priority = 30, full_only = true },
             },
             rows = gpu_table_rows,

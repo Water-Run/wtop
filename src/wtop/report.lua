@@ -363,6 +363,28 @@ function M.render(snapshot)
             return { named_id(zone), quantity(zone.power_watts, 1, " W", 2),
                 zone.power_quality or zone.quality, zone.power_source }
         end, zones)
+    local constraints, constraints_truncated = {}, zones.truncated == true
+    for _, zone in ipairs(list(zones.zones)) do
+        for _, constraint in ipairs(list(zone.constraints)) do
+            if #constraints < 512 then
+                constraints[#constraints + 1] = { zone = zone, constraint = constraint }
+            else constraints_truncated = true end
+        end
+    end
+    table_section(lines, "Power caps", { "Zone", "Interface", "Constraint", "Power cap",
+        "Sample / cap", "Cap window", "Sample window", "Controls enabled" },
+        constraints, function(entry)
+            local zone, cap = entry.zone, entry.constraint
+            return { named_id(zone), zone.source_kind, cap.name or cap.id,
+                quantity(cap.power_limit_watts, 1, " W", 2),
+                quantity(cap.usage_percent, 1, "%", 1),
+                quantity(cap.time_window_seconds, 1, " s", 6),
+                quantity(zone.power_interval_ns, 1e9, " s", 6), zone.controls_enabled }
+        end, { truncated = constraints_truncated })
+    if #constraints > 0 then
+        lines[#lines + 1] = "Ratios compare sampled power with configured caps; they do not establish throttling."
+        lines[#lines + 1] = ""
+    end
     local firmware_batteries = object(snapshot.firmware_batteries)
     table_section(lines, "Firmware batteries", { "Battery", "Location", "Chemistry", "Design energy", "Design voltage" },
         firmware_batteries.batteries, function(battery)

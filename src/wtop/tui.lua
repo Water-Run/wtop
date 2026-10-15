@@ -585,6 +585,57 @@ end
 local SENSOR_DETAIL_LIMIT = 256
 local SENSOR_STALE_AFTER_NS = 15 * 1000000000
 
+local function power_detail_lines(snapshot, i18n)
+    local zones, gpus, total = ViewModel.power_detail_rows(snapshot, i18n)
+    local lines = {
+        translated(i18n, "power.title", "Power and limits"),
+        translated(i18n, "inspector.close_hint", "Esc/Enter closes"),
+        "",
+        translated(i18n, "power.comparison_note", "Sample / configured cap; this does not indicate throttling."),
+    }
+    if snapshot.power and (snapshot.power.denied_zones or 0) > 0 then
+        lines[#lines + 1] = translated(i18n, "power.denied_note", "Power readings need root (--sudo).")
+    end
+    local function field(id, label, value)
+        lines[#lines + 1] = inspector_text("  " .. translated(i18n, id, label)
+            .. ": " .. tostring(value or "—"), INSPECTOR_ROW_WIDTH)
+    end
+    local previous
+    for _, row in ipairs(zones) do
+        local identity = row.zone_id or (row.domain .. ":" .. row.zone)
+        if identity ~= previous then
+            lines[#lines + 1] = ""
+            lines[#lines + 1] = inspector_text(row.zone .. " [" .. identity .. "]", INSPECTOR_ROW_WIDTH)
+            field("metrics.source", "Source", row.domain)
+            field("metrics.power", "Power", row.power .. " · "
+                .. translated(i18n, "power.interval", "Sample window") .. ": " .. row.interval)
+            field("power.controls", "Controls", Technical.state(i18n, row.controls)
+                .. " · " .. Technical.state(i18n, row.state))
+            previous = identity
+        end
+        lines[#lines + 1] = inspector_text("  " .. row.constraint .. ": " .. row.limit
+            .. " · " .. translated(i18n, "power.window", "Cap window") .. ": " .. row.window,
+            INSPECTOR_ROW_WIDTH)
+        field("power.of_limit", "% of cap", row.usage .. " · "
+            .. translated(i18n, "power.headroom", "To cap") .. ": " .. row.headroom)
+    end
+    for _, row in ipairs(gpus) do
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = inspector_text("GPU " .. row.card .. " · " .. row.gpu, INSPECTOR_ROW_WIDTH)
+        field("metrics.power", "Power", row.power)
+        field("power.limit", "Power cap", row.power_limit)
+        field("power.of_limit", "% of cap", row.power_usage)
+        field("metrics.source", "Source", row.power_budget_source)
+    end
+    if total > #zones then
+        lines[#lines + 1] = translated(i18n, "ui.rows_capped", "showing {visible} of {total}",
+            { visible = #zones, total = total })
+    elseif #zones == 0 and #gpus == 0 then
+        lines[#lines + 1] = translated(i18n, "ui.no_data", "No data")
+    end
+    return lines
+end
+
 local function sensor_detail_lines(snapshot, i18n, now_ns)
     snapshot = type(snapshot) == "table" and snapshot or {}
     local data = type(snapshot.sensors) == "table" and snapshot.sensors or {}
@@ -3773,6 +3824,7 @@ local HELP_SECTIONS = {
             { "T", "help.cycle_theme", "cycle the colour theme" },
             { "B", "help.cycle_chart", "switch between block and Braille charts" },
             { "z  Z", "help.chart_zoom", "show more or less time in charts" },
+            { "p", "power.help", "power and limits on Overview, Compute and GPU" },
             { "L", "help.cycle_language", "cycle the interface language" },
             { "v", "help.toggle_virtual", "show or hide virtual devices and pseudo mounts" },
         },
@@ -6214,6 +6266,11 @@ local function run_loop(options, backend, renderer, engine, translator)
                 { key = "?", id = "actions.help", fallback = "Help", command = "help" },
             }
         end
+        if workspace:content_page() == "overview" or workspace:content_page() == "compute"
+            or workspace:content_page() == "gpu" then
+            table.insert(status.hints, 1,
+                { key = "p", id = "power.title", fallback = "Power and limits", command = "power" })
+        end
         if not linux_host then
             -- The SMART, bandwidth, and sshd inspectors are Linux-only.
             local kept = {}
@@ -8388,6 +8445,12 @@ local function run_loop(options, backend, renderer, engine, translator)
         elseif key == "?" or key == "f1" then
             show_overlay(help_lines(translator, columns, linux_host))
             dirty = true
+        elseif key == "p" and (workspace:content_page() == "overview"
+            or workspace:content_page() == "compute" or workspace:content_page() == "gpu") then
+            show_overlay(function()
+                return power_detail_lines(engine.snapshot, translator)
+            end, { powercap = true, gpu = true, hwmon = true })
+            dirty = true
         elseif key == "h" then
             show_overlay(function()
                 return sensor_detail_lines(engine.snapshot, translator, engine.clock:now_ns())
@@ -8484,7 +8547,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             workload = "g",
             sockets = "n",
             virtual = "v", mask = "m", smart = "s", bandwidth = "b", sshd = "D", systemd = "d", sessions = "u",
-            sensors = "h",
+            sensors = "h", power = "p",
         }
         local key = keys[command]
         if not key then return false end
@@ -8682,6 +8745,7 @@ M.process_sampling_plan = process_sampling_plan
 M.thread_detail_request = thread_detail_request
 M.inspector_lines = inspector_lines
 M.sensor_detail_lines = sensor_detail_lines
+M.power_detail_lines = power_detail_lines
 M.hardware_detail_lines = hardware_detail_lines
 M.route_detail_lines = route_detail_lines
 M.process_detail_lines = process_detail_lines

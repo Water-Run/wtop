@@ -137,8 +137,10 @@ function M.merge(devices, lookup, data, options)
       set_missing(metrics, "memory_total_bytes", entry.memory_total_bytes)
       set_missing(metrics, "memory_used_bytes", entry.memory_used_bytes)
       set_missing(metrics, "temperature_celsius", entry.temperature_celsius)
-      set_missing(metrics, "power_watts", entry.power_watts)
-      set_missing(metrics, "power_limit_watts", entry.power_limit_watts)
+      if set_missing(metrics, "power_watts", entry.power_watts) then metrics.power_source = "amdsmi" end
+      if set_missing(metrics, "power_limit_watts", entry.power_limit_watts) then
+        metrics.power_limit_source = "amdsmi"
+      end
       set_missing(metrics, "frequency_current_hz", entry.graphics_clock_hz)
       set_missing(metrics, "frequency_graphics_hz", entry.graphics_clock_hz)
       set_missing(metrics, "frequency_maximum_hz", entry.graphics_clock_maximum_hz)

@@ -8,6 +8,23 @@ _meta:
   catalog_version: 1
 
 messages:
+  power.title: "Puissance et limites"
+  power.help: "puissance et limites dans Vue d’ensemble, Calcul et GPU"
+  power.long_term: "Durable"
+  power.short_term: "Courte"
+  power.peak_power: "Crête"
+  power.constraint: "Contrainte"
+  power.limit: "Limite W"
+  power.of_limit: "% limite"
+  power.window: "Fenêtre limite"
+  power.interval: "Fenêtre mesure"
+  power.controls: "Contrôles"
+  power.headroom: "Marge W"
+  power.comparison_note: "Mesure / limite configurée ; ce rapport ne signale pas un bridage."
+  power.denied_note: "La lecture de puissance nécessite root (--sudo)."
+  status.enabled: "Activé"
+  status.disabled: "Désactivé"
+  status.wrapped: "Compteur bouclé"
   sshd_config.current_files: "Évalue les fichiers actuels. Le démon peut utiliser des options de démarrage ou un contenu antérieur."
   sshd_config.file: "Fichier de configuration"
   sshd_config.connection: "Connexion fournie (règles Match appliquées)"

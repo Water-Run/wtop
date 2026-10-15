@@ -183,7 +183,7 @@ local function build_pages(tabs, i18n)
             widget("sensor_table", "table", t("widgets.sensors", "Sensors"),
                 65, { width = 56, height = 10 }),
             widget("power_table", "table", t("widgets.power_zones", "Power zones"),
-                64, { width = 62, height = 10 }),
+                85, { width = 96, height = 12 }),
         }),
         memory = page("memory", tabs, {
             widget("memory_total", "metric", t("widgets.memory_utilization", "Memory utilization"), 100),

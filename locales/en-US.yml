@@ -7,6 +7,23 @@ _meta:
   catalog_version: 1
 
 messages:
+  power.title: "Power and limits"
+  power.help: "power and limits on Overview, Compute and GPU"
+  power.long_term: "Sustained"
+  power.short_term: "Short"
+  power.peak_power: "Peak"
+  power.constraint: "Constraint"
+  power.limit: "Power cap"
+  power.of_limit: "% of cap"
+  power.window: "Cap window"
+  power.interval: "Sample window"
+  power.controls: "Controls"
+  power.headroom: "To cap"
+  power.comparison_note: "Sample / configured cap; this does not indicate throttling."
+  power.denied_note: "Power readings need root (--sudo)."
+  status.enabled: "Enabled"
+  status.disabled: "Disabled"
+  status.wrapped: "Wrapped"
   sshd_config.current_files: "Evaluates current files. The daemon may use startup overrides or earlier contents."
   sshd_config.file: "Configuration file"
   sshd_config.connection: "Supplied connection (Match rules applied)"

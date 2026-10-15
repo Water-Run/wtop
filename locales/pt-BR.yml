@@ -8,6 +8,23 @@ _meta:
   catalog_version: 1
 
 messages:
+  power.title: "Potência e limites"
+  power.help: "potência e limites em Visão geral, Computação e GPU"
+  power.long_term: "Sustentada"
+  power.short_term: "Curta"
+  power.peak_power: "Pico"
+  power.constraint: "Restrição"
+  power.limit: "Limite W"
+  power.of_limit: "% do limite"
+  power.window: "Janela limite"
+  power.interval: "Janela medida"
+  power.controls: "Controles"
+  power.headroom: "Margem W"
+  power.comparison_note: "Medição / limite configurado; esta proporção não indica redução de desempenho."
+  power.denied_note: "A leitura de potência exige root (--sudo)."
+  status.enabled: "Ativado"
+  status.disabled: "Desativado"
+  status.wrapped: "Volta do contador"
   sshd_config.current_files: "Avalia os arquivos atuais. O daemon pode usar opções de início ou conteúdo anterior."
   sshd_config.file: "Arquivo de configuração"
   sshd_config.connection: "Conexão informada (regras Match aplicadas)"

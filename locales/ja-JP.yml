@@ -8,6 +8,23 @@ _meta:
   catalog_version: 1
 
 messages:
+  power.title: "電力と上限"
+  power.help: "概要・演算・GPU ページで電力と上限を表示"
+  power.long_term: "持続"
+  power.short_term: "短時間"
+  power.peak_power: "ピーク"
+  power.constraint: "制限種別"
+  power.limit: "電力上限"
+  power.of_limit: "上限比率"
+  power.window: "制限期間"
+  power.interval: "測定期間"
+  power.controls: "電力制御"
+  power.headroom: "上限まで"
+  power.comparison_note: "測定電力 / 設定上限。この比率はスロットリングの判定ではありません。"
+  power.denied_note: "電力の読み取りには root 権限が必要です（--sudo）。"
+  status.enabled: "有効"
+  status.disabled: "無効"
+  status.wrapped: "カウンター周回"
   sshd_config.current_files: "現在のファイルを評価します。デーモンは起動時の上書き設定や以前の内容を使用している場合があります。"
   sshd_config.file: "設定ファイル"
   sshd_config.connection: "指定した接続（Match 規則を適用）"

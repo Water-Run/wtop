@@ -211,7 +211,7 @@ local function energy_delta(current, previous, maximum_range)
   return nil, "reset"
 end
 
-local function read_zone(self, fs, entry, entries, previous, now_ns)
+local function read_zone(self, fs, entry, entries, previous, now_ns, controls)
   local base = self.base_path .. "/" .. entry
   local issues = {}
   local listed, list_error, list_truncated = fs:list(base, self.max_zone_entries + 1)
@@ -231,13 +231,25 @@ local function read_zone(self, fs, entry, entries, previous, now_ns)
     "power", self, self.max_counter_value)
   local enabled = optional_integer(fs, base .. "/enabled", issues,
     "enabled", self, 1)
+  if enabled ~= nil then enabled = enabled == 1 end
+  local control = controls[source_kind(entry)]
+  local control_enabled = control and control.enabled
+  local controls_enabled
+  if enabled == false or control_enabled == false then controls_enabled = false
+  elseif enabled == true and control_enabled == true then controls_enabled = true end
+  if control and control.issue then
+    add_issue(issues, "control.enabled", control.issue, control.source, self.max_issues)
+  end
   local zone_constraints, constraints_truncated = constraints(self, fs, base, listed, issues)
   local zone = {
     id = entry,
     name = name,
     source_kind = source_kind(entry),
     parent_id = parent_id(entry, entries),
-    enabled = enabled == nil and nil or enabled == 1,
+    enabled = enabled,
+    control_enabled = control_enabled,
+    controls_enabled = controls_enabled,
+    control_source = control and control.source,
     energy_joules = energy and energy / 1000000 or nil,
     energy_uj = energy,
     maximum_energy_range_joules = maximum_range and maximum_range / 1000000 or nil,
@@ -252,6 +264,8 @@ local function read_zone(self, fs, entry, entries, previous, now_ns)
     source = base,
   }
   local previous_zone = previous and previous.by_id and previous.by_id[entry]
+  if previous_zone and (previous_zone.name ~= name
+      or previous_zone.maximum_energy_range_uj ~= maximum_range) then previous_zone = nil end
   if not zone.power_watts and energy and previous_zone and previous_zone.energy_uj then
     local elapsed_ns = Common.elapsed_ns(now_ns, previous_zone.observed_at_ns)
     local delta, delta_quality = energy_delta(energy, previous_zone.energy_uj,
@@ -262,13 +276,14 @@ local function read_zone(self, fs, entry, entries, previous, now_ns)
         zone.power_watts = watts
         zone.power_source = "energy_delta"
         zone.power_quality = delta_quality
+        zone.power_interval_ns = elapsed_ns
       else
         zone.power_quality = "reset"
       end
     else
       zone.power_quality = delta_quality
     end
-  elseif not energy and energy_error and energy_error.kind == "denied" then
+  elseif not zone.power_watts and not energy and energy_error and energy_error.kind == "denied" then
     zone.power_quality = "denied"
   end
   zone.quality = (#issues > 0 or zone.truncated) and "partial" or "fresh"
@@ -330,10 +345,21 @@ function Powercap:sample(context, previous)
   local previous_data = Common.previous_data(previous)
   local entry_set = {}
   for _, entry in ipairs(entries) do entry_set[entry] = true end
+  local controls = {}
+  for _, entry in ipairs(entries) do
+    local kind = source_kind(entry)
+    if not controls[kind] then
+      local path = self.base_path .. "/" .. kind .. "/enabled"
+      local value, control_error = optional_integer(fs, path, {}, "control.enabled", self, 1)
+      if value ~= nil then value = value == 1 end
+      controls[kind] = { enabled = value, source = path,
+        issue = not optional_absence(control_error) and control_error or nil }
+    end
+  end
   local zones, by_id, all_issues = {}, {}, {}
   local truncated, partial, denied = class_truncated == true, false, 0
   for _, entry in ipairs(entries) do
-    local zone, issues = read_zone(self, fs, entry, entry_set, previous_data, now_ns)
+    local zone, issues = read_zone(self, fs, entry, entry_set, previous_data, now_ns, controls)
     if zone then
       zones[#zones + 1] = zone
       by_id[zone.id] = zone

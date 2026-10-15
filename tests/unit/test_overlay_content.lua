@@ -180,6 +180,18 @@ local function build(i18n, name)
       i18n, 1000000000, "sshd.service", "service")
   elseif name == "sensor_detail_lines" then
     return TUI.sensor_detail_lines(snapshot, i18n, 1000000000)
+  elseif name == "power_detail_lines" then
+    return TUI.power_detail_lines({ power = { zones = {
+      { id = "intel-rapl:0", name = "package-0", source_kind = "intel-rapl",
+        enabled = true, controls_enabled = true, power_watts = 30,
+        power_interval_ns = 1000000000, power_quality = "measured",
+        constraints = {
+          { id = 0, name = "long_term", power_limit_watts = 20, time_window_seconds = 28 },
+          { id = 1, name = "short_term", power_limit_watts = 26, time_window_seconds = 0.00244 },
+          { id = 2, name = "peak_power", power_limit_watts = 114 },
+        } },
+      { id = LONG, name = LONG, source_kind = LONG, power_quality = "denied" },
+    }, denied_zones = 1 }, gpus = { devices = { gpu_device } } }, i18n)
   elseif name == "hardware_detail_lines" then
     return TUI.hardware_detail_lines({ inventory = { pci = { devices = {
       { address = "0000:01:00.0", vendor_name = LONG, device_name = LONG,
@@ -262,7 +274,7 @@ local FIXTURED = {
   "session_lines",
   "event_stats_lines",
   "thread_detail_lines", "thread_picker_lines",
-  "widget_picker_lines", "workspace_lines",
+  "widget_picker_lines", "workspace_lines", "power_detail_lines",
 }
 table.sort(FIXTURED)
 local only_exported, only_fixtured = {}, {}

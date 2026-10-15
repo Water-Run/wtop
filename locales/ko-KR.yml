@@ -8,6 +8,23 @@ _meta:
   catalog_version: 1
 
 messages:
+  power.title: "전력과 한도"
+  power.help: "개요, 연산, GPU 페이지에서 전력과 한도 보기"
+  power.long_term: "지속"
+  power.short_term: "단기"
+  power.peak_power: "최대"
+  power.constraint: "제한 유형"
+  power.limit: "전력 한도"
+  power.of_limit: "한도 비율"
+  power.window: "제한 시간"
+  power.interval: "측정 시간"
+  power.controls: "전력 제어"
+  power.headroom: "남은 전력"
+  power.comparison_note: "측정 전력 / 설정 한도. 이 비율은 스로틀링 여부를 나타내지 않습니다."
+  power.denied_note: "전력을 읽으려면 root 권한이 필요합니다 (--sudo)."
+  status.enabled: "활성"
+  status.disabled: "비활성"
+  status.wrapped: "카운터 순환"
   sshd_config.current_files: "현재 파일을 평가합니다. 데몬은 시작 시 재정의한 설정이나 이전 내용을 사용할 수 있습니다."
   sshd_config.file: "설정 파일"
   sshd_config.connection: "지정한 연결(Match 규칙 적용)"

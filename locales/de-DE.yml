@@ -8,6 +8,23 @@ _meta:
   catalog_version: 1
 
 messages:
+  power.title: "Leistung und Grenzen"
+  power.help: "Leistung und Grenzen in Übersicht, Rechenleistung und GPU"
+  power.long_term: "Dauerhaft"
+  power.short_term: "Kurz"
+  power.peak_power: "Spitze"
+  power.constraint: "Begrenzung"
+  power.limit: "Leistungsgrenze"
+  power.of_limit: "% der Grenze"
+  power.window: "Grenzzeitraum"
+  power.interval: "Messzeitraum"
+  power.controls: "Regelung"
+  power.headroom: "Spielraum"
+  power.comparison_note: "Messwert / eingestellte Grenze; das Verhältnis zeigt keine Drosselung an."
+  power.denied_note: "Leistungsmessungen benötigen root (--sudo)."
+  status.enabled: "Aktiviert"
+  status.disabled: "Deaktiviert"
+  status.wrapped: "Zählerumlauf"
   sshd_config.current_files: "Prüft aktuelle Dateien. Der Daemon kann Startoptionen oder ältere Inhalte verwenden."
   sshd_config.file: "Konfigurationsdatei"
   sshd_config.connection: "Angegebene Verbindung (Match-Regeln angewendet)"
