@@ -53,6 +53,7 @@ end
 assert(report.gpu_vendors.nvml.state == "skipped", "safe mode skips the probe")
 assert(report.gpu_vendors.nvml.reason == "safe_mode", "and says why")
 assert(report.gpu_vendors.amdsmi.state == "skipped", "for every vendor")
+assert(report.gpu_vendors.amdsmi.library == "libamd_smi.so", "official AMD library basename")
 -- A reason is only meaningful alongside a library name, and "unavailable" alone
 -- cannot be told apart from a host that simply has no such GPU.
 if report.gpu_vendors.amdsmi.state == "unavailable" then
@@ -74,6 +75,16 @@ for key, vendor in pairs(probed.gpu_vendors) do
         key .. " reports how many devices the backend then found")
     end
 end
+local saved_amdsmi = native.amdsmi_query
+native.amdsmi_query = function()
+    return { devices = { {} }, status = "partial", api_version = "26.2.2",
+        reason = "amdsmi_enumeration_incomplete", truncated = true }
+end
+local partial_probe = diagnose.collect({}).gpu_vendors.amdsmi
+native.amdsmi_query = saved_amdsmi
+assert(partial_probe.state == "partial" and partial_probe.devices == 1)
+assert(partial_probe.api_version == "26.2.2" and partial_probe.truncated == true)
+assert(partial_probe.reason == "amdsmi_enumeration_incomplete")
 end -- native module present: vendor probe states
 
 -- The helper list answers "which external command can this build actually run".

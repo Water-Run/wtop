@@ -83,7 +83,7 @@ SOURCE_ROCK_ARGS ?=
 
 NATIVE_SOURCES := native/wtop_native.c native/wtop_nvml.c native/wtop_amdsmi.c \
   native/wtop_levelzero.c
-NATIVE_HEADERS := native/wtop_nvml.h native/wtop_amdsmi.h native/wtop_levelzero.h native/wtop_build.h
+NATIVE_HEADERS := native/wtop_nvml.h native/wtop_amdsmi.h native/wtop_amdsmi_abi.h native/licenses/AMD-SMI-MIT.txt native/wtop_levelzero.h native/wtop_build.h
 NATIVE_DIR := $(CURDIR)/build/native
 NATIVE_MODULE := $(NATIVE_DIR)/wtop_native.so
 NATIVE_REVISION_HEADER := $(NATIVE_DIR)/build_revision.h
@@ -313,7 +313,7 @@ SAN_RUN_ENV = ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
 SANITIZER_EXCLUDED := tests/unit/test_benchmark_record.lua
 
 test-sanitized: resource-check $(LUA_STAMP) $(NATIVE_REVISION_HEADER) \
-		$(NATIVE_VERSION_HEADER) sanitize-native
+		$(NATIVE_VERSION_HEADER) sanitize-native test-native-amdsmi-sanitized
 	@if [ -z '$(SAN_ASAN_RUNTIME)' ]; then echo "wtop: the sanitized module names no ASan runtime to preload, so the suite cannot run on the uninstrumented interpreter"; exit 1; fi
 	@for mode in --snapshot --agent --diagnose; do \
 		echo "wtop: sanitized $$mode"; \
@@ -330,7 +330,15 @@ test-native-cpu-limits: $(LUA_STAMP) $(NATIVE_REVISION_HEADER) $(NATIVE_VERSION_
 		$(LUA_PREFIX)/lib/liblua.a -lm -ldl -o $(NATIVE_DIR)/cpu-limits-fixture
 	@$(NATIVE_DIR)/cpu-limits-fixture
 
-check: resource-check native locales test-native-cpu-limits
+.PHONY: test-native-amdsmi test-native-amdsmi-sanitized
+test-native-amdsmi: $(LUA_STAMP)
+	@python3 tests/test_linux_amdsmi.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)'
+
+test-native-amdsmi-sanitized: $(LUA_STAMP)
+	@python3 tests/test_linux_amdsmi.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)' \
+		--cflags='$(SANITIZER_CFLAGS)' --output build/native-amdsmi-san
+
+check: resource-check native locales test-native-cpu-limits test-native-amdsmi
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAC) -p $$(find src tools tests -type f -name '*.lua' -print)
 	@sh -n tools/*.sh
 	@python3 -c 'import pathlib; [compile(path.read_bytes(), str(path), "exec") for path in pathlib.Path("tests").rglob("*.py")]'
@@ -568,6 +576,7 @@ bundle-dir: build-id native locales luainstaller
 		src/wtop.lua -o dist/wtop --lua '$(LUA)' --lua-prefix '$(LUA_PREFIX)' \
 		--target-os linux --max-deps 300 $(LOCALE_INCLUDES) -- --version
 	@cp $(RELEASE_LICENCE) dist/wtop/$(RELEASE_LICENCE)
+	@cp native/licenses/AMD-SMI-MIT.txt dist/wtop/.luai/licenses/AMD-SMI-MIT.txt
 	@find dist/wtop -type d -exec chmod 0755 {} +
 	@find dist/wtop -type f -exec chmod a+r {} +
 	@chmod 0755 dist/wtop/wtop
@@ -605,7 +614,7 @@ test-bundle-file: resource-check-full bundle-file
 # not the other.
 test-release-notices: resource-check-full sbom checksums
 	@for required in $(RELEASE_LICENCE) THIRD_PARTY_NOTICES.md \
-		.luai/licenses/Lua-MIT.txt .luai/licenses/LGPL-3.0-or-later.txt; do \
+		.luai/licenses/Lua-MIT.txt .luai/licenses/AMD-SMI-MIT.txt .luai/licenses/LGPL-3.0-or-later.txt; do \
 		test -f "dist/wtop/$$required" || { \
 			echo "wtop: the onedir bundle does not carry $$required, and the"; \
 			echo "     release is documented as being distributed under terms"; \

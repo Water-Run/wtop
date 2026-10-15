@@ -6,6 +6,7 @@ it; the repository carries no other third-party runtime code.
 | Component | Version | License | Role |
 | --- | --- | --- | --- |
 | [PUC Lua](https://www.lua.org/) | 5.5.1 | MIT © 1994–2026 Lua.org, PUC-Rio | The runtime. Bundled with the onedir/onefile and platform development bundles |
+| [AMD SMI public interface declarations](https://github.com/ROCm/amdsmi) | ROCm 5.7.1–7.2.4 | MIT © Advanced Micro Devices, Inc. | Complete versioned ABI declarations; the vendor library is loaded from the host |
 | [luainstaller](https://github.com/Water-Run/luainstaller/releases/tag/v1.5.0) | 1.5.0 | LGPL-3.0-or-later | Packaging tool; generated launchers and license notices ship in the onedir/onefile bundles |
 
 Throughout this file, a path in `backticks` is one the release actually
@@ -37,3 +38,8 @@ bytes, so that one is covered by the executable's hash.
 
 The notices are inside the `SHA256SUMS` manifest, and CI publishes them beside
 the SBOM. `make test-release-notices` checks all of that.
+
+The AMD interface notice ships at `.luai/licenses/AMD-SMI-MIT.txt` in the Linux
+onedir bundle and inside the native module in both Linux bundle forms. The
+AMD SMI implementation is not bundled. Its public declarations and the fake
+SDK test excerpts retain AMD's MIT notice in the source tree.

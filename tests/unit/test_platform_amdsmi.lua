@@ -1,9 +1,5 @@
--- AMD SMI provider.  The host running the suite has no amdgpu card and no
--- libamdsmi, so every assertion here drives an injected provider -- the same
--- seam the NVML provider is tested through.  That covers the join logic and
--- the refusal paths; the C layer's dlopen and struct reads can only be
--- exercised on real hardware, which is why the provider treats every field
--- as independently optional.
+-- Lua provider merge semantics. tests/native/linux_amdsmi.c separately tests
+-- the native dlopen wrapper against versioned fake SDKs and upstream headers.
 package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 
 local AMDSMI = require("wtop.collectors.amdsmi")
@@ -198,6 +194,41 @@ local headless_sample = headless:sample({ now_ns = function() return 4 end })
 equal(headless_sample.status, "ok", "a host without DRM nodes still lists amdsmi GPUs")
 equal(#headless_sample.data.devices, 2, "both amdsmi GPUs")
 equal(headless_sample.data.providers.amdsmi.status, "ok", "the provider is reported")
+
+local per_device = { id = "0000:03:00.0", metrics = {}, capabilities = {} }
+local versioned = AMDSMI.merge({ per_device }, {
+  by_bdf = { ["0000:03:00.0"] = per_device },
+}, {
+  api_version = "26.2.2", status = "partial", truncated = true,
+  reason = "amdsmi_enumeration_incomplete", driver_version = "old-global",
+  devices = { { index = 0, pci_bdf = "0000:03:00.0", name = "AMD",
+    driver_version = "per-device", power_watts = 47, power_measurement = "average" } },
+}, { used_ids = {} })
+equal(per_device.driver_version, "per-device", "per-device driver takes precedence")
+equal(per_device.metrics.power_measurement, "average", "average power retains its measurement kind")
+equal(versioned.api_version, "26.2.2", "SDK version is exported")
+equal(versioned.status, "partial", "incomplete enumeration is not healthy")
+equal(versioned.truncated, true, "native truncation is exported")
+equal(versioned.reason, "amdsmi_enumeration_incomplete", "enumeration reason is retained")
+
+local partial_collector = GPU.new({ fs = Fixture.new(amd_tree), scan_processes = false,
+  amdsmi = function() return { devices = {}, status = "partial", truncated = true,
+    reason = "amdsmi_enumeration_incomplete", api_version = "26.2.2" } end })
+local partial_sample = partial_collector:sample({ now_ns = function() return 5 end })
+equal(partial_sample.quality, "partial", "incomplete vendor enumeration affects the collection")
+equal(partial_sample.data.truncated, true, "vendor truncation affects the collection")
+local Export = require("wtop.export")
+local export_state = { gpus = { devices = { per_device }, providers = {
+  amdsmi = versioned, unsupported = { secret = "must not be exported" },
+} } }
+local exported = Export.agent(export_state)
+equal(exported.metrics.gpu.providers.amdsmi.api_version, "26.2.2", "Agent retains the SDK version")
+equal(exported.metrics.gpu.providers.amdsmi.status, "partial", "Agent retains incomplete enumeration")
+equal(exported.metrics.gpu.providers.amdsmi.truncated, true, "Agent retains vendor truncation")
+equal(exported.metrics.gpu.providers.unsupported, nil, "Agent provider names are bounded")
+equal(exported.top.gpus[1].metrics.power_measurement, "average", "Agent preserves average power semantics")
+equal(Export.snapshot(export_state).gpus.devices[1].metrics.power_measurement,
+  "average", "Snapshot preserves average power semantics")
 
 print("ok: AMD SMI provider (BDF join, precedence, headless, safe mode, refusals)")
 return true

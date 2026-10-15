@@ -82,6 +82,7 @@ local contents = {
 local LICENCES = {
     { path = "LICENSE", bytes = "EUPL-1.2 fixture text for this project\n" },
     { path = ".luai/licenses/Lua-MIT.txt", bytes = MIT_TEXT },
+    { path = ".luai/licenses/AMD-SMI-MIT.txt", bytes = "AMD interface MIT fixture\n" },
     { path = ".luai/licenses/LGPL-3.0-or-later.txt",
       bytes = "LGPL-3.0-or-later fixture text\n" },
 }
@@ -467,7 +468,7 @@ local function properties_of(component_name, key)
     return value
 end
 
-for _, component_name in ipairs({ "wtop", "wtop_native", "lua", "luainstaller" }) do
+for _, component_name in ipairs({ "wtop", "wtop_native", "amd_smi_interface", "lua", "luainstaller" }) do
     for _, key in ipairs({ "path", "sha256", "present-in", "covers" }) do
         assert(properties_of(component_name, key) ~= nil,
             "the " .. component_name .. " component declares a licence but does "
@@ -483,7 +484,8 @@ for _, entry in ipairs(LICENCES) do
     local expected = sha256(fixture .. "/bundle/" .. entry.path)
     assert(properties_of("lua", "sha256") == expected
         or properties_of("wtop", "sha256") == expected
-        or properties_of("luainstaller", "sha256") == expected,
+        or properties_of("luainstaller", "sha256") == expected
+        or properties_of("amd_smi_interface", "sha256") == expected,
         "no component records " .. expected .. ", the hash of "
             .. entry.path .. ", so the notice text is described but unverifiable")
 end
@@ -513,6 +515,19 @@ assert(properties_of("wtop", "present-in") == "onedir",
 -- missing-artifact case above does -- a decision, a non-zero exit, and no
 -- document at all.  A document naming terms it does not carry is worse than no
 -- document, because it is filed as evidence.
+assert(properties_of("amd_smi_interface", "path") == ".luai/licenses/AMD-SMI-MIT.txt",
+    "the AMD interface has its own notice, separate from the Lua notice")
+assert(properties_of("amd_smi_interface", "sha256")
+    == sha256(fixture .. "/bundle/.luai/licenses/AMD-SMI-MIT.txt"),
+    "the AMD notice digest is measured")
+local missing_amd = fixture .. "/missing-amd"
+os.execute("cp -a " .. fixture .. "/bundle " .. missing_amd)
+assert(os.remove(missing_amd .. "/.luai/licenses/AMD-SMI-MIT.txt"))
+local amd_report = refuses("a release without the AMD interface notice",
+    "python3 tools/make_sbom.py --onedir " .. missing_amd
+        .. " --onefile " .. fixture .. "/wtop-onefile --output " .. fixture .. "/missing-amd.json")
+assert(amd_report:find("AMD-SMI-MIT.txt", 1, true), "the missing AMD notice is named")
+
 local unlicensed = fixture .. "/unlicensed"
 os.execute("cp -a " .. fixture .. "/bundle " .. unlicensed)
 assert(os.remove(unlicensed .. "/LICENSE"),

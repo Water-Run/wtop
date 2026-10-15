@@ -8,8 +8,7 @@
 -- what is missing. A GPU without a DRM node becomes its own device entry, the
 -- same way a headless NVIDIA card does.
 --
--- amdsmi has no process enumeration, so unlike NVML this provider never
--- contributes process rows.
+-- Process rows use the existing DRM fdinfo collector.
 local M = {}
 
 local function finite_number(value)
@@ -50,8 +49,7 @@ function M.default_provider()
     return nil
   end
   return function(include_processes)
-    -- include_processes is accepted for symmetry with NVML and ignored:
-    -- amdsmi exposes no process enumeration.
+    -- Process rows remain on the DRM path; accept the common provider argument.
     local called, data, reason = pcall(native.amdsmi_query, include_processes == true)
     if not called then return nil, "amdsmi_query_failed" end
     return data, reason
@@ -124,7 +122,8 @@ function M.merge(devices, lookup, data, options)
         merged = merged + 1
       end
       device.vendor_uuid = text(entry.uuid, 96) or device.vendor_uuid
-      device.driver_version = text(data.driver_version, 32) or device.driver_version
+      device.driver_version = text(entry.driver_version, 64)
+        or text(data.driver_version, 64) or device.driver_version
       device.amdsmi_index = entry.index
       device.amdsmi_name = text(entry.name, 96)
       if not device.model_name then device.model_name = device.amdsmi_name end
@@ -143,6 +142,9 @@ function M.merge(devices, lookup, data, options)
         device.quality = type(device.quality) == "table" and device.quality or {}
         device.capabilities = device.capabilities or {}
         device.quality.power, device.capabilities.power = "fresh", true
+        if entry.power_measurement == "current" or entry.power_measurement == "average" then
+          metrics.power_measurement = entry.power_measurement
+        end
       end
       if finite_number(entry.power_limit_watts) and entry.power_limit_watts > 0
           and set_missing(metrics, "power_limit_watts", entry.power_limit_watts) then
@@ -166,7 +168,11 @@ function M.merge(devices, lookup, data, options)
     end
   end
   return {
-    status = incomplete > 0 and "partial" or "ok",
+    status = (incomplete > 0 or data.status == "partial" or data.truncated == true)
+      and "partial" or "ok",
+    reason = text(data.reason, 96),
+    api_version = text(data.api_version, 48),
+    truncated = data.truncated == true,
     source = "amdsmi",
     driver_version = text(data.driver_version, 32),
     device_count = #(data.devices or {}),

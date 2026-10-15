@@ -1,0 +1,99 @@
+{
+  "232": {
+    "tag": "rocm-5.7.1",
+    "url": "https://raw.githubusercontent.com/ROCm/amdsmi/rocm-5.7.1/include/amd_smi/amdsmi.h",
+    "sha256": "2ed6883b259055626b0a4e3fa857d324dbdc8a08220dc71e306d92f8c92d196c",
+    "version": [
+      23,
+      2,
+      0,
+      1
+    ]
+  },
+  "234": {
+    "tag": "rocm-6.0.2",
+    "url": "https://raw.githubusercontent.com/ROCm/amdsmi/rocm-6.0.2/include/amd_smi/amdsmi.h",
+    "sha256": "2d36b1843c65629095d8bde4e9afe2295056f719e7ba3609ce67d981fc03ee55",
+    "version": [
+      23,
+      4,
+      0,
+      0
+    ]
+  },
+  "245": {
+    "tag": "rocm-6.1.5",
+    "url": "https://raw.githubusercontent.com/ROCm/amdsmi/rocm-6.1.5/include/amd_smi/amdsmi.h",
+    "sha256": "1a3c4a5f378cc04f86991355ce2a29da8b4b6eb862f9a88461e071bb4288a0fc",
+    "version": [
+      24,
+      5,
+      2,
+      0
+    ]
+  },
+  "246": {
+    "tag": "rocm-6.2.4",
+    "url": "https://raw.githubusercontent.com/ROCm/amdsmi/rocm-6.2.4/include/amd_smi/amdsmi.h",
+    "sha256": "06a054e66caf770b182679e83c27f7fdaa7c348929dd37c59587f0338f113dfa",
+    "version": [
+      24,
+      6,
+      3,
+      0
+    ]
+  },
+  "251": {
+    "tag": "rocm-6.3.3",
+    "url": "https://raw.githubusercontent.com/ROCm/amdsmi/rocm-6.3.3/include/amd_smi/amdsmi.h",
+    "sha256": "eb376d118a3415d6b620b7a78a41a892d442c967d56e2c66c7738853436aacf5",
+    "version": [
+      25,
+      1,
+      0,
+      0
+    ]
+  },
+  "255": {
+    "tag": "rocm-6.4.4",
+    "url": "https://raw.githubusercontent.com/ROCm/amdsmi/rocm-6.4.4/include/amd_smi/amdsmi.h",
+    "sha256": "39c1f981da61732b1b572365b778314d67c33ea30512883f83e147a548ce1de4",
+    "version": [
+      25,
+      25,
+      5,
+      1
+    ]
+  },
+  "260": {
+    "tag": "rocm-7.0.2",
+    "url": "https://raw.githubusercontent.com/ROCm/amdsmi/rocm-7.0.2/include/amd_smi/amdsmi.h",
+    "sha256": "17f1b59caa271b2bdc624a4ae2ed1ac1a4f63e0608e084155fabc586b670a487",
+    "version": [
+      26,
+      0,
+      2
+    ]
+  },
+  "262": {
+    "tag": "rocm-7.2.4",
+    "url": "https://raw.githubusercontent.com/ROCm/amdsmi/rocm-7.2.4/include/amd_smi/amdsmi.h",
+    "sha256": "e9502a3ff54c13c541d3dbf5d6ea51d004e63be44e4890b2138d0c089a6d4d99",
+    "version": [
+      26,
+      2,
+      2
+    ]
+  },
+  "262-0": {
+    "abi_profile": 262,
+    "tag": "rocm-7.1.1",
+    "url": "https://raw.githubusercontent.com/ROCm/amdsmi/rocm-7.1.1/include/amd_smi/amdsmi.h",
+    "sha256": "3265260eb86d19faf304d2d3b61c95e09801cff6bc098b0c89ecdf85cb68aa0f",
+    "version": [
+      26,
+      2,
+      0
+    ]
+  }
+}

@@ -1,334 +1,423 @@
-/* AMD System Management Interface provider. libamdsmi ships with the amdgpu
- * driver, so it is opened at run time and nothing links against it; a host
- * without the library reports the provider as unavailable. Only read-only
- * queries are used.
- *
- * ABI posture: amdsmi is versioned in place, and the library is routinely
- * newer than any header wtop was built against. Every call here is therefore
- * resolved by name, guarded, and allowed to fail independently -- a struct
- * that moved, a symbol that was renamed or a query the running driver refuses
- * omits one field instead of poisoning the whole device. Nothing this file
- * reads is written back, so a mismatch degrades to a partial device rather
- * than acting on a misread value.
- *
- * Per-process usage is deliberately absent: amdsmi exposes no process
- * enumeration, and amdgpu's own /proc/<pid>/fdinfo is the richer source that
- * the DRM path already reads. */
+/* Read-only AMD SMI queries. The SDK is optional and loaded at runtime.
+ * Output layouts are selected from verified public SDK versions, rather than
+ * passing shorter prefixes to functions that write complete structures.
+ * Process counters continue to come from DRM fdinfo. */
 #define _GNU_SOURCE
-
 #include <lua.h>
 #include <lauxlib.h>
-
 #include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-
 #include "wtop_amdsmi.h"
+#include "wtop_amdsmi_abi.h"
 
-#define AMDSMI_MAX_SOCKETS 32
-#define AMDSMI_MAX_PROCESSORS 64
+/* AMD SDK interface-declaration notice. An exported constant keeps the
+ * notice in native modules and in onefile payloads as well as source trees. */
+const char wtop_amdsmi_abi_license[] =
+    "Copyright (c) Advanced Micro Devices, Inc. All rights reserved.\n"
+    "\n"
+    "Permission is hereby granted, free of charge, to any person obtaining a copy\n"
+    "of this software and associated documentation files (the \"Software\"), to deal\n"
+    "in the Software without restriction, including without limitation the rights\n"
+    "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n"
+    "copies of the Software, and to permit persons to whom the Software is\n"
+    "furnished to do so, subject to the following conditions:\n"
+    "\n"
+    "The above copyright notice and this permission notice shall be included in\n"
+    "all copies or substantial portions of the Software.\n"
+    "\n"
+    "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n"
+    "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n"
+    "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n"
+    "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n"
+    "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n"
+    "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN\n"
+    "THE SOFTWARE.\n"
+    ;
 
-/* The layouts below are the documented amdsmi ABI for the fields wtop reads.
- * They are kept minimal on purpose: a prefix is far more likely to stay valid
- * across versions than a trailing field, so nothing past what is read here is
- * declared. */
+/* This is a POSIX dlsym ABI bridge. Clang's function sanitizer compares C
+ * enum/anonymous-struct type names, which differ between the local versioned
+ * declarations and the SDK translation unit even when the ABI matches. Only
+ * that check is excluded at the bridge; ASan and all other UBSan checks remain
+ * active. Tests compile the fake DSO against each original public SDK header. */
+#if defined(__clang__)
+#define SDK_ABI __attribute__((no_sanitize("function")))
+#else
+#define SDK_ABI
+#endif
+
+#define MAX_SOCKETS 32
+#define MAX_DEVICES 64
+#define GPU_INIT_FLAGS UINT64_C(2)
+#define AMD_GPU_TYPE 1
+
+typedef void *handle;
+typedef uint32_t (*init_fn)(uint64_t);
+typedef uint32_t (*shutdown_fn)(void);
+typedef uint32_t (*output_fn)(void *);
+typedef uint32_t (*sockets_fn)(uint32_t *, handle *);
+typedef uint32_t (*processors_fn)(handle, uint32_t *, handle *);
+typedef uint32_t (*type_fn)(handle, uint32_t *);
+typedef uint32_t (*device_output_fn)(handle, void *);
+typedef uint32_t (*uuid_fn)(handle, unsigned int *, char *);
+typedef uint32_t (*driver_fn)(handle, int *, char *);
+typedef uint32_t (*memory_fn)(handle, uint32_t, uint64_t *);
+typedef uint32_t (*temp_fn)(handle, uint32_t, uint32_t, int64_t *);
+typedef uint32_t (*clock_fn)(handle, uint32_t, void *);
+typedef uint32_t (*cap_fn)(handle, uint32_t, wtop_amd_power_cap *);
+typedef uint32_t (*fan_fn)(handle, uint32_t, int64_t *);
+typedef uint32_t (*fan_max_fn)(handle, uint32_t, uint64_t *);
+
 typedef struct {
-    uint32_t domain;
-    uint32_t bus;
-    uint32_t device;
-    uint32_t function;
-    uint32_t pci_segment;
-} amdsmi_bdf_info;
-
-typedef struct {
-    uint32_t gfx_activity;
-    uint32_t umc_activity;
-    uint32_t mm_activity;
-} amdsmi_gpu_activity;
-
-typedef struct {
-    uint64_t vram_total;
-    uint64_t vram_used;
-} amdsmi_memory_usage;
-
-typedef struct {
-    uint32_t average_socket_power;
-    uint32_t current_socket_power;
-    uint32_t power_cap;
-    uint32_t power_limit;
-} amdsmi_power_info;
-
-typedef struct {
-    uint32_t model;
-    uint32_t revision;
-    uint32_t sub_revision;
-} amdsmi_processor_handle;
-
-typedef void *amdsmi_socket_handle;
-
-typedef int amdsmi_status; /* AMDSMI_STATUS_SUCCESS = 0 */
-
-typedef amdsmi_status (*amdsmi_init_function)(uint32_t);
-typedef amdsmi_status (*amdsmi_status_function)(void);
-typedef amdsmi_status (*amdsmi_socket_function)(uint32_t *, amdsmi_socket_handle *);
-typedef amdsmi_status (*amdsmi_processor_function)(uint32_t *, amdsmi_processor_handle *);
-typedef amdsmi_status (*amdsmi_bdf_function)(amdsmi_processor_handle *, amdsmi_bdf_info *);
-typedef amdsmi_status (*amdsmi_handle_text_function)(amdsmi_processor_handle *, char **);
-typedef amdsmi_status (*amdsmi_text_function)(char **);
-typedef amdsmi_status (*amdsmi_activity_function)(amdsmi_processor_handle *,
-    amdsmi_gpu_activity *);
-typedef amdsmi_status (*amdsmi_memory_function)(amdsmi_processor_handle *,
-    amdsmi_memory_usage *);
-typedef amdsmi_status (*amdsmi_temp_function)(amdsmi_processor_handle *, int, int,
-    uint64_t *);
-typedef amdsmi_status (*amdsmi_power_function)(amdsmi_processor_handle *,
-    amdsmi_power_info *);
-typedef amdsmi_status (*amdsmi_clock_function)(amdsmi_processor_handle *, int,
-    uint32_t *);
-/* Fan speed takes no clock type and returns a signed percent, so it cannot
- * share the clock signature. */
-typedef amdsmi_status (*amdsmi_fan_function)(amdsmi_processor_handle *, int *);
-
-static struct {
-    int state; /* 0 untried, 1 ready, -1 unavailable */
-    const char *reason;
-    amdsmi_status_function shutdown;
-    amdsmi_socket_function sockets;
-    amdsmi_processor_function processors;
-    amdsmi_bdf_function bdf;
-    amdsmi_handle_text_function uuid;
-    amdsmi_handle_text_function name;
-    amdsmi_text_function driver_version;
-    amdsmi_activity_function activity;
-    amdsmi_memory_function memory;
-    amdsmi_temp_function temperature;
-    amdsmi_power_function power;
-    amdsmi_clock_function clock;
-    amdsmi_clock_function max_clock;
-    amdsmi_fan_function fan;
-} amdsmi;
-
-/* amdsmi enums used below, restated so the file does not need the SDK header
- * to build: AMDSMI_TEMP_TYPE_EDGE, AMDSMI_CLK_TYPE_GRAPHICS/MEMORY. */
-#define AMDSMI_TEMP_TYPE_EDGE 1
-#define AMDSMI_CLK_TYPE_GRAPHICS 1
-#define AMDSMI_CLK_TYPE_MEMORY 2
-
-static int amdsmi_open(void) {
     void *library;
-    amdsmi_init_function init;
-    if (amdsmi.state) return amdsmi.state > 0;
-    amdsmi.state = -1;
-    library = dlopen("libamdsmi.so.1", RTLD_NOW | RTLD_LOCAL);
-    if (!library) {
-        library = dlopen("libamdsmi.so", RTLD_NOW | RTLD_LOCAL);
-    }
-    if (!library) {
-        amdsmi.reason = "amdsmi_library_not_found";
-        return 0;
-    }
-    init = (amdsmi_init_function)dlsym(library, "amdsmi_init");
-    amdsmi.shutdown = (amdsmi_status_function)dlsym(library, "amdsmi_shut_down");
-    amdsmi.sockets = (amdsmi_socket_function)dlsym(library, "amdsmi_get_socket_handles");
-    amdsmi.processors = (amdsmi_processor_function)dlsym(library,
-        "amdsmi_get_processor_handles");
-    amdsmi.bdf = (amdsmi_bdf_function)dlsym(library, "amdsmi_get_gpu_device_bdf");
-    amdsmi.uuid = (amdsmi_handle_text_function)dlsym(library,
-        "amdsmi_get_gpu_device_uuid");
-    amdsmi.name = (amdsmi_handle_text_function)dlsym(library,
-        "amdsmi_get_gpu_device_name");
-    amdsmi.driver_version = (amdsmi_text_function)dlsym(library,
-        "amdsmi_get_gpu_driver_version");
-    amdsmi.activity = (amdsmi_activity_function)dlsym(library,
-        "amdsmi_get_gpu_activity");
-    amdsmi.memory = (amdsmi_memory_function)dlsym(library,
-        "amdsmi_get_gpu_vram_usage");
-    amdsmi.temperature = (amdsmi_temp_function)dlsym(library,
-        "amdsmi_get_temp_metric");
-    amdsmi.power = (amdsmi_power_function)dlsym(library, "amdsmi_get_power_info");
-    amdsmi.clock = (amdsmi_clock_function)dlsym(library,
-        "amdsmi_get_gpu_device_clock");
-    amdsmi.max_clock = (amdsmi_clock_function)dlsym(library,
-        "amdsmi_get_gpu_device_max_clock");
-    amdsmi.fan = (amdsmi_fan_function)dlsym(library,
-        "amdsmi_get_gpu_device_fan_speed");
-    if (!init || !amdsmi.sockets || !amdsmi.processors) {
-        amdsmi.reason = "amdsmi_symbols_missing";
-        return 0;
-    }
-    if (init(0) != 0) {
-        amdsmi.reason = "amdsmi_initialization_failed";
-        return 0;
-    }
-    amdsmi.state = 1;
-    return 1;
+    init_fn init;
+    shutdown_fn shutdown;
+    output_fn version;
+    sockets_fn sockets;
+    processors_fn processors;
+    type_fn type;
+    device_output_fn bdf, asic, driver_info, activity, power;
+    uuid_fn uuid;
+    driver_fn driver;
+    memory_fn memory_total, memory_used;
+    temp_fn temperature;
+    clock_fn clock;
+    cap_fn cap;
+    fan_fn fan;
+    fan_max_fn fan_max;
+} api;
+
+enum metric { UTILIZATION, MEMORY_UTILIZATION, MEMORY_TOTAL, MEMORY_USED,
+    TEMPERATURE, POWER, POWER_LIMIT, GRAPHICS_CLOCK, GRAPHICS_MAX,
+    MEMORY_CLOCK, FAN_PERCENT, METRIC_COUNT };
+static const char *const metric_names[METRIC_COUNT] = {
+    "utilization_percent", "memory_utilization_percent", "memory_total_bytes",
+    "memory_used_bytes", "temperature_celsius", "power_watts", "power_limit_watts",
+    "graphics_clock_hz", "graphics_clock_maximum_hz", "memory_clock_hz",
+    "fan_speed_percent"
+};
+typedef struct {
+    unsigned int present;
+    double metrics[METRIC_COUNT];
+    char name[257], uuid[257], driver[257], bdf[20];
+    const char *power_measurement;
+} device;
+typedef struct {
+    device devices[MAX_DEVICES];
+    int count, partial, truncated;
+    char version[48];
+} snapshot;
+
+static void text_copy(char *dest, size_t capacity, const char *value, size_t length) {
+    const char *end = memchr(value, 0, length);
+    if (!end || end == value || (size_t)(end - value) >= capacity) return;
+    size_t size = (size_t)(end - value);
+    memcpy(dest, value, size); dest[size] = 0;
+}
+static void reading(device *dev, enum metric key, double value) {
+    dev->metrics[key] = value;
+    dev->present |= 1u << key;
+}
+/* Both 0xffff and all ones occur as unsupported markers in the Linux SDK.
+ * A genuine zero-watt idle reading remains valid. */
+static int watts_valid(uint64_t value) {
+    return value != UINT16_MAX && value != UINT32_MAX && value < 100000;
+}
+static int clock_valid(uint32_t value) {
+    return value != UINT16_MAX && value < 100000;
 }
 
-static void integer_field(lua_State *L, const char *name, lua_Integer value) {
-    lua_pushinteger(L, value);
-    lua_setfield(L, -2, name);
+static const char *open_api(api *a) {
+    static const char *const libraries[] = {
+        "libamd_smi.so", "libamd_smi.so.26", "libamd_smi.so.25",
+        "libamd_smi.so.24", "libamd_smi.so.23", "libamd_smi.so.1"
+    };
+    memset(a, 0, sizeof(*a));
+    for (size_t i = 0; i < sizeof(libraries) / sizeof(libraries[0]); ++i) {
+        a->library = dlopen(libraries[i], RTLD_NOW | RTLD_LOCAL);
+        if (a->library) break;
+    }
+    if (!a->library) return "amdsmi_library_not_found";
+#define RESOLVE(field, type, symbol) a->field = (type)dlsym(a->library, symbol)
+    RESOLVE(init, init_fn, "amdsmi_init");
+    RESOLVE(shutdown, shutdown_fn, "amdsmi_shut_down");
+    RESOLVE(version, output_fn, "amdsmi_get_lib_version");
+    RESOLVE(sockets, sockets_fn, "amdsmi_get_socket_handles");
+    RESOLVE(processors, processors_fn, "amdsmi_get_processor_handles");
+    RESOLVE(type, type_fn, "amdsmi_get_processor_type");
+    RESOLVE(bdf, device_output_fn, "amdsmi_get_gpu_device_bdf");
+    RESOLVE(asic, device_output_fn, "amdsmi_get_gpu_asic_info");
+    RESOLVE(driver_info, device_output_fn, "amdsmi_get_gpu_driver_info");
+    RESOLVE(driver, driver_fn, "amdsmi_get_gpu_driver_version");
+    RESOLVE(uuid, uuid_fn, "amdsmi_get_gpu_device_uuid");
+    RESOLVE(activity, device_output_fn, "amdsmi_get_gpu_activity");
+    RESOLVE(memory_total, memory_fn, "amdsmi_get_gpu_memory_total");
+    RESOLVE(memory_used, memory_fn, "amdsmi_get_gpu_memory_usage");
+    RESOLVE(temperature, temp_fn, "amdsmi_get_temp_metric");
+    RESOLVE(power, device_output_fn, "amdsmi_get_power_info");
+    RESOLVE(cap, cap_fn, "amdsmi_get_power_cap_info");
+    RESOLVE(clock, clock_fn, "amdsmi_get_clock_info");
+    RESOLVE(fan, fan_fn, "amdsmi_get_gpu_fan_speed");
+    RESOLVE(fan_max, fan_max_fn, "amdsmi_get_gpu_fan_speed_max");
+#undef RESOLVE
+    if (!a->init || !a->shutdown || !a->version || !a->sockets
+        || !a->processors || !a->type) return "amdsmi_symbols_missing";
+    return NULL;
 }
 
-static void number_field(lua_State *L, const char *name, lua_Number value) {
-    lua_pushnumber(L, value);
-    lua_setfield(L, -2, name);
+/* The version getter itself has two complete layouts. Bootstrap into an
+ * aligned union large enough for both; never dereference its build pointer.
+ * Unknown version tuples do not authorize any variable-layout output calls. */
+SDK_ABI static int version_profile(api *a, snapshot *s) {
+    union {
+        wtop_amd_version_232 legacy;
+        wtop_amd_version_262 modern;
+        uint32_t words[8];
+    } version;
+    memset(&version, 0xff, sizeof(version));
+    if (a->version(&version) != 0) return 0;
+    uint32_t *v = version.words;
+    if (v[0] == 26) {
+        snprintf(s->version, sizeof(s->version), "%u.%u.%u", v[0], v[1], v[2]);
+        if (v[1] == 0 && v[2] == 2) return 260;
+        if (v[1] == 2 && (v[2] == 0 || v[2] == 2)) return 262;
+    } else {
+        snprintf(s->version, sizeof(s->version), "%u.%u.%u.%u", v[0], v[1], v[2], v[3]);
+        if (v[0] == 23 && v[1] == 2 && v[2] == 0 && v[3] == 1) return 232;
+        if (v[0] == 23 && v[1] == 4 && v[2] == 0 && v[3] == 0) return 234;
+        if (v[0] == 24 && v[1] == 5 && v[2] == 2 && v[3] == 0) return 245;
+        if (v[0] == 24 && v[1] == 6 && v[2] == 3 && v[3] == 0) return 246;
+        if (v[0] == 25 && v[1] == 1 && v[2] == 0 && v[3] == 0) return 251;
+        if (v[0] == 25 && v[1] == 25 && v[2] == 5 && v[3] == 1) return 255;
+    }
+    return 0;
+}
+
+SDK_ABI static const char *collect_handles(api *a, snapshot *s, handle *handles, int *count) {
+    handle sockets[MAX_SOCKETS] = {0};
+    uint32_t needed = 0;
+    if (a->sockets(&needed, NULL) != 0) return "amdsmi_socket_query_failed";
+    if (needed == 0) return NULL;
+    uint32_t capacity = needed < MAX_SOCKETS ? needed : MAX_SOCKETS;
+    uint32_t size = capacity;
+    if (needed > MAX_SOCKETS) s->truncated = s->partial = 1;
+    if (a->sockets(&size, sockets) != 0 || size > capacity) {
+        s->partial = 1;
+        if (size > capacity) s->truncated = 1;
+        return "amdsmi_socket_query_failed";
+    }
+    for (uint32_t i = 0; i < size; ++i) {
+        if (!sockets[i]) { s->partial = 1; continue; }
+        needed = 0;
+        if (a->processors(sockets[i], &needed, NULL) != 0) {
+            s->partial = 1; continue;
+        }
+        if (needed == 0) continue;
+        handle batch[MAX_DEVICES] = {0};
+        capacity = needed < MAX_DEVICES ? needed : MAX_DEVICES;
+        uint32_t amount = capacity;
+        if (needed > MAX_DEVICES) s->truncated = s->partial = 1;
+        if (a->processors(sockets[i], &amount, batch) != 0 || amount > capacity) {
+            s->partial = 1;
+            if (amount > capacity) s->truncated = 1;
+            continue;
+        }
+        for (uint32_t j = 0; j < amount; ++j) {
+            uint32_t type = UINT32_MAX; int duplicate = 0;
+            if (!batch[j] || a->type(batch[j], &type) != 0) { s->partial = 1; continue; }
+            if (type != AMD_GPU_TYPE) continue;
+            for (int k = 0; k < *count; ++k) if (handles[k] == batch[j]) duplicate = 1;
+            if (duplicate) continue;
+            if (*count == MAX_DEVICES) { s->truncated = s->partial = 1; continue; }
+            handles[(*count)++] = batch[j];
+        }
+    }
+    return NULL;
+}
+
+/* Each case allocates the complete SDK structure, including reserved fields.
+ * New versions must be checked against their public header before adding a
+ * tuple above. A symbol existing alone says nothing about output size. */
+SDK_ABI static void identity(api *a, handle h, int profile, device *d) {
+#define IDENTITY_CASE(p) case p: { \
+    wtop_amd_asic_info_##p value; memset(&value, 0xff, sizeof(value)); \
+    if (a->asic && a->asic(h, &value) == 0) \
+        text_copy(d->name, sizeof(d->name), value.market_name, sizeof(value.market_name)); \
+    break; }
+    switch (profile) {
+        IDENTITY_CASE(232) IDENTITY_CASE(234) IDENTITY_CASE(245) IDENTITY_CASE(246)
+        IDENTITY_CASE(251) IDENTITY_CASE(255) IDENTITY_CASE(260) IDENTITY_CASE(262)
+    }
+#undef IDENTITY_CASE
+#define DRIVER_CASE(p) case p: { \
+    wtop_amd_driver_info_##p value; memset(&value, 0xff, sizeof(value)); \
+    if (a->driver_info && a->driver_info(h, &value) == 0) \
+        text_copy(d->driver, sizeof(d->driver), value.driver_version, sizeof(value.driver_version)); \
+    break; }
+    switch (profile) {
+        DRIVER_CASE(234) DRIVER_CASE(245) DRIVER_CASE(246) DRIVER_CASE(251)
+        DRIVER_CASE(255) DRIVER_CASE(260) DRIVER_CASE(262)
+    }
+#undef DRIVER_CASE
+    if (!d->driver[0] && a->driver) {
+        char value[257]; memset(value, 0xff, sizeof(value));
+        int length = sizeof(value);
+        if (a->driver(h, &length, value) == 0 && length > 0
+            && (size_t)length <= sizeof(value))
+            text_copy(d->driver, sizeof(d->driver), value, (size_t)length);
+    }
+    if (a->uuid) {
+        char value[257]; memset(value, 0xff, sizeof(value));
+        unsigned int length = sizeof(value);
+        if (a->uuid(h, &length, value) == 0 && length > 0 && length <= sizeof(value)) {
+            /* SDK releases differ on whether the returned length counts NUL. */
+            size_t bound = length < sizeof(value) ? length + 1 : length;
+            text_copy(d->uuid, sizeof(d->uuid), value, bound);
+        }
+    }
+    wtop_amd_bdf bdf; memset(&bdf, 0xff, sizeof(bdf));
+    if (a->bdf && a->bdf(h, &bdf) == 0 && (bdf.as_uint >> 16) <= 0xffff) {
+        snprintf(d->bdf, sizeof(d->bdf), "%04x:%02x:%02x.%x",
+            (unsigned int)(bdf.as_uint >> 16), (unsigned int)((bdf.as_uint >> 8) & 0xff),
+            (unsigned int)((bdf.as_uint >> 3) & 0x1f), (unsigned int)(bdf.as_uint & 7));
+    }
+}
+static void power_reading(device *d, uint64_t current, uint64_t average) {
+    if (watts_valid(current)) {
+        reading(d, POWER, (double)current); d->power_measurement = "current";
+    } else if (watts_valid(average)) {
+        reading(d, POWER, (double)average); d->power_measurement = "average";
+    }
+}
+SDK_ABI static void power(api *a, handle h, int profile, device *d) {
+    if (a->power) {
+        if (profile == 232) {
+            wtop_amd_power_info_232 value; memset(&value, 0xff, sizeof(value));
+            if (a->power(h, &value) == 0) power_reading(d, UINT64_MAX, value.average_socket_power);
+        } else if (profile <= 251) {
+            wtop_amd_power_info_234 value; memset(&value, 0xff, sizeof(value));
+            if (a->power(h, &value) == 0)
+                power_reading(d, value.current_socket_power, value.average_socket_power);
+        } else if (profile == 255) {
+            wtop_amd_power_info_255 value; memset(&value, 0xff, sizeof(value));
+            /* This release doesn't populate socket_power; use current/average. */
+            if (a->power(h, &value) == 0)
+                power_reading(d, value.current_socket_power, value.average_socket_power);
+        } else {
+            wtop_amd_power_info_262 value; memset(&value, 0xff, sizeof(value));
+            if (a->power(h, &value) == 0)
+                power_reading(d, value.current_socket_power, value.average_socket_power);
+        }
+    }
+    wtop_amd_power_cap cap; memset(&cap, 0xff, sizeof(cap));
+    if (a->cap && a->cap(h, 0, &cap) == 0 && cap.power_cap > 0
+        && cap.power_cap != UINT16_MAX && cap.power_cap != UINT32_MAX
+        && cap.power_cap < UINT64_C(100000000000))
+        reading(d, POWER_LIMIT, (double)cap.power_cap / 1000000.0);
+}
+SDK_ABI static void clocks(api *a, handle h, int profile, device *d) {
+    if (!a->clock) return;
+    /* GFX=0 and MEM=4 in all supported SDK headers. Every layout is 32 bytes,
+     * but declare the correct complete object for the version in use. */
+#define CLOCK_CASE(p, current) case p: { \
+    wtop_amd_clk_info_##p value; memset(&value, 0xff, sizeof(value)); \
+    if (a->clock(h, 0, &value) == 0) { \
+        if (clock_valid(value.current)) reading(d, GRAPHICS_CLOCK, value.current * 1000000.0); \
+        if (value.max_clk > 0 && clock_valid(value.max_clk)) \
+            reading(d, GRAPHICS_MAX, value.max_clk * 1000000.0); \
+    } \
+    memset(&value, 0xff, sizeof(value)); \
+    if (a->clock(h, 4, &value) == 0 && clock_valid(value.current)) \
+        reading(d, MEMORY_CLOCK, value.current * 1000000.0); \
+    break; }
+    switch (profile) {
+        CLOCK_CASE(232, cur_clk) CLOCK_CASE(234, cur_clk) CLOCK_CASE(245, cur_clk)
+        CLOCK_CASE(246, clk) CLOCK_CASE(251, clk) CLOCK_CASE(255, clk)
+        CLOCK_CASE(260, clk) CLOCK_CASE(262, clk)
+    }
+#undef CLOCK_CASE
+}
+SDK_ABI static void collect_device(api *a, handle h, int profile, device *d) {
+    identity(a, h, profile, d);
+    wtop_amd_activity value; memset(&value, 0xff, sizeof(value));
+    if (a->activity && a->activity(h, &value) == 0) {
+        if (value.gfx_activity <= 100) reading(d, UTILIZATION, value.gfx_activity);
+        if (value.umc_activity <= 100) reading(d, MEMORY_UTILIZATION, value.umc_activity);
+    }
+    uint64_t bytes = UINT64_MAX;
+    if (a->memory_total && a->memory_total(h, 0, &bytes) == 0 && bytes < (UINT64_C(1) << 50))
+        reading(d, MEMORY_TOTAL, (double)bytes);
+    bytes = UINT64_MAX;
+    if (a->memory_used && a->memory_used(h, 0, &bytes) == 0 && bytes < (UINT64_C(1) << 50))
+        reading(d, MEMORY_USED, (double)bytes);
+    if ((d->present & ((1u << MEMORY_TOTAL) | (1u << MEMORY_USED)))
+        == ((1u << MEMORY_TOTAL) | (1u << MEMORY_USED))
+        && d->metrics[MEMORY_USED] > d->metrics[MEMORY_TOTAL])
+        d->present &= ~(1u << MEMORY_USED);
+    int64_t temperature = INT64_MAX;
+    if (a->temperature && a->temperature(h, 0, 0, &temperature) == 0
+        && temperature > -274 && temperature < 1000) reading(d, TEMPERATURE, (double)temperature);
+    power(a, h, profile, d);
+    clocks(a, h, profile, d);
+    int64_t fan = INT64_MAX;
+    uint64_t maximum = UINT64_MAX;
+    if (a->fan && a->fan_max && a->fan(h, 0, &fan) == 0
+        && a->fan_max(h, 0, &maximum) == 0 && fan >= 0 && maximum > 0
+        && maximum < 1000000000 && (uint64_t)fan <= maximum)
+        reading(d, FAN_PERCENT, (double)fan * 100.0 / (double)maximum);
 }
 
 static void string_field(lua_State *L, const char *name, const char *value) {
-    lua_pushstring(L, value);
-    lua_setfield(L, -2, name);
+    if (!value || !*value) return;
+    lua_pushstring(L, value); lua_setfield(L, -2, name);
 }
 
-/* A sensor that reports all ones is the library's "unknown" marker, not a
- * reading; passing it on would paint a plausible-looking 4-billion on a
- * panel. */
-static int plausible_number(double value, double ceiling) {
-    return value == value && value >= 0 && value < ceiling;
-}
-
-static int bounded(unsigned long long value, unsigned long long ceiling) {
-    return value < ceiling;
-}
-
-/* Collects the processor handles across every socket. A driver may expose
- * processors that no socket enumeration lists, so the socket walk is a
- * convenience rather than a requirement: when it yields nothing the result is
- * empty and the caller reports the provider as having no devices. */
-static int collect_handles(amdsmi_processor_handle *handles, int capacity) {
-    amdsmi_socket_handle sockets[AMDSMI_MAX_SOCKETS];
-    int count = 0;
-    if (!amdsmi.sockets || !amdsmi.processors) return 0;
-    uint32_t socket_count = AMDSMI_MAX_SOCKETS;
-    if (amdsmi.sockets(&socket_count, sockets) != 0) return 0;
-    if (socket_count > AMDSMI_MAX_SOCKETS) socket_count = AMDSMI_MAX_SOCKETS;
-    for (uint32_t index = 0; index < socket_count; ++index) {
-        amdsmi_processor_handle batch[AMDSMI_MAX_PROCESSORS];
-        uint32_t batch_count = AMDSMI_MAX_PROCESSORS;
-        if (amdsmi.processors(&batch_count, batch) != 0) continue;
-        if (batch_count > AMDSMI_MAX_PROCESSORS) batch_count = AMDSMI_MAX_PROCESSORS;
-        for (uint32_t item = 0; item < batch_count; ++item) {
-            if (count >= capacity) return count;
-            int duplicate = 0;
-            for (int found = 0; found < count; ++found) {
-                if (handles[found].model == batch[item].model
-                    && handles[found].revision == batch[item].revision
-                    && handles[found].sub_revision == batch[item].sub_revision) {
-                    duplicate = 1;
-                    break;
-                }
+/* Collect all vendor outputs before allocating Lua objects. Every successfully
+ * initialized session is shut down and the DSO closed even if Lua later OOMs.
+ * Opening a fresh session also recovers after driver startup/reset/hotplug. */
+SDK_ABI int wtop_amdsmi_query(lua_State *L) {
+    snapshot s; memset(&s, 0, sizeof(s));
+    api a;
+    const char *reason = open_api(&a);
+    int initialized = 0;
+    if (!reason) {
+        if (a.init(GPU_INIT_FLAGS) != 0) reason = "amdsmi_initialization_failed";
+        else initialized = 1;
+    }
+    if (!reason) {
+        int profile = version_profile(&a, &s);
+        if (!profile) reason = "amdsmi_abi_unsupported";
+        else {
+            handle handles[MAX_DEVICES]; int count = 0;
+            reason = collect_handles(&a, &s, handles, &count);
+            if (!reason) {
+                s.count = count;
+                for (int i = 0; i < count; ++i) collect_device(&a, handles[i], profile, &s.devices[i]);
             }
-            if (!duplicate) handles[count++] = batch[item];
         }
     }
-    return count;
-}
-
-/* amdsmi_query([include_processes]) -> {driver_version, devices} | nil, reason
- *
- * include_processes is accepted and ignored: amdsmi has no process
- * enumeration, so there is nothing to opt into. */
-int wtop_amdsmi_query(lua_State *L) {
-    amdsmi_processor_handle handles[AMDSMI_MAX_PROCESSORS];
-    int handle_count;
-    if (!amdsmi_open()) {
-        lua_pushnil(L);
-        lua_pushstring(L, amdsmi.reason ? amdsmi.reason : "amdsmi_unavailable");
-        return 2;
-    }
-    handle_count = collect_handles(handles, AMDSMI_MAX_PROCESSORS);
-    lua_createtable(L, 0, 2);
-    if (amdsmi.driver_version) {
-        char *version = NULL;
-        if (amdsmi.driver_version(&version) == 0 && version) {
-            string_field(L, "driver_version", version);
-        }
-    }
-    lua_createtable(L, handle_count > 0 ? handle_count : 0, 0);
-    for (int index = 0; index < handle_count; ++index) {
-        amdsmi_processor_handle handle = handles[index];
-        amdsmi_bdf_info bdf;
-        amdsmi_gpu_activity activity;
-        amdsmi_memory_usage memory;
-        amdsmi_power_info power;
-        uint64_t temperature = 0;
-        uint32_t clock = 0;
+    if (initialized && a.shutdown() != 0) reason = "amdsmi_shutdown_failed";
+    if (a.library) dlclose(a.library);
+    if (reason) { lua_pushnil(L); lua_pushstring(L, reason); return 2; }
+    lua_createtable(L, 0, 6);
+    string_field(L, "api_version", s.version);
+    string_field(L, "status", s.partial ? "partial" : "ok");
+    if (s.partial) string_field(L, "reason", "amdsmi_enumeration_incomplete");
+    lua_pushboolean(L, s.truncated); lua_setfield(L, -2, "truncated");
+    lua_createtable(L, s.count, 0);
+    for (int i = 0; i < s.count; ++i) {
+        device *d = &s.devices[i];
         lua_createtable(L, 0, 20);
-        integer_field(L, "index", index);
-        if (amdsmi.bdf && amdsmi.bdf(&handle, &bdf) == 0) {
-            char text[32];
-            snprintf(text, sizeof(text), "%04x:%02x:%02x.%x",
-                bdf.domain & 0xffff, bdf.bus & 0xff, bdf.device & 0x1f,
-                bdf.function & 0x7);
-            string_field(L, "pci_bdf", text);
+        lua_pushinteger(L, i); lua_setfield(L, -2, "index");
+        string_field(L, "name", d->name); string_field(L, "uuid", d->uuid);
+        string_field(L, "pci_bdf", d->bdf); string_field(L, "driver_version", d->driver);
+        string_field(L, "power_measurement", d->power_measurement);
+        for (int m = 0; m < METRIC_COUNT; ++m) if (d->present & (1u << m)) {
+            lua_pushnumber(L, d->metrics[m]); lua_setfield(L, -2, metric_names[m]);
         }
-        if (amdsmi.name) {
-            char *value = NULL;
-            if (amdsmi.name(&handle, &value) == 0 && value) {
-                string_field(L, "name", value);
-            }
-        }
-        if (amdsmi.uuid) {
-            char *value = NULL;
-            if (amdsmi.uuid(&handle, &value) == 0 && value) {
-                string_field(L, "uuid", value);
-            }
-        }
-        if (amdsmi.activity && amdsmi.activity(&handle, &activity) == 0) {
-            /* gfx is the compute activity the table's utilisation column wants;
-             * UMC is reported separately because on a card where the two
-             * diverge, calling memory traffic "utilisation" would mislead. */
-            if (bounded(activity.gfx_activity, 101)) {
-                number_field(L, "utilization_percent", (double)activity.gfx_activity);
-            }
-            if (bounded(activity.umc_activity, 101)) {
-                number_field(L, "memory_utilization_percent",
-                    (double)activity.umc_activity);
-            }
-        }
-        if (amdsmi.memory && amdsmi.memory(&handle, &memory) == 0) {
-            if (bounded(memory.vram_total, 1ULL << 50)) {
-                number_field(L, "memory_total_bytes", (double)memory.vram_total);
-            }
-            if (bounded(memory.vram_used, 1ULL << 50)) {
-                number_field(L, "memory_used_bytes", (double)memory.vram_used);
-            }
-        }
-        if (amdsmi.temperature
-            && amdsmi.temperature(&handle, AMDSMI_TEMP_TYPE_EDGE, 0, &temperature) == 0
-            && plausible_number((double)temperature, 1000)) {
-            number_field(L, "temperature_celsius", (double)temperature);
-        }
-        if (amdsmi.power && amdsmi.power(&handle, &power) == 0) {
-            if (bounded(power.average_socket_power, 100000u)) {
-                number_field(L, "power_watts", (double)power.average_socket_power / 1000.0);
-            }
-            if (bounded(power.power_cap, 100000u)) {
-                number_field(L, "power_limit_watts", (double)power.power_cap / 1000.0);
-            }
-        }
-        if (amdsmi.clock
-            && amdsmi.clock(&handle, AMDSMI_CLK_TYPE_GRAPHICS, &clock) == 0
-            && bounded(clock, 100000u)) {
-            number_field(L, "graphics_clock_hz", (double)clock * 1000000.0);
-        }
-        if (amdsmi.max_clock
-            && amdsmi.max_clock(&handle, AMDSMI_CLK_TYPE_GRAPHICS, &clock) == 0
-            && bounded(clock, 100000u)) {
-            number_field(L, "graphics_clock_maximum_hz", (double)clock * 1000000.0);
-        }
-        if (amdsmi.clock
-            && amdsmi.clock(&handle, AMDSMI_CLK_TYPE_MEMORY, &clock) == 0
-            && bounded(clock, 100000u)) {
-            number_field(L, "memory_clock_hz", (double)clock * 1000000.0);
-        }
-        if (amdsmi.fan) {
-            int fan = 0;
-            if (amdsmi.fan(&handle, &fan) == 0 && plausible_number((double)fan, 101)) {
-                number_field(L, "fan_speed_percent", (double)fan);
-            }
-        }
-        lua_rawseti(L, -2, index + 1);
+        lua_rawseti(L, -2, i + 1);
     }
+    lua_setfield(L, -2, "devices");
     return 1;
 }

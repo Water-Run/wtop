@@ -1794,6 +1794,10 @@ function GPU:sample(context, previous)
       { used_ids = used_ids })
     for _, device in ipairs(devices) do by_id[device.id] = device end
   end
+  for _, provider in pairs(providers) do
+    partial = partial or provider.status == "partial"
+    truncated = truncated or provider.truncated == true
+  end
   for _, device in ipairs(devices) do
     estimated = estimated or device.identity_quality == "estimated"
     partial = partial or device.partial

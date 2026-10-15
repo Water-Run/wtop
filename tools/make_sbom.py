@@ -102,6 +102,8 @@ LICENCE_TEXTS = (
      "the project's own terms"),
     ("MIT", ".luai/licenses/Lua-MIT.txt",
      "the PUC Lua runtime the release links and carries"),
+    ("MIT-AMD", ".luai/licenses/AMD-SMI-MIT.txt",
+     "the AMD SMI public interface declarations in the native module"),
     ("LGPL-3.0-or-later", ".luai/licenses/LGPL-3.0-or-later.txt",
      "the packaging tool the generated launcher derives from"),
 )
@@ -304,6 +306,11 @@ def main() -> int:
                   + notice_sentence(licences["EUPL-1.2"]),
                   hashes=h("module"),
                   properties=licence_properties(licences["EUPL-1.2"])),
+        component("amd-smi-abi@ROCm-5.7.1-7.2.4", "amd_smi_interface", "ROCm-5.7.1-7.2.4", "MIT",
+                  "Versioned AMD SMI public interface declarations; the AMD library "
+                  "implementation is loaded from the host and is not bundled."
+                  + notice_sentence(licences["MIT-AMD"]),
+                  properties=licence_properties(licences["MIT-AMD"])),
         component(lua_ref, "lua", LUA_VERSION, "MIT",
                   "PUC Lua runtime. It is linked into the onedir launcher, whose "
                   "measured glibc floor is the interpreter's, and carried as a "
@@ -339,7 +346,8 @@ def main() -> int:
         "components": components,
         "dependencies": [
             {"ref": launcher_ref, "dependsOn": [module_ref, lua_ref]},
-            {"ref": module_ref, "dependsOn": []},
+            {"ref": module_ref, "dependsOn": ["amd-smi-abi@ROCm-5.7.1-7.2.4"]},
+            {"ref": "amd-smi-abi@ROCm-5.7.1-7.2.4", "dependsOn": []},
             {"ref": lua_ref, "dependsOn": []},
         ],
     }

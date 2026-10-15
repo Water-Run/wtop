@@ -749,6 +749,20 @@ local function export_gpu_processes(processes)
     return result
 end
 
+local function export_gpu_providers(providers)
+    local result = json.object({})
+    for _, name in ipairs({ "nvml", "amdsmi", "levelzero" }) do
+        local provider = type(providers) == "table" and providers[name]
+        if type(provider) == "table" then
+            result[name] = copy_fields(provider, {
+                "status", "reason", "source", "api_version", "driver_version",
+                "device_count", "merged_devices", "added_devices", "incomplete_devices", "truncated",
+            })
+        end
+    end
+    return result
+end
+
 local function export_gpus(gpus, quality)
     local result = json.object({
         schema = gpus and gpus.schema,
@@ -2153,7 +2167,7 @@ function M.agent(snapshot, options)
             -- different quantities, and a summary carrying one of them
             -- unnamed reads as "the" frequency of the device.
             "frequency_current_hz", "frequency_domain", "frequency_source_kind",
-            "temperature_celsius", "power_watts", "power_source", "power_limit_watts", "power_limit_source",
+            "temperature_celsius", "power_watts", "power_source", "power_measurement", "power_limit_watts", "power_limit_source",
             "power_limit_percent", "power_headroom_watts",
         })
         output.performance_limits = export_performance_limits(device.performance_limits, device_limit, true)
@@ -2411,6 +2425,7 @@ function M.agent(snapshot, options)
             gpu = json.object({
                 device_count = #gpu_devices,
                 maximum_utilization_percent = maximum_gpu_utilization,
+                providers = export_gpu_providers(full.gpus and full.gpus.providers),
             }),
             power = json.object({
                 total_watts = full.power and full.power.total_power_watts,

@@ -67,6 +67,18 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 ## 验证矩阵
 
+2026-10-15 核对：`1b0b052` 的
+[主 CI](https://github.com/Water-Run/wtop/actions/runs/38712039796) 16 个作业与
+[Windows CI](https://github.com/Water-Run/wtop/actions/runs/38712040017) 两个作业
+全部通过。macOS arm64 最终归档 SHA-256 前缀 `e5767596` 在 M4 验证两种形态、
+全部 CLI、三个功耗窗口入口，以及原 200 列 GPU 表中的 `~755 MHz` 和频率详情；
+Windows x86 最终归档前缀 `0c0d0edd` 在 Windows 11 和 Server 2008 验证两种
+形态、全部 CLI、经典无 ANSI 控制台与功耗窗口。Linux 两种归档在普通用户与
+已有 root 权限下均复验 CPU 当前/历史限制、Agent 和三个功耗入口，实际捕获
+当前 PL1；权限不足的读数不显示条形图。静态门禁核对 macOS 11.0
+部署下限和七个 PE32 i386 映像的 843 个命名导入。Linux 最终归档两种形态的完整性、原生身份、CLI/JSON 和 quick PTY 验收通过；
+复核记录与原始日志保存在 `build/hardware-limit-reasons-20261015/`。
+
 2026-10-12 核对：提交 `74a6687` 的
 [CI 运行](https://github.com/Water-Run/wtop/actions/runs/38210309458)
 已完成，14 个作业全部通过。覆盖 Linux x86_64/aarch64、Lua 5.5 与 Lua 5.4
@@ -157,6 +169,51 @@ M4 通过同一夹具与三个入口，并在 200 列终端恢复实测 `~755 MH
 CLI、功耗入口和相关原生路径复验；Mac 验收同时确认 200 列 GPU 表中，空的
 高优先级功耗列挤掉了实测频率。原失败证据保留，本轮改为优先展示有数据的
 列，使用原 200 列频率/估算标记与时钟详情条件复验，不将旧失败记作通过。
+
+### 2026-10-15：AMD SMI 原生接口与功耗单位
+
+Linux AMD SMI 包装按已核对的公共 SDK 布局读取数据：ROCm 5.7.1、6.0.2、
+6.1.5、6.2.4、6.3.3、6.4.4、7.0.2、7.1.1、7.2.4。根据运行库报告的完整
+版本选择八种布局；未知版本报告 `amdsmi_abi_unsupported`，DRM/hwmon 路径
+仍然可用，不试写尺寸未知的传感器结构体。
+
+使用官方 `libamd_smi.so` 名称与 GPU 初始化标志。处理器是 opaque 句柄，
+按 socket 枚举并核对处理器类型、重复项和有界容量。结构体包含全部保留字段，
+不再以短前缀接收厂商库写入。设备名和驱动版本按版本布局读取，UUID 使用
+调用者提供的缓冲区，PCI domain 超出当前地址模型时不截成另一块设备。
+
+`get_power_info` 的 Linux 读数为 W；当前功耗不可用时可使用平均功耗，并将
+`power_measurement` 标为 `current` 或 `average`。25.5 不依赖未填写的
+`socket_power` 成员。上限独立使用 `get_power_cap_info` 的微瓦并除以一百万，
+不从不同版本的 `power_limit` 成员猜测单位。显存使用独立字节接口；时钟从
+MHz 转为 Hz，温度使用 EDGE/CURRENT 的摄氏度，风扇百分比从原始值和最大值
+计算。正常零值保留，错误、未知哨兵和不一致的容量不冒充读数。
+
+每次查询在创建 Lua 对象前完成采集、关闭 SDK 会话和动态库；驱动初始化
+失败或后续热插拔不会被永久缓存成缺失。设备列表变化、单 socket 失败和
+截断传播为 partial，并在 Snapshot/Agent 的 provider 元数据保留 SDK 版本、
+原因和截断状态。进程 GPU 计数沿用 DRM fdinfo。
+
+原生假库覆盖九个版本的八种布局，每版检查完整接口、缺少可选符号和缺少
+必要符号三种库，直接执行实际 `dlopen` 包装。24 类场景包括初始化失败、
+版本不支持、枚举增长、重复/空句柄、非 GPU、完整结构体写入、未终止字符串、
+哨兵、零功耗、平均值回退、355.5 W 上限、部分指标失败、关闭失败和缺库恢复，
+另逐项注入 Lua 内存分配失败。还以 SHA-256 固定的官方原始头文件重新编译
+假库并执行；Clang ASan/UBSan 及泄漏检测通过。Clang 的 function 类型检查
+无法表示跨 SDK 的局部版本类型，桥接处仅排除此项，其余检查保持启用。
+
+最终 `make check test-55` 的 136 个 Lua 文件通过；严格 C 警告、原生
+Clang ASan/UBSan 门禁、Lua 5.4 相关回归、quick PTY 和两种形态的许可/SBOM
+核对通过。相同 Lua 合并/Agent 语义、功耗与 GPU 时钟用例在 M4、Windows 11
+及 Server 2008 的现有运行时通过。新版原生模块和 Lua 在既有 manylinux2014
+容器重编译后的组合 glibc 下限仍为 2.17；这不证明最低内核版本。
+源码、onedir、onefile 均用实际原生模块和假 SDK 完成 Snapshot/Agent 链路，
+核对 300 W / 355.5 W、84.388% 和测量种类，未将夹具数值称作本机读数。
+
+AMD 声明及测试摘录保留 MIT 许可。Linux 原生模块含许可文字，onedir 有
+独立文本；SBOM 将其与 Lua 的 MIT 文本分开记录。证据与原始头文件位于
+`build/hardware-amdsmi-20261015/`。本轮没有 AMD GPU 实机，SDK 夹具不构成
+实际显卡兼容性认证；XP 运行证据也没有增加。
 
 ### 2026-10-15：当前功耗、配置上限和占比
 

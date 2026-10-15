@@ -74,10 +74,10 @@ end
 --
 -- The `rocm-smi` and `nvidia-smi` entries above answer a different question than
 -- the one a user brings to a diagnostic: wtop never runs either binary.  It
--- dlopens `libnvidia-ml.so.1`, `libamdsmi.so.1` and `libze_loader.so.1` at run
+-- dlopens `libnvidia-ml.so.1`, `libamd_smi.so` and `libze_loader.so.1` at run
 -- time, and a host can have the command-line tool installed and the library
 -- absent, or -- the case this host demonstrates -- `rocm-smi` present with no
--- `libamdsmi.so.1` at all, so wtop has no AMD backend while the helper line
+-- `libamd_smi.so` at all, so wtop has no AMD backend while the helper line
 -- reads `available`.  A shared library also cannot be probed like a source file:
 -- it is found through the dynamic loader's search path, not at a fixed path, so
 -- `system.readable` on a guessed location would answer a question nobody asked.
@@ -91,7 +91,7 @@ end
 -- will not load, and only the second is a problem worth reporting.
 local VENDOR_PROBES = {
     { key = "nvml", label = "nvidia", query = "nvml_query", library = "libnvidia-ml.so.1" },
-    { key = "amdsmi", label = "amd", query = "amdsmi_query", library = "libamdsmi.so.1" },
+    { key = "amdsmi", label = "amd", query = "amdsmi_query", library = "libamd_smi.so" },
     { key = "levelzero", label = "intel", query = "levelzero_query", library = "libze_loader.so.1" },
 }
 
@@ -117,7 +117,11 @@ local function probe_vendor(entry, safe_mode)
     end
     if data then
         local devices = type(data.devices) == "table" and #data.devices or 0
-        result.state = devices > 0 and "available" or "loaded"
+        result.state = (data.status == "partial" or data.truncated == true) and "partial"
+            or devices > 0 and "available" or "loaded"
+        result.api_version = data.api_version
+        result.reason = data.reason
+        result.truncated = data.truncated == true
         result.devices = devices
         if data.driver_version or data.driver then
             result.version = data.driver_version or data.driver
@@ -302,6 +306,8 @@ function M.run(options)
                 detail[#detail + 1] = string.format("%d device(s)", value.devices)
             end
             if value.version then detail[#detail + 1] = tostring(value.version) end
+            if value.api_version then detail[#detail + 1] = "SDK " .. tostring(value.api_version) end
+            if value.truncated then detail[#detail + 1] = "truncated" end
             if value.reason then detail[#detail + 1] = tostring(value.reason) end
             local suffix = #detail > 0 and (" (" .. table.concat(detail, ", ") .. ")") or ""
             io.write(string.format("  %-18s %s%s\n", key,
