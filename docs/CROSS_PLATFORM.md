@@ -67,6 +67,27 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 ## 验证矩阵
 
+2026-10-16 核对：三个 GPU SDK 隔离与 Sysman 修复提交 `6702c31` 的
+[主 CI](https://github.com/Water-Run/wtop/actions/runs/38794231258) 16 个作业与
+[Windows CI](https://github.com/Water-Run/wtop/actions/runs/38794231138) 两个作业
+全部通过，包括两个 Linux 架构的 139 个 Lua 测试文件、GCC ASan/UBSan、
+三轮计时敏感终端回归和下载最终归档后的完整 PTY。
+Linux x86_64 精确归档 `12c47f48` 在本机另验两形态五 CLI、quick PTY、
+三个隔离 SDK 的测试驱动功耗/占比，以及各驱动挂死时的页面导航和退出。
+普通权限的拒绝状态、root 的真实 CPU 限制、功耗条、三个功耗入口与
+Snapshot/Agent 百分比和剩余功率计算均通过。两形态也用真实 Intel Sysman
+驱动确认 300 MHz、fresh 当前限制掩码及 PCI 合并；缺失的 GPU 功耗域未补值。
+aarch64 归档 `8cbe5915` 的本机检查为摘要与包内清单，运行证据来自原生 CI。
+两种 Linux 归档的执行下限均为 glibc 2.38；本轮 glibc 2.17 的源码构建、
+139 个 Lua 文件与三个 SDK 的原生隔离夹具另已通过。
+M4 的精确归档 `2612277e` 两形态通过五 CLI、原 200 列 GPU 时钟、功耗、
+43 传感器、10 个 Mach CPU 身份和父设备导航。Windows 归档 `5d745d25` 在
+Windows 11 与 Server 2008 两形态通过五 CLI、80×25 无 ANSI 控制台、
+CPUID/缓存与 AVX 状态、父级导航及三个功耗入口。macOS 部署下限与
+Windows 11 个 PE 映像的 1,055 个命名导入静态门禁通过。
+完整摘要和记录保存在 `build/hardware-vendor-workers-20261016/`。
+XP、旧 macOS、AMD SMI 真机与带 Sysman 功耗域的设备仍缺少本轮运行证据。
+
 2026-10-16 核对：`dcbd971` 的
 [主 CI](https://github.com/Water-Run/wtop/actions/runs/38772147745) 16 个作业与
 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/38772147754) 两个作业
