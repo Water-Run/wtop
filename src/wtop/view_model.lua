@@ -1697,6 +1697,26 @@ local function cpu_identity_entries(snapshot, format, i18n)
     if identity.microcode then
         entries[#entries + 1] = entry("compute.microcode", "Microcode", identity.microcode)
     end
+    local cpuid = cpu_info.cpuid
+    if cpuid then
+        entries[#entries + 1] = section("cpuid.title", "CPU capabilities")
+        entries[#entries + 1] = entry("metrics.source", "Source", cpuid.source)
+        entries[#entries + 1] = entry("inspector.status", "Status", Technical.state(i18n, cpuid.status))
+        if cpuid.reason then
+            entries[#entries + 1] = entry("inspector.reason", "Reason", Technical.reason(i18n, cpuid.reason))
+        end
+        if topology.compute_units then
+            entries[#entries + 1] = entry("cpuid.compute_units", "Compute units", tostring(topology.compute_units))
+        end
+        for _, feature in ipairs(cpuid.features or {}) do
+            if feature.name == "AVX" or feature.name == "AVX2" or feature.name == "AVX512F" then
+                entries[#entries + 1] = { label = feature.name,
+                    value = translated(i18n, "cpuid.hardware", "Hardware") .. " " .. feature.hardware_cpus
+                        .. "/" .. feature.reported_cpus .. " · " .. translated(i18n, "cpuid.usable", "Usable")
+                        .. " " .. feature.usable_cpus .. "/" .. feature.reported_cpus }
+            end
+        end
+    end
     local caches = cpu_info.cache_summary or {}
     if #caches > 0 then
         entries[#entries + 1] = section("compute.cache_section", "Cache")

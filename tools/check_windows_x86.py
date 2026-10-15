@@ -9,6 +9,7 @@ wtop's own feature fallbacks run.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import pathlib
 import re
@@ -44,6 +45,7 @@ SOURCE_ANCHORS = frozenset({
 
 def optional_api_names(native_dir: pathlib.Path) -> set[str]:
     source_files = sorted(native_dir.glob("wtop_windows*.c"))
+    source_files += sorted(native_dir.glob("wtop_cpuid*.c"))
     if not source_files:
         raise ValueError(f"no Windows native sources under {native_dir}")
     source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
@@ -94,11 +96,16 @@ IMPORT_MEMBER = re.compile(
 )
 
 
-def parse_objdump(output: str, name: str) -> dict[str, object]:
-    if not re.search(r"file format pei-i386\s*$", output, re.M):
-        raise ValueError(f"{name}: not a PE32 i386 image")
-    if not re.search(r"^Magic\s+[0-9a-fA-F]+\s+\(PE32\)\s*$", output, re.M):
-        raise ValueError(f"{name}: PE optional header is not PE32")
+def parse_objdump(output: str, name: str, architecture: str = "x86") -> dict[str, object]:
+    image_format, magic, maximum = ("pei-i386", "PE32", (5, 1))
+    if architecture == "x64":
+        image_format, magic, maximum = "pei-x86-64", "PE32+", (5, 2)
+    elif architecture != "x86":
+        raise ValueError("unknown PE architecture")
+    if not re.search(rf"file format {re.escape(image_format)}\s*$", output, re.M):
+        raise ValueError(f"{name}: not a {magic} {'i386' if architecture == 'x86' else 'x64'} image")
+    if not re.search(rf"^Magic\s+[0-9a-fA-F]+\s+\({re.escape(magic)}\)\s*$", output, re.M):
+        raise ValueError(f"{name}: PE optional header is not {magic}")
     versions: dict[str, int] = {}
     for key in ("MajorOSystemVersion", "MinorOSystemVersion",
                 "MajorSubsystemVersion", "MinorSubsystemVersion"):
@@ -108,8 +115,8 @@ def parse_objdump(output: str, name: str) -> dict[str, object]:
         versions[key] = int(match.group(1))
     for kind in ("OSystem", "Subsystem"):
         version = versions[f"Major{kind}Version"], versions[f"Minor{kind}Version"]
-        if version > (5, 1):
-            raise ValueError(f"{name}: {kind} loader version {version} exceeds XP x86")
+        if version > maximum:
+            raise ValueError(f"{name}: {kind} loader version {version} exceeds XP {architecture}")
 
     imports: dict[str, set[str]] = {}
     current: str | None = None
@@ -149,6 +156,152 @@ def parse_objdump(output: str, name: str) -> dict[str, object]:
     if not imports:
         raise ValueError(f"{name}: no import table was parsed")
     return {"imports": imports, "versions": versions}
+
+
+def worker_images(data: bytes, images: list[tuple[int, bytes]]) -> dict[int, str]:
+    """Only the two self-contained workers declared inside the module may
+    have a different architecture. Primary programs/DLLs stay PE32/XP x86.
+    Digests and complete lengths bind each role to one embedded PE image.
+    This is an artifact consistency check, not a substitute for signatures.
+    """
+    marker = b"WTOP_CPUID_WORKERS_V1\n"
+    if marker not in data:
+        return {}
+    matches = list(re.finditer(
+        rb"WTOP_CPUID_WORKERS_V1\nx86:([1-9][0-9]*):([0-9a-f]{64})\n"
+        rb"x64:([1-9][0-9]*):([0-9a-f]{64})\nEND_WTOP_CPUID_WORKERS\n", data))
+    if len(matches) != 1 or data.count(marker) != 1:
+        raise ValueError("invalid CPUID worker manifest")
+    manifest = matches[0]
+    expected = {manifest[2].decode(): (int(manifest[1]), "x86"),
+                manifest[4].decode(): (int(manifest[3]), "x64")}
+    if len(expected) != 2 or any(not 0 < length <= 512 * 1024 for length, _ in expected.values()):
+        raise ValueError("invalid CPUID worker lengths or identities")
+    found, consumed = {}, set()
+    for offset, image in images:
+        digest = hashlib.sha256(image).hexdigest()
+        if digest in consumed:
+            raise ValueError("duplicate CPUID worker image")
+        if digest in expected:
+            length, architecture = expected.pop(digest)
+            if offset == 0 or len(image) != length:
+                raise ValueError("CPUID worker must be a complete embedded image")
+            found[offset] = architecture
+            consumed.add(digest)
+    if expected:
+        raise ValueError("CPUID worker is missing, duplicated or changed")
+    return found
+
+
+def parse_worker64(data: bytes, name: str) -> dict[str, object]:
+    """Read the optional x64 worker without requiring an x64 build-host
+    toolchain. The native Windows packager itself uses only an x86 compiler.
+    Imports are bounded RVAs into raw sections, not strings scanned in code.
+    """
+    def read(fmt, offset):
+        if offset < 0 or offset + struct.calcsize(fmt) > len(data):
+            raise ValueError(f"{name}: truncated x64 PE")
+        return struct.unpack_from(fmt, data, offset)
+
+    pe, = read("<I", 60)
+    if data[:2] != b"MZ" or data[pe:pe + 4] != b"PE\0\0":
+        raise ValueError(f"{name}: missing x64 PE header")
+    machine, sections, _, _, _, optional_size, flags = read("<HHIIIHH", pe + 4)
+    optional, table = pe + 24, pe + 24 + optional_size
+    if machine != 0x8664 or read("<H", optional)[0] != 0x20b or optional_size < 128:
+        raise ValueError(f"{name}: not a PE32+ x64 worker")
+    if not 0 < sections <= 96 or flags & 0x2000 or read("<H", optional + 68)[0] != 3 or not read("<I", optional + 16)[0]:
+        raise ValueError(f"{name}: invalid x64 worker image type")
+    versions = {}
+    for kind, offset in (("OSystem", 40), ("Subsystem", 48)):
+        major, minor = read("<HH", optional + offset)
+        if (major, minor) > (5, 2):
+            raise ValueError(f"{name}: {kind} loader version exceeds XP x64")
+        versions["Major" + kind + "Version"], versions["Minor" + kind + "Version"] = major, minor
+    headers, = read("<I", optional + 60)
+    mappings = []
+    for index in range(sections):
+        virtual_size, rva, size, offset = read("<IIII", table + index * 40 + 8)
+        if offset + size > len(data):
+            raise ValueError(f"{name}: truncated x64 section")
+        mappings.append((rva, max(virtual_size, size), size, offset))
+
+    def raw(rva, size):
+        candidates = [offset + rva - start for start, virtual, length, offset in mappings
+                      if start <= rva < start + virtual and rva - start + size <= length]
+        if not candidates and 0 <= rva and rva + size <= min(headers, len(data)):
+            return rva
+        if len(candidates) != 1:
+            raise ValueError(f"{name}: invalid or ambiguous x64 import RVA")
+        return candidates[0]
+
+    def string(rva):
+        output = bytearray()
+        for index in range(1024):
+            value = data[raw(rva + index, 1)]
+            if not value:
+                if output:
+                    return output.decode("ascii")
+                break
+            if not 32 <= value < 127:
+                break
+            output.append(value)
+        raise ValueError(f"{name}: invalid x64 import name")
+
+    directories, = read("<I", optional + 108)
+    rva, size = read("<II", optional + 120)
+    if directories < 2 or not rva or not 20 <= size <= 65536:
+        raise ValueError(f"{name}: missing x64 import directory")
+    imports, terminated = {}, False
+    for index in range(min(size // 20, 128)):
+        lookup, stamp, chain, dll, first = read("<IIIII", raw(rva + index * 20, 20))
+        if not (lookup or stamp or chain or dll or first):
+            terminated = True
+            break
+        library = string(dll).lower()
+        if library in imports:
+            raise ValueError(f"{name}: duplicate x64 import library")
+        symbols, end = set(), False
+        for entry in range(8192):
+            value, = read("<Q", raw((lookup or first) + entry * 8, 8))
+            if not value:
+                end = True
+                break
+            if value >= 0x80000000:
+                raise ValueError(f"{name}: unsupported ordinal or oversized x64 import")
+            symbols.add(string(value + 2))
+        if not end or not symbols:
+            raise ValueError(f"{name}: invalid x64 import thunk table")
+        imports[library] = symbols
+    if not terminated or not imports:
+        raise ValueError(f"{name}: unterminated x64 import directory")
+    return {"imports": imports, "versions": versions}
+
+
+def inspect_images(data: bytes, objdump: str, name: str):
+    images = pe_images(data)
+    workers = worker_images(data, images)
+    reports = []
+    with tempfile.TemporaryDirectory(prefix="wtop-pe-") as directory:
+        for index, (offset, image) in enumerate(images):
+            path = pathlib.Path(directory) / f"image-{index}.exe"
+            path.write_bytes(image)
+            architecture = workers.get(offset, "x86")
+            if architecture == "x64":
+                result = parse_worker64(image, name)
+                check_reports({"worker.exe": result}, set(), ())
+                reports.append((offset, result, "cpuid-x64.exe"))
+                continue
+            output = subprocess.run([objdump, "-p", str(path)], check=True,
+                                    capture_output=True, text=True,
+                                    env={**os.environ, "LC_ALL": "C"}).stdout
+            result = parse_objdump(output, f"{name} PE at +{offset}", architecture)
+            if offset in workers:
+                check_reports({"worker.exe": result}, set(), ())
+            exported = re.search(r"^Name\s+[0-9a-fA-F]+\s+(\S+\.dll)\s*$", output, re.M | re.I)
+            role = "cpuid-" + architecture + ".exe" if offset in workers else None
+            reports.append((offset, result, role or (exported[1].lower() if exported else None)))
+    return reports
 
 
 def check_reports(reports: dict[str, dict[str, object]],
@@ -194,10 +347,11 @@ def check_bundle(bundle: pathlib.Path, objdump: str,
         if path.is_symlink() or not path.is_file():
             raise ValueError(f"{path}: PE image is not a regular file")
         name = path.name
-        output = subprocess.run([objdump, "-p", str(path)], check=True,
-                                capture_output=True, text=True,
-                                env={**os.environ, "LC_ALL": "C"}).stdout
-        reports[name] = parse_objdump(output, name)
+        for offset, result, role in inspect_images(path.read_bytes(), objdump, name):
+            key = name if offset == 0 else role
+            if not key or key in reports:
+                raise ValueError("unexpected or duplicate embedded PE")
+            reports[key] = result
     return check_reports(reports, optional_api_names(native_dir))
 
 
@@ -255,14 +409,6 @@ def check_packaged(bundle: pathlib.Path, objdump: str,
     required = ("wtop.exe", "lua55.dll", "wtop_native.dll")
     optional = optional_api_names(native_dir)
 
-    def report(path, name):
-        output = subprocess.run([objdump, "-p", str(path)], check=True,
-                                capture_output=True, text=True,
-                                env={**os.environ, "LC_ALL": "C"}).stdout
-        result = parse_objdump(output, name)
-        exported = re.search(r"^Name\s+[0-9a-fA-F]+\s+(\S+\.dll)\s*$", output, re.M | re.I)
-        return result, exported[1] if exported else None
-
     direct_count, direct_symbols = 0, 0
     if kind in ("dir", "both"):
         reports = {}
@@ -271,26 +417,26 @@ def check_packaged(bundle: pathlib.Path, objdump: str,
                 continue
             if path.is_symlink() or not path.is_file() or path.name.lower() in reports:
                 raise ValueError("invalid or duplicate packaged PE: " + str(path))
-            reports[path.name.lower()] = report(path, path.name)[0]
+            for offset, result, role in inspect_images(path.read_bytes(), objdump, path.name):
+                key = path.name.lower() if offset == 0 else role
+                if not key or key in reports:
+                    raise ValueError("unexpected or duplicate packaged PE")
+                reports[key] = result
         direct_count, direct_symbols = check_reports(reports, optional, required)
         if kind == "dir":
             return direct_count, direct_symbols
     onefile = bundle / "wtop-onefile.exe"
     if onefile.is_symlink() or not onefile.is_file():
         raise ValueError("missing regular onefile executable")
-    images = pe_images(onefile.read_bytes())
+    images = inspect_images(onefile.read_bytes(), objdump, "onefile")
     if len(images) < 4:
         raise ValueError("onefile is missing its embedded program or DLLs")
     reports = {}
-    with tempfile.TemporaryDirectory(prefix="wtop-pe-") as directory:
-        for index, (offset, data) in enumerate(images):
-            path = pathlib.Path(directory) / f"image-{index}.exe"
-            path.write_bytes(data)
-            result, exported = report(path, f"onefile PE at +{offset}")
-            name = exported.lower() if exported else f"image-{index}.exe"
-            if name in reports:
-                raise ValueError("duplicate embedded DLL: " + name)
-            reports[name] = result
+    for index, (offset, result, role) in enumerate(images):
+        name = role or f"image-{index}.exe"
+        if name in reports:
+            raise ValueError("duplicate embedded DLL: " + name)
+        reports[name] = result
     embedded_count, embedded_symbols = check_reports(reports, optional,
                                                       ("lua55.dll", "wtop_native.dll"))
     return direct_count + embedded_count, direct_symbols + embedded_symbols
@@ -314,7 +460,7 @@ def main() -> int:
     except (ValueError, OSError, subprocess.CalledProcessError) as exc:
         print(f"wtop: Windows x86 static check failed: {exc}", file=sys.stderr)
         return 1
-    print(f"wtop: Windows x86 static check: {images} PE32 i386 images, "
+    print(f"wtop: Windows x86 static check: {images} PE images (primary x86, declared workers checked), "
           f"{symbols} named imports; XP runtime remains untested")
     return 0
 

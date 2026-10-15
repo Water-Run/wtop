@@ -2397,6 +2397,34 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         add("cpu.efficiency_class", "Efficiency class", device.efficiency_class)
     end
     if device.parked ~= nil then add("cpu.parked", "Parked", device.parked) end
+    if device.cores_per_compute_unit then
+        add("cpuid.cores_per_unit", "Cores per compute unit", device.cores_per_compute_unit)
+    end
+    if device.apic_id then add("cpuid.apic_id", "APIC ID", string.format("0x%x", device.apic_id)) end
+    if device.initial_apic_id then
+        add("cpuid.initial_apic_id", "Initial APIC ID", string.format("0x%x", device.initial_apic_id))
+    end
+    if node.kind == "thread" then
+        local info = snapshot.cpu_info and snapshot.cpu_info.cpuid
+        for _, cpu in ipairs(info and info.logical_cpus or {}) do
+            if cpu.id == device.id then
+                local identity = cpu.identity or {}
+                add("cpuid.title", "CPU capabilities", info.source)
+                add("cpuid.signature", "CPU signature", identity.signature)
+                add("cpuid.physical_bits", "Physical address bits", identity.physical_address_bits)
+                add("cpuid.linear_bits", "Linear address bits", identity.linear_address_bits)
+                add("cpuid.hypervisor", "Hypervisor interface present", identity.hypervisor_present)
+                if identity.hypervisor_vendor then add("cpuid.hypervisor_vendor", "Hypervisor vendor", identity.hypervisor_vendor) end
+                if cpu.xcr0 then add("cpuid.xcr0", "Enabled extended state (XCR0)", cpu.xcr0) end
+                for _, feature in ipairs(cpu.features or {}) do
+                    lines[#lines + 1] = feature.name .. ": " .. translated(i18n, "cpuid.hardware", "Hardware")
+                        .. " " .. format_value(feature.hardware, i18n) .. " · "
+                        .. translated(i18n, "cpuid.usable", "Usable") .. " " .. format_value(feature.usable, i18n)
+                end
+                break
+            end
+        end
+    end
     local function hardware_hex(value, digits)
         if type(value) == "number" and math.tointeger(value)
                 and value >= 0 and value < 16 ^ digits then

@@ -1,0 +1,28 @@
+{
+  "protocol": "wtop.cpuid.v1",
+  "captured": "2026-10-15",
+  "producer": "native/wtop_cpuid_helper.c",
+  "scope": "CPUID registers and worker status only; no process or user data",
+  "captures": [
+    {
+      "file": "amd15h.bin",
+      "sha256": "4e7c05c6d7b0309c870ed1e06727d4a9cd6a27be88342c09b5473a170d633587",
+      "logical_cpus": 6,
+      "os": "Windows Server 2008 x64",
+      "family": 21,
+      "model": 1,
+      "worker_bits": 64
+    },
+    {
+      "file": "intel-06-97.bin",
+      "sha256": "ff9cd97bda824b4d1d2704b13c94354ff6ae23f85f30737aeb61a3a50d2de0b4",
+      "logical_cpus": 8,
+      "os": "Windows 11 x64",
+      "family": 6,
+      "model": 151,
+      "worker_bits": 64
+    }
+  ],
+  "producer_sha256": "e26018e0951a3f44c24560704a71346eead903a027a414bd25225cf577a226c0",
+  "protocol_sha256": "2b3393f39a3478a4695c12a208d59fcb065989e3f75ea248ae710e9e3188be18"
+}

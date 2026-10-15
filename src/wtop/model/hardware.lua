@@ -74,6 +74,7 @@ end
 local KIND_LABELS = {
     package = { "inventory.cpu_package", "CPU package {id}" },
     core = { "inventory.cpu_core", "CPU core {id}" },
+    compute_unit = { "cpuid.compute_unit", "Compute unit {id}" },
     thread = { "inventory.cpu_thread", "Logical CPU {id}" },
     numa = { "inventory.numa", "NUMA node {id}" },
     policy = { "inventory.frequency_policy", "Frequency policy {id}" },
@@ -517,10 +518,26 @@ function M.build(snapshot)
         and (cpu.core_id_known == true or topology.quality ~= "estimated")
       local independent_core = cpu.core_id_scope == "system"
         or (cpu.core_id_scope == "processor_group" and numeric_id(cpu.processor_group))
+      local unit_node
+      if package_node and identifier(cpu.compute_unit_key) and numeric_id(cpu.compute_unit_id) then
+        local unit_id = "compute-unit:" .. cpu.compute_unit_key
+        unit_node = result.by_id[unit_id]
+        if not unit_node then
+          unit_node = add_node("cpu", cpu.compute_unit_key, {
+            id = cpu.compute_unit_id, source = cpu.core_source,
+            cores_per_compute_unit = cpu.cores_per_compute_unit,
+          }, unit_id, package_node.id, "cpu_info")
+          unit_node.kind = "compute_unit"
+          groups[#groups + 1] = unit_node
+        end
+        if unit_node.parent_id == package_node.id then
+          unit_node.cpu_ids[#unit_node.cpu_ids + 1] = cpu.id
+        else unit_node = nil; result.partial = true end
+      end
       if core_known and (package_node or independent_core)
           and numeric_id(cpu.core_id) and identifier(cpu.core_key) then
         local core_id = "core:" .. cpu.core_key
-        local core_parent = package_node and package_node.id
+        local core_parent = unit_node and unit_node.id or package_node and package_node.id
         parent = result.by_id[core_id]
         if not parent then
           parent = add_node("cpu", cpu.core_key, {

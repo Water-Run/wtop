@@ -2210,6 +2210,7 @@ static const luaL_Reg functions[] = {
     {"user_locale", l_user_locale},
     {"collect_cpu", wtop_collect_cpu},
     {"collect_cpu_info", wtop_collect_cpu_info},
+    {"collect_cpuid", wtop_collect_cpuid},
     {"collect_memory", l_collect_memory},
     {"collect_process", l_collect_process},
     {"collect_process_io", l_collect_process_io},

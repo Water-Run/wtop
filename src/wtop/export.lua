@@ -79,6 +79,49 @@ local function export_issues(issues)
     return result
 end
 
+local function export_cpuid(cpuid)
+    local result = copy_fields(cpuid, { "schema", "source", "status", "reason", "quality",
+        "architecture_bits", "age_ms", "caches_complete", "scope", "roster_complete", "error_code" })
+    result.topology = copy_fields(cpuid.topology, { "complete", "observed_logical_cpus",
+        "sockets", "physical_cores", "compute_units", "threads_per_core_minimum", "threads_per_core_maximum" })
+    result.features, result.logical_cpus, result.issues = json.array({}), json.array({}), json.array({})
+    for index = 1, math.min(#(cpuid.features or {}), 32) do
+        result.features[index] = copy_fields(cpuid.features[index], { "name", "reported_cpus",
+            "hardware_cpus", "usable_cpus", "unknown_usability_cpus" })
+    end
+    for index = 1, math.min(#(cpuid.logical_cpus or {}), 512) do
+        local cpu = cpuid.logical_cpus[index]
+        local output = copy_fields(cpu, { "id", "processor_group", "logical_processor_index", "status",
+            "flags", "max_basic", "max_extended", "xcr0", "affinity_restored", "os_processor_verified", "truncated" })
+        output.identity = copy_fields(cpu.identity, { "source", "vendor", "model_name", "signature", "family", "model", "stepping",
+            "initial_apic_id", "physical_address_bits", "linear_address_bits", "hypervisor_present", "hypervisor_vendor" })
+        output.topology = copy_fields(cpu.topology, { "method", "apic_id", "package_id", "core_id", "core_key",
+            "node_id", "compute_unit_id", "compute_unit_key", "cores_per_compute_unit" })
+        output.topology.levels = json.array({})
+        for level, value in ipairs(cpu.topology and cpu.topology.levels or {}) do
+            output.topology.levels[level] = copy_fields(value, { "level", "type", "shift", "diagnostic_logical_count" })
+        end
+        output.topology.thread_siblings = copy_array(cpu.topology and cpu.topology.thread_siblings)
+        output.features, output.leaves, output.cache_views = json.array({}), json.array({}), json.array({})
+        for feature = 1, math.min(#(cpu.features or {}), 32) do
+            output.features[feature] = copy_fields(cpu.features[feature], { "name", "hardware", "os_enabled", "usable",
+                "leaf", "subleaf", "register", "bit" })
+        end
+        for record = 1, math.min(#(cpu.leaves or {}), 96) do
+            output.leaves[record] = copy_fields(cpu.leaves[record], { "leaf", "subleaf", "eax", "ebx", "ecx", "edx" })
+        end
+        for cache = 1, math.min(#(cpu.cache_views or {}), 32) do
+            output.cache_views[cache] = copy_fields(cpu.cache_views[cache], { "leaf", "subleaf", "source", "level", "type",
+                "size_bytes", "coherency_line_size_bytes", "physical_line_partition", "ways_of_associativity", "number_of_sets", "maximum_sharing" })
+        end
+        result.logical_cpus[index] = output
+    end
+    for index = 1, math.min(#(cpuid.issues or {}), 512) do
+        result.issues[index] = copy_fields(cpuid.issues[index], { "reason", "cpu_id" })
+    end
+    return result
+end
+
 local function export_cpu_info(cpu_info)
     local result = json.object({
         schema = cpu_info and cpu_info.schema,
@@ -94,7 +137,7 @@ local function export_cpu_info(cpu_info)
     result.topology = copy_fields(topology, {
         "sockets", "physical_cores", "threads", "online_threads",
         "threads_per_core_minimum", "threads_per_core_maximum", "quality", "truncated",
-        "source", "identity_quality", "processor_groups",
+        "source", "identity_quality", "processor_groups", "compute_units",
     })
     for _, key in ipairs({
         "online_cpu_list", "present_cpu_list", "possible_cpu_list", "isolated_cpu_list",
@@ -112,6 +155,7 @@ local function export_cpu_info(cpu_info)
             "processor_group", "logical_processor_index", "cpu_set_id", "efficiency_class",
             "last_level_cache_index", "numa_node_index", "parked", "allocated",
             "core_source", "package_source", "core_id_method", "package_id_method", "core_id_scope",
+            "compute_unit_id", "compute_unit_key", "node_id", "cores_per_compute_unit", "apic_id", "initial_apic_id",
         })
         output.thread_siblings = copy_array(cpu.thread_siblings)
         result.topology.logical_cpus[index] = output
@@ -132,7 +176,7 @@ local function export_cpu_info(cpu_info)
         local output = copy_fields(cache, {
             "id", "cache_id", "level", "type", "size", "size_bytes", "shared_cpu_list_text",
             "coherency_line_size_bytes", "ways_of_associativity", "number_of_sets",
-            "physical_line_partition", "source",
+            "physical_line_partition", "source", "leaf", "subleaf", "maximum_sharing", "ambiguous",
         })
         output.shared_cpu_list = copy_array(cache.shared_cpu_list)
         result.caches[index] = output
@@ -145,6 +189,14 @@ local function export_cpu_info(cpu_info)
         })
     end
     result.issues = export_issues(cpu_info and cpu_info.issues)
+    if cpu_info and type(cpu_info.cpuid) == "table" then result.cpuid = export_cpuid(cpu_info.cpuid) end
+    if cpu_info and cpu_info.os_topology then
+        result.os_topology = export_cpu_info({ topology = cpu_info.os_topology }).topology
+    end
+    if cpu_info and cpu_info.os_caches then
+        local original = export_cpu_info({ caches = cpu_info.os_caches, cache_summary = cpu_info.os_cache_summary })
+        result.os_caches, result.os_cache_summary = original.caches, original.cache_summary
+    end
     return result
 end
 
@@ -2397,6 +2449,16 @@ function M.agent(snapshot, options)
                 core_types = cpu_core_types,
                 physical_cores = cpu_topology.physical_cores,
                 sockets = cpu_topology.sockets,
+                compute_units = cpu_topology.compute_units,
+                cpuid = full.cpu_info and full.cpu_info.cpuid and json.object({
+                    status = full.cpu_info.cpuid.status, quality = full.cpu_info.cpuid.quality,
+                    reason = full.cpu_info.cpuid.reason, source = full.cpu_info.cpuid.source,
+                    architecture_bits = full.cpu_info.cpuid.architecture_bits,
+                    scope = full.cpu_info.cpuid.scope,
+                    roster_complete = full.cpu_info.cpuid.roster_complete,
+                    topology = full.cpu_info.cpuid.topology, features = full.cpu_info.cpuid.features,
+                    caches_complete = full.cpu_info.cpuid.caches_complete,
+                }) or nil,
                 power_watts = full.power and full.power.total_power_watts,
                 frequency = frequency_metric,
                 thermal_throttle = json.object({

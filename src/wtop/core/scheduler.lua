@@ -300,6 +300,11 @@ function Scheduler:tick(context)
       if result.status == "ok" then
         task.failures = 0
         task.last_success = result
+        -- An independent asynchronous component can still be pending while
+        -- the collector's primary data is current (e.g. CPU info + CPUID).
+        if valid_interval(result.retry_after_ms) then
+          interval_ms = math.min(interval_ms, result.retry_after_ms)
+        end
       else
         task.failures = math.min(task.failures + 1, 1000000)
         local exponential = interval_ms * (2 ^ math.min(task.failures - 1, 10))

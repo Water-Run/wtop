@@ -67,6 +67,17 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 ## 验证矩阵
 
+2026-10-15 核对：`f5f22cf` 的
+[主 CI](https://github.com/Water-Run/wtop/actions/runs/38731850859) 16 个作业与
+[Windows CI](https://github.com/Water-Run/wtop/actions/runs/38731850813) 两个作业
+全部通过。精确 macOS arm64 归档 `eb8918c4` 和 Windows x86 归档 `366fd05d`
+在 M4、Windows 11、Server 2008 验收两种形态、五种 CLI、硬件导航和功耗窗口；
+M4 保留原 200 列 GPU 频率断言，Windows 使用经典无 ANSI 控制台。
+Linux x86_64 精确归档的完整性、CLI/JSON 与 quick PTY 通过；aarch64 归档
+的下载运行验收由对应原生 CI 作业完成，本机只核对摘要、传输清单和包内声明。
+macOS 与 Windows 静态门禁通过。完整摘要和日志在
+`build/hardware-nvml-limits-20261015/`。
+
 2026-10-15 核对：`dfbc192` 的
 [主 CI](https://github.com/Water-Run/wtop/actions/runs/38721400428) 16 个作业与
 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/38721400562) 两个作业
@@ -128,6 +139,68 @@ macOS、Windows 的运行验证来自下表列出的主机记录。
 | 带 WSL 的 Windows | WSL 中的 Linux 运行时 | Linux 兼容性;这不构成原生 Windows 支持的证据 |
 
 ## 开发验证记录
+
+### 2026-10-15：隔离 CPUID、芯片缓存与系统可用指令集
+
+Windows x86 开发构建新增独立的 CPUID 数据源。主程序和原生模块仍是
+PE32 i386；模块内嵌两个有摘要和长度声明的读取器。在 x64 Windows 上启动
+原生 x64 读取器，避免 WOW64 的 32 位掩码丢失组内第 32 至 63 号 CPU。
+读取器只修改并恢复自己的线程亲和性，按指定逻辑 CPU 查询有界、已支持的
+叶；CPUID 和 XGETBV 异常处于子进程内。XGETBV 仅在 XSAVE 与 OSXSAVE
+均声明时执行。当前还没有 32 位 XP 或超过 32 个逻辑 CPU 主机的实测证据。
+
+父端按 Lua VM 管理缓存和异步工作线程，首次最多等 100 ms，之后返回明确的
+pending/error。完成结果缓存 60 秒，失败 5 秒后重试；OS 逻辑 CPU 身份、
+核心/插槽或 CPU Set 元数据变化会废弃旧任务。每进程最多两个工作线程，
+Lua VM 关闭只请求取消，工作线程持有独立引用并保持模块加载。正常管道等待
+有 3.5 秒期限；TEMP 文件系统或系统加载器永久阻塞时，线程仍可能留存，但
+不会无限增加任务或等待它。OS CPU 信息保持独立可用，后台补充读数就绪后
+由短间隔复采接入。模块引用的使用依据 Microsoft 的
+[GetModuleHandleExW](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulehandleexw)
+与 [FreeLibraryAndExitThread](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-freelibraryandexitthread)
+契约；这些接口的 XP 最低版本声明不等于 XP 实机验收。
+
+共享解码器保留逐 CPU 厂商、签名、family/model/stepping、地址宽度、
+Hypervisor 接口位、XCR0、选定原始叶，以及硬件支持/OS 状态/可用性。
+Hypervisor 位不直接解释为“正在虚拟机内”；AMX、NX、Long mode 等没有
+对应 OS 使用证据的能力保留未知可用性。AVX/AVX2/FMA 要求硬件和启用的
+XMM/YMM 状态，AVX512 还要求基础能力及 opmask/ZMM 状态。
+
+Intel 拓扑优先 `1F`，其次 `0B`，用实际 CPU 名单及 APIC 位域计数。
+[Intel SDM](https://cdrdv2-public.intel.com/868137/325462-089-sdm-vol-1-2abcd-3abcd-4.pdf)
+卷 1 表 21-69 明确将 EBX 层级计数用于显示/诊断；表 21-14 定义缓存几何和
+共享地址位宽，二者都不能代替 OS 可见 CPU 的实际数量。本轮也对照渲染页
+核对了表格。AMD Family 15h Models 00h–0Fh 按
+[42301 BKDG](https://www.amd.com/content/dam/amd/en/documents/archived-tech-docs/programmer-references/42301_15h_Mod_00h-0Fh_BKDG.pdf)
+的 `8000001D/1E` 定义解释：整数核心共享计算单元，不当作 SMT；初始 APIC
+与可改写的当前 ExtendedApicId 分开保存。L3 的可见 ways 可因分区不同，
+重叠视图的几何不一致时不生成物理总量。较新 AMD 和未知拓扑目前保留原始
+叶、身份与特性，继续使用 OS 拓扑/缓存，尚未套用旧 AMD 的语义。
+
+只有完整且一致的成员关系才用于首选拓扑和缓存汇总，并保留 `os_topology`、
+`os_caches`、`os_cache_summary`。部分 CPU 名单不提升为完整系统总量。
+Compute 显示能力覆盖，硬件详情显示逐 CPU 地址宽度、APIC、XCR0 和指令集；
+共享树支持核心 → 计算单元 → 插槽及缓存归属。Snapshot 保留逐 CPU 原始寄存器
+与来源，Agent 仅带有界汇总，报告列出支持与可用 CPU 数；十种语言有对应标签。
+
+提供主机的独立 32/64 位读取器和原生父端已实测：
+
+| 主机 | OS 报告 | CPUID 观察与核对 |
+| --- | --- | --- |
+| Windows 11，Intel family 6/model 0x97 | 8 逻辑 CPU、4 核、13 缓存实例 | `1F`，4 核/8 线程、13 实例；L3 地址容量 16 并未算成 16 个已观察 CPU；8 个 CPU 均支持且可用 AVX |
+| Server 2008，AMD family 15h/model 1 | 6 核、18 个系统缓存报告 | 6 个整数核心、3 个计算单元、13 个共享缓存实例，含 8 MiB L3；6 个 CPU 均声明 AVX，但 OSXSAVE 未启用，实际可用数为 0 |
+
+两台主机的原生故障夹具覆盖错误响应、超大响应、指令异常、超时、创建失败、
+取消、两个 VM 和全局并发限额、80 组首次与 30 组缓存路径的 Lua OOM、3 组原生堆 OOM；父线程
+亲和性不变，任务堆分配和临时文件均释放，预热后句柄数保持稳定。
+真实二进制捕获保存在 `tests/fixtures/cpuid/`，共享回归还覆盖诊断计数与实际
+人口差异、AVX512 状态门控、AMD 非线性初始 APIC、缓存分区冲突、畸形包和
+异步复采。137 个 Lua 文件、相关 Lua 5.4 回归、`make check` 与 quick PTY
+通过。M4 共享回归和实际 10 个 Mach 逻辑 CPU 的快照通过，未生成 x86 能力。
+两台 Windows 的五 CLI 和真实 80×25 无 ANSI 控制台通过；分页核对 AVX 硬件
+与系统可用状态，并逐级导航核心、计算单元和插槽。
+证据在 `build/hardware-cpuid-20261015/`；此节源树运行结果不代表
+最终包、XP、其他芯片或尚未实现的 AMD 拓扑已验收。
 
 ### 2026-10-15：CPU 与 GPU 的当前限制原因
 
@@ -2442,7 +2515,7 @@ Windows/macOS 的 NUMA 原生提供方仍待实现，本轮没有新增这些平
   Lua 5.5.1 与系统 Lua 5.4.8 下通过。本次沙箱的实时网络命名空间
   只暴露 `lo`；源码 Snapshot 的 `lo` 队列为 RX 1、TX 1，与 sysfs
   对应目录一致。多队列网卡仍缺少本机实测。
-- 当前源码套件包含 136 个 Lua 测试文件；此前矩阵和按日期记载的
+- 当前源码套件包含 137 个 Lua 测试文件；此前矩阵和按日期记载的
   120 文件运行是当时的验证结果，不计作本轮新增测试的覆盖证据。
 - `make check test-55 test-pty-quick` 通过，121 个 Lua 文件均通过；
   源码和 onedir 的硬件详情 PTY 场景也通过。onedir Snapshot 导出

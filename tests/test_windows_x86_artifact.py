@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pathlib
+import hashlib
 import struct
 import sys
 import tempfile
@@ -182,5 +183,57 @@ struct.pack_into("<II", certificate_pe, 216, 512, 16)
 certificate_pe.extend(bytes(16))
 assert Check.pe_images(bytes(certificate_pe))[0][1] == bytes(certificate_pe)
 refused(lambda: Check.pe_images(bytes(certificate_pe[:-1])), "truncated embedded PE")
+
+# The optional x64 worker is parsed without an x64 objdump on a native x86
+# packaging host. Its declared role, complete digest and XP x64 floor are
+# separate from the primary PE32 gate.
+helper64 = bytearray(1024)
+helper64[:2] = b"MZ"
+struct.pack_into("<I", helper64, 60, 64)
+helper64[64:68] = b"PE\0\0"
+struct.pack_into("<HHIIIHH", helper64, 68, 0x8664, 1, 0, 0, 0, 240, 0x22)
+struct.pack_into("<H", helper64, 88, 0x20b)
+struct.pack_into("<I", helper64, 104, 0x1100)  # entry point
+struct.pack_into("<HH", helper64, 128, 5, 2)
+struct.pack_into("<HH", helper64, 136, 5, 2)
+struct.pack_into("<I", helper64, 148, 512)
+struct.pack_into("<H", helper64, 156, 3)  # console subsystem
+struct.pack_into("<I", helper64, 196, 16)
+struct.pack_into("<II", helper64, 208, 0x1000, 40)
+helper64[328:336] = b".idata\0\0"
+struct.pack_into("<IIII", helper64, 336, 512, 0x1000, 512, 512)
+struct.pack_into("<IIIII", helper64, 512, 0x1040, 0, 0, 0x1060, 0x1040)
+struct.pack_into("<Q", helper64, 576, 0x1080)
+helper64[608:621] = b"kernel32.dll\0"
+helper64[642:655] = b"GetTickCount\0"
+x64 = Check.parse_worker64(bytes(helper64), "worker.exe")
+assert x64["imports"] == {"kernel32.dll": {"GetTickCount"}}
+assert Check.check_reports({"worker.exe": x64}, set(), ()) == (1, 1)
+refused(lambda: Check.parse_objdump(report().replace("pei-i386", "pei-x86-64"), "app.exe"), "not a PE32 i386")
+bad = bytearray(helper64)
+struct.pack_into("<H", bad, 136, 6)
+refused(lambda: Check.parse_worker64(bytes(bad), "worker.exe"), "exceeds XP x64")
+bad = bytearray(helper64)
+struct.pack_into("<Q", bad, 576, 0x8000000000000001)
+refused(lambda: Check.parse_worker64(bytes(bad), "worker.exe"), "ordinal")
+bad = bytearray(helper64)
+struct.pack_into("<I", bad, 524, 0x5000)
+refused(lambda: Check.parse_worker64(bytes(bad), "worker.exe"), "import RVA")
+bad = bytearray(helper64)
+struct.pack_into("<I", bad, 208, 0x1200)
+refused(lambda: Check.parse_worker64(bytes(bad), "worker.exe"), "import RVA")
+
+manifest = (b"WTOP_CPUID_WORKERS_V1\nx86:512:" + hashlib.sha256(pe).hexdigest().encode()
+            + b"\nx64:1024:" + hashlib.sha256(helper64).hexdigest().encode()
+            + b"\nEND_WTOP_CPUID_WORKERS\n")
+container = bytes(pe) * 2 + bytes(helper64) + manifest
+images = Check.pe_images(container)
+# A primary program cannot masquerade as the declared x86 worker.
+refused(lambda: Check.worker_images(container, images), "complete embedded")
+images = images[1:]
+assert Check.worker_images(container, images) == {512: "x86", 1024: "x64"}
+refused(lambda: Check.worker_images(container, images[:-1]), "missing, duplicated or changed")
+refused(lambda: Check.worker_images(container, images + [images[0]]), "duplicate CPUID")
+refused(lambda: Check.worker_images(container + manifest, images), "manifest")
 
 print("ok: Windows x86 artifact gate rejects loader and import regressions")

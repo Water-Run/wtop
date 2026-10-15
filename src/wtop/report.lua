@@ -141,9 +141,19 @@ function M.render(snapshot)
         { "Sockets", topology.sockets }, { "Physical cores", topology.physical_cores },
         { "Logical CPUs", topology.threads }, { "Online CPUs", topology.online_threads },
         { "Core types", cpu_identity.core_type_count },
+        { "Compute units", topology.compute_units },
     }
     table_section(lines, "CPU", { "Field", "Value" }, cpu_items,
         function(row) return row end)
+    local cpuid = object(cpu_info.cpuid)
+    if cpuid.status then
+        table_section(lines, "CPU instruction capabilities (observed logical CPUs)",
+            { "Feature", "Reported CPUs", "Hardware support", "OS usable", "Usability unknown" },
+            cpuid.features, function(feature)
+                return { feature.name, feature.reported_cpus, feature.hardware_cpus,
+                    feature.usable_cpus, feature.unknown_usability_cpus }
+            end, cpuid)
+    end
     table_section(lines, "CPU caches", { "Level", "Type", "Instances", "Total capacity" },
         cpu_info.cache_summary, function(cache)
             return { cache.level, cache.type, cache.instances, bytes(cache.total_size_bytes) }

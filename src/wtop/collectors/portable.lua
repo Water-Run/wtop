@@ -3,6 +3,7 @@
 local Capability = require("wtop.core.capability")
 local Common = require("wtop.collectors.common")
 local SensorSession = require("wtop.model.sensor_session")
+local CPUID = require("wtop.model.cpuid")
 local native_default = require("wtop.native")
 
 local M = {}
@@ -655,7 +656,7 @@ local function new_collector(id, description, options)
         reason = tostring(called and reason or data or "native_collection_failed"),
       })
     end
-    local quality = "fresh"
+    local quality, retry_after_ms = "fresh", nil
     if id == "cpu" then
       local derived, derived_quality = cpu_data(data, previous)
       if not derived then
@@ -695,12 +696,23 @@ local function new_collector(id, description, options)
     elseif type(data.quality) == "string" then
       quality = data.quality
     end
+    if id == "cpu_info" and type(self.native.collect_cpuid) == "function" then
+      local targets = data.topology and data.topology.logical_cpus
+      if type(targets) == "table" and #targets > 0 then
+        local ok, observation, failure = pcall(self.native.collect_cpuid, targets)
+        if not ok or type(observation) ~= "table" then
+          observation = { status = "error", reason = ok and failure or "cpuid_helper_failed" }
+        end
+        retry_after_ms = CPUID.enrich(data, observation)
+      end
+    end
     if id == "hwmon" then
       SensorSession.attach(data.devices, previous_ok(previous), timestamp_ns,
         "native", quality == "fresh" or quality == "partial")
     end
     return Common.result("ok", timestamp_ns, data, {
       quality = quality,
+      retry_after_ms = retry_after_ms,
       -- This dispatcher published a quality with no reason at all, and it is
       -- the one collector where that is guaranteed rather than incidental: it
       -- runs on every macOS and Windows host, so *every* degraded reading

@@ -3,12 +3,17 @@ set -eu
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 compiler=$(printenv WTOP_WINDOWS_CC 2>/dev/null || printf 'i686-w64-mingw32-gcc')
+compiler64=$(printenv WTOP_WINDOWS_CC64 2>/dev/null || printf 'x86_64-w64-mingw32-gcc')
 source_dir="$project_dir/.tools/src/lua-5.5.1"
 work_dir="$project_dir/build/windows-x86"
 output_dir="$project_dir/dist/windows-x86"
 
 if ! command -v "$compiler" >/dev/null 2>&1; then
     echo "wtop: 32-bit MinGW compiler is required: $compiler" >&2
+    exit 1
+fi
+if ! command -v "$compiler64" >/dev/null 2>&1; then
+    echo "wtop: 64-bit MinGW compiler is required for the isolated CPU reader: $compiler64" >&2
     exit 1
 fi
 if [ ! -f "$source_dir/src/Makefile" ]; then
@@ -37,11 +42,24 @@ make -C "$work_dir/lua-src/src" lua.exe "CC=$compiler" \
 # exceed 2 GiB on 64-bit build hosts while keeping a PE32/XP runtime.
 touch "$work_dir/.lua-static-runtime-large-address-aware"
 "$project_dir/tools/write_build_id.sh"
+for architecture in x86 x64; do
+    worker_compiler="$compiler"
+    worker_version=1
+    if [ "$architecture" = x64 ]; then worker_compiler="$compiler64"; worker_version=2; fi
+    "$worker_compiler" -std=c17 -Os -s -Wall -Wextra -Werror -static-libgcc -municode \
+        -Wl,--no-insert-timestamp,--major-os-version,5,--minor-os-version,"$worker_version" \
+        -Wl,--major-subsystem-version,5,--minor-subsystem-version,"$worker_version" \
+        "$project_dir/native/wtop_cpuid_helper.c" -o "$work_dir/cpuid-$architecture.exe"
+done
+python3 "$project_dir/tools/embed_cpuid_helpers.py" \
+    --x86 "$work_dir/cpuid-x86.exe" --x64 "$work_dir/cpuid-x64.exe" \
+    --output "$work_dir/wtop_cpuid_helpers.h"
 "$compiler" -std=c17 -O2 -Wall -Wextra -Werror -shared -static-libgcc \
-    -I"$source_dir/src" -I"$project_dir/build/native" -o "$work_dir/wtop_native.dll" \
+    -I"$source_dir/src" -I"$project_dir/build/native" -I"$work_dir" -o "$work_dir/wtop_native.dll" \
     "$project_dir/native/wtop_windows.c" "$project_dir/native/wtop_windows_net.c" \
     "$project_dir/native/wtop_windows_hw.c" "$project_dir/native/wtop_windows_cpu.c" \
     "$project_dir/native/wtop_windows_disk.c" \
+    "$project_dir/native/wtop_windows_cpuid.c" \
     "$work_dir/lua-src/src/lua55.dll" -lpsapi -liphlpapi -lsetupapi
 
 rm -rf "$output_dir"

@@ -102,7 +102,7 @@ def build(root: Path, kind: str, compiler: str | None = None, verbose: bool = Fa
     if kind == "dir":
         shutil.copy2(root / "LICENSE", output / "LICENSE")
     images, symbols = check_packaged(output_root, str(objdump), root / "native", kind)
-    print(f"wtop: checked {images} PE32 images and {symbols} named imports")
+    print(f"wtop: checked {images} PE images (primary x86, declared workers checked) and {symbols} named imports")
     return output
 
 
