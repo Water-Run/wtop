@@ -1463,13 +1463,36 @@ function M.build(snapshot)
     end
   end
   local gpus = type(snapshot.gpus) == "table" and snapshot.gpus or {}
+  local gpu_ids, gpu_instances = {}, {}
+  for index, gpu in ipairs(type(gpus.devices) == "table" and gpus.devices or {}) do
+    if index > 128 then break end
+    local id = type(gpu) == "table" and (identifier(gpu.id) or identifier(gpu.card))
+    if id then gpu_ids[id] = (gpu_ids[id] or 0) + 1 end
+    local instance = type(gpu) == "table" and registry_identity(gpu._registry_entry_id)
+    if instance then gpu_instances[instance] = (gpu_instances[instance] or 0) + 1 end
+  end
   for index, gpu in ipairs(type(gpus.devices) == "table" and gpus.devices or {}) do
     if index > 128 then result.truncated = true break end
     if type(gpu) == "table" then
       local address = pci_address(gpu.pci_bdf)
       local node = address and result.by_id["pci:" .. address]
       local id = identifier(gpu.id) or identifier(gpu.card)
+      if id and gpu_ids[id] > 1 then result.partial = true end
+      if gpu._registry_entry_id ~= nil or gpu._registry_parent_id ~= nil then
+        local instance = registry_identity(gpu._registry_entry_id)
+        local parent = registry_identity(gpu._registry_parent_id)
+        local target = parent and registry_nodes[parent]
+        node = nil
+        if instance and gpu_instances[instance] == 1 and gpu.identity_quality == "fresh"
+            and Quality.current_source(snapshot.quality, "inventory")
+            and Quality.current_source(snapshot.quality, "gpus")
+            and target and not target.ambiguous
+            and (gpu._registry_parent_bus == "pci" or gpu._registry_parent_bus == "usb")
+            and target.bus == gpu._registry_parent_bus then node = target
+        elseif gpu._registry_parent_id ~= nil then result.partial = true end
+      end
       if node and not node.ambiguous and id
+          and gpu_ids[id] == 1
           and (gpu.vendor_id == nil or node.device.vendor_id == nil
             or gpu.vendor_id == node.device.vendor_id)
           and (gpu.device_id == nil or node.device.device_id == nil

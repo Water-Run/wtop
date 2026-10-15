@@ -89,6 +89,53 @@ assert(busy_text():sub(1, 1) ~= "~", "an exact idle-time reading has no estimate
 disk.busy_percent, disk.busy_quality = nil, "estimated"
 assert(busy_text() == "—", "an absent busy reading does not get an estimate prefix")
 
+-- GPU ancestry uses the current instance namespace, including domainless PCI.
+do
+  local gpu = { id = "ioreg:9901", card = "ioreg:9901", model_name = "Fixture GPU",
+    _registry_entry_id = "ioreg:9901", _registry_parent_id = "ioreg:9001",
+    _registry_parent_bus = "pci", identity_quality = "fresh", metrics = {
+      frequency_current_hz = 500000000, frequency_source_kind = "ioreport:GPUPH" },
+    quality = { frequency = "estimated" } }
+  state.gpus = { devices = { gpu } }
+  local function owners() return Hardware.build(state).by_id["pci:ioreg:1001"].gpu_ids end
+  assert(#owners() == 1 and owners()[1] == gpu.id)
+  assert(table.concat(TUI.hardware_detail_lines(state, "pci:ioreg:1001", i18n), "\n")
+    :find(gpu.id, 1, true), "hardware details expose the resolved GPU instance")
+  local encoded = JSON.encode(Export.snapshot(state))
+  assert(not encoded:find("_registry", 1, true))
+  assert(Export.snapshot(state).inventory.topology.nodes)
+  local agent = Export.agent(state, {})
+  assert(agent.top.gpus[1].metrics.frequency_source_kind == "ioreport:GPUPH"
+    and agent.top.gpus[1].quality.frequency == "estimated",
+    "agent frequency includes its provenance and estimated quality")
+  local model = ViewModel.build({ history_values = function() return {} end }, state, i18n, {}, "gpu")
+  assert(model.gpu_table.rows[1].frequency:sub(1, 1) == "~", "residency mean is visibly estimated")
+  state.quality = { gpus = { status = "ok", quality = "stale" } }
+  assert(#owners() == 0)
+  state.quality = { inventory = { status = "ok", quality = "stale" } }
+  assert(#owners() == 0)
+  state.quality = nil
+  gpu._registry_parent_bus = "usb"; assert(#owners() == 0); gpu._registry_parent_bus = "pci"
+  gpu._registry_parent_id = "ioreg:0"; gpu.pci_bdf = "02:00.0"
+  state.inventory.pci.devices[2] = { address = "02:00.0" }
+  graph = Hardware.build(state)
+  assert(#owners() == 0 and #graph.by_id["pci:02:00.0"].gpu_ids == 0,
+    "an invalid registry edge cannot fall back to a display BDF")
+  gpu._registry_parent_id = nil
+  assert(#Hardware.build(state).by_id["pci:02:00.0"].gpu_ids == 0,
+    "an integrated GPU without a bus ancestor does not invent a PCI owner")
+  gpu._registry_parent_id = "ioreg:9001"
+  state.inventory.pci.devices[2]._registry_entry_id = "ioreg:9001"
+  assert(#owners() == 0)
+  state.inventory.pci.devices[2] = nil
+  gpu.identity_quality = "partial"; assert(#owners() == 0); gpu.identity_quality = "fresh"
+  state.gpus.devices[2] = gpu; assert(#owners() == 0); state.gpus.devices[2] = nil
+  state.gpus.devices[2] = { id = "another", _registry_entry_id = "ioreg:9901",
+    _registry_parent_id = "ioreg:9001", _registry_parent_bus = "pci", identity_quality = "fresh" }
+  assert(#owners() == 0, "two public names cannot make a duplicated source instance unique")
+  state.gpus = nil
+end
+
 -- Malformed cycles are broken by the common graph, without editing a sample.
 hub._registry_parent_id, hub._registry_parent_bus = "ioreg:9003", "usb"
 graph = Hardware.build(state)

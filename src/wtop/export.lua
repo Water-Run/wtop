@@ -702,6 +702,7 @@ local function export_gpus(gpus)
     local result = json.object({
         schema = gpus and gpus.schema,
         truncated = gpus and gpus.truncated == true or false,
+        partial = gpus and gpus.partial == true or false,
         devices = json.array({}),
     })
     result.process_scan = copy_fields(gpus and gpus.process_scan, {
@@ -2072,7 +2073,7 @@ function M.agent(snapshot, options)
             -- that publishes a graphics clock and a memory clock reports two
             -- different quantities, and a summary carrying one of them
             -- unnamed reads as "the" frequency of the device.
-            "frequency_current_hz", "frequency_domain",
+            "frequency_current_hz", "frequency_domain", "frequency_source_kind",
             "temperature_celsius", "power_watts",
         })
         -- The full clock set, in the same shape the snapshot uses.  This

@@ -1005,6 +1005,8 @@ local function gpu_rows(snapshot, format)
         -- of it.  The full set is in the exported clocks, not here: a table
         -- cell has no room to name which clock is which.
         local frequency_text = frequency(format, metrics.frequency_current_hz)
+        if type(gpu.quality) == "table" and gpu.quality.frequency == "estimated"
+            and metrics.frequency_current_hz ~= nil then frequency_text = "~" .. frequency_text end
         local clock_count = #(type(gpu.frequencies) == "table"
             and gpu.frequencies.domains or {})
         if clock_count > 1 and metrics.frequency_current_hz ~= nil then

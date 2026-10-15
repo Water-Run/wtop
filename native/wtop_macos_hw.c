@@ -32,6 +32,7 @@
 #include <unistd.h>
 
 #include "wtop_macos.h"
+#include "wtop_macos_gpu_clock.h"
 
 #define MAX_PIDS 8192
 #define MAX_SOCKETS 16384
@@ -70,11 +71,6 @@ static int cf_text(CFTypeRef value, char *output, size_t size) {
 static int cf_int64(CFTypeRef value, int64_t *output) {
     return value && CFGetTypeID(value) == CFNumberGetTypeID()
         && CFNumberGetValue((CFNumberRef)value, kCFNumberSInt64Type, output);
-}
-
-static int cf_double(CFTypeRef value, double *output) {
-    return value && CFGetTypeID(value) == CFNumberGetTypeID()
-        && CFNumberGetValue((CFNumberRef)value, kCFNumberDoubleType, output);
 }
 
 static int cf_bool(CFTypeRef value, int *output) {
@@ -312,151 +308,56 @@ static ioreport_set gpu_states;
 static dvfs_table gpu_table;
 static int gpu_table_state = 0;
 
-static int dictionary_number(CFDictionaryRef dictionary, const char *key,
-    double *value) {
-    CFStringRef name;
-    int found;
-    if (!dictionary) return 0;
-    name = CFStringCreateWithCString(kCFAllocatorDefault, key, kCFStringEncodingUTF8);
-    found = cf_double(CFDictionaryGetValue(dictionary, name), value);
-    CFRelease(name);
-    return found;
-}
-
-static int l_collect_gpu(lua_State *L) {
-    io_iterator_t iterator = 0;
-    io_registry_entry_t entry;
-    int output = 1;
-    double frequency = 0, active = 0;
-    int has_frequency = 0;
-    if (!gpu_table_state)
+int wtop_gpu_frequency(uint64_t owner, struct wtop_gpu_frequency *frequency) {
+    static uint64_t previous_owner;
+    memset(frequency, 0, sizeof(*frequency));
+    if (previous_owner != owner) {
+        if (gpu_states.previous) CFRelease(gpu_states.previous);
+        gpu_states.previous = NULL;
+        gpu_table_state = 0;
+        previous_owner = owner;
+    }
+    if (!owner) return 0;
+    if (gpu_table_state <= 0)
         gpu_table_state = read_dvfs_table("voltage-states9-sram", &gpu_table) ? 1 : -1;
-    if (gpu_table_state > 0
-        && ioreport_open(&gpu_states, CFSTR("GPU Stats"), CFSTR("GPU Performance States"))) {
-        CFDictionaryRef owner;
-        CFArrayRef items = ioreport_changes(&gpu_states, &owner);
-        for (CFIndex index = 0; items && index < CFArrayGetCount(items); ++index) {
-            CFDictionaryRef item = CFArrayGetValueAtIndex(items, index);
-            char name[32];
-            if (cf_text(ioreport.name(item), name, sizeof(name))
-                && strcmp(name, "GPUPH") == 0)
-                has_frequency = residency_frequency(item, &gpu_table, &frequency, &active);
+    if (gpu_table_state <= 0
+        || !ioreport_open(&gpu_states, CFSTR("GPU Stats"), CFSTR("GPU Performance States"))) return 0;
+    CFDictionaryRef delta = NULL;
+    CFArrayRef items = ioreport_changes(&gpu_states, &delta);
+    int found = 0, valid = 0;
+    CFIndex count = items ? CFArrayGetCount(items) : 0;
+    if (count > 1024) goto done;
+    for (CFIndex index = 0; index < count; ++index) {
+        CFTypeRef item = CFArrayGetValueAtIndex(items, index);
+        char name[32];
+        if (!item || CFGetTypeID(item) != CFDictionaryGetTypeID()
+            || !cf_text(ioreport.name(item), name, sizeof(name)) || strcmp(name, "GPUPH")) continue;
+        if (++found > 1) { valid = 0; break; }
+        int32_t states = ioreport.state_count(item);
+        if (states <= 0 || states > WTOP_MAX_GPU_STATES) continue;
+        struct wtop_gpu_state values[WTOP_MAX_GPU_STATES];
+        int named = 1;
+        unsigned next_state = UINT_MAX;
+        for (int32_t state = 0; state < states; ++state) {
+            if (!cf_text(ioreport.state_name(item, state), name, sizeof(name))) { named = 0; break; }
+            values[state].ticks = ioreport.residency(item, state);
+            if (!wtop_gpu_state_label(name, &next_state, &values[state].idle)) { named = 0; break; }
         }
-        if (owner) CFRelease(owner);
+        if (named) valid = wtop_gpu_clock(values, (unsigned)states, gpu_table.hz,
+            (unsigned)gpu_table.count, &frequency->mean, &frequency->active);
     }
-    if (IOServiceGetMatchingServices(MACH_PORT_NULL,
-        IOServiceMatching("IOAccelerator"), &iterator) != KERN_SUCCESS) {
-        lua_pushnil(L);
-        lua_pushliteral(L, "IOAccelerator is unavailable");
-        return 2;
+    if (valid) {
+        frequency->minimum = (uint64_t)gpu_table.hz[0];
+        frequency->maximum = frequency->minimum;
+        for (int i = 1; i < gpu_table.count; ++i) {
+            uint64_t hz = (uint64_t)gpu_table.hz[i];
+            if (hz < frequency->minimum) frequency->minimum = hz;
+            if (hz > frequency->maximum) frequency->maximum = hz;
+        }
     }
-    lua_createtable(L, 0, 3);
-    string_field(L, "schema", "dev.waterrun.wtop.gpu/v2");
-    lua_createtable(L, 2, 0);
-    while ((entry = IOIteratorNext(iterator)) != 0) {
-        CFMutableDictionaryRef properties = NULL;
-        CFDictionaryRef statistics = NULL;
-        char text[128], id[64];
-        int64_t cores = 0, vendor = 0;
-        double value;
-        if (IORegistryEntryCreateCFProperties(entry, &properties,
-            kCFAllocatorDefault, 0) != KERN_SUCCESS || !properties) {
-            IOObjectRelease(entry);
-            continue;
-        }
-        {
-            CFTypeRef stats = CFDictionaryGetValue(properties,
-                CFSTR("PerformanceStatistics"));
-            if (stats && CFGetTypeID(stats) == CFDictionaryGetTypeID())
-                statistics = (CFDictionaryRef)stats;
-        }
-        lua_createtable(L, 0, 12);
-        snprintf(id, sizeof(id), "gpu%d", output - 1);
-        string_field(L, "id", id);
-        string_field(L, "card", id);
-        {
-            CFTypeRef vendor_data = CFDictionaryGetValue(properties, CFSTR("vendor-id"));
-            if (vendor_data && CFGetTypeID(vendor_data) == CFDataGetTypeID()
-                && CFDataGetLength((CFDataRef)vendor_data) >= 2) {
-                const uint8_t *bytes = CFDataGetBytePtr((CFDataRef)vendor_data);
-                vendor = bytes[0] | (bytes[1] << 8);
-                snprintf(text, sizeof(text), "0x%04llx", (long long)vendor);
-                string_field(L, "vendor_id", text);
-                string_field(L, "vendor", text);
-            }
-        }
-        string_field(L, "vendor_name", vendor == 0x106b ? "Apple"
-            : vendor == 0x1002 ? "AMD" : vendor == 0x8086 ? "Intel"
-            : vendor == 0x10de ? "NVIDIA" : "Unknown");
-        if (cf_text(CFDictionaryGetValue(properties, CFSTR("model")), text, sizeof(text)))
-            string_field(L, "model_name", text);
-        if (cf_text(CFDictionaryGetValue(properties, CFSTR("IOClass")), text, sizeof(text)))
-            string_field(L, "driver", text);
-        string_field(L, "identity_quality", "fresh");
-        string_field(L, "source", "iokit:IOAccelerator");
-        if (cf_int64(CFDictionaryGetValue(properties, CFSTR("gpu-core-count")), &cores)
-            && cores > 0) integer_field(L, "core_count", cores);
-        lua_createtable(L, 0, 8);
-        if (dictionary_number(statistics, "Device Utilization %", &value)) {
-            number_field(L, "utilization_percent", value);
-            string_field(L, "utilization_source", "iokit");
-        } else if (dictionary_number(statistics, "GPU Activity(%)", &value)) {
-            number_field(L, "utilization_percent", value);
-            string_field(L, "utilization_source", "iokit");
-        }
-        if (dictionary_number(statistics, "Renderer Utilization %", &value))
-            number_field(L, "renderer_utilization_percent", value);
-        if (dictionary_number(statistics, "Tiler Utilization %", &value))
-            number_field(L, "tiler_utilization_percent", value);
-        if (dictionary_number(statistics, "vramUsedBytes", &value)) {
-            double free_bytes;
-            integer_field(L, "memory_used_bytes", (lua_Integer)value);
-            if (dictionary_number(statistics, "vramFreeBytes", &free_bytes))
-                integer_field(L, "memory_total_bytes", (lua_Integer)(value + free_bytes));
-        } else if (dictionary_number(statistics, "In use system memory", &value)) {
-            /* Unified memory: the GPU's share of system memory. */
-            integer_field(L, "memory_used_bytes", (lua_Integer)value);
-            integer_field(L, "shared_memory_used_bytes", (lua_Integer)value);
-            if (dictionary_number(statistics, "Alloc system memory", &value))
-                integer_field(L, "shared_memory_allocated_bytes", (lua_Integer)value);
-        }
-        /* The DVFS residency belongs to the integrated GPU. */
-        if (vendor == 0x106b && has_frequency && output == 1) {
-            if (frequency > 0) integer_field(L, "frequency_current_hz", (lua_Integer)frequency);
-            if (gpu_table.count > 0) {
-                integer_field(L, "frequency_minimum_hz", (lua_Integer)gpu_table.hz[0]);
-                integer_field(L, "frequency_maximum_hz",
-                    (lua_Integer)gpu_table.hz[gpu_table.count - 1]);
-            }
-            number_field(L, "active_residency_percent", active * 100);
-        }
-        lua_setfield(L, -2, "metrics");
-        lua_createtable(L, 0, 2);
-        boolean_field(L, "utilization", statistics != NULL);
-        boolean_field(L, "process_usage", 0);
-        lua_setfield(L, -2, "capabilities");
-        lua_createtable(L, 0, 1);
-        string_field(L, "quality", "unavailable");
-        string_field(L, "reason", "per_process_gpu_usage_unavailable");
-        lua_setfield(L, -2, "processes");
-        lua_rawseti(L, -2, output++);
-        CFRelease(properties);
-        IOObjectRelease(entry);
-    }
-    IOObjectRelease(iterator);
-    lua_setfield(L, -2, "devices");
-    if (output == 1) {
-        lua_pop(L, 1);
-        lua_pushnil(L);
-        lua_pushliteral(L, "no_display_adapters");
-        return 2;
-    }
-    lua_createtable(L, 0, 2);
-    boolean_field(L, "enabled", 0);
-    string_field(L, "status", "unavailable");
-    string_field(L, "reason", "per_process_gpu_usage_unavailable");
-    lua_setfield(L, -2, "process_scan");
-    return 1;
+done:
+    if (delta) CFRelease(delta);
+    return valid;
 }
 
 /* ------------------------------------------------------------------------
@@ -1090,7 +991,7 @@ static int l_collect_cgroup(lua_State *L) {
 }
 
 static const luaL_Reg hardware_functions[] = {
-    {"collect_gpu", l_collect_gpu},
+    {"collect_gpu", wtop_collect_gpu},
     {"collect_hwmon", wtop_collect_hwmon},
     {"collect_powercap", l_collect_powercap},
     {"collect_cpufreq", l_collect_cpufreq},
