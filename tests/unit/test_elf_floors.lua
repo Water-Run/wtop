@@ -89,9 +89,12 @@ assert(module_floor ~= interpreter_floor,
 
 -- A plain ELF reports its own floor, and finding nothing inside it is the
 -- expected answer rather than a scan that failed to look.
-local plain = run("python3 tools/elf_floors.py " .. module_path)
+local plain = run("python3 tools/elf_floors.py " .. interpreter_path)
 assert(plain:find("embedded ELF images found: 0", 1, true) ~= nil,
-    "a plain shared object must be reported as carrying no ELF image:\n" .. plain)
+    "a plain interpreter must be reported as carrying no ELF image:\n" .. plain)
+local native_report = run("python3 tools/elf_floors.py " .. module_path)
+assert(native_report:find("embedded ELF images found: 1",1,true),
+    "the isolated NVML reader must be measured inside the native module:\n" .. native_report)
 
 -- The assembled file has the shape of a onefile: the *lower*-requirement image
 -- at offset 0 with the higher-requirement one appended, so that a scanner
@@ -120,7 +123,7 @@ assert(combined_floor == higher_floor,
         .. "defect this test exists for")
 
 local report = run("python3 tools/elf_floors.py " .. combined)
-assert(report:find("embedded ELF images found: 1", 1, true) ~= nil,
+assert(report:find("embedded ELF images found: 2", 1, true) ~= nil,
     "the appended image must be counted, so that a bundler compressing its "
         .. "payload and hiding the images shows up as a zero rather than as a "
         .. "quietly lower floor:\n" .. report)

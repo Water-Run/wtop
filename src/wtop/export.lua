@@ -818,6 +818,7 @@ local function export_gpu_providers(providers)
         if type(provider) == "table" then
             result[name] = copy_fields(provider, {
                 "status", "reason", "source", "api_version", "driver_version",
+                "transport", "sample_started_ns", "sample_finished_ns",
                 "device_count", "merged_devices", "added_devices", "incomplete_devices", "truncated",
             })
         end

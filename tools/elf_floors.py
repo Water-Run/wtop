@@ -19,14 +19,14 @@ module and calling it the bundle's floor, one level deeper and harder to see,
 because here the unmeasured file is inside the measured one.
 
 Each report line is:  offset  label  highest  all-versions
-The file itself is always measured whole.  An embedded image is measured from
-its own offset to the next ELF magic or end of file; the trailing bytes beyond
-it do not affect the reading, because objdump resolves the dynamic table by
-offset rather than by file size.
+The file itself is always measured whole. Each embedded image is measured from
+its own offset to the end of the container. This keeps its section tables intact
+when it contains another executable; trailing bytes beyond an image do not
+affect objdump's table offsets.
 
 The one thing this cannot do is see inside a compressed payload, and the
-onefile's payload is stored uncompressed -- two plain ELF images sit at a fixed
-distance from the end.  If a future bundler compressed it, this scan would find
+onefile's payload is stored uncompressed, including the native module's own
+NVML reader image. If a future bundler compressed it, this scan would find
 nothing and report the outer binary's floor again, which is the failure this
 tool exists to prevent.  The count of embedded images is therefore always
 printed, so "found none" is visible in a report rather than something a reader
@@ -94,10 +94,10 @@ def inspect(path, workdir):
     offset = data.find(MAGIC, 1)
     while offset != -1:
         following = data.find(MAGIC, offset + 1)
-        stop = following if following != -1 else size
-        with open(path, "rb") as source:
-            source.seek(offset)
-            payload = source.read() if following == -1 else source.read(stop - offset)
+        # A native module can itself contain the isolated NVML executable.
+        # Cutting at the next magic would truncate that module before its
+        # dynamic/section tables and silently under-measure the onefile.
+        payload = data[offset:]
         with open(scratch, "wb") as target:
             target.write(payload)
         versions, error = required_versions(scratch)

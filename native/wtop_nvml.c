@@ -38,8 +38,10 @@
  * queries are used. */
 #define _GNU_SOURCE
 
+#ifndef WTOP_NVML_CORE_ONLY
 #include <lua.h>
 #include <lauxlib.h>
+#endif
 
 #include <dlfcn.h>
 #include <stdint.h>
@@ -50,7 +52,10 @@
 #include <math.h>
 #include <time.h>
 
+#ifndef WTOP_NVML_CORE_ONLY
 #include "wtop_nvml.h"
+#endif
+#include "wtop_nvml_output.h"
 
 const char wtop_nvml_interface_license[] =
     "Copyright 1993-2026 NVIDIA Corporation.  All rights reserved.\n"
@@ -193,13 +198,16 @@ typedef struct {
     nvml_fields_function fields;
     sample_cursor cursors[NVML_MAX_DEVICES];
 } nvml_api;
+#ifndef WTOP_NVML_CORE_ONLY
 static char nvml_registry_key;
+#endif
 
 NVML_ABI static void nvml_close(nvml_api *a) {
     if (a->state && a->shutdown) a->shutdown();
     if (a->library) dlclose(a->library);
     memset(a, 0, sizeof(*a));
 }
+#ifndef WTOP_NVML_CORE_ONLY
 static int nvml_gc(lua_State *L) { nvml_close(lua_touserdata(L, 1)); return 0; }
 static nvml_api *nvml_context(lua_State *L) {
     lua_rawgetp(L, LUA_REGISTRYINDEX, &nvml_registry_key);
@@ -215,6 +223,8 @@ static nvml_api *nvml_context(lua_State *L) {
     /* No SDK resource is acquired until the finalizer and registry root exist. */
     return a;
 }
+
+#endif
 
 static void *symbol(void *library, const char *name, const char *fallback) {
     void *found = dlsym(library, name);
@@ -267,20 +277,6 @@ NVML_ABI static const char *nvml_open(nvml_api *a) {
     return NULL;
 }
 
-static void integer_field(lua_State *L, const char *name, lua_Integer value) {
-    lua_pushinteger(L, value);
-    lua_setfield(L, -2, name);
-}
-
-static void number_field(lua_State *L, const char *name, lua_Number value) {
-    lua_pushnumber(L, value);
-    lua_setfield(L, -2, name);
-}
-
-static void string_field(lua_State *L, const char *name, const char *value) {
-    lua_pushstring(L, value);
-    lua_setfield(L, -2, name);
-}
 
 typedef struct {
     unsigned int pid;
@@ -458,20 +454,20 @@ NVML_ABI static nvml_return mask_query(nvml_device device, nvml_mask_function cu
     }
     return status;
 }
-NVML_ABI static void clock_events(lua_State *L, nvml_api *a, nvml_device device) {
+NVML_ABI static void clock_events(nvml_output *L, nvml_api *a, nvml_device device) {
     unsigned long long active = ~0ULL, supported = ~0ULL;
     const char *active_source, *supported_source;
     nvml_return status = mask_query(device, a->current_events, a->current_throttle, &active,
         &active_source, "nvmlDeviceGetCurrentClocksEventReasons", "nvmlDeviceGetCurrentClocksThrottleReasons");
     nvml_return support_status = mask_query(device, a->supported_events, a->supported_throttle,
         &supported, &supported_source, "nvmlDeviceGetSupportedClocksEventReasons", "nvmlDeviceGetSupportedClocksThrottleReasons");
-    lua_createtable(L, 0, 6);
+    nvml_table(L, 0, 6);
     integer_field(L, "status_code", status); integer_field(L, "supported_status_code", support_status);
     string_field(L, "source", active_source); string_field(L, "supported_source", supported_source);
     char text[19];
     if (status == 0) { snprintf(text, sizeof(text), "0x%016llx", active); string_field(L, "raw_hex", text); }
     if (support_status == 0) { snprintf(text, sizeof(text), "0x%016llx", supported); string_field(L, "supported_hex", text); }
-    lua_setfield(L, -2, "clock_events");
+    nvml_field_attach(L, "clock_events");
 }
 static int field_power(const nvml_field *field, unsigned int expected, double *watts) {
     if (field->field_id != expected || field->scope != 0 || field->status != 0) return 0;
@@ -500,7 +496,7 @@ static const char *field_freshness(const nvml_field *field) {
     if (age < -1000000) return "gap";
     return age > 5000000 ? "stale" : "fresh";
 }
-NVML_ABI static void device_power(lua_State *L, nvml_api *a, nvml_device device) {
+NVML_ABI static void device_power(nvml_output *L, nvml_api *a, nvml_device device) {
     nvml_field fields[2]; memset(fields, 0xff, sizeof(fields));
     fields[0].field_id = 186; fields[1].field_id = 185;
     fields[0].scope = fields[1].scope = 0; /* GPU, not module/CPU+GPU scope. */
@@ -549,25 +545,23 @@ NVML_ABI static void device_power(lua_State *L, nvml_api *a, nvml_device device)
  * are retryable. Cursors are keyed by UUID and committed only after every Lua
  * allocation succeeds, so an OOM or index reorder cannot consume another
  * device's samples. */
-NVML_ABI int wtop_nvml_query(lua_State *L) {
-    int include_processes = lua_toboolean(L, 1);
-    nvml_api *a = nvml_context(L);
+NVML_ABI static const char *nvml_collect(nvml_api *a, nvml_output *L, int include_processes) {
     const char *reason = nvml_open(a);
-    if (reason) { lua_pushnil(L); lua_pushstring(L, reason); return 2; }
+    if (reason) return reason;
     unsigned int total = 0;
     nvml_return status = a->count(&total);
     if (status != 0) {
         if (status == 1 || status == 9 || status == 15) nvml_close(a);
-        lua_pushnil(L); lua_pushliteral(L, "nvml_device_count_failed"); return 2;
+        return "nvml_device_count_failed";
     }
     unsigned int count = total > NVML_MAX_DEVICES ? NVML_MAX_DEVICES : total;
     int truncated = total > count, partial = truncated, returned = 0;
     sample_cursor pending[NVML_MAX_DEVICES]; memset(pending, 0, sizeof(pending));
-    lua_createtable(L, 0, 5);
+    nvml_table(L, 0, 5);
     char text[256]; memset(text, 0xff, sizeof(text));
     if (a->driver_version && a->driver_version(text, sizeof(text)) == 0 && valid_text(text, sizeof(text)))
         string_field(L, "driver_version", text);
-    lua_createtable(L, (int)count, 0);
+    nvml_table(L, (int)count, 0);
     for (unsigned int index = 0; index < count; ++index) {
         nvml_device device = NULL;
         if (a->handle(index, &device) != 0 || !device) { partial = 1; continue; }
@@ -582,7 +576,7 @@ NVML_ABI int wtop_nvml_query(lua_State *L) {
                 if (strcmp(a->cursors[i].uuid, uuid) == 0) previous = a->cursors[i].timestamp;
         }
         if (duplicate) { partial = 1; continue; }
-        lua_createtable(L, 0, 28);
+        nvml_table(L, 0, 28);
         integer_field(L, "index", index);
         if (uuid[0]) string_field(L, "uuid", uuid);
         memset(text, 0xff, sizeof(text));
@@ -608,8 +602,8 @@ NVML_ABI int wtop_nvml_query(lua_State *L) {
         }
         nvml_memory memory; memset(&memory, 0xff, sizeof(memory));
         if (a->memory && a->memory(device, &memory) == 0 && memory.total < (1ULL << 50)) {
-            integer_field(L, "memory_total_bytes", (lua_Integer)memory.total);
-            if (memory.used <= memory.total) integer_field(L, "memory_used_bytes", (lua_Integer)memory.used);
+            integer_field(L, "memory_total_bytes", (int64_t)memory.total);
+            if (memory.used <= memory.total) integer_field(L, "memory_used_bytes", (int64_t)memory.used);
         }
         unsigned int value = UINT_MAX;
         if (a->temperature && a->temperature(device, 0, &value) == 0 && value < 1000)
@@ -638,41 +632,41 @@ NVML_ABI int wtop_nvml_query(lua_State *L) {
             allocation allocations[NVML_MAX_PROCESSES * 2]; int records_count = 0;
             int amount = collect_processes(a, device, previous, &next, rows, &process_truncated,
                 allocations, &records_count);
-            lua_createtable(L, amount, 0);
+            nvml_table(L, amount, 0);
             for (int i = 0; i < amount; ++i) {
-                lua_createtable(L, 0, 10);
+                nvml_table(L, 0, 10);
                 integer_field(L, "pid", rows[i].pid); string_field(L, "kind", rows[i].kind);
                 if (rows[i].has_memory) {
-                    integer_field(L, "memory_bytes", (lua_Integer)rows[i].memory);
+                    integer_field(L, "memory_bytes", (int64_t)rows[i].memory);
                     string_field(L, "memory_quality", rows[i].memory_estimated ? "estimated" : "fresh");
                     string_field(L, "memory_scope", rows[i].memory_estimated ? "largest_reported_context"
                         : rows[i].has_whole ? "whole_device" : "reported_context");
                 }
-                lua_createtable(L, 0, 0); int contexts = 0;
+                nvml_table(L, 0, 0); int contexts = 0;
                 for (int j = 0; j < records_count; ++j) {
                     nvml_process p = allocations[j].value;
                     if (p.pid != rows[i].pid) continue;
-                    lua_createtable(L, 0, 4);
+                    nvml_table(L, 0, 4);
                     if (p.gpu_instance_id != UINT_MAX) integer_field(L, "gpu_instance_id", p.gpu_instance_id);
                     if (p.compute_instance_id != UINT_MAX) integer_field(L, "compute_instance_id", p.compute_instance_id);
-                    if (p.used_gpu_memory < (1ULL << 50)) integer_field(L, "memory_bytes", (lua_Integer)p.used_gpu_memory);
+                    if (p.used_gpu_memory < (1ULL << 50)) integer_field(L, "memory_bytes", (int64_t)p.used_gpu_memory);
                     string_field(L, "kind", allocations[j].sources == 3 ? "compute+graphics"
                         : allocations[j].sources == 1 ? "compute" : "graphics");
-                    lua_rawseti(L, -2, ++contexts);
+                    nvml_index(L, ++contexts);
                 }
-                lua_setfield(L, -2, "memory_contexts");
+                nvml_field_attach(L, "memory_contexts");
                 if (rows[i].has_sample) {
                     integer_field(L, "sm_percent", rows[i].sm);
                     integer_field(L, "memory_percent", rows[i].memory_utilization);
                     integer_field(L, "encoder_percent", rows[i].encoder);
                     integer_field(L, "decoder_percent", rows[i].decoder);
-                    integer_field(L, "sample_timestamp_us", (lua_Integer)rows[i].timestamp);
+                    integer_field(L, "sample_timestamp_us", (int64_t)rows[i].timestamp);
                     string_field(L, "sample_window", previous ? "since_last_query" : "driver_buffer");
                 }
-                lua_rawseti(L, -2, i + 1);
+                nvml_index(L, i + 1);
             }
-            lua_setfield(L, -2, "processes");
-            lua_pushboolean(L, process_truncated); lua_setfield(L, -2, "processes_truncated");
+            nvml_field_attach(L, "processes");
+            boolean_field(L, "processes_truncated", process_truncated);
             if (process_truncated) partial = truncated = 1;
         }
         /* UUID is read again before committing identity/cursors. Keep explicit
@@ -680,20 +674,47 @@ NVML_ABI int wtop_nvml_query(lua_State *L) {
         if (uuid[0]) {
             memset(text, 0xff, sizeof(text));
             if (a->uuid(device, text, sizeof(text)) != 0 || !valid_text(text, sizeof(text)) || strcmp(text, uuid) != 0) {
-                partial = 1; lua_pop(L, 1); continue;
+                partial = 1; nvml_discard(L); continue;
             }
             memcpy(pending[returned].uuid, uuid, strlen(uuid) + 1);
             pending[returned].timestamp = next;
         }
-        lua_rawseti(L, -2, ++returned);
+        nvml_index(L, ++returned);
     }
-    lua_setfield(L, -2, "devices");
+    nvml_field_attach(L, "devices");
     unsigned int after = 0;
     if (a->count(&after) != 0 || after != total) partial = 1;
     string_field(L, "source", "nvml");
     string_field(L, "status", partial ? "partial" : "ok");
     if (partial) string_field(L, "reason", "nvml_enumeration_incomplete");
-    lua_pushboolean(L, truncated); lua_setfield(L, -2, "truncated");
+    boolean_field(L, "truncated", truncated);
+    if (L->failed) return L->failed==2 ? "nvml_allocation_failed" : "nvml_output_too_large";
     memcpy(a->cursors, pending, sizeof(pending));
+    return NULL;
+}
+
+#ifndef WTOP_NVML_CORE_ONLY
+static void nvml_lua_emit(nvml_output *out,enum nvml_operation op,const char *key,
+    int64_t integer,double number,const char *text) {
+    lua_State *L=out->context;
+    switch(op) {
+    case NVML_TABLE:lua_createtable(L,(int)(integer>>32),(int)(integer&0xffffffff));return;
+    case NVML_FIELD:lua_setfield(L,-2,key);return;
+    case NVML_INDEX:lua_rawseti(L,-2,(lua_Integer)integer);return;
+    case NVML_DISCARD:lua_pop(L,1);return;
+    case NVML_INTEGER:lua_pushinteger(L,(lua_Integer)integer);break;
+    case NVML_NUMBER:lua_pushnumber(L,number);break;
+    case NVML_STRING:lua_pushstring(L,text);break;
+    case NVML_BOOLEAN:lua_pushboolean(L,integer!=0);break;
+    }
+    lua_setfield(L,-2,key);
+}
+int wtop_nvml_query(lua_State *L) {
+    int processes=lua_toboolean(L,1);
+    nvml_api *api=nvml_context(L);
+    nvml_output output={L,0,nvml_lua_emit};
+    const char *reason=nvml_collect(api,&output,processes);
+    if(reason){lua_pushnil(L);lua_pushstring(L,reason);return 2;}
     return 1;
 }
+#endif

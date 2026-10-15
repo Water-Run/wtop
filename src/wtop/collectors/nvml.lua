@@ -34,13 +34,57 @@ end
 
 function M.default_provider()
   local ok, native = pcall(require, "wtop.native")
-  if not ok or type(native) ~= "table" or type(native.nvml_query) ~= "function" then
+  if not ok or type(native) ~= "table" or type(native.nvml_worker_open) ~= "function"
+      or type(native.nvml_worker_query) ~= "function" or type(native.nvml_worker_close) ~= "function" then
     return nil
   end
-  return function(include_processes)
-    local called, data, reason = pcall(native.nvml_query, include_processes == true)
+  local session, closed
+  local function query(include_processes)
+    if closed then return nil, "nvml_worker_closed" end
+    if not session then
+      local created, value = pcall(native.nvml_worker_open)
+      if not created then return nil, "nvml_allocation_failed" end
+      if not value then return nil, "nvml_worker_unavailable" end
+      session = value
+    end
+    local called, data, reason = pcall(native.nvml_worker_query, session, include_processes == true)
     if not called then return nil, "nvml_query_failed" end
+    if type(data) == "table" then
+      local read, realtime = pcall(native.realtime_ns)
+      if read and type(realtime) == "number" then M.refresh_power(data, realtime / 1000) end
+    end
     return data, reason
+  end
+  return query, function()
+    closed = true
+    if session then return native.nvml_worker_close(session) end
+    return true
+  end
+end
+
+-- A response can wait for the next collector tick. Re-evaluate SDK UTC field
+-- timestamps at delivery, including the preference for a fresh averaged field
+-- over an older instantaneous one. Cached data cannot reset its own age.
+function M.refresh_power(data, realtime_us)
+  for _, device in ipairs(data.devices or {}) do
+    if device.power_measurement ~= "device_sample" then
+      local function freshness(kind)
+        if not finite_number(device["power_" .. kind .. "_watts"]) then return nil end
+        local timestamp = device["power_" .. kind .. "_timestamp_us"]
+        if not finite_number(timestamp) or timestamp <= 0 then return "gap" end
+        local age = realtime_us - timestamp
+        return age < -1000000 and "gap" or age > 5000000 and "stale" or "fresh"
+      end
+      local instant, average = freshness("instant"), freshness("average")
+      device.power_instant_quality, device.power_average_quality = instant, average
+      if instant or average then
+        local use_instant = instant and (not average or instant == "fresh" or average ~= "fresh")
+        device.power_watts = use_instant and device.power_instant_watts or device.power_average_watts
+        device.power_quality = use_instant and instant or average
+        device.power_measurement = use_instant and "current" or "average"
+        device.power_interval_ns = not use_instant and 1000000000 or nil
+      end
+    end
   end
 end
 
@@ -234,7 +278,7 @@ function M.merge(devices, lookup, data, options)
       end
       device.capabilities = device.capabilities or {}
       device.capabilities.nvml = true
-      local domain = Limits.nvml(entry.clock_events, options.now_ns)
+      local domain = Limits.nvml(entry.clock_events, data.sample_started_ns or options.now_ns)
       if domain then
         device.performance_limits = device.performance_limits or { domains = {} }
         device.performance_limits.domains = device.performance_limits.domains or {}
@@ -253,6 +297,9 @@ function M.merge(devices, lookup, data, options)
     reason = text(data.reason, 96),
     truncated = data.truncated == true,
     source = "nvml",
+    transport = text(data.transport, 32),
+    sample_started_ns = data.sample_started_ns,
+    sample_finished_ns = data.sample_finished_ns,
     driver_version = text(data.driver_version, 32),
     device_count = #(data.devices or {}),
     merged_devices = merged,

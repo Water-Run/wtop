@@ -287,7 +287,7 @@ local NOT_RELEASE_EVIDENCE = {
     -- Host-specific performance verdict, not a universal release document;
     -- no target-machine budget has been fixed for test-all yet.
     "check_perf_budget.py",
-    "check_windows_x86.py", "embed_cpuid_helpers.py",
+    "check_windows_x86.py", "embed_cpuid_helpers.py", "embed_nvml_worker.sh",
     "check_macos.py",
     "check_resources.sh",
     "compile_locales.lua", "cross_libc_build.sh", "elf_floors.py",

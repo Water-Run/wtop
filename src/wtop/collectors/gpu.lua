@@ -10,6 +10,11 @@ local GPULimits = require("wtop.collectors.gpu_limits")
 
 local GPU = {}
 GPU.__index = GPU
+local NVML_WORKER_FAILURES = {
+  nvml_query_timeout=true, nvml_worker_unavailable=true, nvml_worker_busy=true,
+  nvml_worker_exited=true, nvml_invalid_response=true, nvml_allocation_failed=true,
+  nvml_output_too_large=true,
+}
 
 local MAX_DIRECTORY_LIMIT = 2147483647
 local PCI_IDS_PATHS = {
@@ -1631,7 +1636,10 @@ end
 function GPU:_nvml_provider(fs)
   if self.nvml then return self.nvml end
   if not self.nvml_default or fs ~= FS.default then return nil end
-  if self._nvml_host == nil then self._nvml_host = NVML.default_provider() or false end
+  if self._nvml_host == nil then
+    self._nvml_host, self._nvml_close = NVML.default_provider()
+    self._nvml_host = self._nvml_host or false
+  end
   return self._nvml_host or nil
 end
 
@@ -1666,8 +1674,8 @@ function GPU:probe(context)
   if #found.cards == 0 then
     -- No DRM card can still mean a working vendor-managed GPU, so ask both
     -- providers before declaring the page unavailable.
-    local nvml_data = not (context and context.safe_mode)
-      and NVML.query(self:_nvml_provider(fs), false)
+    local nvml_data, nvml_reason
+    if not (context and context.safe_mode) then nvml_data, nvml_reason = NVML.query(self:_nvml_provider(fs), false) end
     if nvml_data and #nvml_data.devices > 0 then
       return Capability.available({ source = "nvml", details = { devices = #nvml_data.devices } })
     end
@@ -1676,7 +1684,9 @@ function GPU:probe(context)
     if amdsmi_data and #amdsmi_data.devices > 0 then
       return Capability.available({ source = "amdsmi", details = { devices = #amdsmi_data.devices } })
     end
-    return Capability.unavailable("no_drm_card_devices", { source = self.drm_path })
+    local retry = nvml_reason == "nvml_query_pending" and 250 or NVML_WORKER_FAILURES[nvml_reason] and 5000 or nil
+    return Capability.unavailable(retry and nvml_reason or "no_drm_card_devices",
+      { source = self.drm_path, retry_after_ms = retry })
   end
   return Capability.available({
     source = self.drm_path,
@@ -1716,12 +1726,19 @@ function GPU:sample(context, previous)
   if #found.cards == 0 and not (nvml_data and #nvml_data.devices > 0)
     and not (amdsmi_data and #amdsmi_data.devices > 0) then
     local finished = Common.now_ns(context)
-    return Common.result("unavailable", finished, nil, {
-      quality = "unavailable",
-      reason = "no_drm_card_devices",
+    local pending = nvml_reason == "nvml_query_pending"
+    local failed = NVML_WORKER_FAILURES[nvml_reason] == true
+    local reason = (pending or failed) and nvml_reason or "no_drm_card_devices"
+    local result = Common.result(failed and "error" or "unavailable", finished, nil, {
+      quality = failed and "error" or "unavailable",
+      reason = reason,
+      retry_after_ms = pending and 250 or failed and 5000 or nil,
       duration_ns = Common.elapsed_ns(finished, started) or 0,
       source = self.drm_path,
     })
+    result.capability = Capability.unavailable(reason, { source = self.drm_path,
+      retry_after_ms = pending and 250 or failed and 5000 or nil })
+    return result
   end
 
   local devices = {}
@@ -1852,7 +1869,15 @@ function GPU:sample(context, previous)
   if process_scan.enabled and process_scan.status == "ok" then
     self._last_process_result = result
   end
+  result.capability = Capability.available({source = self.drm_path,
+    details = {cards = #devices, truncated = truncated}})
+  if nvml_reason == "nvml_query_pending" then result.retry_after_ms = 250 end
   return result
+end
+
+function GPU:stop()
+  if self._nvml_close then self._nvml_close(); self._nvml_close = nil end
+  self._nvml_host = nil
 end
 
 GPU.enumerate = enumerate

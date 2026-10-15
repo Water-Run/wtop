@@ -24,7 +24,7 @@ Linux /proc · /sys / macOS / Windows native APIs
       virtual cell grid → diff renderer → terminal
 ```
 
-默认连续采集不依赖外部 CLI。`smartctl`、`perf`、`sleep`、`systemctl`、`journalctl` 和 `loginctl` 由按需检查器通过受限 Runner 启动。Linux 的 NVML、AMD SMI、Level Zero 提供方在运行时发现即动态加载，安全模式下跳过；macOS、Windows 使用各自的原生硬件后端。
+默认连续采集不依赖外部 CLI。`smartctl`、`perf`、`sleep`、`systemctl`、`journalctl` 和 `loginctl` 由按需检查器通过受限 Runner 启动。Linux 的 NVML 在独立原生读取进程内动态加载，AMD SMI、Level Zero 仍在主进程动态加载；安全模式跳过这些厂商接口。macOS、Windows 使用各自的原生硬件后端。
 
 UI 状态目前由 `tui.lua`、`workspace.lua` 和进程控制器直接协调，尚未形成完整的 Action → Reducer → 单一 AppState 架构。既有的边界仍然成立：采集器不向终端绘制内容，控件（widget）也不直接读取 procfs 或 sysfs。
 
@@ -430,6 +430,18 @@ Linux 厂商提供方按设备身份补充通用 DRM 信息：NVML 提供 NVIDIA
 温度、时钟和功率。后两项已有假库测试，真机覆盖仍待补齐。
 MIG、多 tile、完整厂商健康信息和厂商控制操作仍是规划项。
 
+默认 NVML 会话使用内嵌在原生模块中的独立 ELF，不依赖辅助 Lua 或外部命令。
+后台控制线程负责启动、协议、两秒查询截止与子进程回收；前台每次最多等待
+50 ms。驱动加载、初始化、查询和关闭均在子进程内，标准输出与错误输出
+不会混入界面或 JSON。每个提供方拥有自己的会话，全进程最多两个控制器；
+停止时取消自己的会话，关闭 Lua VM 不等待驱动。
+
+读取进程保留 NVML 会话和进程采样游标。响应有长度、深度、操作数和序号
+边界，完整校验后才解码；Lua 内存不足时保留同一帧供重试。真实采样起止
+时间随响应传递，交付时重新核对功耗时间戳；过期数据不会因读取缓存而变新。
+没有 DRM 节点的设备可以在异步发现完成后更新 GPU 能力。此隔离不覆盖
+AMD SMI、Level Zero 或同步 sysfs 读取。
+
 ## 7. 检查器
 
 检查器只响应用户按键而运行，不参与连续采样。默认注册表恰好包含：
@@ -515,7 +527,7 @@ CLI/配置中的主题值只接受五个确切的内置名称。未知的 CLI �
 
 ## 10. 当前测试边界
 
-- 现有的 137 个 Lua 单元/夹具测试文件覆盖：平台门控、procfs、sysfs、连接、cgroup v2、DRM fdinfo、GPU 频率/hwmon 连接、磁盘/挂载与 hwmon 的设备拓扑联接、异构 CPU 清单、powercap、SMART、PMU、布局、i18n、输入、渲染器、Runner 隔离、资源预检、权限处理、pidfd 操作、JSON 边界、导出隐私、无硬件环境下的驱动树、离线检查器重放、进程采集的规模限制、sudo 文件访问策略、主机或显卡必须提供的最小 GPU 能力、Lua 代码树内的版本收敛、原生模块与 SBOM、内存带宽能力声明、Insights 的 Collectors 表中采集器与槽位的对应关系、`truncated` 结果质量及其原因，以及发布证据——glibc 基线、内嵌 ELF 下限、构建身份和发布 SBOM。
+- 现有的 138 个 Lua 单元/夹具测试文件覆盖：平台门控、procfs、sysfs、连接、cgroup v2、DRM fdinfo、GPU 频率/hwmon 连接、磁盘/挂载与 hwmon 的设备拓扑联接、异构 CPU 清单、powercap、SMART、PMU、布局、i18n、输入、渲染器、Runner 隔离、资源预检、权限处理、pidfd 操作、JSON 边界、导出隐私、无硬件环境下的驱动树、离线检查器重放、进程采集的规模限制、sudo 文件访问策略、主机或显卡必须提供的最小 GPU 能力、Lua 代码树内的版本收敛、原生模块与 SBOM、内存带宽能力声明、Insights 的 Collectors 表中采集器与槽位的对应关系、`truncated` 结果质量及其原因，以及发布证据——glibc 基线、内嵌 ELF 下限、构建身份和发布 SBOM。
 - PTY 冒烟测试覆盖 `40×10`、`60×20`、`80×24/25`、`80×50`、`160×24`、`200×22`、`180×45`、窗口缩放、CJK、按键路径、备用屏幕恢复和布局持久化。
 - onedir/onefile 构建后有针对 CLI、快照和 PTY 的目标。
 - `tests/support/` 下三个共享测试辅助模块各有自己的测试，因为一个被十几个调用方使用、自身却没有测试的辅助模块，其正确性只是碰巧由哪些调用方使用它而决定的意外。`test_makefile_readers.lua` 在一个合成本地 Makefile 上固定了 Makefile 读取器的行为，该 Makefile 带有本项目并不使用的形态——本项目的 Makefile 正是那些它所钉住的缺陷处于蛰伏状态的原因。`test_fixture_fs.lua` 钉住的是“合并不得改变夹具所声明的内容”这一性质，而不是声明种类的清单，因为清单会成为同一事实的第三份副本；`merge` 曾经把 `errors` 整个丢掉，于是一个回答 `ENODATA` 的驱动被变成了一份“文件不存在”的记录。`test_hardware_fixtures.lua` 是第三个，它那里的缺口更糟：另外两个模块是在构建东西，而这个模块本身*就是*证据——每个需要本项目没有的硬件的采集器测试都从它那里取一棵树并采信它，因此一个自相矛盾的夹具不会让测试失败，反而会让读到它的测试通过。它按性质审计全部十二个夹具，并且不点名任何路径。

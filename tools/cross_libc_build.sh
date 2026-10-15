@@ -74,6 +74,9 @@ cleanup() {
 trap cleanup EXIT INT TERM
 cp -r "$project_dir/native" "$stage/"
 cp "$lua_archive" "$stage/"
+cp "$project_dir/Makefile" "$project_dir/VERSION" "$stage/"
+mkdir -p "$stage/tools"
+cp "$project_dir/tools/embed_nvml_worker.sh" "$stage/tools/"
 
 # The build identity travels with the sources.  The container has no .git, so it
 # cannot run tools/write_build_id.sh, and without the header the module it builds
@@ -210,10 +213,13 @@ make -C "/b/lua-$LUA_VERSION" -j"$(nproc 2>/dev/null || echo 2)" linux >/dev/nul
 make -C "/b/lua-$LUA_VERSION" install INSTALL_TOP=/opt/lua >/dev/null 2>&1
 
 mkdir -p /b/native-build
-gcc $native_flags -shared -I/b/build/native -I/opt/lua/include \
+native_sources=$(make -s -f /b/Makefile --eval="print-native-sources:;@echo \$(NATIVE_SOURCES)" print-native-sources)
+worker_source=$(make -s -f /b/Makefile --eval="print-worker-source:;@echo \$(NVML_WORKER_SOURCE)" print-worker-source)
+gcc $native_flags -s "$worker_source" -ldl -lm -o /b/native-build/wtop_nvml_worker
+sh /b/tools/embed_nvml_worker.sh /b/native-build/wtop_nvml_worker /b/native-build/wtop_nvml_worker_image.h
+gcc $native_flags -shared -I/b/native-build -I/b/build/native -I/opt/lua/include \
     -o /b/native-build/wtop_native.so \
-    /b/native/wtop_native.c /b/native/wtop_nvml.c /b/native/wtop_amdsmi.c \
-    /b/native/wtop_levelzero.c -ldl
+    $native_sources -ldl -pthread
 
 floors=""
 report() {
@@ -232,10 +238,11 @@ report() {
 echo "== required GLIBC symbol versions"
 report "lua interpreter" /opt/lua/bin/lua
 report "native module   " /b/native-build/wtop_native.so
+report "NVML reader     " /b/native-build/wtop_nvml_worker
 echo
 
 echo "== shared library dependencies"
-for f in /b/native-build/wtop_native.so /opt/lua/bin/lua; do
+for f in /b/native-build/wtop_native.so /b/native-build/wtop_nvml_worker /opt/lua/bin/lua; do
     readelf -d "$f" | sed -n "s/.*(NEEDED).*\[\(.*\)\]/  \1/p"
 done
 echo
@@ -248,6 +255,7 @@ if [ "$run_suite" = "suite" ]; then
     echo "== unit suite in this container"
     mkdir -p /b/full/build/native
     cp /b/native-build/wtop_native.so /b/full/build/native/wtop_native.so
+    cp /b/native-build/wtop_nvml_worker /b/native-build/wtop_nvml_worker_image.h /b/full/build/native/
     # The revision header has to be where the staged tree expects it, not only
     # where it was compiled: tests/unit/test_build_identity.lua reads the file
     # to confirm the module was compiled against the header the Lua half agrees
@@ -277,6 +285,13 @@ if [ "$run_suite" = "suite" ]; then
     LUA_CPATH="/b/full/build/native/?.so;;" \
         /opt/lua/bin/lua tests/run.lua tests/unit/test_*.lua
     echo "--version: $(/opt/lua/bin/lua src/wtop.lua --version 2>&1 | head -1)"
+    echo "== isolated NVML lifecycle with this libc"
+    mkdir -p /b/fake-nvml
+    gcc $native_flags -shared -DWTOP_NVML_VARIANT=0 tests/native/nvml_fake.c -o /b/fake-nvml/libnvidia-ml.so.1
+    gcc $native_flags -I/opt/lua/include tests/native/linux_nvml_worker.c \
+        -Wl,-E,--whole-archive /opt/lua/lib/liblua.a -Wl,--no-whole-archive -lm -ldl -pthread \
+        -o /b/native-build/worker-fixture
+    LD_LIBRARY_PATH=/b/fake-nvml /b/native-build/worker-fixture /b/native-build/wtop_native.so
 fi
 '
 

@@ -656,6 +656,17 @@ function Engine:tick(force)
         end
     end
     local completed = self.scheduler:tick(self.context)
+    -- Asynchronous discovery can finish after the initial probe. Keep the
+    -- capability table shared with one-shot exports current as sources settle.
+    if self.capabilities then
+        for id, result in pairs(completed) do
+            local capability = result.capability
+            if type(capability) == "table" and type(capability.available) == "boolean"
+                and ({available=true,unavailable=true,denied=true,degraded=true,error=true})[capability.state] then
+                self.capabilities[id] = capability
+            end
+        end
+    end
     if next(completed) then
         self.sequence = self.sequence + 1
         self.snapshot = Snapshot.merge(
