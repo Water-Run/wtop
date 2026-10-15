@@ -1534,9 +1534,11 @@ local function cpu_identity_entries(snapshot, format, i18n)
     end
     if topology.threads then
         entries[#entries + 1] = entry("compute.sockets", "Sockets",
-            plural_unit(i18n, "compute.socket_count", "socket", "sockets", topology.sockets or 0))
+            type(topology.sockets) == "number" and topology.sockets > 0
+                and plural_unit(i18n, "compute.socket_count", "socket", "sockets", topology.sockets) or "—")
         entries[#entries + 1] = entry("compute.cores", "Physical cores",
-            plural_unit(i18n, "compute.core_count", "core", "cores", topology.physical_cores or 0))
+            type(topology.physical_cores) == "number" and topology.physical_cores > 0
+                and plural_unit(i18n, "compute.core_count", "core", "cores", topology.physical_cores) or "—")
         entries[#entries + 1] = entry("compute.threads", "Logical CPUs",
             plural_unit(i18n, "compute.thread_count", "thread", "threads", topology.threads or 0))
     end
@@ -1558,12 +1560,17 @@ local function cpu_identity_entries(snapshot, format, i18n)
         entries[#entries + 1] = section("compute.core_types_section", "Core types")
         for index = 1, math.min(6, #cpu_info.core_types) do
             local core_type = cpu_info.core_types[index]
-            local detail = tostring(core_type.logical_cpu_count or 0) .. "T"
+            local detail = core_type.logical_cpu_count and (tostring(core_type.logical_cpu_count) .. "T") or "—"
             if core_type.maximum_frequency_hz then
                 detail = detail .. " · " .. frequency(format, core_type.maximum_frequency_hz)
             end
+            local label = core_type.model_name or core_type.part
+            if not label and core_type.efficiency_class ~= nil then
+                label = tostring(core_type.efficiency_class) .. " · "
+                    .. translated(i18n, "cpu.efficiency_class", "Efficiency class")
+            end
             entries[#entries + 1] = {
-                label = tostring(core_type.model_name or core_type.part or "CPU"),
+                label = tostring(label or "CPU"),
                 value = detail,
             }
         end

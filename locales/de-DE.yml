@@ -476,6 +476,12 @@ messages:
     other: "{count} Threads"
   compute.threads: "Logische CPUs"
   cpu.online: "Online"
+  cpu.cache_line: "Cachezeile (Bytes)"
+  cpu.cache_ways: "Assoziativität (Wege)"
+  cpu.processor_group: "Prozessorgruppe"
+  cpu.group_index: "CPU-Index in der Gruppe"
+  cpu.efficiency_class: "Effizienzklasse"
+  cpu.parked: "Geparkt"
   diagnostics.active_locale: "Aktive Sprache"
   diagnostics.fallback_chain: "Ausweichkette"
   diagnostics.missing_messages:

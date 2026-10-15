@@ -95,7 +95,7 @@ local function cpu_data(data, previous)
   local used, total = deltas(current, old, bits)
   data.total = {
     utilization = used and total and total > 0
-        and math.max(0, math.min(100, used * 100 / total)) or nil,
+        and math.max(0, math.min(100, used * 100.0 / total)) or nil,
     quality = used and total and total > 0 and "fresh" or "gap",
   }
   local old_cores = {}
@@ -115,12 +115,12 @@ local function cpu_data(data, previous)
       core.quality = "unavailable"
     elseif core_used and core_total and core_total > 0 then
       core.utilization = math.max(0, math.min(100,
-        core_used * 100 / core_total))
+        core_used * 100.0 / core_total))
       -- Optional time classes; a platform that does not split them leaves
       -- the columns unavailable rather than zero.
       for _, key in ipairs({"user", "nice", "system", "irq"}) do
         local part = parts[key]
-        if part then core[key] = math.max(0, math.min(100, part * 100 / core_total)) end
+        if part then core[key] = math.max(0, math.min(100, part * 100.0 / core_total)) end
       end
       core.quality = "fresh"
     else

@@ -472,6 +472,12 @@ messages:
     other: "{count} スレッド"
   compute.threads: "論理 CPU"
   cpu.online: "オンライン"
+  cpu.cache_line: "キャッシュライン（バイト）"
+  cpu.cache_ways: "連想度（ウェイ）"
+  cpu.processor_group: "プロセッサグループ"
+  cpu.group_index: "グループ内 CPU 番号"
+  cpu.efficiency_class: "効率クラス"
+  cpu.parked: "パーキング"
   diagnostics.active_locale: "使用中の言語"
   diagnostics.fallback_chain: "フォールバック順"
   diagnostics.missing_messages:

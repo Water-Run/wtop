@@ -196,6 +196,23 @@ narrower.counter_bits = nil
 equal(mach_pair(mach_cpu(100, 10, 0, 100), narrower).data.total.utilization, nil,
     "changing the counter representation starts a new baseline")
 
+local function wide_cpu(busy, total, user, system)
+    local raw = { busy = busy, total = total, user = user, system = system }
+    return { raw = raw, counter_bits = 64, cores = { { name = "cpu0", raw = raw } } }
+end
+local wide = collectors(fake_native({ collect_cpu = {
+    wide_cpu(0, 0, 0, 0), wide_cpu(1 << 61, 1 << 62, 1 << 60, 1 << 60),
+} })).cpu
+local wide_second = wide:sample(at(1000000000), wide:sample(at(0)))
+close(wide_second.data.total.utilization, 50, 1e-9, "large 64-bit CPU deltas avoid integer multiplication overflow")
+close(wide_second.data.cores[1].user, 25, 1e-9, "large 64-bit user time avoids overflow")
+close(wide_second.data.cores[1].system, 25, 1e-9, "large 64-bit system time avoids overflow")
+local wide_reset = collectors(fake_native({ collect_cpu = {
+    wide_cpu(100, 1000, 100, 0), wide_cpu(1, 10, 1, 0),
+} })).cpu
+equal(wide_reset:sample(at(1000000000), wide_reset:sample(at(0))).data.total.utilization, nil,
+    "64-bit Windows counters going backwards do not invent a wrap")
+
 -- ---------------------------------------------------------------------------
 -- Processes: identity, PID maps, CPU share, first-frame estimate, denial.
 -- ---------------------------------------------------------------------------

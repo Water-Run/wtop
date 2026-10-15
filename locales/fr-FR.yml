@@ -480,6 +480,12 @@ messages:
     other: "{count} threads"
   compute.threads: "CPU logiques"
   cpu.online: "En ligne"
+  cpu.cache_line: "Ligne de cache (octets)"
+  cpu.cache_ways: "Associativité (voies)"
+  cpu.processor_group: "Groupe de processeurs"
+  cpu.group_index: "Indice CPU du groupe"
+  cpu.efficiency_class: "Classe d’efficacité"
+  cpu.parked: "En veille"
   diagnostics.active_locale: "Langue active"
   diagnostics.fallback_chain: "Chaîne de repli"
   diagnostics.missing_messages:

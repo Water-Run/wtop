@@ -484,6 +484,12 @@ messages:
     other: "{count} потока"
   compute.threads: "Логические ЦП"
   cpu.online: "В сети"
+  cpu.cache_line: "Строка кэша (байт)"
+  cpu.cache_ways: "Ассоциативность (каналов)"
+  cpu.processor_group: "Группа процессоров"
+  cpu.group_index: "Номер CPU в группе"
+  cpu.efficiency_class: "Класс эффективности"
+  cpu.parked: "Припаркован"
   diagnostics.active_locale: "Текущий язык"
   diagnostics.fallback_chain: "Цепочка замены"
   diagnostics.missing_messages:

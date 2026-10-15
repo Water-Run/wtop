@@ -41,6 +41,7 @@ end
 
 local CPU_FIELDS = {
     "id", "name", "online", "identity_quality", "source",
+    "processor_group", "logical_processor_index", "cpu_set_id",
     "utilization", "user", "nice", "system", "iowait", "irq", "steal", "quality",
 }
 
@@ -48,7 +49,7 @@ local function export_cpu(cpu)
     local result = copy_fields(cpu, {
         "context_switches", "interrupts", "processes_created",
         "processes_running", "processes_blocked", "boot_time_seconds",
-        "counter_bits", "counter_source", "truncated",
+        "counter_bits", "counter_source", "counter_scope", "truncated",
     })
     if cpu and cpu.load then
         result.load = copy_fields(cpu.load, { "one", "five", "fifteen", "running", "total", "last_pid" })
@@ -85,14 +86,14 @@ local function export_cpu_info(cpu_info)
     result.identity = copy_fields(cpu_info and cpu_info.identity, {
         "model_name", "vendor", "family", "model", "stepping", "microcode",
         "implementer", "architecture", "variant", "part", "flags_count", "flags_truncated",
-        "core_type_count", "heterogeneous",
+        "core_type_count", "heterogeneous", "nominal_frequency_hz",
     })
     result.identity.flags = copy_array(cpu_info and cpu_info.identity and cpu_info.identity.flags)
     local topology = cpu_info and cpu_info.topology or {}
     result.topology = copy_fields(topology, {
         "sockets", "physical_cores", "threads", "online_threads",
         "threads_per_core_minimum", "threads_per_core_maximum", "quality", "truncated",
-        "source", "identity_quality",
+        "source", "identity_quality", "processor_groups",
     })
     for _, key in ipairs({
         "online_cpu_list", "present_cpu_list", "possible_cpu_list", "isolated_cpu_list",
@@ -107,6 +108,9 @@ local function export_cpu_info(cpu_info)
             "cpu_capacity", "kernel_core_type", "maximum_frequency_hz", "threads_in_core",
             "core_type_id", "source",
             "mach_cpu_type", "mach_cpu_subtype", "is_main", "identity_quality",
+            "processor_group", "logical_processor_index", "cpu_set_id", "efficiency_class",
+            "last_level_cache_index", "numa_node_index", "parked", "allocated",
+            "core_source", "package_source", "core_id_method", "package_id_method", "core_id_scope",
         })
         output.thread_siblings = copy_array(cpu.thread_siblings)
         result.topology.logical_cpus[index] = output
@@ -117,7 +121,7 @@ local function export_cpu_info(cpu_info)
             "id", "model_name", "vendor", "family", "model", "stepping", "implementer",
             "architecture", "variant", "part", "cpu_capacity", "kernel_core_type",
             "threads_per_core", "maximum_frequency_hz", "physical_core_count",
-            "logical_cpu_count",
+            "logical_cpu_count", "efficiency_class", "source",
         })
         output.logical_cpu_ids = copy_array(core_type.logical_cpu_ids)
         result.core_types[index] = output

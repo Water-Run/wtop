@@ -2301,6 +2301,16 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         or node.parent_id)
     add("inventory.driver", "Driver", device.driver)
     add("metrics.source", "Source", device.source)
+    if device.processor_group ~= nil then
+        add("cpu.processor_group", "Processor group", device.processor_group)
+    end
+    if device.logical_processor_index ~= nil then
+        add("cpu.group_index", "Group CPU index", device.logical_processor_index)
+    end
+    if device.efficiency_class ~= nil then
+        add("cpu.efficiency_class", "Efficiency class", device.efficiency_class)
+    end
+    if device.parked ~= nil then add("cpu.parked", "Parked", device.parked) end
     local function hardware_hex(value, digits)
         if type(value) == "number" and math.tointeger(value)
                 and value >= 0 and value < 16 ^ digits then
@@ -2330,6 +2340,26 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
     end
     if #node.cpu_ids > 0 or node.kind == "numa" then
         add_list("numa.cpu_ids", "CPU IDs", node.kind == "numa" and device.cpu_ids or node.cpu_ids or {})
+    end
+    if node.kind == "cpu_cache" then
+        add("processor_fw.level", "Cache level", device.level)
+        add("metrics.type", "Type", device.type)
+        add("metrics.capacity", "Size", device.size_bytes, "bytes")
+        if device.coherency_line_size_bytes then
+            add("cpu.cache_line", "Cache line (bytes)", device.coherency_line_size_bytes)
+        end
+        if device.ways_of_associativity then
+            add("cpu.cache_ways", "Associativity (ways)", device.ways_of_associativity)
+        end
+    elseif node.bus == "cpu" and #node.cache_ids > 0 then
+        local names = {}
+        for _, id in ipairs(node.cache_ids) do
+            local cache = graph.by_id[id]
+            if cache and cache.kind == "cpu_cache" and not cache.ambiguous then
+                names[#names + 1] = Hardware.label(cache, i18n)
+            end
+        end
+        if #names > 0 then add_list("metrics.cache", "Cache", names) end
     end
     if #node.numa_node_ids > 0 then add_list("numa.nodes", "NUMA nodes", node.numa_node_ids) end
     if #node.cpufreq_ids > 0 then

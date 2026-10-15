@@ -472,6 +472,12 @@ messages:
     other: "{count} 個執行緒"
   compute.threads: "邏輯 CPU"
   cpu.online: "上線"
+  cpu.cache_line: "快取行（位元組）"
+  cpu.cache_ways: "相聯度（路）"
+  cpu.processor_group: "處理器群組"
+  cpu.group_index: "群組內 CPU 編號"
+  cpu.efficiency_class: "能效等級"
+  cpu.parked: "已停放"
   diagnostics.active_locale: "目前語系"
   diagnostics.fallback_chain: "備援語系鏈"
   diagnostics.missing_messages:

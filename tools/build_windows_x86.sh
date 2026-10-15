@@ -40,7 +40,7 @@ touch "$work_dir/.lua-static-runtime-large-address-aware"
 "$compiler" -std=c17 -O2 -Wall -Wextra -Werror -shared -static-libgcc \
     -I"$source_dir/src" -I"$project_dir/build/native" -o "$work_dir/wtop_native.dll" \
     "$project_dir/native/wtop_windows.c" "$project_dir/native/wtop_windows_net.c" \
-    "$project_dir/native/wtop_windows_hw.c" \
+    "$project_dir/native/wtop_windows_hw.c" "$project_dir/native/wtop_windows_cpu.c" \
     "$project_dir/native/wtop_windows_disk.c" \
     "$work_dir/lua-src/src/lua55.dll" -lpsapi -liphlpapi -lsetupapi
 

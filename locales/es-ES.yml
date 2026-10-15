@@ -480,6 +480,12 @@ messages:
     other: "{count} hilos"
   compute.threads: "CPU lógicas"
   cpu.online: "En línea"
+  cpu.cache_line: "Línea de caché (bytes)"
+  cpu.cache_ways: "Asociatividad (vías)"
+  cpu.processor_group: "Grupo de procesadores"
+  cpu.group_index: "Índice de CPU del grupo"
+  cpu.efficiency_class: "Clase de eficiencia"
+  cpu.parked: "Estacionado"
   diagnostics.active_locale: "Idioma activo"
   diagnostics.fallback_chain: "Cadena de respaldo"
   diagnostics.missing_messages:

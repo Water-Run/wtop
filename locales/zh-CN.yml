@@ -472,6 +472,12 @@ messages:
     other: "{count} 个线程"
   compute.threads: "逻辑 CPU"
   cpu.online: "在线"
+  cpu.cache_line: "缓存行（字节）"
+  cpu.cache_ways: "相联度（路）"
+  cpu.processor_group: "处理器组"
+  cpu.group_index: "组内 CPU 编号"
+  cpu.efficiency_class: "能效等级"
+  cpu.parked: "已停放"
   diagnostics.active_locale: "当前语言"
   diagnostics.fallback_chain: "回退链"
   diagnostics.missing_messages:

@@ -106,6 +106,10 @@ local KIND_LABELS = {
 
 function M.label(node, i18n)
   local device = node.device
+  if node.kind == "cpu_cache" then
+    local text = i18n and i18n:t("metrics.cache") or "Cache"
+    return "L" .. tostring(device.level or "?") .. " " .. tostring(device.type or "") .. " " .. text
+  end
   if node.kind == "edac_module" and identifier(device.label) then return device.label end
   if node.kind == "usb_interface" and identifier(device.interface) then return device.interface end
   if node.kind == "spd_device" and identifier(device.part_number) then return device.part_number end
@@ -500,28 +504,38 @@ function M.build(snapshot)
         package_node = result.by_id[id]
         if not package_node then
           package_node = add_node("cpu", "package" .. cpu.package_id,
-            { id = cpu.package_id, source = cpu.source }, id, nil, "cpu_info")
+            { id = cpu.package_id, source = cpu.package_source or cpu.source }, id, nil, "cpu_info")
           package_node.kind = "package"
           groups[#groups + 1] = package_node
         end
         parent = package_node
-        if cpu.core_id_known ~= false and numeric_id(cpu.core_id) and identifier(cpu.core_key) then
-          local core_id = "core:" .. cpu.core_key
-          parent = result.by_id[core_id]
-          if not parent then
-            parent = add_node("cpu", cpu.core_key, { id = cpu.core_id, source = cpu.source },
-              core_id, package_node.id, "cpu_info")
-            parent.kind = "core"
-            groups[#groups + 1] = parent
-          end
-          if parent.parent_id == package_node.id then
-            parent.cpu_ids[#parent.cpu_ids + 1] = cpu.id
-          else
-            result.partial = true
-            parent = package_node
-          end
-        end
         package_node.cpu_ids[#package_node.cpu_ids + 1] = cpu.id
+      end
+      -- CPU Sets can prove a core's membership even when a 32-bit API cannot
+      -- represent the package mask. Keep the verified core as a root then.
+      local core_known = cpu.core_id_known ~= false
+        and (cpu.core_id_known == true or topology.quality ~= "estimated")
+      local independent_core = cpu.core_id_scope == "system"
+        or (cpu.core_id_scope == "processor_group" and numeric_id(cpu.processor_group))
+      if core_known and (package_node or independent_core)
+          and numeric_id(cpu.core_id) and identifier(cpu.core_key) then
+        local core_id = "core:" .. cpu.core_key
+        local core_parent = package_node and package_node.id
+        parent = result.by_id[core_id]
+        if not parent then
+          parent = add_node("cpu", cpu.core_key, {
+              id = cpu.core_id, source = cpu.core_source or cpu.source,
+              processor_group = cpu.processor_group, efficiency_class = cpu.efficiency_class,
+            }, core_id, core_parent, "cpu_info")
+          parent.kind = "core"
+          groups[#groups + 1] = parent
+        end
+        if parent.parent_id == core_parent then
+          parent.cpu_ids[#parent.cpu_ids + 1] = cpu.id
+        else
+          result.partial = true
+          parent = package_node
+        end
       end
       local node = add_node("cpu", "cpu" .. cpu.id, cpu, "cpu:" .. cpu.id,
         parent and parent.id, "cpu_info", cpu.id)
@@ -530,6 +544,47 @@ function M.build(snapshot)
         node.package_id = package_node and package_node.id
         cpus[cpu.id] = node
       end
+    end
+  end
+  -- OS cache records carry logical-CPU memberships. Keep those memberships
+  -- separate from firmware cache handles, and attach only to a verified
+  -- containing core/package. Unknown or stale members leave the cache a root.
+  local os_caches = {}
+  for index, cache in ipairs(type(cpu_info.caches) == "table" and cpu_info.caches or {}) do
+    if index > 1024 then result.truncated = true break end
+    if type(cache) == "table" and identifier(cache.id) then
+      local node = add_node("cache", cache.id, cache, "cpu-cache:" .. cache.id, nil, "cpu_info", cache.id)
+      if node then node.kind = "cpu_cache"; os_caches[#os_caches + 1] = node end
+    else result.partial = true end
+  end
+  for _, node in ipairs(os_caches) do
+    local ids, complete = cpu_list(node.device.shared_cpu_list)
+    complete = complete and #ids > 0
+      and #ids == #node.device.shared_cpu_list and not node.ambiguous
+      and Quality.current_source(snapshot.quality, "cpu_info")
+    for _, id in ipairs(ids) do
+      if not cpus[id] or cpus[id].ambiguous then complete = false end
+    end
+    node.cpu_ids, node.membership_complete = ids, complete
+    if complete and not node.ambiguous then
+      local parent, parent_count
+      for _, group in ipairs(groups) do
+        if not group.ambiguous then
+          local members = {}; for _, id in ipairs(group.cpu_ids) do members[id] = true end
+          local contains = true; for _, id in ipairs(ids) do if not members[id] then contains = false break end end
+          if contains then
+            group.cache_ids[#group.cache_ids + 1] = node.id
+            if not parent or #group.cpu_ids < parent_count
+                or (#group.cpu_ids == parent_count and group.kind == "core" and parent.kind ~= "core") then
+              parent, parent_count = group, #group.cpu_ids
+            end
+          end
+        end
+      end
+      node.parent_id = parent and parent.id
+      for _, id in ipairs(ids) do cpus[id].cache_ids[#cpus[id].cache_ids + 1] = node.id end
+    else
+      result.partial = true
     end
   end
   -- Thermal-throttle counters are reported per logical CPU. Package counters

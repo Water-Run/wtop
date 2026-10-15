@@ -475,6 +475,12 @@ messages:
     other: "{count} threads"
   compute.threads: "Logical CPUs"
   cpu.online: "Online"
+  cpu.cache_line: "Cache line (bytes)"
+  cpu.cache_ways: "Associativity (ways)"
+  cpu.processor_group: "Processor group"
+  cpu.group_index: "Group CPU index"
+  cpu.efficiency_class: "Efficiency class"
+  cpu.parked: "Parked"
   diagnostics.active_locale: "Active locale"
   diagnostics.fallback_chain: "Fallback chain"
   diagnostics.missing_messages:

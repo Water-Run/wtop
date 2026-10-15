@@ -472,6 +472,12 @@ messages:
     other: "스레드 {count}개"
   compute.threads: "논리 CPU"
   cpu.online: "온라인"
+  cpu.cache_line: "캐시 라인(바이트)"
+  cpu.cache_ways: "연관도(웨이)"
+  cpu.processor_group: "프로세서 그룹"
+  cpu.group_index: "그룹 내 CPU 번호"
+  cpu.efficiency_class: "효율 등급"
+  cpu.parked: "파킹됨"
   diagnostics.active_locale: "현재 언어"
   diagnostics.fallback_chain: "대체 언어 체인"
   diagnostics.missing_messages:
