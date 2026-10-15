@@ -42,6 +42,7 @@ int main(int argc,char **argv) {
     tick(6400000);query(L);check(L,"assert(data.devices[1].power_watts==30 and data.devices[1].power_interval_ns==200000000)");
     mode(10);query(L);check(L,"assert(data.devices[1].graphics_clock_hz==nil and data.devices[1].frequency_domains[1].requested_hz==900e6)");
     mode(11);query(L);check(L,"assert(data.devices[1].graphics_clock_hz==nil and data.devices[1].frequency_domains[1].throttle_raw_hex==nil)");
+    mode(25);query(L);check(L,"assert(data.devices[1].frequency_domains[1].throttle_quality=='fresh' and data.devices[1].frequency_domains[1].throttle_raw_hex=='0x0000000000000001')");
     mode(7);query(L);check(L,"assert(data.devices[1].temperature_celsius==nil and data.status=='partial')");
     mode(6);query(L);check(L,"assert(data.devices[1].pci_bdf==nil and data.devices[1].uuid)");
     for(int m=8;m<=9;++m){mode(m);query(L);check(L,"assert(#data.devices==1 and data.status=='partial')");}

@@ -87,7 +87,7 @@ ze_result_t zesTemperatureGetState(zes_temp_handle_t h,double *p) {
 ze_result_t zesDeviceEnumFrequencyDomains(zes_device_handle_t h,uint32_t *n,zes_freq_handle_t *out) {return domains(h,n,(void **)out,0x7000,3);}
 ze_result_t zesFrequencyGetProperties(zes_freq_handle_t h,zes_freq_properties_t *p) {
     uintptr_t x=(uintptr_t)h-0x7000;assert(x/16<3&&x%16<3&&p->stype==9&&p->pNext==NULL);
-    memset(p,0,sizeof(*p));p->type=x%16==1?1:0;p->onSubdevice=x%16==2;p->subdeviceId=1;p->isThrottleEventSupported=1;p->min=100;p->max=8000;return ZE_RESULT_SUCCESS;
+    memset(p,0,sizeof(*p));p->type=x%16==1?1:0;p->onSubdevice=x%16==2;p->subdeviceId=1;p->isThrottleEventSupported=mode!=25;p->min=100;p->max=8000;return ZE_RESULT_SUCCESS;
 }
 ze_result_t zesFrequencyGetState(zes_freq_handle_t h,zes_freq_state_t *p) {
     uintptr_t x=(uintptr_t)h-0x7000;assert(x/16<3&&x%16<3&&p->stype==0x1b&&p->pNext==NULL);

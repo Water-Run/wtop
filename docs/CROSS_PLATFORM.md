@@ -194,9 +194,19 @@ macOS、Windows 的运行验证来自下表列出的主机记录。
   配置上限 40 W，对应 75/100/125%。私有序列号和读取器 PID 不进入导出。
   三来源的构造器挂死时，真实 PTY 均可切换页面、打开功耗窗口并退出。
   单 GPU 假时钟验收覆盖冷启动、能量预热和 2250 ms 的一次性导出等待上限。
-- 测试库和真实驱动是两种证据；本轮仍缺少实际 AMD SMI、Sysman GPU 和
-  多 GPU/tile 的新增真机运行结果。同步 sysfs 隔离、更多旧系统与低配硬件
-  性能预算继续开放。记录保存在 `build/hardware-vendor-workers-20261016/`。
+- 本机 Raptor Lake UHD Graphics 使用 Fedora 签名 RPM 解压出的 Intel
+  runtime 26.35.39758.11、loader 1.33.1 完成真实 Sysman 验证。普通权限与
+  root 均得到同一个 PCI 设备、300 MHz 实际/请求频率、100–1500 MHz 范围；
+  Snapshot 与既有 DRM 设备合并，没有新增重复 GPU。该驱动没有提供温度或
+  功耗域，这两项保留缺失。
+- 实机验证修正了事件能力的误判：`isThrottleEventSupported` 只表示能否注册
+  异步通知，不能门控 `zesFrequencyGetState` 的当前原因。SDK 回归覆盖事件
+  订阅不支持但当前 PL1 标志可读；实机修复后读到 fresh 的零掩码，与 i915
+  当次未触发状态一致。接口语义见
+  [Sysman Frequency](https://oneapi-src.github.io/level-zero-spec/level-zero/1.19.12/sysman/api/apis/frequency.html)。
+- AMD SMI、带可用 Sysman 功耗域的硬件和多 GPU/tile 仍缺少新增真机结果。
+  同步 sysfs 隔离、更多旧系统与低配硬件性能预算继续开放。记录保存在
+  `build/hardware-vendor-workers-20261016/`。
 
 ### 2026-10-16：Linux NVML 故障隔离与采样时效
 

@@ -161,7 +161,9 @@ L0_ABI static void l0_frequencies(struct l0_api *a,l0_handle device,gpu_output *
             if(!props.onSubdevice&&props.type==1){root_memory=state.actual*1e6;++memory_count;}
         }
         if(valid&&l0_number(state.request,100000))number_field(out,"requested_hz",state.request*1e6);
-        if(valid&&props.isThrottleEventSupported==1&&state.throttleReasons!=UINT32_MAX){
+        /* isThrottleEventSupported describes asynchronous event registration.
+         * A successful state read independently supplies the current reasons. */
+        if(valid&&state.throttleReasons!=UINT32_MAX){
             char text[19];snprintf(text,sizeof(text),"0x%016llx",(unsigned long long)state.throttleReasons);
             string_field(out,"throttle_raw_hex",text);string_field(out,"throttle_quality","fresh");
         } else string_field(out,"throttle_quality",valid?"unavailable":"error");
