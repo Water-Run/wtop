@@ -12,7 +12,8 @@ local function capture(name, count)
   local file = assert(io.open(root .. "/tests/fixtures/cpuid/" .. name .. ".bin", "rb"))
   local raw = file:read("a"); file:close()
   local targets = {}
-  for id = 0, count - 1 do targets[#targets + 1] = { id=id, processor_group=0, logical_processor_index=id } end
+  for id = 0, count - 1 do targets[#targets + 1] = { id=id, processor_group=0, logical_processor_index=id,
+    online=true, online_known=true } end
   return raw, targets
 end
 local function feature(cpu, name)
@@ -148,6 +149,8 @@ assert(not json:find('"raw"',1,true) and not json:find('"_leaves"',1,true))
 local detail = table.concat(TUI.hardware_detail_lines({cpu_info=data},"cpu:0",i18n),"\n")
 assert(detail:find("AVX: Hardware yes · Usable no",1,true),detail)
 assert(detail:find("Initial APIC ID: 0x0",1,true))
+assert(detail:find("Online: yes",1,true)<detail:find("CPU capabilities:",1,true),
+  "basic availability must precede the longer instruction list in small consoles")
 
 -- Async supplemental work requests a short follow-up without turning valid
 -- OS CPU info into a failure, backing off, or disturbing other collectors.

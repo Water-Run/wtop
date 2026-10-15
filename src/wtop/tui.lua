@@ -2397,6 +2397,11 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         add("cpu.efficiency_class", "Efficiency class", device.efficiency_class)
     end
     if device.parked ~= nil then add("cpu.parked", "Parked", device.parked) end
+    if device.online ~= nil then
+        local online = device.online
+        if device.online_known == false then online = nil end
+        add("cpu.online", "Online", online)
+    end
     if device.cores_per_compute_unit then
         add("cpuid.cores_per_unit", "Cores per compute unit", device.cores_per_compute_unit)
     end
@@ -2683,11 +2688,6 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
             add("cpuidle.cpus_reporting", "CPUs reporting idle states",
                 #node.cpuidle_cpu_ids)
         end
-    end
-    if device.online ~= nil then
-        local online = device.online
-        if device.online_known == false then online = nil end
-        add("cpu.online", "Online", online)
     end
     if node.kind == "memory_device" then
         add("memory_hw.locator", "Position", device.locator)
