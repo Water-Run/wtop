@@ -661,4 +661,57 @@ local weak_label = collectors({
 equal(weak_label.data.devices[1].channels[1].session.samples, 1,
   "a native channel without a stable label starts a new series")
 
+-- Registry IDs survive service reordering and distinguish same-named probes.
+do
+  local function reading(value, reverse, missing, partial)
+    local channels = {}
+    for _, id in ipairs(reverse and { 2002, 2001 } or { 2001, 2002 }) do
+      local instance = "ioreg:" .. id
+      channels[#channels + 1] = { id = missing and "unresolved:" .. id or instance,
+        _source_instance = not missing and instance or nil,
+        identity_quality = missing and "partial" or "fresh",
+        label = "Board", type = "temperature", unit = "celsius", input = value + id - 2001,
+        quality = "fresh" }
+    end
+    return { quality = partial and "partial" or "fresh", devices = { {
+      id = "hid:Thermal", class = "hid:Thermal", name = "Thermal", source = "iohid",
+      identity_quality = "fresh", quality = "fresh", channels = channels } } }
+  end
+  local native = collectors(fake_native({ collect_hwmon = {
+    reading(30), reading(40, true, false, true), reading(50, false, true), reading(60, true, true),
+  } })).hwmon
+  local first = native:sample(at(1000000000))
+  local second = native:sample(at(2000000000), first)
+  equal(second.quality, "partial", "a partial scan reports its missing observations")
+  local channels = second.data.devices[1].channels
+  equal(channels[1].id, "ioreg:2002", "channel order can change")
+  equal(channels[1].session.samples, 2, "same labels retain distinct verified source history")
+  close(channels[1].session.average, 36, 1e-9, "first source is matched by identity, not position")
+  close(channels[2].session.average, 35, 1e-9, "other source history remains independent")
+  local third = native:sample(at(3000000000), second)
+  local fourth = native:sample(at(4000000000), third)
+  equal(fourth.data.devices[1].channels[1].session.samples, 1,
+    "unidentified service readings cannot accumulate across polls")
+  local replaced = reading(70)
+  replaced.devices[1].channels[1]._source_instance = "ioreg:3001"
+  local changed = collectors({ collect_hwmon = function() return replaced end }).hwmon:sample(at(3000000000), second)
+  equal(changed.data.devices[1].channels[1].session.samples, 1, "a changed source instance resets history")
+  local duplicate = reading(70)
+  duplicate.devices[1].channels[2].id = "ioreg:2001"
+  duplicate.devices[1].channels[2]._source_instance = "ioreg:2001"
+  local ambiguous = collectors({ collect_hwmon = function() return duplicate end }).hwmon:sample(at(3000000000), second)
+  for _, channel in ipairs(ambiguous.data.devices[1].channels) do
+    equal(channel.session.samples, 1, "duplicate service identities cannot carry historical extrema")
+  end
+  local exported = require("wtop.export").snapshot({ sensors = second.data })
+  equal(exported.sensors.quality, "partial", "sensor scan quality reaches Snapshot JSON")
+  equal(exported.sensors.devices[1].channels[1].identity_quality, "fresh",
+    "verified channel identity quality is exported")
+  local unidentified = require("wtop.export").snapshot({ sensors = fourth.data })
+  equal(unidentified.sensors.devices[1].channels[1].identity_quality, "partial",
+    "unconfirmed channel identity is visible in Snapshot JSON")
+  assert(not require("wtop.format.json").encode(exported):find("_source_instance", 1, true),
+    "private source instances are not exported")
+end
+
 return true

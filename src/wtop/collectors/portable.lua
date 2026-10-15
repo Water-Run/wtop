@@ -641,7 +641,7 @@ local function new_collector(id, description, options)
     end
     if id == "hwmon" then
       SensorSession.attach(data.devices, previous_ok(previous), timestamp_ns,
-        "native", quality == "fresh")
+        "native", quality == "fresh" or quality == "partial")
     end
     return Common.result("ok", timestamp_ns, data, {
       quality = quality,

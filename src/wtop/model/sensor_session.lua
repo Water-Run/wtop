@@ -41,6 +41,14 @@ local function label_counts(channels)
   return counts
 end
 
+local function source_instance(channel)
+  if type(channel) ~= "table" or channel.identity_quality ~= "fresh" then return nil end
+  local id = channel._source_instance
+  if type(id) == "string" and #id <= 26 and id:match("^ioreg:[1-9]%d*$")
+      and channel.id == id then return id end
+  return nil
+end
+
 local function previous_session(unique_current, device, old_device, channel, old, now, kind)
   if unique_current ~= device or type(old_device) ~= "table"
       or device.identity_quality ~= "fresh"
@@ -54,6 +62,9 @@ local function previous_session(unique_current, device, old_device, channel, old
   if type(old) ~= "table" or old.id ~= channel.id
       or old.type ~= channel.type or old.unit ~= channel.unit
       or old.label ~= channel.label then return nil end
+  if kind == "native" and (channel._source_instance ~= old._source_instance
+      or channel.identity_quality ~= old.identity_quality
+      or channel.identity_quality == "partial") then return nil end
   local session = old.session
   if type(session) ~= "table" or type(session.samples) ~= "number"
       or math.type(session.samples) ~= "integer" or session.samples <= 0
@@ -107,7 +118,10 @@ function M.attach(devices, previous_data, sampled_at, kind, allow_direct)
           local old = current[device.id] == device
             and current_channels[channel.id] == channel
             and old_channels[channel.id] or nil
-          if kind == "native" then
+          -- Distinct verified service instances can have identical labels.
+          -- Label-only sources still need an unambiguous current/old label.
+          local instance = source_instance(channel)
+          if kind == "native" and not (instance and instance == source_instance(old)) then
             local key = type(channel.type) == "string"
               and type(channel.label) == "string"
               and channel.type .. "\0" .. channel.label or nil

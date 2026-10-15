@@ -1239,7 +1239,8 @@ local function export_spd(spd)
 end
 
 local function export_sensors(sensors)
-    local result = json.object({ devices = json.array({}) })
+    local result = copy_fields(sensors, { "quality", "partial" })
+    result.devices = json.array({})
     for device_index, device in ipairs(sensors and sensors.devices or {}) do
         local exported = copy_fields(device, {
             "id", "class", "class_index", "name", "device_target", "device_path",
@@ -1249,7 +1250,7 @@ local function export_sensors(sensors)
         for channel_index, channel in ipairs(device.channels or {}) do
             local output = copy_fields(channel, {
                 "id", "type", "index", "unit", "label", "input", "input_source",
-                "alarm", "fault", "quality", "source",
+                "alarm", "fault", "identity_quality", "quality", "source",
             })
             output.readings = copy_object(channel.readings)
             output.thresholds = copy_object(channel.thresholds)

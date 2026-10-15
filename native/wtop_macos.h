@@ -9,6 +9,7 @@ void wtop_register_hardware(lua_State *L);
 int wtop_collect_inventory(lua_State *L);
 int wtop_collect_disk(lua_State *L);
 int wtop_collect_network(lua_State *L);
+int wtop_collect_hwmon(lua_State *L);
 void wtop_smc_begin(void);
 int wtop_smc_number(const char *key, double *value);
 uint64_t wtop_smc_epoch(void);
