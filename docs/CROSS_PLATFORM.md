@@ -67,6 +67,26 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 ## 验证矩阵
 
+2026-10-16 核对：混合 GPU 连续观测提交 `de92b1e` 的
+[主 CI](https://github.com/Water-Run/wtop/actions/runs/38813098799) 16 个作业与
+[Windows CI](https://github.com/Water-Run/wtop/actions/runs/38813098741) 两个作业
+全部通过，包括两个 Linux 架构的 139 个 Lua 测试文件、GCC ASan/UBSan、
+三轮计时敏感终端回归和最终归档下载后的完整 PTY。
+Linux x86_64 精确归档 `acb29dd1` 在本机另验两形态五 CLI、quick PTY、
+三个 SDK 的功耗/占比与预热后挂死的六组真实 PTY；两个程序均通过普通权限
+拒绝、root 当前 CPU 限制、功耗条、三个入口和 Snapshot/Agent 计算验收。
+真实 Intel Sysman 在两形态读到 300 MHz、fresh 零限制掩码及唯一 PCI
+合并，原采样时间一致；驱动缺失的 GPU 功耗域保持缺失。
+aarch64 归档 `f370c154` 的本机检查为摘要与包内清单，运行证据来自上述
+原生下载 CI。两个 Linux 归档的执行下限均为 glibc 2.38。
+M4 精确归档 `3be52219` 的两形态通过五 CLI、原 200 列 GPU 时钟、功耗、
+43 传感器、10 个 Mach CPU 身份和父设备导航。Windows 归档 `f6b778e7` 在
+Windows 11 与 Server 2008 两形态通过五 CLI、80×25 无 ANSI 控制台、
+13 个芯片缓存、AVX 状态、父级导航和三个功耗入口。macOS 部署下限及
+Windows 11 个 PE 映像的 1,055 个命名导入静态门禁通过。
+完整摘要和验收记录保存在 `build/hardware-gpu-continuity-20261016/`。
+XP、旧 macOS、AMD SMI 真机和 Sysman 功耗域硬件仍缺少本轮运行证据。
+
 2026-10-16 核对：三个 GPU SDK 隔离与 Sysman 修复提交 `6702c31` 的
 [主 CI](https://github.com/Water-Run/wtop/actions/runs/38794231258) 16 个作业与
 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/38794231138) 两个作业
@@ -221,6 +241,18 @@ macOS、Windows 的运行验证来自下表列出的主机记录。
   目录包、单文件包、LuaRocks 安装版均通过三种预热后挂死的真实 PTY 场景，
   共九组。三种形态的本机 Intel Sysman 查询也都读到 300 MHz、fresh 零限制
   掩码、原采样时间和唯一 PCI 关联；驱动未暴露的 GPU 功耗域保持缺失。
+
+### 2026-10-16：同步硬件 I/O 的阻塞负例
+
+独立 FUSE 常规文件夹具确认 `native.readfile` 即使使用 `O_NONBLOCK`，仍会
+等待约 1.2 秒。真实 TUI 在正常显示后，把一次传感器读取定向到该夹具；
+终端已处于 raw 输入模式，`q` 仍等待约 1.2 秒，释放读取后正常退出。
+夹具进程和挂载均已核对清理，未修改真实传感器文件。这是待修复的响应性
+缺口，当前程序尚未隔离这类同步读取。原始结果与终端记录在
+`build/hardware-io-isolation-20261016/`。
+`O_NONBLOCK` 的常规文件语义见 [open(2)](https://man7.org/linux/man-pages/man2/open.2.html)，
+sysfs 读取调用设备属性方法的流程见
+[内核 sysfs 文档](https://www.kernel.org/doc/html/latest/filesystems/sysfs.html)。
 
 ### 2026-10-16：三个 GPU SDK 隔离与 Sysman 原生遥测
 
