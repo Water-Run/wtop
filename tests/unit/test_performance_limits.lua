@@ -150,4 +150,92 @@ for _,locale in ipairs({"en-US","zh-CN","zh-TW","ja-JP","ko-KR","fr-FR","de-DE",
     assert(text:find(i:t("limits.history_note"),1,true))
     assert(i:has("reason.cpu_limits_not_supported") and i:has("limits.reason.electrical"))
 end
-print("ok: CPU and GT limit status, recorded flags, source scope, permissions, model support, races and stale exports")
+-- NVML current event reasons are separate from supported capabilities and
+-- have no historical latch. Preserve all 64 bits, including future reasons.
+local function event(raw, supported, status, support_status)
+    return GPU.nvml({ raw_hex=raw, supported_hex=supported, status_code=status or 0,
+        supported_status_code=support_status or 0,
+        source="nvmlDeviceGetCurrentClocksEventReasons" },5000)
+end
+local quiet=event("0x0000000000000000","0x00000000000007ff")
+assert(quiet.quality=="fresh" and quiet.active==false)
+assert(find(quiet.reasons,"software_power_cap").active==false)
+local limited=event("0x0000000000000044","0x00000000000007ff")
+assert(limited.active and limited.scope=="gpu_clock" and limited.observed_at_ns==5000)
+assert(find(limited.reasons,"software_power_cap").active and find(limited.reasons,"hardware_thermal").active)
+assert(find(limited.reasons,"idle").active==false and find(limited.reasons,"idle").logged==nil)
+local idle=event("0x0000000000000001","0x00000000000001ff")
+assert(idle.active and find(idle.reasons,"idle").active and not find(idle.reasons,"hardware_thermal").active)
+assert(find(idle.reasons,"board_limit").supported==false and find(idle.reasons,"board_limit").active==nil)
+local caps_missing=event("0x0000000000000004",nil,0,3)
+assert(caps_missing.quality=="fresh" and caps_missing.active)
+assert(find(caps_missing.reasons,"software_power_cap").active)
+assert(find(caps_missing.reasons,"hardware_thermal").active==nil,
+    "unsupported capability query does not invent false values for other flags")
+local unknown=event("0x8000000000000004","0x80000000000007ff")
+assert(unknown.quality=="partial" and unknown.active and unknown.unknown_status_hex=="0x8000000000000000")
+assert(find(unknown.reasons,"software_power_cap").active)
+assert(event("0xffffffffffffffff","0x00000000000007ff").active==nil)
+assert(event("bad","0x00000000000007ff").quality=="error")
+assert(event(nil,nil,4,4).quality=="denied" and event(nil,nil,4,4).active==nil)
+assert(event(nil,nil,15,3).quality=="gap")
+assert(event(nil,nil,13,13).quality=="unavailable")
+assert(event("0x0000000000000004","0x0000000000000000").quality=="partial")
+local vendor_state={gpus={devices={{id="nvml0",card="nvml0",metrics={},
+    performance_limits={domains={limited}}}}}}
+local exported=Export.snapshot(vendor_state).gpus.devices[1].performance_limits.domains[1]
+assert(exported.raw_hex=="0x0000000000000044" and exported.supported_hex=="0x00000000000007ff")
+assert(find(exported.reasons,"idle").supported==true)
+local agent=Export.agent(vendor_state).top.gpus[1].performance_limits.domains[1]
+assert(agent.active_reasons[1]=="software_power_cap" and #agent.recorded_reasons==0)
+assert(agent.supported_hex=="0x00000000000007ff")
+vendor_state.quality={gpus={quality="stale",status="error"}}
+assert(not Export.agent(vendor_state).top.gpus[1].performance_limits.domains[1].active)
+assert(#Export.agent(vendor_state).top.gpus[1].performance_limits.domains[1].active_reasons==0)
+vendor_state.quality=nil
+for _,locale in ipairs({"en-US","zh-CN","zh-TW","ja-JP","ko-KR","fr-FR","de-DE","es-ES","pt-BR","ru-RU"})do
+    local i=assert(I18n.new({locale=locale}))
+    local rendered=table.concat(TUI.power_detail_lines(vendor_state,i),"\n")
+    assert(rendered:find(i:t("limits.reason.software_power_cap"),1,true))
+    assert(rendered:find(i:t("limits.reason.hardware_thermal"),1,true))
+    assert(rendered:find("0x0000000000000044",1,true) and rendered:find("0x00000000000007ff",1,true))
+    assert(not rendered:find(i:t("limits.history_note"),1,true),"NVML current events do not become historical flags")
+end
+local unknown_state={gpus={devices={{id="gpu0",card="gpu0",metrics={},performance_limits={domains={unknown}}}}}}
+assert(View.performance_limit_rows(unknown_state,en)[1].current:find("Unknown flags",1,true))
+
+local NVML=require("wtop.collectors.nvml")
+assert(NVML.normalize_bdf("0000:01:20.0")==nil and NVML.normalize_bdf("0000:01:00.8")==nil)
+local entries={};local lookup={by_bdf={}}
+local merged=NVML.merge(entries,lookup,{status="partial",truncated=true,devices={{index=0,
+    name="NVIDIA fixture",pci_bdf="0000:03:1a.3",power_watts=42.25,power_limit_watts=355.5,
+    power_measurement="average",power_interval_ns=1e9,power_average_watts=42.25,
+    clock_events={status_code=0,raw_hex="0x0000000000000004",supported_status_code=0,supported_hex="0x00000000000007ff"},
+    processes={{pid=4242,sm_percent=10,sample_timestamp_us=200,sample_window="driver_buffer"}},
+}}},{used_ids={},now_ns=9000,include_processes=true})
+assert(merged.status=="partial" and merged.truncated and entries[1].performance_limits.domains[1].observed_at_ns==9000)
+assert(entries[1].processes.list[1].quality=="estimated" and entries[1].processes.list[1].sample_window=="driver_buffer")
+local averaged={gpus={devices=entries,providers={nvml=merged}}}
+local summary=Export.agent(averaged)
+assert(summary.top.gpus[1].metrics.power_average_watts==42.25 and summary.top.gpus[1].metrics.power_interval_ns==1e9)
+assert(summary.top.gpus[1].metrics.power_measurement=="average")
+assert(summary.metrics.gpu.providers.nvml.truncated==true)
+local rendered=table.concat(TUI.power_detail_lines(averaged,en),"\n")
+assert(rendered:find("Average",1,true) and rendered:find("Sample window:",1,true))
+local old_entries={}
+NVML.merge(old_entries,{by_bdf={}},{devices={{index=0,name="Old power sample",pci_bdf="0000:03:00.0",
+    power_watts=300,power_limit_watts=355.5,power_quality="stale",power_measurement="current",
+    power_instant_watts=300,power_instant_quality="stale",power_instant_timestamp_us=1234}}},{used_ids={}})
+local old_power={gpus={devices=old_entries}}
+assert(Export.snapshot(old_power).gpus.devices[1].metrics.power_limit_percent==nil)
+assert(Export.agent(old_power).top.gpus[1].metrics.power_limit_percent==nil)
+assert(Export.agent(old_power).top.gpus[1].metrics.power_instant_quality=="stale")
+assert(View.build(engine,old_power,en,{},"gpu").gpu_table.rows[1].power:find("Stale",1,true))
+assert(table.concat(TUI.power_detail_lines(old_power,en),"\n"):find("Stale",1,true))
+local cap_only={gpus={devices={{id="gpu0",card="gpu0",metrics={power_limit_watts=355.5,
+    power_limit_source="nvml"}}}}}
+assert(View.build(engine,cap_only,en,{},"gpu").gpu_table.rows[1].power_budget_source=="nvml")
+local process_export=Export.snapshot(averaged).gpus.devices[1].processes.list[1]
+assert(process_export.sample_window=="driver_buffer" and process_export.sample_timestamp_us==200)
+
+print("ok: CPU, GT and NVML limit status, recorded flags, source scope, permissions, model support, races and stale exports")

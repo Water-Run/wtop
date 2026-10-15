@@ -83,6 +83,7 @@ local LICENCES = {
     { path = "LICENSE", bytes = "EUPL-1.2 fixture text for this project\n" },
     { path = ".luai/licenses/Lua-MIT.txt", bytes = MIT_TEXT },
     { path = ".luai/licenses/AMD-SMI-MIT.txt", bytes = "AMD interface MIT fixture\n" },
+    { path = ".luai/licenses/NVML-NVIDIA.txt", bytes = "NVIDIA interface fixture\n" },
     { path = ".luai/licenses/LGPL-3.0-or-later.txt",
       bytes = "LGPL-3.0-or-later fixture text\n" },
 }
@@ -468,7 +469,7 @@ local function properties_of(component_name, key)
     return value
 end
 
-for _, component_name in ipairs({ "wtop", "wtop_native", "amd_smi_interface", "lua", "luainstaller" }) do
+for _, component_name in ipairs({ "wtop", "wtop_native", "amd_smi_interface", "nvml_interface", "lua", "luainstaller" }) do
     for _, key in ipairs({ "path", "sha256", "present-in", "covers" }) do
         assert(properties_of(component_name, key) ~= nil,
             "the " .. component_name .. " component declares a licence but does "
@@ -485,7 +486,8 @@ for _, entry in ipairs(LICENCES) do
     assert(properties_of("lua", "sha256") == expected
         or properties_of("wtop", "sha256") == expected
         or properties_of("luainstaller", "sha256") == expected
-        or properties_of("amd_smi_interface", "sha256") == expected,
+        or properties_of("amd_smi_interface", "sha256") == expected
+        or properties_of("nvml_interface", "sha256") == expected,
         "no component records " .. expected .. ", the hash of "
             .. entry.path .. ", so the notice text is described but unverifiable")
 end

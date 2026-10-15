@@ -632,6 +632,10 @@ local function power_detail_lines(snapshot, i18n)
         lines[#lines + 1] = ""
         lines[#lines + 1] = inspector_text("GPU " .. row.card .. " · " .. row.gpu, INSPECTOR_ROW_WIDTH)
         field("metrics.power", "Power", row.power)
+        if row.power_measurement then field("power.measurement", "Measurement", row.power_measurement) end
+        if type(row.power_interval_ns) == "number" and row.power_interval_ns > 0 then
+            field("power.interval", "Sample window", format_value(row.power_interval_ns / 1e9, i18n, "seconds"))
+        end
         field("power.limit", "Power cap", row.power_limit)
         field("power.of_limit", "% of cap", row.power_usage)
         field("metrics.source", "Source", row.power_budget_source)
@@ -643,6 +647,8 @@ local function power_detail_lines(snapshot, i18n)
         field("limits.current", "Current limits", row.current)
         field("limits.scope", "Scope", row.scope .. " · " .. Technical.state(i18n, row.quality))
         field("metrics.source", "Source", row.source)
+        if row.raw_hex then field("limits.raw", "Raw flags", row.raw_hex) end
+        if row.supported_hex then field("limits.supported", "Supported flags", row.supported_hex) end
         if row.recorded then
             has_history = true
             field("limits.recorded", "Recorded flags", row.recorded)

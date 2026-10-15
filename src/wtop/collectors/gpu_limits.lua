@@ -102,4 +102,66 @@ function M.i915(fs, class_path, max_domains, now_ns)
     return result
 end
 
+-- NVML returns a coherent 64-bit current mask in one call. Capability bits
+-- are separate: a zero unsupported bit is not proof of an inactive limiter.
+local NVML_REASONS = {
+    { "idle", 0 }, { "application_clock", 1 }, { "software_power_cap", 2 },
+    { "hardware_slowdown", 3 }, { "sync_boost", 4 }, { "software_thermal", 5 },
+    { "hardware_thermal", 6 }, { "power_brake", 7 }, { "display_clock", 8 },
+    { "board_limit", 9 }, { "reliability", 10 },
+}
+local function mask(value)
+    if type(value) ~= "string" or not value:match("^0x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x$") then return nil end
+    return tonumber(value:sub(3), 16)
+end
+local function nvml_quality(status)
+    if status == 3 or status == 13 then return "unavailable" end
+    if status == 4 then return "denied" end
+    if status == 1 or status == 9 or status == 15 then return "gap" end
+    return "error"
+end
+function M.nvml(data, observed_at_ns)
+    if type(data) ~= "table" then return nil end
+    local domain = {
+        id = "clock_events", scope = "gpu_clock", source_kind = "nvml_clock_events",
+        source = Common.safe_text(data.source or "NVML clock events", 96),
+        supported_source = Common.safe_text(data.supported_source or "NVML supported clock events", 96),
+        status_code = data.status_code, supported_status_code = data.supported_status_code,
+        observed_at_ns = observed_at_ns, reasons = {},
+    }
+    local active = data.status_code == 0 and mask(data.raw_hex) or nil
+    local supported = data.supported_status_code == 0 and mask(data.supported_hex) or nil
+    -- All ones is not a usable current/capability report. Keep its raw form
+    -- for diagnosis without presenting every known reason as asserted.
+    if active == -1 then active = nil end
+    if supported == -1 then supported = nil end
+    domain.raw_hex = type(data.raw_hex) == "string" and data.raw_hex:sub(1, 18):lower() or nil
+    if supported ~= nil then domain.supported_hex = string.format("0x%016x", supported) end
+    if active == nil then
+        domain.quality = data.status_code == 0 and "error" or nvml_quality(data.status_code)
+        domain.reason = data.status_code == 0 and "nvml_invalid_clock_events" or "nvml_clock_events_unavailable"
+    else
+        domain.raw_hex = string.format("0x%016x", active)
+        domain.active = active ~= 0
+        domain.unknown_status_hex = string.format("0x%016x", active & ~0x7ff)
+        domain.quality = active & ~0x7ff ~= 0 and "partial" or "fresh"
+        if supported ~= nil then
+            domain.unsupported_status_hex = string.format("0x%016x", active & ~supported)
+            if active & ~supported ~= 0 then domain.quality = "partial" end
+        end
+    end
+    for _, spec in ipairs(NVML_REASONS) do
+        local bit = 1 << spec[2]
+        local supported_bit
+        if supported ~= nil then supported_bit = supported & bit ~= 0 end
+        local reason = { id = spec[1], supported = supported_bit }
+        if active ~= nil then
+            if active & bit ~= 0 then reason.active = true
+            elseif supported_bit == true then reason.active = false end
+        end
+        domain.reasons[#domain.reasons + 1] = reason
+    end
+    return domain
+end
+
 return M

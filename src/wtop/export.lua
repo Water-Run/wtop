@@ -158,7 +158,9 @@ local function export_performance_limits(limits, maximum, summary, quality)
         local domain = domains[index]
         local output = copy_fields(domain, { "id", "scope", "cpu_id", "package_id", "family", "model",
             "active", "quality", "source", "source_kind", "observed_at_ns", "register", "reason",
-            "raw_hex", "unknown_status_mask", "unknown_log_mask", "reserved_high" })
+            "raw_hex", "unknown_status_mask", "unknown_log_mask", "reserved_high",
+            "supported_hex", "unknown_status_hex", "unsupported_status_hex", "status_code",
+            "supported_status_code", "supported_source" })
         local stale = Power.unusable(quality) or Power.unusable(domain.quality)
         if Power.unusable(quality) then
             output.quality = type(quality) == "table" and (quality.quality or quality.status) or quality
@@ -175,7 +177,7 @@ local function export_performance_limits(limits, maximum, summary, quality)
             for i, id in ipairs(domain.logical_cpu_ids or {}) do output.logical_cpu_ids[i] = id end
             output.reasons = json.array({})
             for i, reason in ipairs(domain.reasons or {}) do
-                output.reasons[i] = copy_fields(reason, { "id", "active", "logged" })
+                output.reasons[i] = copy_fields(reason, { "id", "active", "logged", "supported" })
                 if stale then output.reasons[i].active = nil end
             end
             output.issues = export_issues(domain.issues)
@@ -729,9 +731,17 @@ local function export_gpu_processes(processes)
     for index, process in ipairs(processes and processes.list or {}) do
         local output = copy_fields(process, {
             "id", "pid", "starttime_ticks", "name", "uid", "quality", "utilization_percent",
+            "source", "kind", "sample_timestamp_us", "sample_window",
         })
         output.engines = export_gpu_engines(process.engines)
         output.memory_summary = copy_object(process.memory_summary)
+        output.memory_contexts = json.array({})
+        for _, context in ipairs(process.memory_contexts or {}) do
+            if #output.memory_contexts >= 512 then break end
+            output.memory_contexts[#output.memory_contexts + 1] = copy_fields(context, {
+                "gpu_instance_id", "compute_instance_id", "memory_bytes", "kind",
+            })
+        end
         output.clients = json.array({})
         for client_index, client in ipairs(process.clients or {}) do
             local exported_client = copy_fields(client, {
@@ -2168,7 +2178,9 @@ function M.agent(snapshot, options)
             -- unnamed reads as "the" frequency of the device.
             "frequency_current_hz", "frequency_domain", "frequency_source_kind",
             "temperature_celsius", "power_watts", "power_source", "power_measurement", "power_limit_watts", "power_limit_source",
-            "power_limit_percent", "power_headroom_watts",
+            "power_limit_percent", "power_headroom_watts", "power_instant_watts", "power_average_watts",
+            "power_interval_ns", "power_average_interval_ns", "power_instant_timestamp_us", "power_average_timestamp_us",
+            "power_instant_quality", "power_average_quality",
         })
         output.performance_limits = export_performance_limits(device.performance_limits, device_limit, true)
         -- The full clock set, in the same shape the snapshot uses.  This

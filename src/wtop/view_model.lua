@@ -982,6 +982,9 @@ local function limit_status(domain, state, i18n)
     if domain.active == false then return translated(i18n, "limits.inactive", "Not asserted") end
     if domain.active == true then
         local names = limit_names(domain, "active", i18n)
+        if domain.unknown_status_hex and domain.unknown_status_hex ~= "0x0000000000000000" then
+            names[#names + 1] = translated(i18n, "limits.unknown_flags", "Unknown flags")
+        end
         return #names > 0 and table.concat(names, ", ")
             or translated(i18n, "limits.unknown_reason", "Asserted; reason unavailable")
     end
@@ -1006,6 +1009,7 @@ function M.performance_limit_rows(snapshot, i18n)
                     quality = limit_quality(domain, state) or "unknown",
                     scope = translated(i18n, "limits.scope." .. tostring(domain.scope), domain.scope or "—"),
                     source = domain.source or domain.source_kind or "—",
+                    raw_hex = domain.raw_hex, supported_hex = domain.supported_hex,
                 }
             end
         end
@@ -1123,11 +1127,18 @@ local function gpu_rows(snapshot, format, i18n)
             temperature = temperature_celsius
                 and formatted(function() return assert(format:temperature(temperature_celsius)) end)
                 or "—",
-            power = power_watts and string.format("%.1f W", power_watts) or "—",
+            power = power_watts and (string.format("%.1f W", power_watts)
+                .. (metrics.power_source == "nvml" and Power.unusable(gpu.quality)
+                    and (" · " .. Technical.state(i18n, type(gpu.quality)=="table"
+                        and gpu.quality.power or gpu.quality)) or "")) or "—",
             power_limit = power_budget.limit and string.format("%.1f W", power_budget.limit) or "—",
             power_usage = power_usage(format, power_budget.comparison),
             power_percent = power_budget.comparison and power_budget.comparison.percent,
-            power_budget_source = power_budget.source,
+            power_budget_source = power_budget.source or power_budget.limit_source,
+            power_measurement = (metrics.power_measurement == "current" or metrics.power_measurement == "average"
+                or metrics.power_measurement == "device_sample") and translated(i18n,
+                    "power.measurement." .. metrics.power_measurement, metrics.power_measurement) or nil,
+            power_interval_ns = metrics.power_interval_ns,
             limits = limit_text,
             -- The channel the figures came from, so a reader can tell a
             -- package power from a rail and an edge sensor from a hot spot.

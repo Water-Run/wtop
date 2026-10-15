@@ -1,0 +1,7 @@
+{
+  "version": "13.4.92",
+  "source": "https://raw.githubusercontent.com/NVIDIA/go-nvml/6b38eea7ed6854b19001f44231e9385661e90c46/gen/nvml/nvml.h",
+  "sha256": "92194e389cbebc379d5e3feff30c375fab47c761030131fe1f59af963983e5fc",
+  "upstream_archive": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvml_dev/linux-x86_64/cuda_nvml_dev-linux-x86_64-13.4.92-archive.tar.xz",
+  "commit": "6b38eea7ed6854b19001f44231e9385661e90c46"
+}

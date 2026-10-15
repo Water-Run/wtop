@@ -5,6 +5,7 @@
 -- per-process usage. A value DRM already measured keeps precedence; NVML
 -- only fills what is missing. A GPU without a DRM node (a headless compute
 -- card without nvidia-drm) becomes its own device entry.
+local Limits = require("wtop.collectors.gpu_limits")
 local M = {}
 
 local function finite_number(value)
@@ -27,6 +28,7 @@ function M.normalize_bdf(value)
   if not domain then return nil end
   local domain_number = tonumber(domain, 16)
   if not domain_number or domain_number > 0xffff then return nil end
+  if tonumber(device, 16) > 0x1f or tonumber(func, 16) > 7 then return nil end
   return string.format("%04x:%s:%s.%s", domain_number, bus, device, func)
 end
 
@@ -115,6 +117,18 @@ local function process_rows(device, entry, process_name)
       if finite_number(row.decoder_percent) and row.decoder_percent > 0 then
         engines.decoder = { utilization_percent = row.decoder_percent }
       end
+      local contexts = {}
+      for _, entry in ipairs(row.memory_contexts or {}) do
+        if #contexts >= 512 then break end
+        if type(entry) == "table" then
+          contexts[#contexts + 1] = {
+            gpu_instance_id = finite_number(entry.gpu_instance_id) and entry.gpu_instance_id or nil,
+            compute_instance_id = finite_number(entry.compute_instance_id) and entry.compute_instance_id or nil,
+            memory_bytes = finite_number(entry.memory_bytes) and entry.memory_bytes >= 0 and entry.memory_bytes or nil,
+            kind = text(entry.kind, 32),
+          }
+        end
+      end
       local process = {
         id = "nvml:" .. tostring(row.pid),
         pid = row.pid,
@@ -122,9 +136,15 @@ local function process_rows(device, entry, process_name)
         kind = text(row.kind, 16),
         utilization_percent = finite_number(row.sm_percent) and row.sm_percent or nil,
         memory_summary = finite_number(row.memory_bytes)
-          and { resident_bytes = row.memory_bytes } or {},
+          and { resident_bytes = row.memory_bytes, quality = text(row.memory_quality, 16),
+            scope = text(row.memory_scope, 40) } or {},
+        memory_contexts = contexts,
         engines = engines,
-        quality = "fresh",
+        quality = (row.sample_window == "driver_buffer" or row.memory_quality == "estimated")
+          and "estimated" or "fresh",
+        sample_timestamp_us = finite_number(row.sample_timestamp_us) and row.sample_timestamp_us >= 0
+          and row.sample_timestamp_us or nil,
+        sample_window = text(row.sample_window, 32),
         source = "nvml",
       }
       processes.list[#processes.list + 1] = process
@@ -134,9 +154,14 @@ local function process_rows(device, entry, process_name)
   end
   processes.summary = processes.summary or {}
   processes.summary.process_count = #processes.list
+  if entry.processes_truncated == true then
+    processes.truncated = true
+    processes.quality = "truncated"
+  end
   if added > 0 then
     processes.source = "nvml"
-    processes.quality = "fresh"
+    processes.quality = entry.processes_truncated and "truncated" or "fresh"
+    processes.truncated = entry.processes_truncated == true
     device.capabilities = device.capabilities or {}
     device.capabilities.processes = true
   end
@@ -178,7 +203,22 @@ function M.merge(devices, lookup, data, options)
         metrics.power_source = "nvml"
         device.quality = type(device.quality) == "table" and device.quality or {}
         device.capabilities = device.capabilities or {}
-        device.quality.power, device.capabilities.power = "fresh", true
+        local power_quality = entry.power_quality
+        if power_quality ~= "fresh" and power_quality ~= "stale" and power_quality ~= "gap" then
+          power_quality = power_quality == nil and "fresh" or "error"
+        end
+        device.quality.power, device.capabilities.power = power_quality, true
+        for _, key in ipairs({ "power_instant_quality", "power_average_quality" }) do
+          if entry[key] == "fresh" or entry[key] == "stale" or entry[key] == "gap" then metrics[key] = entry[key] end
+        end
+        if entry.power_measurement == "current" or entry.power_measurement == "average"
+            or entry.power_measurement == "device_sample" then
+          metrics.power_measurement = entry.power_measurement
+        end
+        for _, key in ipairs({ "power_instant_watts", "power_average_watts", "power_interval_ns",
+            "power_average_interval_ns", "power_instant_timestamp_us", "power_average_timestamp_us" }) do
+          if finite_number(entry[key]) and entry[key] >= 0 then metrics[key] = entry[key] end
+        end
       end
       if finite_number(entry.power_limit_watts) and entry.power_limit_watts > 0
           and set_missing(metrics, "power_limit_watts", entry.power_limit_watts) then
@@ -194,13 +234,24 @@ function M.merge(devices, lookup, data, options)
       end
       device.capabilities = device.capabilities or {}
       device.capabilities.nvml = true
+      local domain = Limits.nvml(entry.clock_events, options.now_ns)
+      if domain then
+        device.performance_limits = device.performance_limits or { domains = {} }
+        device.performance_limits.domains = device.performance_limits.domains or {}
+        device.performance_limits.domains[#device.performance_limits.domains + 1] = domain
+        device.quality = type(device.quality) == "table" and device.quality or {}
+        device.quality.performance_limits = domain.quality
+        device.capabilities.performance_limits = domain.active ~= nil
+      end
       if options.include_processes then
         process_rows(device, entry, options.process_name)
       end
     end
   end
   return {
-    status = "ok",
+    status = (data.status == "partial" or data.truncated == true) and "partial" or "ok",
+    reason = text(data.reason, 96),
+    truncated = data.truncated == true,
     source = "nvml",
     driver_version = text(data.driver_version, 32),
     device_count = #(data.devices or {}),

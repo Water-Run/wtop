@@ -67,6 +67,15 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 ## 验证矩阵
 
+2026-10-15 核对：`dfbc192` 的
+[主 CI](https://github.com/Water-Run/wtop/actions/runs/38721400428) 16 个作业与
+[Windows CI](https://github.com/Water-Run/wtop/actions/runs/38721400562) 两个作业
+全部通过。精确 macOS arm64 归档 `815afef8` 和 Windows x86 归档 `543539a6`
+在既有三台主机上验收两种形态、全部 CLI、硬件导航和功耗窗口；M4 保留原
+200 列 GPU 时钟严格验收，两台 Windows 使用实际经典无 ANSI 控制台。
+Linux 精确归档的完整性、CLI/JSON 与 quick PTY 通过；平台静态门禁也通过。
+完整 SHA-256 和日志保存在 `build/hardware-amdsmi-20261015/`。
+
 2026-10-15 核对：`1b0b052` 的
 [主 CI](https://github.com/Water-Run/wtop/actions/runs/38712039796) 16 个作业与
 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/38712040017) 两个作业
@@ -169,6 +178,56 @@ M4 通过同一夹具与三个入口，并在 200 列终端恢复实测 `~755 MH
 CLI、功耗入口和相关原生路径复验；Mac 验收同时确认 200 列 GPU 表中，空的
 高优先级功耗列挤掉了实测频率。原失败证据保留，本轮改为优先展示有数据的
 列，使用原 200 列频率/估算标记与时钟详情条件复验，不将旧失败记作通过。
+
+### 2026-10-15：NVIDIA 实时限制、瞬时功耗与采样质量
+
+Linux NVML 后端读取十一种当前时钟事件：空闲、应用时钟、软件功耗上限、
+硬件降速、同步加速、软/硬件温度限制、外部电源刹车、显示时钟、板级限制与
+可靠性策略。优先使用 EventReasons 接口，兼容旧 ThrottleReasons 名称；
+函数缺失或返回不支持时回退。单次 64 位当前掩码保持完整，支持能力另读，
+拒绝/不支持/设备丢失不会变成零。新版本的未知位保留在原始十六进制值中。
+不将空闲称为温度故障，也不为 NVML 当前事件编造历史记录。
+依据 [NVIDIA 当前时钟事件定义](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlClocksEventReasons.html)。
+
+功耗优先使用 GPU-only 的 FI186 瞬时值，并保留 FI185 的一秒平均值；各字段
+分别检查状态、类型和作用域，模块的 CPU+GPU 总功耗不作为 GPU 读数。上限
+仍独立读取当前强制执行的 mW 上限。旧通用 PowerUsage 的读数保留为设备采样，
+不猜其为瞬时还是平均。Snapshot/Agent 保留测量类型、窗口、时间戳和各值质量，
+`p` 显示测量类型、平均窗口、原始/支持状态位和实际限制原因。
+相关单位与语义见 [NVML 查询接口](https://docs.nvidia.com/deploy/nvml-api/latest/api/group__nvmlDeviceQueries.html)。
+
+FieldValue 的时间戳为 UTC 微秒，不能与进程样本的 CPU 时间戳混用。wtop 将
+超过五秒的字段读数标为 stale，缺失时间或超前超过一秒标为 gap；这类值保留
+以便诊断，但不会生成新鲜功耗占比。有新鲜平均值时不优先选择旧瞬时值。
+这些阈值是 wtop 的显示策略，不是 NVIDIA 的精度或响应时间承诺。
+
+SDK 会话由各 Lua VM 独立持有并在关闭时清理，缺库和初始化失败可以重试。
+会话在采样间保留，进程游标按 UUID 对应，不再随枚举索引串卡；内存分配失败
+不会提前消费样本。PCI 地址保留 SDK 功能号，高 domain 和互相矛盾的地址不
+截成其他设备。数值边界和完整 SDK 结构布局有独立验证。
+
+进程接口兼容 v3/v2/v1，计算/图形列表的重复报告先折叠，利用率取最新样本，
+首次取到的驱动缓冲历史标为估计值。多上下文显存不直接相加：
+[MIG 的计算实例可以共享内存](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/concepts.html)。
+缺少可靠的整个设备报告时保留各上下文与读数，并把最大已报告上下文标为
+估计值，来源为 `largest_reported_context`；不把它当作已经证明的进程总量。
+完整 MIG 拓扑、共享范围和实机归属验证仍需继续补齐。
+
+NVIDIA 13.4.92 官方完整头文件及独立摘录均验证了消费结构的尺寸、对齐、成员
+偏移和调用参数。五种动态库形态覆盖现代、v1、v2、缺失符号和名称回退；
+44 种场景、两 VM 生命周期、缺库恢复、UUID 重排、350 点首次分配故障及
+100 点已有缓存故障通过。Clang ASan/UBSan 和泄漏检查通过；与 AMD 桥接相同，
+仅排除无法表达跨 SDK 类型名称等价关系的 function 类型检查。
+
+最终 `make check test-55` 的 136 个文件、相关 Lua 5.4 回归、quick PTY、
+严格原生警告、三台提供主机的共享模型/窗口语义回归通过；新版组合 glibc
+符号下限在既有 manylinux2014 构建中仍为 2.17。源码和两种包均通过实际原生
+模块到 Snapshot/Agent 的瞬时/平均/旧值/未来值/无时间戳链路；两种包的实际
+`p` 窗口验证 300 W / 355.5 W / 84.4%、平均 42.25 W / 11.9% 和旧值无条形图，
+并显示软件功耗限制与原始掩码。以上功耗数值来自测试 SDK，不是本机显卡读数。
+NVIDIA 接口许可作为独立具名许可记录在 SBOM，并随原生模块和包携带。
+证据位于 `build/hardware-nvml-limits-20261015/`；本轮没有 NVIDIA 实际显卡
+或 XP 运行证据，不能据此宣称完整厂商覆盖。
 
 ### 2026-10-15：AMD SMI 原生接口与功耗单位
 

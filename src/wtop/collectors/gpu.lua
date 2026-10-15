@@ -1770,7 +1770,7 @@ function GPU:sample(context, previous)
   }
   if nvml_data then
     providers.nvml = NVML.merge(devices, lookup, nvml_data, {
-      used_ids = used_ids,
+      used_ids = used_ids, now_ns = Common.now_ns(context),
       include_processes = process_scan.enabled == true,
       process_name = function(pid)
         local comm = fs:read(self.proc_path .. "/" .. tostring(pid) .. "/comm", 4096)

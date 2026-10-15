@@ -104,6 +104,8 @@ LICENCE_TEXTS = (
      "the PUC Lua runtime the release links and carries"),
     ("MIT-AMD", ".luai/licenses/AMD-SMI-MIT.txt",
      "the AMD SMI public interface declarations in the native module"),
+    ("NVIDIA-NVML", ".luai/licenses/NVML-NVIDIA.txt",
+     "the NVIDIA NVML interface declarations in the native module"),
     ("LGPL-3.0-or-later", ".luai/licenses/LGPL-3.0-or-later.txt",
      "the packaging tool the generated launcher derives from"),
 )
@@ -154,16 +156,16 @@ def embeds_verbatim(container: pathlib.Path, payload: pathlib.Path) -> bool:
             carried = chunk[-overlap:] if overlap else b""
 
 
-def component(identifier: str, name: str, version: str, license_id: str,
+def component(identifier: str, name: str, version: str, license_id: typing.Optional[str],
               description: str, kind: str = "library",
               scope: str = "required",
-              hashes=None, properties=None) -> typing.Dict:
+              hashes=None, properties=None, license_name=None) -> typing.Dict:
     entry = {
         "bom-ref": identifier,
         "type": kind,
         "name": name,
         "version": version,
-        "licenses": [{"license": {"id": license_id}}],
+        "licenses": [{"license": {"name": license_name} if license_name else {"id": license_id}}],
         "purl": f"pkg:generic/{name}@{version}",
         "scope": scope,
         "description": description,
@@ -311,6 +313,12 @@ def main() -> int:
                   "implementation is loaded from the host and is not bundled."
                   + notice_sentence(licences["MIT-AMD"]),
                   properties=licence_properties(licences["MIT-AMD"])),
+        component("nvml-interface@13.4.92", "nvml_interface", "13.4.92", None,
+                  "Public NVIDIA NVML interface declarations and test layouts; "
+                  "the NVIDIA implementation is loaded from the host, not bundled."
+                  + notice_sentence(licences["NVIDIA-NVML"]),
+                  license_name="NVIDIA NVML header license",
+                  properties=licence_properties(licences["NVIDIA-NVML"])),
         component(lua_ref, "lua", LUA_VERSION, "MIT",
                   "PUC Lua runtime. It is linked into the onedir launcher, whose "
                   "measured glibc floor is the interpreter's, and carried as a "
@@ -346,8 +354,9 @@ def main() -> int:
         "components": components,
         "dependencies": [
             {"ref": launcher_ref, "dependsOn": [module_ref, lua_ref]},
-            {"ref": module_ref, "dependsOn": ["amd-smi-abi@ROCm-5.7.1-7.2.4"]},
+            {"ref": module_ref, "dependsOn": ["amd-smi-abi@ROCm-5.7.1-7.2.4", "nvml-interface@13.4.92"]},
             {"ref": "amd-smi-abi@ROCm-5.7.1-7.2.4", "dependsOn": []},
+            {"ref": "nvml-interface@13.4.92", "dependsOn": []},
             {"ref": lua_ref, "dependsOn": []},
         ],
     }
