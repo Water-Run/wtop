@@ -25,8 +25,8 @@ __attribute__((constructor)) static void fixture_constructor(void) {
     const char *setting=getenv("WTOP_NVML_FIXTURE_MODE");int scenario=setting?atoi(setting):0;
     if(scenario==45)fixture_hang();
     if(scenario==50){puts("driver stdout must not enter the protocol");fputs("driver stderr noise\n",stderr);fflush(stdout);fflush(stderr);}
-    if(scenario==56){const char bad[]="corrupt driver bytes";(void)write(3,bad,sizeof(bad));}
-    if(scenario==57){uint32_t bad[16]={0x4d4e5457,1,UINT32_MAX};(void)write(3,bad,sizeof(bad));}
+    if(scenario==56){const char bad[]="corrupt driver bytes";ssize_t sent=write(3,bad,sizeof(bad));(void)sent;}
+    if(scenario==57){uint32_t bad[16]={0x4d4e5457,1,UINT32_MAX};ssize_t sent=write(3,bad,sizeof(bad));(void)sent;}
     if(scenario==58){
         const char *value=getenv("WTOP_NVML_TEST_FD_INO");struct stat st;
         if(value&&!fstat(20,&st)&&(unsigned long long)st.st_ino==strtoull(value,NULL,10))_exit(123);
