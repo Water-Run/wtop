@@ -67,6 +67,22 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 ## 验证矩阵
 
+2026-10-15 核对：`4c8a09d` 的
+[主 CI](https://github.com/Water-Run/wtop/actions/runs/38748001998) 16 个作业与
+[Windows CI](https://github.com/Water-Run/wtop/actions/runs/38748002139) 两个作业
+全部通过，包括两个 Linux 架构下载最终归档后的完整 PTY 验收。
+Windows 精确归档 `33ef455d` 在 Windows 11 与 Server 2008 验收两种形态、
+五 CLI、80×25 无 ANSI 控制台、原基本在线状态、硬件父级导航与三个功耗入口。
+两种形态均实际启动包内 x64 CPUID 读取器，Snapshot、Agent 和分页详情核对
+AMD 6 核/3 计算单元/AVX 不可用、Intel 4 核/8 线程/AVX 可用，以及 CPUID
+13 个缓存实例与各自独立的 OS 报告。M4 的精确归档 `1dc631f8` 两形态通过
+五 CLI、原 200 列 GPU 频率、时钟详情、功耗/IOReport、43 传感器与 10 个
+Mach CPU 身份验收。Linux x86_64 归档 `cae79161` 在本机另验完整性、CLI/JSON
+和两形态 quick PTY；aarch64 归档 `a6ed1c9b` 的本机检查仅为摘要与包内清单，
+运行证据来自上述原生 CI。静态门禁核对 macOS 部署下限和 Windows 11 个
+PE 映像的 1,055 个命名导入；可选 x64 读取器与主 x86 映像分别验证。
+完整摘要和原始验收记录保存在 `build/hardware-cpuid-20261015/`。
+
 2026-10-15 核对：`f5f22cf` 的
 [主 CI](https://github.com/Water-Run/wtop/actions/runs/38731850859) 16 个作业与
 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/38731850813) 两个作业
@@ -199,6 +215,8 @@ Compute 显示能力覆盖，硬件详情显示逐 CPU 地址宽度、APIC、XCR
 通过。M4 共享回归和实际 10 个 Mach 逻辑 CPU 的快照通过，未生成 x86 能力。
 两台 Windows 的五 CLI 和真实 80×25 无 ANSI 控制台通过；分页核对 AVX 硬件
 与系统可用状态，并逐级导航核心、计算单元和插槽。
+另以构造的 512 个逻辑 CPU 包核对完整共享分组和默认 Snapshot 编码，成功
+导出约 5.9 MB；这属于协议/模型边界夹具，不是大规模硬件实测。
 证据在 `build/hardware-cpuid-20261015/`；此节源树运行结果不代表
 最终包、XP、其他芯片或尚未实现的 AMD 拓扑已验收。
 
@@ -3155,7 +3173,7 @@ Windows 的经典控制台测量和各次优化结果仍保留在上文的主机
 ## 开发构建
 
 在 macOS 上运行 `./tools/build_macos.sh`;可执行包位于
-`dist/macos/wtop`。在 Linux 上使用 32 位 MinGW 交叉编译器运行
+`dist/macos/wtop`。在 Linux 上安装 32 位和 64 位 MinGW 交叉编译器后运行
 `./tools/build_windows_x86.sh`,并将 `dist/windows-x86` 拷贝到
 Windows。在 CMD 或 PowerShell 中运行 `wtop.cmd`。在
 Cygwin/OpenSSH PTY 中,使用 `wtop.sh`,以便键盘输入不经行缓冲直接
@@ -3222,8 +3240,8 @@ NT 处理器计数器回退。该回退在 Server 2008 上被强制启用做验�
   的值而非单一数字;`make cross-libc` 可复现它。内核一半的答案
   是"无",各数据源的降级行为见
   [Monitoring Scope and Performance Operations](MONITORING.md),
-  该性质由 `tests/unit/test_engine.lua` 固定。CPU 架构覆盖仍未
-  确定:只构建过 x86_64。
+  该性质由 `tests/unit/test_engine.lua` 固定。Linux x86_64 与 aarch64
+  已有原生 CI 构建和运行验证；其他架构与更早内核的覆盖仍待确定。
 - 面向旧硬件的 CPU、内存、启动和输入延迟的实测预算。
 
 在这些基线选定并验证之前,不应将兼容性目标作为已发布平台的承诺对外
