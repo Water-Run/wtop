@@ -1,16 +1,26 @@
 /* Each reader owns a complete collector and its counter history. Blocking
  * filesystem/driver callbacks cannot hold the terminal thread or a Lua lock. */
 #define _GNU_SOURCE
+#define _DARWIN_C_SOURCE
 #include <lua.h>
 #include <lauxlib.h>
 #include <lualib.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#ifdef __APPLE__
+#include <sys/event.h>
+#include <pthread.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <mach-o/dyld.h>
+#else
 #include <sys/prctl.h>
+#endif
 #include <sys/resource.h>
 #include <signal.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <limits.h>
@@ -19,6 +29,54 @@
 #include "wtop_gpu_worker.h"
 #include "wtop_gpu_protocol.h"
 #include "wtop_hardware_lua.h"
+
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
+#ifdef __APPLE__
+static char private_image[PATH_MAX];
+static struct stat image_identity;
+static void remove_private_image(void) {
+    struct stat current;
+    if(private_image[0]&&!lstat(private_image,&current)&&S_ISREG(current.st_mode)
+        &&current.st_dev==image_identity.st_dev&&current.st_ino==image_identity.st_ino)
+        (void)unlink(private_image);
+}
+static void remember_image(void) {
+    char path[PATH_MAX],executable[PATH_MAX];uint32_t capacity=sizeof(executable);struct stat current;
+    if(fstat(4,&image_identity)||fcntl(4,F_GETPATH,path)<0
+        ||_NSGetExecutablePath(executable,&capacity)||stat(executable,&current))return;
+    if(strncmp(path,"/tmp/wtop-hardware-",19)&&strncmp(path,"/private/tmp/wtop-hardware-",27))return;
+    if(!S_ISREG(image_identity.st_mode)||image_identity.st_uid!=geteuid()
+        ||(image_identity.st_mode&0077)||image_identity.st_dev!=current.st_dev
+        ||image_identity.st_ino!=current.st_ino)return;
+    snprintf(private_image,sizeof(private_image),"%s",path);
+}
+/* A blocked API cannot receive the quit command. Watch both the parent and
+ * the IPC peer so cancellation still ends this process while its main thread
+ * is inside a driver. No thread shares or touches the collector's Lua state. */
+static void *watch_parent(void *opaque) {
+    int queue=(int)(intptr_t)opaque;
+    for(;;){
+        struct kevent event;int count=kevent(queue,NULL,0,&event,1,NULL);
+        if(count<0&&errno==EINTR)continue;
+        if(count<0||(count>0&&(event.filter==EVFILT_PROC||(event.flags&EV_EOF)))){
+            remove_private_image();_Exit(3);
+        }
+    }
+}
+static int monitor_parent(pid_t parent) {
+    int queue=kqueue();if(queue<0)return 0;
+    struct kevent changes[2];
+    EV_SET(&changes[0],(uintptr_t)parent,EVFILT_PROC,EV_ADD|EV_ONESHOT,NOTE_EXIT,0,NULL);
+    EV_SET(&changes[1],3,EVFILT_READ,EV_ADD|EV_CLEAR,0,0,NULL);
+    if(fcntl(queue,F_SETFD,FD_CLOEXEC)||kevent(queue,changes,2,NULL,0,NULL)<0||getppid()!=parent){close(queue);return 0;}
+    pthread_t thread;int error=pthread_create(&thread,NULL,watch_parent,(void *)(intptr_t)queue);
+    if(error){close(queue);return 0;}
+    (void)pthread_detach(thread);return 1;
+}
+#endif
 
 int luaopen_wtop_native(lua_State *L);
 static const char *const wtop_hardware_names[WTOP_HARDWARE_COUNT]={WTOP_HARDWARE_NAMES};
@@ -80,8 +138,17 @@ int main(int argc,char **argv) {
     while(source<WTOP_HARDWARE_COUNT&&strcmp(argv[2],wtop_hardware_names[source]))++source;
     if(!parent||source==WTOP_HARDWARE_COUNT)return 2;
     struct rlimit core={0,0};(void)setrlimit(RLIMIT_CORE,&core);
+#ifdef __APPLE__
+    remember_image();
+    if(private_image[0]&&atexit(remove_private_image)){remove_private_image();return 3;}
+#endif
+    (void)close(4);
+#ifdef __APPLE__
+    if(!monitor_parent((pid_t)parent)){remove_private_image();return 3;}
+#else
     if(prctl(PR_SET_PDEATHSIG,SIGKILL)||getppid()!=(pid_t)parent)return 3;
-    (void)close(4);(void)prctl(PR_SET_DUMPABLE,0);
+    (void)prctl(PR_SET_DUMPABLE,0);
+#endif
     unsigned char prefix[4];if(!receive_exact(prefix,4))return 4;
     uint32_t size=gpu_u32(prefix);if(!size||size>65536)return 4;
     char *configuration=malloc(size);if(!configuration)return 5;

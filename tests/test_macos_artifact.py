@@ -44,4 +44,10 @@ assert len(Check.inspect(arm + b"payload" + arm + arm, embedded=True)) == 3
 refused(arm + arm + image((26, 0, 0)), "exceeds target", embedded=True)
 refused(arm + arm + image((10, 13, 0), 0x01000007), "mixed Mach-O", embedded=True)
 refused(arm + arm + image(dependency="/tmp/build/liblua.dylib"), "non-system dylib", embedded=True)
+# Directory modules also carry a standalone reader. Its floor, architecture
+# and dependencies must be checked even without a onefile's outer payload.
+assert len(Check.inspect(arm + b"reader" + arm)) == 2
+refused(arm + image((26, 0, 0)), "exceeds target")
+refused(arm + image((10, 13, 0), 0x01000007), "mixed Mach-O")
+refused(arm + image(dependency="/tmp/build/liblua.dylib"), "non-system dylib")
 print("ok: macOS gate checks deployment floors and dependencies in every embedded image")

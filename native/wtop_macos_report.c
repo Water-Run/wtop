@@ -108,6 +108,7 @@ int wtop_gpu_frequency(uint64_t owner, struct wtop_gpu_frequency *frequency) {
     if (gpu_table_state <= 0) { wtop_ioreport_reset(WTOP_REPORT_GPU); return 0; }
     struct wtop_report_sample sample;
     enum wtop_report_status status = wtop_ioreport_sample(WTOP_REPORT_GPU, &sample);
+    frequency->warming=status==WTOP_REPORT_WARMUP;
     if(status!=WTOP_REPORT_FAILED&&sample.epoch!=previous_epoch){
         previous_epoch=sample.epoch;gpu_table_state=0;
     }
@@ -222,6 +223,7 @@ int wtop_collect_powercap(lua_State *L) {
     int has_system=wtop_smc_number("PSTR",&system_watts)&&isfinite(system_watts)&&system_watts>=0;
     int output=1;
     lua_createtable(L,0,7);string_field(L,"schema","dev.waterrun.wtop.macos-energy/v1");
+    boolean_field(L,"_sampling_pending",status==WTOP_REPORT_WARMUP);
     lua_createtable(L,7,0);
     for(unsigned zone=0;zone<6;++zone){
         if(!valid[zone])continue;
@@ -351,5 +353,6 @@ int wtop_collect_cpufreq(lua_State *L){
     lua_setfield(L,-2,"policies");
     if(output==1){lua_pop(L,1);lua_pushnil(L);lua_pushliteral(L,"cpu_performance_states_unavailable");return 2;}
     boolean_field(L,"partial",partial||!map);
+    boolean_field(L,"_sampling_pending",status==WTOP_REPORT_WARMUP);
     string_field(L,"quality",partial||!map?"partial":status==WTOP_REPORT_WARMUP?"gap":any_running?"estimated":"fresh");return 1;
 }

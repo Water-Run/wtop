@@ -2,6 +2,7 @@
  * controller thread owns spawn, IPC, timeouts and reaping; it never calls Lua
  * or a vendor API. Only short state updates hold the job mutex. */
 #define _GNU_SOURCE
+#define _DARWIN_C_SOURCE
 #include <lua.h>
 #include <lauxlib.h>
 #include <dlfcn.h>
@@ -27,9 +28,16 @@
 #include <time.h>
 #include "wtop_gpu_protocol.h"
 #include "wtop_gpu_worker.h"
+#ifndef __APPLE__
 #include "wtop_gpu_worker_image.h"
+#else
+#include <crt_externs.h>
+#endif
 #include "wtop_hardware_worker.h"
 #include "wtop_hardware_worker_image.h"
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
 #define WORKER_COUNT (GPU_VENDOR_COUNT + WTOP_HARDWARE_COUNT)
 #define GPU_SESSION_META "wtop.worker.session.v2"
 #define GPU_FRAME_META "wtop.worker.frame.v2"
@@ -58,6 +66,10 @@ struct gpu_job {
     char reason[96];
     char **environment;
     unsigned char *configuration;size_t configuration_size;
+#ifdef __APPLE__
+    int image_fd;
+    char image_path[PATH_MAX];
+#endif
 };
 struct gpu_session {struct gpu_job *job;int closed;unsigned vendor;};
 struct gpu_frame_guard {struct gpu_frame *frame;struct gpu_job *job;};
@@ -75,7 +87,15 @@ static const char *worker_error(unsigned source,unsigned error) {
 }
 static pthread_once_t module_once=PTHREAD_ONCE_INIT;
 static void *module_pin;
+#ifndef __APPLE__
+typedef int (*closefrom_function)(posix_spawn_file_actions_t *,int);
+static closefrom_function closefrom_api;
+#endif
+#ifdef __APPLE__
+#define environ (*_NSGetEnviron())
+#else
 extern char **environ;
+#endif
 int wtop_gpu_worker_query(lua_State *L);
 static uint64_t client_now(void) {
     struct timespec time;if(clock_gettime(CLOCK_MONOTONIC,&time))return 0;
@@ -109,12 +129,38 @@ static void pin_module(void) {
      * that handle lets Lua unmap controller code while a thread is reaping.
      * Never dlclose from a thread whose return address is inside the module. */
     module_pin=dlopen(info.dli_fname,RTLD_NOW|RTLD_NOLOAD);
+#ifndef __APPLE__
+    /* Older libdl can keep a shared error buffer when pthread was loaded
+     * after the interpreter. Resolve optional symbols before controllers can
+     * race their loader errors against Lua's CLIBS finalization. */
+    closefrom_api=(closefrom_function)dlsym(RTLD_DEFAULT,"posix_spawn_file_actions_addclosefrom_np");
+    (void)dlerror();(void)dlerror();
+#endif
 }
 static void job_error(struct gpu_job *job,const char *reason,int error) {
     pthread_mutex_lock(&job->mutex);job->state=ERROR;job->error=error;job->failed_at=client_now();
     snprintf(job->reason,sizeof(job->reason),"%s",reason);pthread_cond_broadcast(&job->condition);pthread_mutex_unlock(&job->mutex);
 }
-static int fd_image(unsigned source) {
+static int fd_image(unsigned source,char image_path[PATH_MAX]) {
+    image_path[0]=0;
+#ifdef __APPLE__
+    if(source<GPU_VENDOR_COUNT){errno=EINVAL;return -1;}
+    char temporary[]="/tmp/wtop-hardware-XXXXXX";
+    int file=mkstemp(temporary);if(file<0)return -1;
+    size_t offset=0;
+    while(offset<sizeof(wtop_hardware_worker_image)){
+        ssize_t count=write(file,wtop_hardware_worker_image+offset,sizeof(wtop_hardware_worker_image)-offset);
+        if(count<0&&errno==EINTR)continue;
+        if(count<=0){int saved=count<0?errno:EIO;close(file);unlink(temporary);errno=saved;return -1;}
+        offset+=(size_t)count;
+    }
+    if(fchmod(file,0500)){int saved=errno;close(file);unlink(temporary);errno=saved;return -1;}
+    int reader=open(temporary,O_RDONLY|O_CLOEXEC);int saved=errno;close(file);
+    if(reader<0){unlink(temporary);errno=saved;return -1;}
+    int executable=fcntl(reader,F_DUPFD_CLOEXEC,10);saved=errno;close(reader);
+    if(executable<0){unlink(temporary);errno=saved;return -1;}
+    snprintf(image_path,PATH_MAX,"%s",temporary);return executable;
+#else
     int file=-1;char temporary[]="/tmp/wtop-gpu-XXXXXX";int named=0;
 #ifdef SYS_memfd_create
     file=(int)syscall(SYS_memfd_create,"wtop-gpu",3u|0x10u);
@@ -142,29 +188,50 @@ static int fd_image(unsigned source) {
     close(file);if(named)unlink(temporary);
     if(reader<0){errno=error;return -1;}
     int executable=fcntl(reader,F_DUPFD_CLOEXEC,10);error=errno;close(reader);errno=error;return executable;
+#endif
+}
+static void close_image(int executable,const char *image_path) {
+    close(executable);if(image_path[0])unlink(image_path);
+}
+static int socket_pair(int pair[2]) {
+    int type=SOCK_STREAM;
+#ifndef __APPLE__
+    type|=SOCK_CLOEXEC;
+#endif
+    if(socketpair(AF_UNIX,type,0,pair))return errno;
+#ifdef __APPLE__
+    int one=1;
+    for(int i=0;i<2;++i){
+        if(fcntl(pair[i],F_SETFD,FD_CLOEXEC)||setsockopt(pair[i],SOL_SOCKET,SO_NOSIGPIPE,&one,sizeof(one))){
+            int saved=errno;close(pair[0]);close(pair[1]);return saved;
+        }
+    }
+#endif
+    return 0;
 }
 static int spawn_reader(struct gpu_job *job,int *channel) {
     /* Refuse a process sandbox which prevents ownership/reaping altogether. */
     if(waitpid((pid_t)INT_MAX,NULL,WNOHANG)<0&&errno!=ECHILD)return errno;
-    int executable=fd_image(job->vendor);if(executable<0)return errno;
+    char image_path[PATH_MAX];int executable=fd_image(job->vendor,image_path);if(executable<0)return errno;
     int pair[2];
-    if(socketpair(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC,0,pair)){int error=errno;close(executable);return error;}
+    int pair_error=socket_pair(pair);
+    if(pair_error){close_image(executable,image_path);return pair_error;}
     for(int i=0;i<2;++i){
         int raised=fcntl(pair[i],F_DUPFD_CLOEXEC,10);
-        if(raised<0){int saved=errno;close(pair[0]);close(pair[1]);close(executable);return saved;}
+        if(raised<0){int saved=errno;close(pair[0]);close(pair[1]);close_image(executable,image_path);return saved;}
         close(pair[i]);pair[i]=raised;
     }
     posix_spawn_file_actions_t actions;posix_spawnattr_t attributes;
     int error=posix_spawn_file_actions_init(&actions);
-    if(error){close(executable);close(pair[0]);close(pair[1]);return error;}
+    if(error){close_image(executable,image_path);close(pair[0]);close(pair[1]);return error;}
     error=posix_spawnattr_init(&attributes);
-    if(error){posix_spawn_file_actions_destroy(&actions);close(executable);close(pair[0]);close(pair[1]);return error;}
+    if(error){posix_spawn_file_actions_destroy(&actions);close_image(executable,image_path);close(pair[0]);close(pair[1]);return error;}
 #define ACTION(expression) do {if(!error)error=(expression);} while(0)
     ACTION(posix_spawn_file_actions_adddup2(&actions,pair[1],3));
     ACTION(posix_spawn_file_actions_adddup2(&actions,executable,4));
     for(int fd=0;fd<3;++fd)ACTION(posix_spawn_file_actions_addopen(&actions,fd,"/dev/null",O_RDWR,0));
-    typedef int (*closefrom_function)(posix_spawn_file_actions_t *,int);
-    closefrom_function closefrom=(closefrom_function)dlsym(RTLD_DEFAULT,"posix_spawn_file_actions_addclosefrom_np");
+#ifndef __APPLE__
+    closefrom_function closefrom=closefrom_api;
     DIR *directory=closefrom?NULL:opendir("/proc/self/fd");
     if(closefrom)ACTION(closefrom(&actions,5));
     else if(!directory)error=errno;
@@ -179,22 +246,34 @@ static int spawn_reader(struct gpu_job *job,int *channel) {
         }
         closedir(directory);
     }
+#endif
     sigset_t empty,defaults;sigemptyset(&empty);sigemptyset(&defaults);
     sigaddset(&defaults,SIGPIPE);sigaddset(&defaults,SIGTERM);sigaddset(&defaults,SIGINT);sigaddset(&defaults,SIGCHLD);
     ACTION(posix_spawnattr_setsigmask(&attributes,&empty));ACTION(posix_spawnattr_setsigdefault(&attributes,&defaults));
     short flags=POSIX_SPAWN_SETSIGMASK|POSIX_SPAWN_SETSIGDEF|POSIX_SPAWN_SETPGROUP;
+#ifdef __APPLE__
+    flags|=POSIX_SPAWN_CLOEXEC_DEFAULT;
+#endif
 #ifdef POSIX_SPAWN_USEVFORK
     flags|=POSIX_SPAWN_USEVFORK;
 #endif
     ACTION(posix_spawnattr_setflags(&attributes,flags));ACTION(posix_spawnattr_setpgroup(&attributes,0));
-    char path[64],parent[32];snprintf(path,sizeof(path),"/proc/self/fd/4");
+    const char *path=image_path[0]?image_path:"/proc/self/fd/4";char parent[32];
     snprintf(parent,sizeof(parent),"%ld",(long)getpid());char *arguments[]={job->vendor<GPU_VENDOR_COUNT?"wtop-gpu-reader":"wtop-hardware-reader",parent,(char *)vendor_names[job->vendor],NULL};
     pid_t pid=0;
     if(!error)error=posix_spawn(&pid,path,&actions,&attributes,arguments,job->environment);
     if(!error)atomic_store(&job->pid,pid);
     posix_spawnattr_destroy(&attributes);posix_spawn_file_actions_destroy(&actions);
-    close(executable);close(pair[1]);
-    if(error){close(pair[0]);return error;}*channel=pair[0];return 0;
+    close(pair[1]);
+    if(error){close_image(executable,image_path);close(pair[0]);return error;}
+#ifdef __APPLE__
+    /* dyld/code signing can still need the named executable after spawn has
+     * returned. Keep its read-only descriptor and name until the reader exits. */
+    job->image_fd=executable;snprintf(job->image_path,sizeof(job->image_path),"%s",image_path);
+#else
+    close_image(executable,image_path);
+#endif
+    *channel=pair[0];return 0;
 #undef ACTION
 }
 static int transfer(struct gpu_job *job,int fd,unsigned char *data,size_t length,int writing,uint64_t deadline) {
@@ -254,6 +333,15 @@ static void finish_child(struct gpu_job *job,int channel,int descriptor) {
         struct timespec delay={0,2000000};nanosleep(&delay,NULL);
     }
     if(descriptor>=0)close(descriptor);
+#ifdef __APPLE__
+    struct stat expected,current;
+    if(job->image_fd>=0){
+        if(!fstat(job->image_fd,&expected)&&!lstat(job->image_path,&current)
+            &&S_ISREG(current.st_mode)&&expected.st_dev==current.st_dev&&expected.st_ino==current.st_ino)
+            (void)unlink(job->image_path);
+        close(job->image_fd);job->image_fd=-1;job->image_path[0]=0;
+    }
+#endif
 }
 static struct gpu_frame *read_response(struct gpu_job *job,int channel,unsigned processes,uint64_t requested,int *error,char reason[96]) {
     uint64_t deadline=requested+GPU_QUERY_NS;
@@ -311,6 +399,17 @@ static void wait_deadline(struct timespec *deadline,unsigned milliseconds) {
     clock_gettime(CLOCK_MONOTONIC,deadline);deadline->tv_nsec+=(long)milliseconds*1000000L;
     deadline->tv_sec+=deadline->tv_nsec/1000000000L;deadline->tv_nsec%=1000000000L;
 }
+static int wait_condition(pthread_cond_t *condition,pthread_mutex_t *mutex,const struct timespec *deadline) {
+#ifdef __APPLE__
+    struct timespec now;if(clock_gettime(CLOCK_MONOTONIC,&now))return errno;
+    struct timespec remaining={deadline->tv_sec-now.tv_sec,deadline->tv_nsec-now.tv_nsec};
+    if(remaining.tv_nsec<0){--remaining.tv_sec;remaining.tv_nsec+=1000000000L;}
+    if(remaining.tv_sec<0)return ETIMEDOUT;
+    return pthread_cond_timedwait_relative_np(condition,mutex,&remaining);
+#else
+    return pthread_cond_timedwait(condition,mutex,deadline);
+#endif
+}
 static int close_session(lua_State *L) {
     struct gpu_session *session=luaL_checkudata(L,1,GPU_SESSION_META);struct gpu_job *job=session->job;
     session->closed=1;
@@ -325,7 +424,7 @@ int wtop_gpu_worker_close(lua_State *L) {
     session->closed=1;
     if(job){atomic_store(&job->cancelled,1);pthread_mutex_lock(&job->mutex);pthread_cond_broadcast(&job->condition);
         struct timespec limit;wait_deadline(&limit,(unsigned)wait_ms);
-        while(wait_ms&&!job->done){int error=pthread_cond_timedwait(&job->condition,&job->mutex,&limit);if(error)break;}
+        while(wait_ms&&!job->done){int error=wait_condition(&job->condition,&job->mutex,&limit);if(error)break;}
         done=job->done;pthread_mutex_unlock(&job->mutex);session->job=NULL;job_release(job);}
     lua_pushboolean(L,done);return 1;
 }
@@ -362,10 +461,19 @@ static void decode_frame(lua_State *L,const struct gpu_frame *frame) {
 static struct gpu_job *new_job(int processes,unsigned vendor,const char *configuration,size_t configuration_size) {
     if(atomic_fetch_add(&controllers[vendor],1)>=2){atomic_fetch_sub(&controllers[vendor],1);errno=EBUSY;return NULL;}
     struct gpu_job *job=calloc(1,sizeof(*job));if(!job){atomic_fetch_sub(&controllers[vendor],1);return NULL;}
+#ifdef __APPLE__
+    job->image_fd=-1;
+#endif
     atomic_init(&job->refs,2);atomic_init(&job->cancelled,0);atomic_init(&job->pid,0);job->vendor=vendor;job->processes=processes;job->requested=client_now();
     int error=pthread_mutex_init(&job->mutex,NULL);if(error){free(job);atomic_fetch_sub(&controllers[vendor],1);errno=error;return NULL;}
     pthread_condattr_t attr;error=pthread_condattr_init(&attr);
-    if(!error){error=pthread_condattr_setclock(&attr,CLOCK_MONOTONIC);if(!error)error=pthread_cond_init(&job->condition,&attr);pthread_condattr_destroy(&attr);}
+    if(!error){
+#ifndef __APPLE__
+        error=pthread_condattr_setclock(&attr,CLOCK_MONOTONIC);
+#endif
+        if(!error)error=pthread_cond_init(&job->condition,&attr);
+        pthread_condattr_destroy(&attr);
+    }
     if(error){pthread_mutex_destroy(&job->mutex);free(job);atomic_fetch_sub(&controllers[vendor],1);errno=error;return NULL;}
     if(configuration_size){
         job->configuration=malloc(configuration_size);
@@ -404,7 +512,7 @@ static int query_session(lua_State *L,unsigned wait_ms) {
     struct timespec limit;wait_deadline(&limit,wait_ms);
     pthread_mutex_lock(&job->mutex);
     if(job->state==IDLE){job->state=QUERY;job->processes=processes;job->requested=client_now();pthread_cond_broadcast(&job->condition);}
-    while(wait_ms&&job->state==QUERY&&!job->done){int error=pthread_cond_timedwait(&job->condition,&job->mutex,&limit);if(error)break;}
+    while(wait_ms&&job->state==QUERY&&!job->done){int error=wait_condition(&job->condition,&job->mutex,&limit);if(error)break;}
     struct gpu_frame *frame=job->state==READY?job->frame:NULL;
     if(frame&&(frame->processes!=(unsigned)processes||client_now()-frame->started>GPU_FRAME_NS)){
         job->frame=NULL;job->state=QUERY;job->processes=processes;job->requested=client_now();

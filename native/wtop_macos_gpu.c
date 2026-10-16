@@ -258,6 +258,7 @@ int wtop_collect_gpu(lua_State *L) {
     string_field(L, "schema", "dev.waterrun.wtop.gpu/v2");
     boolean_field(L, "truncated", rows->truncated);
     boolean_field(L, "partial", rows->partial);
+    boolean_field(L, "_sampling_pending", frequency.warming);
     string_field(L, "quality", rows->partial ? "partial" : "fresh");
     lua_createtable(L, (int)rows->count, 0);
     unsigned output = 1;

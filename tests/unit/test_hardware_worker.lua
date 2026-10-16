@@ -198,4 +198,73 @@ closing_engine.hardware_inputs={
 }
 closing_engine:stop()
 assert(cleanup.first and cleanup.second,"one failed input cleanup prevented another from closing")
+
+-- Portable sources select the advertised process transport, including GPU,
+-- without calling a synchronous native API on pending/error paths.
+local Portable = require("wtop.collectors.portable")
+local slots, portable_closes, pending_energy = {}, 0, false
+local transport = {available=true,hardware_worker_sources={powercap=true,cpufreq=true,gpu=true}}
+for _,id in ipairs({"powercap","cpufreq","gpu"}) do
+    transport["collect_"..id]=function() error("parent entered a synchronous hardware API") end
+end
+transport.hardware_worker_open=function(id,configuration)
+    assert(not slots[id] and next(Wire.decode(configuration))==nil)
+    local slot={id=id};slots[id]=slot;return slot
+end
+transport.hardware_worker_query=function(slot,_,wait)
+    assert(wait==0)
+    if slot.id=="powercap" and pending_energy then return nil,"hardware_query_pending" end
+    return Wire.encode({capability={available=true,state="available"},result={status="ok",
+        quality="fresh",timestamp_ns=90,data={source=slot.id}}}),
+        {sample_started_ns=80,sample_finished_ns=95}
+end
+transport.hardware_worker_close=function(slot,wait)
+    assert(wait==0 and slots[slot.id]==slot);portable_closes=portable_closes+1
+end
+local portable_readers={};now=100
+for _,id in ipairs({"powercap","cpufreq","gpu"}) do
+    local collector=Portable.new(id,{native=transport});portable_readers[id]=collector
+    assert(collector:probe(context).available)
+    local result=collector:sample(context)
+    assert(result.data.source==id and result.transport=="process" and result.value_timestamp_ns==90)
+end
+pending_energy=true
+assert(portable_readers.powercap:sample(context).sampling_pending)
+assert(portable_readers.cpufreq:sample(context).data.source=="cpufreq")
+assert(portable_readers.gpu:sample(context).data.source=="gpu")
+for _,collector in pairs(portable_readers) do collector:close() end
+assert(portable_closes==3)
+local direct_calls=0
+local direct=Portable.new("powercap",{native={collect_powercap=function()
+    direct_calls=direct_calls+1;return {zones={}}
+end}})
+assert(direct:sample(context).status=="ok" and direct_calls==1,
+    "a backend without an advertised worker changed its collection path")
+local broken=Portable.new("powercap",{native={available=true,hardware_worker_sources={powercap=true},
+    collect_powercap=function()error("missing transport fell back into parent")end}})
+assert(broken:sample(context).reason=="hardware_worker_unavailable")
+broken:close()
+
+-- Derivation stays inside each reader: actual native sample windows, epoch
+-- changes and a new reader's warmup cannot reuse the terminal's prior data.
+local prior_native, prior_core=package.loaded["wtop.native"],package.loaded["wtop.core.hardware_worker"]
+local child_now,energy,epoch=1000000000,10,"epoch-A"
+local child_native={available=true,uname=function() return {sysname="Darwin"} end,
+    monotonic_ns=function() return child_now end,realtime_ns=function() return child_now end,
+    collect_powercap=function() return {zones={{id="cpu",aggregate=true,energy_joules=energy,
+        _source_epoch=epoch,_sample_timestamp_ns=child_now}}} end}
+package.loaded["wtop.native"]=child_native;package.loaded["wtop.core.hardware_worker"]=nil
+local create_reader=require("wtop.core.hardware_worker")
+local child=create_reader("powercap",Wire.encode({}))
+assert(Wire.decode(child(false)).result.data.zones[1].power_watts==nil)
+child_now,energy=3000000000,22
+local watts=Wire.decode(child(false)).result.data.zones[1]
+assert(watts.power_watts==6 and watts.power_interval_ns==2000000000)
+child_now,energy,epoch=4000000000,0,"epoch-B"
+assert(Wire.decode(child(false)).result.data.zones[1].power_watts==nil)
+child_now,energy=5000000000,3
+assert(Wire.decode(child(false)).result.data.zones[1].power_watts==3)
+local restarted=create_reader("powercap",Wire.encode({}))
+assert(Wire.decode(restarted(false)).result.data.zones[1].power_watts==nil)
+package.loaded["wtop.native"],package.loaded["wtop.core.hardware_worker"]=prior_native,prior_core
 return true

@@ -18,6 +18,7 @@ int wtop_collect_powercap(lua_State *L);
 struct wtop_gpu_frequency {
     double mean, active;
     uint64_t minimum, maximum;
+    int warming;
 };
 int wtop_gpu_frequency(uint64_t owner, struct wtop_gpu_frequency *frequency);
 void wtop_smc_begin(void);

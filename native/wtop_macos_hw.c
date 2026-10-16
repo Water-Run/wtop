@@ -32,6 +32,9 @@
 #include <unistd.h>
 
 #include "wtop_macos.h"
+#ifndef WTOP_HARDWARE_WORKER
+#include "wtop_hardware_worker.h"
+#endif
 
 #define MAX_PIDS 8192
 #define MAX_SOCKETS 16384
@@ -507,6 +510,11 @@ static int l_collect_cgroup(lua_State *L) {
 }
 
 static const luaL_Reg hardware_functions[] = {
+#ifndef WTOP_HARDWARE_WORKER
+    {"hardware_worker_open", wtop_hardware_worker_open},
+    {"hardware_worker_query", wtop_hardware_worker_query},
+    {"hardware_worker_close", wtop_hardware_worker_close},
+#endif
     {"collect_gpu", wtop_collect_gpu},
     {"collect_hwmon", wtop_collect_hwmon},
     {"collect_powercap", wtop_collect_powercap},
@@ -520,4 +528,10 @@ static const luaL_Reg hardware_functions[] = {
 
 void wtop_register_hardware(lua_State *L) {
     luaL_setfuncs(L, hardware_functions, 0);
+#ifndef WTOP_HARDWARE_WORKER
+    static const char *const sources[]={WTOP_HARDWARE_NAMES};
+    lua_createtable(L,0,WTOP_HARDWARE_COUNT);
+    for(unsigned i=0;i<WTOP_HARDWARE_COUNT;++i){lua_pushboolean(L,1);lua_setfield(L,-2,sources[i]);}
+    lua_setfield(L,-2,"hardware_worker_sources");
+#endif
 }

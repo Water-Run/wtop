@@ -18,7 +18,9 @@ def main() -> None:
     parser.add_argument('--module', type=Path, default=ROOT/'build/native/wtop_native.so')
     parser.add_argument('--output', type=Path, default=ROOT/'build/native-hardware-worker')
     parser.add_argument('--native-only', action='store_true')
+    parser.add_argument('--shutdown-rounds', type=int, default=3)
     args = parser.parse_args()
+    assert 1 <= args.shutdown_rounds <= 100
     assert args.module.is_file(), 'native module not found: ' + str(args.module)
     work = args.output.resolve(); work.mkdir(parents=True, exist_ok=True)
     library = work/'hardware_io_fake.so'
@@ -57,10 +59,10 @@ def main() -> None:
         subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/smbios_worker_smoke.lua'),
                         str(ROOT),str(firmware_control),str(firmware_entered),str(firmware_reads)],
                        cwd=ROOT,env=firmware_env,check=True,timeout=20)
-        for _ in range(3):
+        for _ in range(args.shutdown_rounds):
             subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/hardware_worker_shutdown.lua'),
                             str(ROOT)],cwd=ROOT,env=env,check=True,timeout=5)
-        print('ok: three standalone Lua VM exits with ten asynchronous readers being reaped',flush=True)
+        print('ok: '+str(args.shutdown_rounds)+' standalone Lua VM exits with ten asynchronous readers being reaped',flush=True)
         if not args.native_only:
             control.write_text('0\n'); entered.unlink(missing_ok=True)
             saved=os.environ.copy(); os.environ.update(env)

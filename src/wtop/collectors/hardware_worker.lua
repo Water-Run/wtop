@@ -9,21 +9,26 @@ M.sources = { hwmon = true, cpufreq = true, powercap = true, cpu_limits = true,
     thermal_throttle = true, cpuidle = true, thermal_zones = true, smbios_input = true, gpu_drm = true,
     cpu_clocks = true }
 
-function M.available()
-    return Native.available and type(Native.hardware_worker_open) == "function"
-        and type(Native.hardware_worker_query) == "function"
-        and type(Native.hardware_worker_close) == "function"
+function M.available(native)
+    native = native or Native
+    return native.available and type(native.hardware_worker_open) == "function"
+        and type(native.hardware_worker_query) == "function"
+        and type(native.hardware_worker_close) == "function"
 end
 
-function M.new(collector, options)
-    assert(M.sources[collector.id], "unsupported hardware worker")
+function M.new(collector, options, native)
+    native = native or Native
+    assert(M.sources[collector.id] or (type(native.hardware_worker_sources) == "table"
+        and native.hardware_worker_sources[collector.id]), "unsupported hardware worker")
     local configuration = Wire.encode(options or {})
     assert(#configuration <= 65536, "hardware_configuration_size")
     return setmetatable({ id = collector.id, _method_style = true,
-        default_interval_ms = collector.default_interval_ms, configuration = configuration }, Proxy)
+        default_interval_ms = collector.default_interval_ms, configuration = configuration,
+        native = native }, Proxy)
 end
 
 function Proxy:_read(context)
+    local Native = self.native
     if self.closed then return nil, "hardware_worker_closed" end
     local safe_mode = context and context.safe_mode == true or false
     if self.session and self.safe_mode ~= safe_mode then
@@ -100,7 +105,7 @@ end
 
 function Proxy:close()
     self.closed, self.ready = true, nil
-    if self.session then Native.hardware_worker_close(self.session, 0); self.session = nil end
+    if self.session then self.native.hardware_worker_close(self.session, 0); self.session = nil end
 end
 
 return M

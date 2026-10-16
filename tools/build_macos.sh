@@ -44,12 +44,7 @@ make -C "$work_dir/lua-5.5.1" install INSTALL_TOP="$project_dir/.tools/lua-5.5.1
 rm -rf "$output_dir"
 mkdir -p "$output_dir"
 "$project_dir/tools/write_build_id.sh"
-cc -std=c17 -O2 -Wall -Wextra -Werror \
-    "-mmacosx-version-min=$deployment" -dynamiclib -undefined dynamic_lookup \
-    -install_name @rpath/wtop_native.so \
-    -I"$work_dir/lua-5.5.1/src" \
-    -I"$project_dir/build/native" \
-    -o "$output_dir/wtop_native.so" "$project_dir/native/wtop_macos.c" \
+set -- "$project_dir/native/wtop_macos.c" \
     "$project_dir/native/wtop_macos_hw.c" \
     "$project_dir/native/wtop_macos_cpu.c" \
     "$project_dir/native/wtop_macos_gpu.c" \
@@ -59,7 +54,22 @@ cc -std=c17 -O2 -Wall -Wextra -Werror \
     "$project_dir/native/wtop_macos_disk.c" \
     "$project_dir/native/wtop_macos_net.c" \
     "$project_dir/native/wtop_macos_smc.c" \
-    "$project_dir/native/wtop_macos_sensors.c" \
+    "$project_dir/native/wtop_macos_sensors.c"
+"$project_dir/.tools/lua-5.5.1/bin/lua" "$project_dir/tools/embed_hardware_lua.lua" \
+    "$work_dir/wtop_hardware_lua.h"
+cc -std=c17 -O2 -Wall -Wextra -Werror -pthread \
+    "-mmacosx-version-min=$deployment" -DWTOP_HARDWARE_WORKER \
+    -I"$work_dir/lua-5.5.1/src" -I"$work_dir" -I"$project_dir/build/native" \
+    -o "$work_dir/wtop_hardware_worker" "$project_dir/native/wtop_hardware_worker.c" \
+    "$@" "$work_dir/lua-5.5.1/src/liblua.a" \
+    -framework IOKit -framework CoreFoundation
+sh "$project_dir/tools/embed_gpu_worker.sh" "$work_dir/wtop_hardware_worker" \
+    "$work_dir/wtop_hardware_worker_image.h" wtop_hardware_worker_image
+cc -std=c17 -O2 -Wall -Wextra -Werror -pthread \
+    "-mmacosx-version-min=$deployment" -dynamiclib -undefined dynamic_lookup \
+    -install_name @rpath/wtop_native.so \
+    -I"$work_dir/lua-5.5.1/src" -I"$work_dir" -I"$project_dir/build/native" \
+    -o "$output_dir/wtop_native.so" "$@" "$project_dir/native/wtop_worker_client.c" \
     -framework IOKit -framework CoreFoundation
 cp "$work_dir/lua-5.5.1/src/lua" "$output_dir/lua"
 cp -R "$project_dir/src" "$output_dir/"

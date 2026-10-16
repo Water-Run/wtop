@@ -800,16 +800,20 @@ do
     } }
   end
   local failed = { quality = "partial", zones = { { id = "system", power_watts = 20 } } }
+  local warming = energy("epoch1",0,1000000000,"gap"); warming._sampling_pending=true
   local source = collectors(fake_native({ collect_powercap = {
-    energy("epoch1",0,1000000000,"gap"), energy("epoch1",10,3000000000), failed,
+    warming, energy("epoch1",10,3000000000), failed,
     energy("epoch2",0,5000000000,"gap"), energy("epoch2",10,6000000000),
     energy("epoch3",100,7000000000), energy("epoch3",120,8000000000,"gap"),
   } })).powercap
   local first = source:sample(at(1000000000))
   equal(first.data.zones[1].power_watts,nil,"warmup does not fabricate zero watts")
+  assert(first.sampling_pending and first.retry_after_ms==100 and first.data._sampling_pending==nil,
+    "native warmup must schedule a real second observation without exporting its private hint")
   local second = source:sample(at(2000000000),first)
   equal(second.data.zones[1].power_watts,5,"power uses the actual two-second IOReport interval")
   equal(second.data.zones[1].power_interval_ns,2000000000,"the observed averaging window is retained")
+  assert(not second.sampling_pending,"a completed energy interval remained pending")
   local third = source:sample(at(3000000000),second)
   equal(third.quality,"partial","failed energy and fresh independent SMC remain partial")
   equal(#third.data.zones,1,"failed energy zones disappear rather than repeat old counters")
@@ -830,6 +834,14 @@ do
   equal(exported.power.zones[1].power_interval_ns,2000000000,"Snapshot exposes the actual averaging interval")
   local text=require("wtop.format.json").encode(exported)
   assert(not text:find("_source_epoch",1,true) and not text:find("_sample_timestamp_ns",1,true),"private counter identity and clock are not exported")
+  local gpu=collectors(fake_native({collect_gpu={
+    {devices={},quality="fresh",_sampling_pending=true},{devices={},quality="fresh"}
+  }})).gpu
+  local warming_gpu=gpu:sample(at(1000000000))
+  assert(warming_gpu.quality=="fresh" and warming_gpu.sampling_pending
+    and warming_gpu.retry_after_ms==100 and warming_gpu.data._sampling_pending==nil,
+    "fresh GPU identity/utilization must not suppress its frequency warmup")
+  assert(not gpu:sample(at(1100000000),warming_gpu).sampling_pending)
 end
 
 return true

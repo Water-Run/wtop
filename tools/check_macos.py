@@ -71,18 +71,19 @@ def inspect_image(data: bytes, offset: int) -> dict:
 
 def inspect(data: bytes, embedded: bool = False) -> list[dict]:
     images = [inspect_image(data, 0)]
-    if embedded:
-        offset = data.find(MAGIC, 32)
-        while offset >= 0:
-            # Ignore a magic constant in code; actual payload headers also
-            # identify their image type and a bounded load-command region.
-            if offset + 32 <= len(data):
-                header = struct.unpack_from("<8I", data, offset)
-                if header[3] in (2, 6, 8) and 0 < header[4] <= 4096:
-                    images.append(inspect_image(data, offset))
-            offset = data.find(MAGIC, offset + 4)
-        if len(images) < 3:
-            raise ValueError("onefile is missing its embedded program or native module")
+    # A native module can itself embed a reader executable. Inspect it in the
+    # directory package as well as inside a onefile's nested native payload.
+    offset = data.find(MAGIC, 32)
+    while offset >= 0:
+        # Ignore a magic constant in code; actual payload headers also
+        # identify their image type and a bounded load-command region.
+        if offset + 32 <= len(data):
+            header = struct.unpack_from("<8I", data, offset)
+            if header[3] in (2, 6, 8) and 0 < header[4] <= 4096:
+                images.append(inspect_image(data, offset))
+        offset = data.find(MAGIC, offset + 4)
+    if embedded and len(images) < 3:
+        raise ValueError("onefile is missing its embedded program or native module")
     if len({image["architecture"] for image in images}) != 1:
         raise ValueError("mixed Mach-O architectures")
     return images

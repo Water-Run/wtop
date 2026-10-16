@@ -67,6 +67,18 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 ## 验证矩阵
 
+2026-10-16 核对：逐逻辑 CPU 有效频率及夹具修复提交 `83ea2fe` 的
+[主 CI](https://github.com/Water-Run/wtop/actions/runs/38847321798) 16 个作业和
+[Windows CI](https://github.com/Water-Run/wtop/actions/runs/38847321801) 两个作业
+全部成功，含两个 Linux 架构的最终下载与完整终端矩阵。
+四归档摘要分别为 Linux `32629a69`、ARM `15e1a4ed`、Mac `3788f2f5`、
+Windows `69a1f06a`。Linux 两形态另验实际计数器/窗口计算、普通权限拒绝、
+真实空闲零值、超时回收、八组 CPU 详情与两个逻辑 CPU 表，以及三个功耗
+入口和 Snapshot/Agent 百分比。M4、Windows 11、Server 2008 的两种包
+通过对应 CPU/GPU/功耗/传感器/父设备与经典控制台验收。收据见
+`build/hardware-cpu-ci-fix-20261016/ACCEPTANCE.json`。当前有效频率的固定
+计数器后端只覆盖列出的 Intel Core 型号；XP 与旧 Intel Mac 仍无实测。
+
 2026-10-16 核对：DRM/fdinfo 读取与 SDK 能量窗口提交 `7559398` 的
 [主 CI](https://github.com/Water-Run/wtop/actions/runs/38837419804) 16 个作业和
 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/38837419677) 两个作业
@@ -358,6 +370,36 @@ glibc 2.17 的 140 个 Lua 文件通过后，新增独立解释器验收暴露�
 单文件包及源码 rock 的安装入口均通过共享输入和超时检查。最终 CI、四类
 精确归档与提供主机复验全部完成，范围见上方验证矩阵。记录保存在
 `build/hardware-smbios-isolation-20261016/`。
+
+### 2026-10-16：macOS 三类硬件读取隔离（开发中）
+
+CPU 频率、GPU 和功耗各自使用独立的原生读取进程，完整的 IOReport 订阅、
+驻留/能量历史及共享 Lua 派生状态留在读取器内。单个来源超时保留旧数据和
+原始时间，健康来源继续更新。新进程先预热，一次性导出会等有界的下一次
+真实观测；私有预热提示不进入 Snapshot/Agent。Mac 单文件和目录模块中的
+内嵌读取器也纳入 Mach-O 依赖与最低版本检查。
+
+提供的 M4 上，真实 IOReport Energy Model 调用边界被暂停后，同步基线需
+等约 5 s 放开调用才能退出。开发源码与两种安装包的冷启动、预热后阻塞
+复验均在放开调用前退出，按 `q` 后实测约 25–72 ms，阻塞读取器已回收。
+持续观测保持原功耗时间，CPU/GPU 继续更新；约 5.46 s 后重新预热并恢复，
+137.348 ms 的实际能量窗口与功耗计算一致。强制终止父进程时，读取器与
+其私有文件约 17 ms 内消失，测试仍保持 API 阻塞。
+
+新增原生传输门禁不要求机器提供功耗/GPU 数据：验证三个进程、单调时间、
+暂停后的超时回收、独立轮询、恢复、错误配置、文件清理和三次解释器关闭。
+该门禁、现有八项 Mac 原生夹具、两种包五 CLI/quick PTY 和七个 Mach-O
+检查已通过。本机 142 个 Lua 文件、原生 ASan/UBSan、glibc 2.17 原生来源
+通过。这里是源码与本地开发包证据，精确新提交的 CI/归档需另行核对。
+其他 Mac 采集器及 Windows 的同步驱动路径仍在后续范围内。
+
+旧 libc 回归暴露了另一项竞争：控制线程并发查询不存在的可选符号时，
+glibc 2.17 的加载器错误存储可能与 Lua 关闭动态库同时释放；其
+[实现保留了共享错误缓冲区回退](https://github.com/bminor/glibc/blob/glibc-2.17/dlfcn/dlerror.c)。
+现在线程启动前解析该符号并清空错误状态。同一保存的环境中，修复前再次
+出现 fasttop 重复释放，修复后 100 次关闭、每次十个读取器通过；完整旧
+libc 原生流程也通过。失败日志、对照构建和实际主机记录保存在
+`build/hardware-macos-io-isolation-20261016/`。
 
 ### 2026-10-16：CPU 计数器夹具的强化读取 ABI
 

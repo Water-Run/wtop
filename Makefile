@@ -3,7 +3,7 @@ SHELL := /bin/sh
 HOST_OS := $(shell uname -s 2>/dev/null || echo unknown)
 ifeq ($(HOST_OS),Darwin)
 
-.PHONY: all native run snapshot diagnose test-native-inventory test-native-disk test-native-network test-native-smc test-native-hid test-native-gpu test-native-ioreport test-native-cpu
+.PHONY: all native run snapshot diagnose test-native-inventory test-native-disk test-native-network test-native-smc test-native-hid test-native-gpu test-native-ioreport test-native-cpu test-native-worker
 .NOTPARALLEL: native bundle-dir bundle-file test-bundle-dir test-bundle-file test-bundles
 all: native
 native:
@@ -46,6 +46,8 @@ test-native-cpu: native
 	@cc -std=c17 -O2 -Wall -Wextra -Werror -Ibuild/macos/lua-5.5.1/src \
 		tests/native/macos_cpu.c build/macos/lua-5.5.1/src/liblua.a -o build/macos/cpu-fixture
 	@./build/macos/cpu-fixture
+test-native-worker: native
+	@python3 tests/test_macos_worker.py
 run: native
 	@./dist/macos/wtop
 snapshot: native

@@ -657,6 +657,8 @@ local function new_collector(id, description, options)
         reason = tostring(called and reason or data or "native_collection_failed"),
       })
     end
+    local sampling_pending = data._sampling_pending == true
+    data._sampling_pending = nil
     local quality, retry_after_ms = "fresh", nil
     if id == "cpu" then
       local derived, derived_quality = cpu_data(data, previous)
@@ -711,9 +713,9 @@ local function new_collector(id, description, options)
       SensorSession.attach(data.devices, previous_ok(previous), timestamp_ns,
         "native", quality == "fresh" or quality == "partial")
     end
-    return Common.result("ok", timestamp_ns, data, {
+    local result = Common.result("ok", timestamp_ns, data, {
       quality = quality,
-      retry_after_ms = retry_after_ms,
+      retry_after_ms = sampling_pending and 100 or retry_after_ms,
       -- This dispatcher published a quality with no reason at all, and it is
       -- the one collector where that is guaranteed rather than incidental: it
       -- runs on every macOS and Windows host, so *every* degraded reading
@@ -742,6 +744,20 @@ local function new_collector(id, description, options)
         or (id == "disk" and quality == "estimated" and "disk_identity_estimated" or nil),
       source = "native:" .. self.method,
     })
+    result.sampling_pending = sampling_pending or nil
+    return result
+  end
+  return collector
+end
+
+function M.new(id, options)
+  assert(sources[id], "unsupported portable collector")
+  local collector = new_collector(id, sources[id], options)
+  local native = collector.native
+  if type(native.hardware_worker_sources) == "table"
+      and native.hardware_worker_sources[id] then
+    local Hardware = require("wtop.collectors.hardware_worker")
+    return Hardware.new(collector, {}, native)
   end
   return collector
 end
@@ -750,7 +766,7 @@ function M.new_all(options)
   options = options or {}
   local result = {}
   for id, description in pairs(sources) do
-    result[id] = new_collector(id, description, options[id] or options.common)
+    result[id] = M.new(id, options[id] or options.common)
   end
   local memory_options = {}
   for key, value in pairs(options.memory_devices or options.common or {}) do memory_options[key] = value end
