@@ -106,6 +106,7 @@ local interface_reasons = {
   "cpu_clock_counter_reset",
   "cpu_clock_data_incomplete",
   "cpu_clock_identity_changed",
+  "storage_identity_changed",
   "cpu_clock_interval_invalid",
   "cpu_clock_not_supported",
   "cpu_clock_read_failed",

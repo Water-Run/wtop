@@ -61,6 +61,7 @@ local INTERVAL_FLOORS_MS = {
     cpu_info = 30000,
     cpu_limits = 1000,
     cpu_clocks = 1000,
+    disk_health = 5000,
     thermal_throttle = 5000,
     cpuidle = 5000,
     process = 1000,
@@ -108,6 +109,7 @@ local BACKGROUND_INTERVALS_MS = {
     memory = 5000,
     pressure = 2000,
     disk = 3000,
+    disk_health = 10000,
     network = 3000,
     connections = 10000,
     process = 5000,
@@ -136,7 +138,7 @@ local TAB_COLLECTORS = {
     },
     memory = { memory = true, numa = true, memory_devices = true, edac = true, spd = true,
         pressure = true, system_info = true },
-    storage = { disk = true, mounts = true, pressure = true },
+    storage = { disk = true, disk_health = true, mounts = true, pressure = true },
     network = { network = true, connections = true },
     gpu = { gpu = true, hwmon = true },
     workloads = { cpu = true, memory = true, pressure = true, cgroup = true },
@@ -192,7 +194,7 @@ local TAB_WIDGET_COLLECTORS = {
         dimm_table = { "memory_devices", "edac", "spd" },
     },
     storage = {
-        storage_summary = { "disk" }, disk_table = { "disk" }, smart_hint = {},
+        storage_summary = { "disk" }, disk_table = { "disk", "disk_health" }, smart_hint = {},
         mount_table = { "mounts" }, io_pressure = { "pressure" },
     },
     network = {
@@ -482,7 +484,7 @@ function Engine.new(options)
         "thermal_zones",
         "host_interfaces",
         "processor_firmware", "thermal_throttle", "cpuidle",
-        "edac", "spd", "pressure", "disk", "network", "connections",
+        "edac", "spd", "pressure", "disk", "disk_health", "network", "connections",
         "process", "gpu", "cpufreq", "hwmon", "powercap", "mounts", "cgroup",
         "system_info", "power_supply", "inventory",
     }

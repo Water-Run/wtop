@@ -16,6 +16,10 @@
 
 static unsigned mode, sample, count = 2, opens, closes, destroys, number_calls[258], id_calls[258];
 static int reverse_first_two;
+static unsigned health_mode, temperature_calls, nvme_calls, ata_calls, descriptor_calls[258];
+enum { H_NVME=1, H_TEMP_OVERSIZE=2, H_PROTO_BAD_TYPE=4, H_PROTO_BAD_OFFSET=8,
+    H_PROTO_SHORT=16, H_ATA_SHORT=32, H_REOPEN_DENIED=64, H_IDENTITY_CHANGED=128,
+    H_PROTO_BAD_VERSION=256, H_PROTO_BAD_LENGTH=512, H_ATA_DRIVER_ERROR=1024 };
 enum { LEGACY = 1, NO_SERIAL = 2, BAD_DESCRIPTOR = 4, REUSED_INSTANCE = 8,
     REUSED_NUMBER = 16, DUPLICATE_NUMBER = 32, NO_PARENT = 64, OVERFLOW_TIME = 128,
     SHORT_PERFORMANCE = 256, ONE_REPLACED = 512 };
@@ -61,11 +65,13 @@ static HANDLE WINAPI open_disk(LPCWSTR path, DWORD access, DWORD shares,
     LPSECURITY_ATTRIBUTES security, DWORD disposition, DWORD flags, HANDLE template) {
     unsigned i;
     (void)security; (void)template;
-    assert(access == 0 && disposition == OPEN_EXISTING && flags == 0);
+    assert((access == 0 || access == (GENERIC_READ|GENERIC_WRITE))
+        && disposition == OPEN_EXISTING && flags == 0);
     assert(shares == (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE));
     assert(wcsncmp(path, L"fixture:", 8) == 0);
     i = (unsigned)wcstoul(path + 8, NULL, 10);
     assert(i < count);
+    if (access && (health_mode&H_REOPEN_DENIED)) { SetLastError(ERROR_ACCESS_DENIED); return INVALID_HANDLE_VALUE; }
     ++opens;
     return (HANDLE)(uintptr_t)(i + 100);
 }
@@ -120,6 +126,28 @@ static BOOL WINAPI ioctl(HANDLE handle, DWORD code, LPVOID input, DWORD input_si
             : (mode & ONE_REPLACED) && i == 1 ? "PRIVATE-REPLACED-SECOND" : "PRIVATE-OTHER";
         DWORD offset = sizeof(*d);
         if ((int)query->PropertyId == 7) return FALSE; /* XP fallback */
+        if ((int)query->PropertyId == 52) {
+            ++temperature_calls;assert(capacity==536);
+            memset(output,0,capacity);
+            DWORD *header=output;SHORT *limits=(SHORT *)((BYTE *)output+8);
+            header[0]=40;header[1]=40;limits[0]=140;limits[1]=125;
+            ((WORD *)output)[6]=1;
+            SHORT *sensor=(SHORT *)((BYTE *)output+24);
+            sensor[0]=0;sensor[1]=40;sensor[2]=125;sensor[3]=-32768;
+            *returned=(health_mode&H_TEMP_OVERSIZE)?capacity+1:40;return TRUE;
+        }
+        if ((int)query->PropertyId == 50) {
+            ++nvme_calls;assert(capacity==560&&input==output);
+            DWORD *p=input;
+            assert(p[2]==3&&p[3]==2&&p[4]==2&&p[6]==40&&p[7]==512);
+            memset(output,0,capacity);p[0]=48;p[1]=48;p[2]=3;p[3]=2;p[6]=40;p[7]=512;
+            ((BYTE *)output)[49]=57;((BYTE *)output)[50]=1;
+            if(health_mode&H_PROTO_BAD_TYPE)p[2]=2;
+            if(health_mode&H_PROTO_BAD_OFFSET)p[6]=0xffffffff;
+            if(health_mode&H_PROTO_BAD_VERSION)p[0]=47;
+            if(health_mode&H_PROTO_BAD_LENGTH)p[7]=0xffffffff;
+            *returned=(health_mode&H_PROTO_SHORT)?47:560;return TRUE;
+        }
         assert(query->PropertyId == StorageDeviceProperty);
         memset(output, 0, capacity);
         d->Version = sizeof(*d);
@@ -129,7 +157,10 @@ static BOOL WINAPI ioctl(HANDLE handle, DWORD code, LPVOID input, DWORD input_si
         if (!(mode & NO_SERIAL)) {
             d->SerialNumberOffset = offset; strcpy(base + offset, device_serial); offset += (DWORD)strlen(device_serial) + 1;
         }
-        d->Size = offset; d->BusType = i == 0 ? (STORAGE_BUS_TYPE)11 : BusTypeUsb;
+        if ((health_mode&H_IDENTITY_CHANGED)&&i==0&&descriptor_calls[i]++) {
+            d->SerialNumberOffset=0;
+        }
+        d->Size = offset; d->BusType = i == 0 ? (STORAGE_BUS_TYPE)((health_mode&H_NVME)?17:11) : BusTypeUsb;
         d->RemovableMedia = i != 0;
         *returned = (mode & BAD_DESCRIPTOR) ? capacity + 1 : offset;
         return TRUE;
@@ -151,6 +182,21 @@ static BOOL WINAPI ioctl(HANDLE handle, DWORD code, LPVOID input, DWORD input_si
         *returned = (mode & SHORT_PERFORMANCE)
             ? offsetof(DISK_PERFORMANCE, QueueDepth) + sizeof(p->QueueDepth) : sizeof(*p);
         return TRUE;
+    }
+    if(code==SMART_GET_VERSION) {
+        GETVERSIONINPARAMS *v=output;assert(capacity==sizeof(*v));
+        memset(v,0,sizeof(*v));v->fCapabilities=4;*returned=sizeof(*v);return TRUE;
+    }
+    if(code==SMART_RCV_DRIVE_DATA) {
+        SENDCMDINPARAMS *p=input;SENDCMDOUTPARAMS *out=output;
+        assert(input_size==offsetof(SENDCMDINPARAMS,bBuffer)&&capacity==528);
+        assert(p->irDriveRegs.bFeaturesReg==0xd0&&p->irDriveRegs.bCommandReg==0xb0);
+        assert(p->bDriveNumber==device_number(i)&&i==0);
+        ++ata_calls;memset(output,0,capacity);out->cBufferSize=512;
+        out->bBuffer[0]=1;out->bBuffer[2]=194;out->bBuffer[5]=40;out->bBuffer[6]=40;out->bBuffer[7]=40;
+        unsigned sum=0;for(unsigned n=0;n<511;++n)sum+=out->bBuffer[n];out->bBuffer[511]=(BYTE)(0-sum);
+        if(health_mode&H_ATA_DRIVER_ERROR)out->DriverStatus.bDriverError=1;
+        *returned=(health_mode&H_ATA_SHORT)?527:528;return TRUE;
     }
     assert(!"unexpected disk control code"); return FALSE;
 }
@@ -188,14 +234,54 @@ static void get_disk(lua_State *L, int index) {
 static size_t device_count(lua_State *L) {
     size_t n; lua_getfield(L, -1, "devices"); n = lua_rawlen(L, -1); lua_pop(L, 1); return n;
 }
+static void collect_health(lua_State *L,unsigned scenario,int deep,lua_Integer selected) {
+    lua_settop(L,0);mode=0;health_mode=scenario;count=2;
+    opens=closes=destroys=temperature_calls=nvme_calls=ata_calls=0;
+    memset(number_calls,0,sizeof(number_calls));memset(id_calls,0,sizeof(id_calls));
+    memset(descriptor_calls,0,sizeof(descriptor_calls));
+    lua_pushcfunction(L,wtop_collect_disk_health);lua_pushboolean(L,deep);lua_pushinteger(L,selected);
+    assert(lua_pcall(L,2,1,0)==LUA_OK);assert(opens==closes&&destroys==1);
+}
+static void raw_health(lua_State *L) { get_disk(L,1);lua_getfield(L,-1,"raw_health");assert(lua_istable(L,-1)); }
+static lua_Integer number_value(lua_State *L,const char *name) {
+    lua_getfield(L,-1,name);assert(lua_isinteger(L,-1));lua_Integer n=lua_tointeger(L,-1);lua_pop(L,1);return n;
+}
+static void health_tests(lua_State *L) {
+    collect_health(L,0,0,-1);assert(device_count(L)==2&&temperature_calls==0&&nvme_calls==0&&ata_calls==0);
+    raw_health(L);lua_getfield(L,-1,"skipped");assert(lua_toboolean(L,-1));
+    collect_health(L,H_NVME,0,-1);assert(temperature_calls==1&&nvme_calls==1&&ata_calls==0);
+    raw_health(L);lua_getfield(L,-1,"temperature_data");size_t bytes=0;
+    assert(lua_tolstring(L,-1,&bytes)&&bytes==40);lua_pop(L,1);
+    lua_getfield(L,-1,"nvme_data");assert(lua_tolstring(L,-1,&bytes)&&bytes==512);
+    const unsigned bad_protocol[]={H_PROTO_BAD_TYPE,H_PROTO_BAD_OFFSET,H_PROTO_SHORT,H_PROTO_BAD_VERSION,H_PROTO_BAD_LENGTH};
+    for(unsigned i=0;i<sizeof(bad_protocol)/sizeof(bad_protocol[0]);++i) {
+        collect_health(L,H_NVME|bad_protocol[i],0,-1);raw_health(L);
+        absent(L,"nvme_data");assert(number_value(L,"nvme_error")==ERROR_INVALID_DATA);
+    }
+    collect_health(L,H_NVME|H_TEMP_OVERSIZE,0,-1);raw_health(L);
+    absent(L,"temperature_data");assert(number_value(L,"temperature_error")==ERROR_INVALID_DATA);
+    collect_health(L,0,1,0);assert(device_count(L)==1&&ata_calls==1&&temperature_calls==1);
+    raw_health(L);lua_getfield(L,-1,"ata_data");assert(lua_tolstring(L,-1,&bytes)&&bytes==512);
+    reverse_first_two=1;collect_health(L,0,1,0);assert(device_count(L)==1&&ata_calls==1);reverse_first_two=0;
+    collect_health(L,H_ATA_SHORT,1,0);raw_health(L);absent(L,"ata_data");assert(number_value(L,"ata_error")==ERROR_INVALID_DATA);
+    collect_health(L,H_ATA_DRIVER_ERROR,1,0);raw_health(L);absent(L,"ata_data");assert(number_value(L,"ata_error")==ERROR_INVALID_DATA);
+    collect_health(L,H_REOPEN_DENIED,1,0);raw_health(L);absent(L,"ata_data");assert(number_value(L,"ata_error")==ERROR_ACCESS_DENIED);
+    collect_health(L,H_NVME|H_IDENTITY_CHANGED,0,-1);assert(device_count(L)==1&&temperature_calls==1);
+    collect_health(L,H_IDENTITY_CHANGED,1,0);assert(device_count(L)==0&&ata_calls==0);
+    collect_health(L,0,1,257);assert(device_count(L)==1&&ata_calls==0);
+    health_mode=0;
+    puts("Windows storage health: read-only protocol, defaults, selected sparse identity, malformed replies, permission and hotplug passed");
+}
 static void save_id(lua_State *L, char *output) {
     lua_getfield(L, -1, "stable_id"); assert(lua_isstring(L, -1));
     assert(strlen(lua_tostring(L, -1)) < 96); strcpy(output, lua_tostring(L, -1)); lua_pop(L, 1);
 }
-typedef struct { lua_Alloc allocator; void *userdata; size_t maximum; } allocation_policy;
+typedef struct { lua_Alloc allocator; void *userdata; size_t maximum, upper, rejected; } allocation_policy;
 static void *limited_allocate(void *context, void *pointer, size_t old_size, size_t new_size) {
     allocation_policy *policy = context;
-    if (new_size >= policy->maximum) return NULL;
+    if (new_size >= policy->maximum && (!policy->upper || new_size < policy->upper)) {
+        policy->rejected = new_size; return NULL;
+    }
     return policy->allocator(policy->userdata, pointer, old_size, new_size);
 }
 int main(void) {
@@ -241,10 +327,24 @@ int main(void) {
         lua_pushcfunction(L, wtop_collect_disk);
         policy.allocator = lua_getallocf(L, &policy.userdata);
         policy.maximum = sizeof(disk_row) * 2;
+        policy.upper = policy.rejected = 0;
         lua_setallocf(L, limited_allocate, &policy);
         int status = lua_pcall(L, 0, 1, 0);
         lua_setallocf(L, policy.allocator, policy.userdata);
         assert(status == LUA_ERRMEM && opens == 0 && closes == 0 && destroys == 1);
+    }
+    health_tests(L);
+    {
+        allocation_policy policy;health_mode=H_NVME;mode=0;count=2;
+        opens=closes=destroys=0;lua_settop(L,0);
+        lua_pushcfunction(L,wtop_collect_disk_health);lua_pushboolean(L,0);lua_pushinteger(L,-1);
+        policy.allocator=lua_getallocf(L,&policy.userdata);
+        policy.maximum=sizeof(wtop_storage_reading)*2;
+        policy.upper=sizeof(disk_row)*2;policy.rejected=0;
+        lua_setallocf(L,limited_allocate,&policy);int status=lua_pcall(L,2,1,0);
+        lua_setallocf(L,policy.allocator,policy.userdata);
+        assert(status==LUA_ERRMEM&&opens==0&&closes==0&&destroys==1
+            &&policy.rejected>=sizeof(wtop_storage_reading)*2&&policy.rejected<sizeof(disk_row)*2);
     }
     lua_close(L);
     puts("Windows disks: sparse numbers, current identity, hotplug, bounds and closed handles passed");

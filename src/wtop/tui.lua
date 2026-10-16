@@ -4563,6 +4563,13 @@ end
 
 local function make_inspectors(engine)
     local host = native.uname()
+    if host and host.sysname == "Windows" and type(native.collect_disk_health) == "function" then
+        local registry = Inspectors.Registry.new()
+        local inspector = require("wtop.inspectors.windows_storage").new({ native = native })
+        assert(registry:register(inspector))
+        engine._storage_inspector = inspector
+        return registry
+    end
     if not host or host.sysname ~= "Linux" then
         return Inspectors.Registry.new()
     end
@@ -4827,6 +4834,7 @@ local function run_loop(options, backend, renderer, engine, translator)
     if layout_columns then process_controller:set_columns(layout_columns) end
     local decoder = UI.Input.Decoder.new()
     local inspector_registry = make_inspectors(engine)
+    local storage_overlay_builder
     local journal_reader = Journal.new({ runner = engine.context.runner, clock = engine.clock,
         journalctl = system.find_executable("journalctl") or "/usr/bin/journalctl" })
     local collector_capabilities = engine:probe()
@@ -6032,6 +6040,15 @@ local function run_loop(options, backend, renderer, engine, translator)
             return
         end
         local label = translated(translator, title.key, title.fallback)
+        if inspector_id == "storage.smart" and engine._storage_inspector then
+            storage_overlay_builder = function()
+                local current = inspector_registry:inspect(inspector_id,
+                    inspector_context(engine), entity, "summary")
+                return inspector_lines(label .. " · " .. tostring(entity.name or entity.id), current, translator)
+            end
+            show_overlay(storage_overlay_builder, { disk = true, disk_health = true })
+            return
+        end
         show_overlay(inspector_lines(label .. " · "
             .. tostring(entity.path or entity.name or entity.id or "?"), result, translator))
     end
@@ -6399,7 +6416,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             -- The SMART, bandwidth, and sshd inspectors are Linux-only.
             local kept = {}
             for _, hint in ipairs(status.hints or {}) do
-                if hint.command ~= "smart" and hint.command ~= "bandwidth"
+                if (hint.command ~= "smart" or engine._storage_inspector) and hint.command ~= "bandwidth"
                     and hint.command ~= "sshd" and hint.command ~= "systemd" and hint.command ~= "sessions" then
                     kept[#kept + 1] = hint
                 end
@@ -8640,7 +8657,7 @@ local function run_loop(options, backend, renderer, engine, translator)
         elseif key == "n" and workspace:content_page() == "processes" then
             jump_to_network(selected_process())
             dirty = true
-        elseif key == "s" and linux_host then
+        elseif key == "s" and (linux_host or engine._storage_inspector) then
             inspect_smart()
             dirty = true
         elseif key == "b" and linux_host then
@@ -8680,6 +8697,10 @@ local function run_loop(options, backend, renderer, engine, translator)
     end
 
     while running do
+        if storage_overlay_builder and overlay_builder ~= storage_overlay_builder then
+            engine._storage_inspector:close()
+            storage_overlay_builder = nil
+        end
         local timeout_ms = math.min(engine:next_delay_ms(100), 100)
         local polled, poll_error = backend.poll(timeout_ms)
         if not polled then
@@ -8853,6 +8874,7 @@ function M.run(options)
         local renderer = UI.Renderer.new(backend)
         return run_loop(options, backend, renderer, engine, translator)
     end, debug.traceback)
+    if engine._storage_inspector then engine._storage_inspector:close() end
     engine:stop()
     if started then
         backend.stop()

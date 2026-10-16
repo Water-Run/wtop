@@ -25,7 +25,9 @@ return function(id, configuration)
     if platform == "macos" or platform == "windows" then
         options.native = Native
         options._hardware_direct = true
-        collector = require("wtop.collectors.portable").new(id, options)
+        if id == "disk_health" and platform == "windows" then
+            collector = require("wtop.collectors.windows_storage").new(options)
+        else collector = require("wtop.collectors.portable").new(id, options) end
     else
         collector = assert(constructors[id], "hardware_collector")(options)
     end

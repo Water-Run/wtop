@@ -6,6 +6,7 @@ local Hardware = require("wtop.model.hardware")
 local Quality = require("wtop.model.quality")
 local Power = require("wtop.model.power")
 local Thermal = require("wtop.model.thermal")
+local StorageHealth = require("wtop.model.storage_health")
 local NVMe = require("wtop.linux.nvme_diagnostics")
 
 local M = {}
@@ -406,7 +407,7 @@ local function export_stacked_block(stack)
     return result
 end
 
-local function export_disks(disks)
+local function export_disks(disks, snapshot)
     local result = json.object({ devices = json.array({}),
         total = disks and disks.total or nil,
         truncated = disks and disks.truncated == true or false,
@@ -438,6 +439,16 @@ local function export_disks(disks)
             })
         end
         result.devices[index].nvme = export_nvme(device.nvme)
+        local thermal = snapshot and StorageHealth.temperature(snapshot, device)
+        if thermal then
+            result.devices[index].temperature = json.object({
+                temperature_celsius = thermal.channel.input,
+                critical_celsius = thermal.critical_celsius,
+                headroom_celsius = thermal.headroom_celsius,
+                source = thermal.channel.source, quality = thermal.quality,
+                observed_at_ns = thermal.observed_at_ns,
+            })
+        end
         result.devices[index].stack = export_stacked_block(device.stack)
         result.devices[index].slave_refs = json.array({})
         for position, reference in ipairs(device.slave_refs or {}) do
@@ -1461,6 +1472,53 @@ local function export_sensors(snapshot)
     return result
 end
 
+local function export_disk_health(snapshot)
+    local result = json.object({ devices = json.array({}),
+        truncated = snapshot.disk_health and snapshot.disk_health.truncated == true or false })
+    for _, disk in ipairs(snapshot.disks and snapshot.disks.devices or {}) do
+        local health = StorageHealth.match(snapshot, disk)
+        if health then
+            local item = copy_fields(health, { "id", "name", "bus_type", "quality", "deep", "skipped", "source" })
+            local state = snapshot.quality and snapshot.quality.disk_health
+            item.observed_at_ns = state and state.value_timestamp_ns
+            if not Quality.current_source(snapshot.quality, "disk_health")
+                or item.observed_at_ns and snapshot.timestamp_ns
+                and (snapshot.timestamp_ns < item.observed_at_ns
+                    or snapshot.timestamp_ns - item.observed_at_ns > Thermal.STALE_AFTER_NS) then
+                item.quality = "stale"
+            end
+            item.query_errors = copy_object(health.query_errors)
+            item.temperature = json.object({ channels = json.array({}),
+                critical_celsius = health.temperature and health.temperature.critical_celsius,
+                warning_celsius = health.temperature and health.temperature.warning_celsius,
+                limit_scope = health.temperature and "device_composite" or nil })
+            for index, channel in ipairs(health.temperature and health.temperature.channels or {}) do
+                item.temperature.channels[index] = copy_fields(channel, {
+                    "id", "index", "label", "input", "unit", "quality", "source",
+                    "over_threshold_celsius", "under_threshold_celsius",
+                })
+                item.temperature.channels[index].thresholds = copy_fields(channel.thresholds, { "crit", "max" })
+            end
+            if health.nvme then item.nvme = copy_fields(health.nvme, {
+                "critical_warning", "available_spare_percent", "available_spare_threshold_percent",
+                "percentage_used", "temperature_celsius", "data_units_read", "data_units_written",
+                "data_unit_bytes", "data_units_rounded_up", "percentage_used_lower_bound",
+                "host_read_commands", "host_write_commands", "controller_busy_minutes", "power_cycles",
+                "power_on_hours", "unsafe_shutdowns", "media_errors", "error_log_entries", "source",
+            }) end
+            if health.ata then
+                item.ata = json.object({ version = health.ata.version, source = health.ata.source,
+                    attributes = json.array({}) })
+                for index, attribute in ipairs(health.ata.attributes or {}) do
+                    item.ata.attributes[index] = copy_fields(attribute, { "id", "flags", "current", "worst", "raw_hex" })
+                end
+            end
+            result.devices[#result.devices + 1] = item
+        end
+    end
+    return result
+end
+
 local function export_mounts(mounts)
     local result = json.object({ mounts = json.array({}) })
     for index, mount in ipairs(mounts and mounts.mounts or {}) do
@@ -1913,7 +1971,8 @@ function M.snapshot(snapshot, options)
         cpu_clocks = export_cpu_clocks(snapshot.cpu_clocks,snapshot.quality and snapshot.quality.cpu_clocks),
         memory = export_memory(snapshot.memory),
         pressure = export_pressure(snapshot.pressure),
-        disks = export_disks(snapshot.disks),
+        disks = export_disks(snapshot.disks, snapshot),
+        disk_health = export_disk_health(snapshot),
         network = export_network(snapshot.network),
         connections = export_connections(snapshot.connections, options.connection_limit,
             options.include_remote_addresses == true),
@@ -2156,6 +2215,7 @@ function M.agent(snapshot, options)
             "read_iops", "write_iops", "busy_percent", "busy_quality", "average_read_latency_ms",
             "average_write_latency_ms", "in_flight", "quality",
         })
+        if device.temperature then top_disks[index].temperature = copy_object(device.temperature) end
     end
     local busiest_current_disk
     for _, device in ipairs(disk_devices) do

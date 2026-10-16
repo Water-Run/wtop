@@ -52,6 +52,17 @@ Linux GPU 的 `top.gpus[].observations` 按来源记录观测时间、接收时�
 
 温度条目的 `critical_celsius` 来自同一通道的 `crit`，`headroom_celsius` 为临界值减去当前温度；完整 Snapshot、硬件报告与 `top.sensors` 使用同一计算。`max` 和 `emergency` 分别保留，不作为缺失 `crit` 的替代。`metrics.sensors.minimum_headroom_celsius` 与 `closest_to_critical` 保留全部有效温度通道中的最小余量及对应设备，独立于最热列表的数量限制。余量不表示限频位；过期、故障或不可用的读数没有当前余量，也不产生新的温度阈值信号。
 
+Windows 的 Snapshot `disk_health` 保留磁盘自己的温度通道、标准 NVMe 健康字段和
+按需读取的 ATA 原始属性。已核对身份的磁盘在 `disks.devices[].temperature` 和
+Agent `top.disks[].temperature` 携带当前温度、临界值、余量、来源、质量和观测时间。
+I/O 与健康有独立的数据质量；不要用 I/O 停滞推断盘温也已停止，或把缓存值当作新样本。
+私有身份比较字段不导出，身份不足或不匹配时不建立关联。
+
+NVMe 的 128 位计数使用十进制字符串，避免浮点或有符号整数截断。
+`data_unit_bytes=512000` 和 `data_units_rounded_up` 说明累计读写的单位与取整；
+`percentage_used_lower_bound` 在 255 时表示下界，不把使用率超过 100 当作接口错误。
+ATA 原始属性没有通用温度单位，也不据此合成健康通过/失败结论。
+
 每条 `signals` 条目使用稳定的 `resource`、`code`、`severity` 字段；
 有数值时再提供 `value` 和 `unit`，`message` 仅供展示。当前阈值为
 保守提示，例如 CPU 75/90%、内存 85/95%、设备忙 80/95%、PSI

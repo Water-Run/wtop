@@ -14,6 +14,7 @@
 #include <lua.h>
 #include <lauxlib.h>
 #include "wtop_windows.h"
+#include "wtop_windows_storage.h"
 
 #define MAX_DISKS 256
 #define MAX_INTERFACES 1024
@@ -47,6 +48,7 @@ typedef struct {
     int has_size, has_performance, partial, ambiguous;
     uint64_t size;
     DISK_PERFORMANCE performance;
+    wtop_storage_reading *health;
 } disk_row;
 typedef struct { disk_key key; uint64_t generation; DWORD number; int present; } disk_cache;
 static disk_cache cache[MAX_DISKS];
@@ -179,7 +181,7 @@ static void stable_id(lua_State *L, const disk_row *row, int slot) {
 }
 
 static int read_interface(HDEVINFO set, SP_DEVICE_INTERFACE_DATA *interface,
-    disk_row *row) {
+    disk_row *row, int health_mode, int deep, DWORD selected) {
     union { SP_DEVICE_INTERFACE_DETAIL_DATA_W detail; BYTE bytes[MAX_DETAIL_BYTES]; } details;
     SP_DEVINFO_DATA device;
     STORAGE_DEVICE_NUMBER number, confirmed;
@@ -207,21 +209,47 @@ static int read_interface(HDEVINFO set, SP_DEVICE_INTERFACE_DATA *interface,
         CloseHandle(drive); return 0;
     }
     row->number = number.DeviceNumber;
+    if (health_mode && deep && row->number != selected) { CloseHandle(drive); return -1; }
     row->devinst = device.DevInst;
     if (!wtop_pnp_identity(row->devinst, row->key.instance, 256)) row->partial = 1;
     read_identity(drive, row);
+    if (health_mode && deep && row->bus != 17) {
+        disk_row identity_before = *row;
+        CloseHandle(drive);
+        drive = CreateFileW(details.detail.DevicePath, GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+        if (drive == INVALID_HANDLE_VALUE) {
+            memset(row->health, 0, sizeof(*row->health));
+            row->health->deep = 1; row->health->ata_error = GetLastError();
+            row->health->temperature_error = row->health->ata_error;
+            goto identity_only;
+        }
+        memset(&row->key, 0, sizeof(row->key));
+        wcscpy(row->key.instance, identity_before.key.instance);
+        read_identity(drive, row);
+        if (!same_key(&identity_before.key, &row->key)) { CloseHandle(drive); return 0; }
+    }
     memset(&geometry, 0, sizeof(geometry));
     row->has_size = DeviceIoControl(drive, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, NULL, 0,
         &geometry, sizeof(geometry), &returned, NULL)
         && returned >= offsetof(DISK_GEOMETRY_EX, Data) && returned <= sizeof(geometry)
         && geometry.DiskSize.QuadPart >= 0;
     if (row->has_size) row->size = (uint64_t)geometry.DiskSize.QuadPart;
-    row->has_performance = DeviceIoControl(drive, IOCTL_DISK_PERFORMANCE, NULL, 0,
+    row->has_performance = !health_mode && DeviceIoControl(drive, IOCTL_DISK_PERFORMANCE, NULL, 0,
         &row->performance, sizeof(row->performance), &returned, NULL)
         && returned >= offsetof(DISK_PERFORMANCE, QueueDepth) + sizeof(row->performance.QueueDepth)
         && returned <= sizeof(row->performance)
         && row->performance.BytesRead.QuadPart >= 0 && row->performance.BytesWritten.QuadPart >= 0;
-    if (!row->has_performance) row->partial = 1;
+    if (!health_mode && !row->has_performance) row->partial = 1;
+    if (health_mode) wtop_storage_read(drive, row->health, row->bus, row->number, deep);
+    /* The handle's descriptor must still name the same device after queries. */
+    if (health_mode) {
+        disk_row after = *row;
+        memset(&after.key, 0, sizeof(after.key));
+        wcscpy(after.key.instance, row->key.instance);
+        read_identity(drive, &after);
+        if (!same_key(&row->key, &after.key)) { CloseHandle(drive); return 0; }
+    }
     memset(&confirmed, 0, sizeof(confirmed));
     if (!DeviceIoControl(drive, IOCTL_STORAGE_GET_DEVICE_NUMBER, NULL, 0, &confirmed,
             sizeof(confirmed), &returned, NULL) || returned != sizeof(confirmed)
@@ -229,6 +257,7 @@ static int read_interface(HDEVINFO set, SP_DEVICE_INTERFACE_DATA *interface,
         CloseHandle(drive); return 0;
     }
     CloseHandle(drive);
+identity_only:
     row->parent_status = row->key.instance[0]
         ? wtop_pnp_parent(row->devinst, row->key.instance, row->parent, row->parent_bus) : -1;
     if (row->key.instance[0] && (!wtop_pnp_identity(row->devinst, current, 256)
@@ -242,7 +271,7 @@ static void time_field(lua_State *L, const char *name, LONGLONG ticks) {
         integer_field(L, name, (lua_Integer)ticks * 100);
 }
 
-int wtop_collect_disk(lua_State *L) {
+static int collect_disks(lua_State *L, int health_mode, int deep, DWORD selected) {
     interface_guard *guard = (interface_guard *)lua_newuserdatauv(L, sizeof(*guard), 0);
     int guard_index = lua_gettop(L);
     guard->set = INVALID_HANDLE_VALUE;
@@ -273,6 +302,8 @@ int wtop_collect_disk(lua_State *L) {
     /* Allocate for the visible devices rather than the global limit. Lua's
      * close guard also releases SetupAPI if this allocation runs out of RAM. */
     disk_row *rows = (disk_row *)lua_newuserdatauv(L, sizeof(disk_row) * (size_t)capacity, 0);
+    wtop_storage_reading *health_rows = health_mode ? lua_newuserdatauv(L,
+        sizeof(wtop_storage_reading) * (size_t)capacity, 0) : NULL;
     if (set != INVALID_HANDLE_VALUE) {
         for (DWORD index = 0; index < MAX_INTERFACES; ++index) {
             SP_DEVICE_INTERFACE_DATA interface;
@@ -286,7 +317,10 @@ int wtop_collect_disk(lua_State *L) {
             if (index + 1 == MAX_INTERFACES) truncated = 1;
             if (count >= capacity) { truncated = 1; continue; }
             memset(&row, 0, sizeof(row));
-            if (!read_interface(set, &interface, &row)) { partial = 1; continue; }
+            if (health_mode) row.health = &health_rows[count];
+            int read = read_interface(set, &interface, &row, health_mode, deep, selected);
+            if (read < 0) continue;
+            if (!read) { partial = 1; continue; }
             for (int i = 0; i < count; ++i) {
                 if (rows[i].number == row.number) {
                     rows[i].ambiguous = row.ambiguous = 1;
@@ -341,6 +375,18 @@ int wtop_collect_disk(lua_State *L) {
         string_field(L, "source", "SetupAPI:disk");
         boolean_field(L, "aggregate", 1);
         stable_id(L, row, slots[i]);
+        /* Private equality proof across I/O and health readers. Never exported. */
+        if (row->descriptor_valid && (row->key.has_guid || row->key.serial[0])) {
+            disk_key key;
+            memset(&key, 0, sizeof(key));
+            wcscpy(key.instance, row->key.instance);
+            strcpy(key.vendor, row->key.vendor); strcpy(key.model, row->key.model);
+            strcpy(key.firmware, row->key.firmware); strcpy(key.serial, row->key.serial);
+            key.has_guid = row->key.has_guid;
+            if (key.has_guid) key.guid = row->key.guid;
+            lua_pushlstring(L, (const char *)&key, sizeof(key));
+            lua_setfield(L, -2, "_health_key");
+        }
         if (row->partial) boolean_field(L, "partial", 1);
         if (row->key.instance[0]) utf8_field(L, "_pnp_instance_id", row->key.instance);
         if (row->parent_status > 0) {
@@ -357,6 +403,10 @@ int wtop_collect_disk(lua_State *L) {
         if (row->rotational >= 0) integer_field(L, "rotational", row->rotational);
         if (row->descriptor_valid) boolean_field(L, "removable", row->removable);
         lua_setfield(L, -2, "identity");
+        if (health_mode) {
+            integer_field(L, "bus_type", row->bus);
+            wtop_storage_push(L, row->health); lua_setfield(L, -2, "raw_health");
+        }
         if (row->has_performance) {
             const DISK_PERFORMANCE *p = &row->performance;
             lua_createtable(L, 0, 7);
@@ -379,4 +429,14 @@ int wtop_collect_disk(lua_State *L) {
     boolean_field(L, "truncated", truncated);
     if (partial || truncated) string_field(L, "quality", "partial");
     return 1;
+}
+
+int wtop_collect_disk(lua_State *L) { return collect_disks(L, 0, 0, MAXDWORD); }
+
+int wtop_collect_disk_health(lua_State *L) {
+    int deep = lua_toboolean(L, 1);
+    lua_Integer selected = luaL_optinteger(L, 2, -1);
+    luaL_argcheck(L, selected >= -1 && selected <= MAXDWORD, 2, "invalid disk number");
+    luaL_argcheck(L, !deep || selected >= 0, 2, "deep query requires a selected disk");
+    return collect_disks(L, 1, deep, (DWORD)selected);
 }

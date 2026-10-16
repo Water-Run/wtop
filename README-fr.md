@@ -59,6 +59,7 @@ vraie machine XP.
   Réseau, GPU, Charges de travail, Système et Analyses.
 - Une liste de processus avec recherche, tri, navigation dans l'arbre, accès aux
   charges de travail et menu de signaux avec confirmation.
+- Les versions Windows en développement affichent la température NVMe et les limites indiquées par le disque. Appuyez sur `s` pour consulter son état en lecture seule ; les données SMART ATA sont lues après sélection du disque.
 - Des inspections approfondies facultatives (SMART/NVMe, bande passante
   mémoire, unités systemd, sshd) quand les outils sont présents sur la machine.
 - Une mesure qui a échoué ou qui est incomplète est signalée comme telle
@@ -168,6 +169,8 @@ détails, comme les connexions des processus d'autres utilisateurs ou les
 données SMART, demandent les droits root : lancez `sudo wtop` ou
 `wtop --sudo`. Une session root ne lit ni n'écrit votre configuration ou
 votre disposition personnelles.
+
+Certaines requêtes de disque Windows nécessitent les droits administrateur.
 
 ## Développement
 

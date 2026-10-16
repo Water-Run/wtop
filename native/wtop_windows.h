@@ -13,6 +13,7 @@ void wtop_push_interface_guid(lua_State *L, const void *guid);
 void wtop_fill_interface_guids(lua_State *L);
 int wtop_collect_connections(lua_State *L);
 int wtop_collect_disk(lua_State *L);
+int wtop_collect_disk_health(lua_State *L);
 int wtop_collect_cpu_info(lua_State *L);
 int wtop_collect_cpuid(lua_State *L);
 int wtop_collect_cpu(lua_State *L);

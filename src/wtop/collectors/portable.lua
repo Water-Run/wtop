@@ -778,6 +778,13 @@ function M.new_all(options)
   for id, description in pairs(sources) do
     result[id] = M.new(id, options[id] or options.common)
   end
+  local storage_options = options.disk_health or options.common or {}
+  local storage_native = storage_options.native or native_default
+  if type(storage_native.collect_disk_health) == "function"
+      and type(storage_native.hardware_worker_sources) == "table"
+      and storage_native.hardware_worker_sources.disk_health then
+    result.disk_health = require("wtop.collectors.windows_storage").new(storage_options)
+  end
   local memory_options = {}
   for key, value in pairs(options.memory_devices or options.common or {}) do memory_options[key] = value end
   -- Portable.new_all can be called directly by fixtures on a Linux host.

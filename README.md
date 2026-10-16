@@ -54,6 +54,7 @@ build target but hasn't been tested on a real XP machine yet.
   Workloads, System and Insights.
 - A process list with search, sorting, tree navigation, links to workloads,
   and a confirmed signal menu.
+- Windows development builds show NVMe temperature and reported limits in Storage. Press `s` for read-only drive health; ATA SMART is read after selecting a drive.
 - Optional deep checks (SMART/NVMe, memory bandwidth, systemd units, sshd) when the host
   tools are available.
 - Readings that failed or are incomplete are labeled as such (for example
@@ -161,6 +162,8 @@ Everyday monitoring works as a normal user. Some details, like other
 users' open sockets or SMART data, need root: run `sudo wtop` or
 `wtop --sudo`. A root session doesn't read or write your personal config
 or layout.
+
+Some Windows drive queries require administrator rights.
 
 ## Development
 

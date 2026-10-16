@@ -2231,6 +2231,7 @@ static const luaL_Reg functions[] = {
     {"collect_process", l_collect_process},
     {"collect_process_io", l_collect_process_io},
     {"collect_disk", wtop_collect_disk},
+    {"collect_disk_health", wtop_collect_disk_health},
     {"collect_mounts", l_collect_mounts},
     {"collect_network", l_collect_network},
     {"collect_connections", wtop_collect_connections},

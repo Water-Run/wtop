@@ -229,6 +229,32 @@ function M.render(snapshot)
                 stack.name or stack.level or identity.model,
                 medium, device.quality }
         end, disks)
+    local thermal_disks = {}
+    for _, device in ipairs(list(disks.devices)) do
+        if type(object(device).temperature) == "table" then thermal_disks[#thermal_disks + 1] = device end
+    end
+    if #thermal_disks > 0 then
+        table_section(lines, "Storage temperatures", { "Device", "Temperature", "Critical", "To critical", "Source", "Quality" },
+            thermal_disks, function(device)
+                local t = device.temperature
+                return { device.name, quantity(t.temperature_celsius,1," °C",2),
+                    quantity(t.critical_celsius,1," °C",2), quantity(t.headroom_celsius,1," °C",2),
+                    t.source, t.quality }
+            end)
+    end
+    local health = object(snapshot.disk_health)
+    local nvme_health = {}
+    for _, device in ipairs(list(health.devices)) do
+        if type(object(device).nvme) == "table" then nvme_health[#nvme_health + 1] = device end
+    end
+    if #nvme_health > 0 then
+        table_section(lines, "NVMe health", { "Device", "Warning bits", "Life used %", "Spare %", "Power-on hours", "Media errors", "Quality" },
+            nvme_health, function(device)
+                local n = device.nvme
+                return { device.name, n.critical_warning, n.percentage_used,
+                    n.available_spare_percent, n.power_on_hours, n.media_errors, device.quality }
+            end, health)
+    end
     local stacked_volumes = {}
     for _, device in ipairs(list(disks.devices)) do
         if type(object(device).stack) == "table" then

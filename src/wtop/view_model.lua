@@ -8,6 +8,7 @@ local MountFilter = require("wtop.model.mount_filter")
 local Quality = require("wtop.model.quality")
 local Power = require("wtop.model.power")
 local Thermal = require("wtop.model.thermal")
+local StorageHealth = require("wtop.model.storage_health")
 local Hardware = require("wtop.model.hardware")
 local HardwareFilter = require("wtop.model.hardware_filter")
 local Privacy = require("wtop.privacy")
@@ -627,6 +628,8 @@ local function disk_rows(snapshot, format, options)
             local temperature_entry = temperature_by_disk[device.name]
             local temperature_channel = temperature_entry
                 and temperature_entry.temperature or nil
+            local storage_temperature = StorageHealth.temperature(snapshot, device)
+            if storage_temperature then temperature_channel = storage_temperature.channel end
             rows[#rows + 1] = {
                 device = device.name,
                 model = device.stack and (device.stack.name or device.stack.level)
@@ -635,8 +638,15 @@ local function disk_rows(snapshot, format, options)
                 medium = identity.rotational == 1 and "HDD"
                     or (identity.rotational == 0 and "SSD" or "—"),
                 temperature = temperature_channel
-                    and temperature(format, temperature_channel.input) or "—",
+                    and (storage_temperature and storage_temperature.quality ~= "fresh"
+                        and Technical.state(options.i18n, storage_temperature.quality)
+                        or temperature(format, temperature_channel.input)) or "—",
                 temperature_source = temperature_channel,
+                temperature_quality = storage_temperature and storage_temperature.quality,
+                critical = storage_temperature and temperature(format, storage_temperature.critical_celsius) or "—",
+                thermal_headroom = storage_temperature and storage_temperature.headroom_celsius ~= nil
+                    and formatted(function() return assert(format:temperature_delta(
+                        storage_temperature.headroom_celsius, { precision = 1 })) end) or "—",
                 scheduler = identity.scheduler or "—",
                 read = rate(format, device.read_bytes_per_second),
                 write = rate(format, device.write_bytes_per_second),
@@ -2305,7 +2315,7 @@ local COLLECTOR_RESOURCE = {
     cpu_clocks = "cpu_clocks",
     cpuidle = "cpuidle",
     pressure = "pressure",
-    disk = "disks", network = "network", connections = "connections",
+    disk = "disks", disk_health = "disk_health", network = "network", connections = "connections",
     process = "processes", gpu = "gpus", cpufreq = "cpu_frequency", hwmon = "sensors",
     powercap = "power", mounts = "mounts", cgroup = "workloads",
     system_info = "system", power_supply = "power_supplies", inventory = "inventory",
@@ -2623,19 +2633,58 @@ local function workload_detail_entries(snapshot, format, i18n, selected)
     return entries
 end
 
+local function disk_columns(i18n, rows)
+    local columns = {
+        { key = "device", label = translated(i18n, "metrics.device", "Device"), width = 12, min_width = 8, priority = 95 },
+        { key = "model", label = translated(i18n, "metrics.model", "Model"), width = 20, min_width = 10, priority = 40, full_only = true },
+        { key = "size", label = translated(i18n, "metrics.capacity", "Size"), width = 10, min_width = 8, align = "right", priority = 55 },
+        { key = "medium", label = translated(i18n, "metrics.medium", "Type"), width = 5, min_width = 4, priority = 30, full_only = true },
+        { key = "temperature", label = translated(i18n, "metrics.temperature", "Temp"), width = 9, min_width = 7, align = "right", priority = 60,
+            token = function(_, row)
+                return row.temperature_source and severity_token(
+                    row.temperature_source.input, 55, 65) or nil
+            end },
+        { key = "read", label = translated(i18n, "metrics.read", "Read"), width = 12, min_width = 10, align = "right", priority = 90 },
+        { key = "write", label = translated(i18n, "metrics.write", "Write"), width = 12, min_width = 10, align = "right", priority = 88 },
+        { key = "busy", label = translated(i18n, "metrics.busy", "Busy"), width = 9, min_width = 7, align = "right", priority = 70,
+            token = function(_, row) return severity_token(row.busy_value, 60, 85) end,
+            bar = function(_, row)
+                return row.busy_value and math.min(1, row.busy_value / 100) or nil
+            end },
+        { key = "queue", label = translated(i18n, "metrics.queue", "Queue"), width = 7, min_width = 6, align = "right", priority = 25, full_only = true },
+        { key = "latency", label = translated(i18n, "metrics.read_latency", "Read latency"), width = 13, min_width = 10, align = "right", priority = 35, full_only = true },
+    }
+    for _, row in ipairs(rows) do
+        if row.critical ~= "—" then
+            columns[#columns + 1] = { key = "critical",
+                label = translated(i18n, "sensor.critical", "Critical"),
+                width = 12, min_width = 8, align = "right", priority = 50 }
+            columns[#columns + 1] = { key = "thermal_headroom",
+                label = translated(i18n, "sensor.headroom", "To critical"),
+                width = 14, min_width = 9, align = "right", priority = 52 }
+            break
+        end
+    end
+    return columns
+end
+
 local function smart_hint_entries(snapshot, capabilities, i18n)
     local inspectors = capabilities and capabilities.inspectors or {}
     local smart = inspectors["storage.smart"]
     local available = type(smart) == "table" and smart.available == true
+    local windows = smart and smart.source == "Windows storage queries"
     return {
         entry("storage.smart_key", "Inspect", translated(i18n, "storage.smart_hint_short",
             "press s to choose a device")),
         entry("inspector.status", "Status", available
             and translated(i18n, "inspector.ready", "ready")
-            or translated(i18n, "inspector.helper_missing", "smartctl not available"),
+            or (windows and Technical.state(i18n, "unavailable")
+                or translated(i18n, "inspector.helper_missing", "smartctl not available")),
             { token = available and "metric.good" or "metric.warn" }),
-        { label = "", value = translated(i18n, "storage.smart_standby",
-            "Read-only probes are lazy; standby disks are not awakened."),
+        { label = "", value = windows and translated(i18n, "storage.windows_probe",
+            "NVMe monitoring is read-only; selecting an ATA disk reads its SMART data.")
+            or translated(i18n, "storage.smart_standby",
+                "Read-only probes are lazy; standby disks are not awakened."),
           token = "text.muted" },
     }
 end
@@ -2727,7 +2776,8 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
     end
     local disks, disks_hidden = {}, 0
     if on("storage", "disk_table") then
-        disks, disks_hidden = disk_rows(snapshot, format, { show_virtual = options.show_virtual_devices })
+        disks, disks_hidden = disk_rows(snapshot, format,
+            { show_virtual = options.show_virtual_devices, i18n = i18n })
     end
     local interfaces = on("network", "network_table") and network_rows(snapshot, format) or {}
     local system_devices_rows, system_pci_total, system_usb_total, system_devices_truncated
@@ -3244,26 +3294,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             axis_format = percent_axis,
         },
         disk_table = {
-            columns = {
-                { key = "device", label = translated(i18n, "metrics.device", "Device"), width = 12, min_width = 8, priority = 95 },
-                { key = "model", label = translated(i18n, "metrics.model", "Model"), width = 20, min_width = 10, priority = 40, full_only = true },
-                { key = "size", label = translated(i18n, "metrics.capacity", "Size"), width = 10, min_width = 8, align = "right", priority = 55 },
-                { key = "medium", label = translated(i18n, "metrics.medium", "Type"), width = 5, min_width = 4, priority = 30, full_only = true },
-                { key = "temperature", label = translated(i18n, "metrics.temperature", "Temp"), width = 9, min_width = 7, align = "right", priority = 60,
-                    token = function(_, row)
-                        return row.temperature_source and severity_token(
-                            row.temperature_source.input, 55, 65) or nil
-                    end },
-                { key = "read", label = translated(i18n, "metrics.read", "Read"), width = 12, min_width = 10, align = "right", priority = 90 },
-                { key = "write", label = translated(i18n, "metrics.write", "Write"), width = 12, min_width = 10, align = "right", priority = 88 },
-                { key = "busy", label = translated(i18n, "metrics.busy", "Busy"), width = 9, min_width = 7, align = "right", priority = 70,
-                    token = function(_, row) return severity_token(row.busy_value, 60, 85) end,
-                    bar = function(_, row)
-                        return row.busy_value and math.min(1, row.busy_value / 100) or nil
-                    end },
-                { key = "queue", label = translated(i18n, "metrics.queue", "Queue"), width = 7, min_width = 6, align = "right", priority = 25, full_only = true },
-                { key = "latency", label = translated(i18n, "metrics.read_latency", "Read latency"), width = 13, min_width = 10, align = "right", priority = 35, full_only = true },
-            },
+            columns = disk_columns(i18n, disks),
             rows = disks,
             status_text = disks_hidden > 0 and translated(i18n, "storage.hidden_devices",
                 "{count} virtual devices hidden", { count = disks_hidden }) or nil,
