@@ -3,9 +3,9 @@ package.path=root.."/src/?.lua;"..root.."/src/?/init.lua;"..package.path
 local Native=require("wtop.native")
 local Wire=require("wtop.core.worker_wire")
 local Json=require("wtop.format.json")
-local names={"cpufreq","powercap","gpu","hwmon"}
+local names={"cpufreq","powercap","gpu","hwmon","network"}
 local suspended=arg[2]or "powercap"
-assert(suspended=="powercap"or suspended=="hwmon")
+assert(suspended=="powercap"or suspended=="hwmon"or suspended=="network")
 local sessions,pids,counts={},{},{}
 local function emit(value)print(Json.encode(value));io.stdout:flush()end
 local function now()return Native.monotonic_ns()end
@@ -29,8 +29,8 @@ local deadline=now()+4e9
 repeat
     for _,id in ipairs(names)do if not pids[id]then query(id)end end
     Native.sleep_ms(10)
-until (pids.cpufreq and pids.powercap and pids.gpu and pids.hwmon)or now()>deadline
-assert(pids.cpufreq and pids.powercap and pids.gpu and pids.hwmon,"initial reader frames unavailable")
+until (pids.cpufreq and pids.powercap and pids.gpu and pids.hwmon and pids.network)or now()>deadline
+assert(pids.cpufreq and pids.powercap and pids.gpu and pids.hwmon and pids.network,"initial reader frames unavailable")
 local old_pid=pids[suspended]
 emit({event="ready",pids=pids})
 assert(io.read("l")=="stopped")

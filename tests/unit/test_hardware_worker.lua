@@ -203,8 +203,8 @@ assert(cleanup.first and cleanup.second,"one failed input cleanup prevented anot
 -- without calling a synchronous native API on pending/error paths.
 local Portable = require("wtop.collectors.portable")
 local slots, portable_closes, pending_energy = {}, 0, false
-local transport = {available=true,hardware_worker_sources={powercap=true,cpufreq=true,gpu=true,hwmon=true}}
-for _,id in ipairs({"powercap","cpufreq","gpu","hwmon"}) do
+local transport = {available=true,hardware_worker_sources={powercap=true,cpufreq=true,gpu=true,hwmon=true,network=true}}
+for _,id in ipairs({"powercap","cpufreq","gpu","hwmon","network"}) do
     transport["collect_"..id]=function() error("parent entered a synchronous hardware API") end
 end
 transport.hardware_worker_open=function(id,configuration)
@@ -222,7 +222,7 @@ transport.hardware_worker_close=function(slot,wait)
     assert(wait==0 and slots[slot.id]==slot);portable_closes=portable_closes+1
 end
 local portable_readers={};now=100
-for _,id in ipairs({"powercap","cpufreq","gpu","hwmon"}) do
+for _,id in ipairs({"powercap","cpufreq","gpu","hwmon","network"}) do
     local collector=Portable.new(id,{native=transport});portable_readers[id]=collector
     assert(collector:probe(context).available)
     local result=collector:sample(context)
@@ -233,7 +233,7 @@ assert(portable_readers.powercap:sample(context).sampling_pending)
 assert(portable_readers.cpufreq:sample(context).data.source=="cpufreq")
 assert(portable_readers.gpu:sample(context).data.source=="gpu")
 for _,collector in pairs(portable_readers) do collector:close() end
-assert(portable_closes==4)
+assert(portable_closes==5)
 local direct_calls=0
 local direct=Portable.new("powercap",{native={collect_powercap=function()
     direct_calls=direct_calls+1;return {zones={}}
@@ -283,6 +283,23 @@ local new_sensors=create_reader("hwmon",Wire.encode({}))
 local new_sensor=Wire.decode(new_sensors(false)).result.data.devices[1].channels[1]
 assert(new_sensor.session.samples==1 and new_sensor.session.minimum==50 and new_sensor.session.maximum==50,
     "a new sensor reader reused another reader's session statistics")
+local received,network_identity=1000,"ioreg:network-A"
+child_native.collect_network=function()return {interfaces={{id="en0",name="en0",ifindex=1,
+    _registry_entry_id=network_identity,counter_bits=64,counters={rx_bytes=received,tx_bytes=received*2}}}}end
+local network=create_reader("network",Wire.encode({}))
+child_now=8000000000
+assert(Wire.decode(network(false)).result.data.interfaces[1].rx_bytes_per_second==nil)
+child_now,received=9000000000,1600
+local network_second=Wire.decode(network(false)).result.data.interfaces[1]
+assert(network_second.rx_bytes_per_second==600 and network_second.tx_bytes_per_second==1200)
+child_now,received,network_identity=10000000000,2200,"ioreg:network-B"
+assert(Wire.decode(network(false)).result.data.interfaces[1].rx_bytes_per_second==nil,
+    "changed registry identity reused old interface counters")
+child_now,received=11000000000,2500
+assert(Wire.decode(network(false)).result.data.interfaces[1].rx_bytes_per_second==300)
+local new_network=create_reader("network",Wire.encode({}))
+assert(Wire.decode(new_network(false)).result.data.interfaces[1].rx_bytes_per_second==nil,
+    "a new network reader reused another reader's rate baseline")
 package.loaded["wtop.native"],package.loaded["wtop.core.hardware_worker"]=prior_native,prior_core
 
 -- Default construction is a different path from an injected collector set.

@@ -32,7 +32,7 @@ def main():
             time.sleep(.01)
         raise AssertionError('owned reader was not reaped: '+str(pid))
 
-    for suspended in ['powercap','hwmon']:
+    for suspended in ['powercap','hwmon','network']:
         with (work/('transport-'+suspended+'.stderr')).open('wb') as error_log:
             parent=subprocess.Popen([str(lua),str(ROOT/'tests/native/macos_worker_smoke.lua'),str(ROOT),suspended],
                 cwd=ROOT,env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=error_log,text=True,bufsize=1)
@@ -43,7 +43,7 @@ def main():
                 value=json.loads(text);assert value['event']==expected,value
                 return value
             try:
-                initial=event('ready')['pids'];assert len(set(initial.values()))==4
+                initial=event('ready')['pids'];assert len(set(initial.values()))==5
                 for pid in initial.values():path_for(pid)
                 stopped=initial[suspended];os.kill(stopped,signal.SIGSTOP)
                 parent.stdin.write('stopped\n');parent.stdin.flush()
@@ -72,16 +72,16 @@ def main():
                     for line in result.stdout.splitlines():
                         columns=line.split(None,2)
                         if len(columns)==3 and columns[1]==str(process.pid) and 'wtop-hardware-' in columns[2]:owned.append(int(columns[0]))
-                    if len(owned)==4:break
+                    if len(owned)==5:break
                     time.sleep(.01)
-                assert len(owned)==4,'shutdown fixture did not start all four readers'
+                assert len(owned)==5,'shutdown fixture did not start all five readers'
                 vm_images=[path_for(pid) for pid in owned]
                 process.stdin.write('close\n');process.stdin.flush();assert process.wait(timeout=3)==0
                 for pid in owned:gone(pid)
                 for path in vm_images:assert not path.exists(),'VM shutdown leaked its reader image'
             finally:
                 if process.poll()is None:process.kill();process.wait(timeout=3)
-    print('ok: macOS four independent readers, monotonic frames, power/sensor timeout/reap, independent recovery, malformed config, private-image cleanup and three standalone VM exits')
+    print('ok: macOS five independent readers, monotonic frames, power/sensor/network timeout/reap, independent recovery, malformed config, private-image cleanup and three standalone VM exits')
 
 
 if __name__=="__main__":

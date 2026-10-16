@@ -114,5 +114,20 @@ assert(english.inventory == "inventory",
   "the inventory collector writes the `inventory` slot; if that changed, the "
     .. "fixture above is no longer testing the row it claims to test")
 
+-- A retained interface table needs its own source notice even if the user
+-- removed the separate network summary widget from their workspace.
+local net_snapshot = {cpu = {}, memory = {}, network = {interfaces = {{id = "en0", name = "en0",
+  rates = {rx_bytes_per_second = 123, tx_bytes_per_second = 456}, counters = {}}}},
+  quality = {network = {status = "error", quality = "stale", reason = "hardware_query_timeout"}}}
+local net_models = ViewModel.build(engine, net_snapshot, translator, {}, "network")
+assert(net_models.network_table.status_text:find(Technical.state(translator, "stale"), 1, true))
+assert(net_models.network_table.status_text:find(Technical.reason(translator, "hardware_query_timeout"), 1, true))
+assert(#net_models.network_table.rows == 1 and net_models.network_table.rows[1].interface == "en0")
+net_snapshot.quality.network = {status = "ok", quality = "fresh"}
+assert(ViewModel.build(engine, net_snapshot, translator, {}, "network").network_table.status_text == nil)
+net_snapshot.quality.network = {status = "unavailable", quality = "unavailable"}
+assert(ViewModel.build(engine, net_snapshot, translator, {}, "network").network_table.status_text
+  == Technical.state(translator, "unavailable"))
+
 print(string.format("ok: collector table rows (%d registered collectors read "
   .. "their own slot)", #registered))

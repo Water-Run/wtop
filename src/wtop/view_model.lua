@@ -197,6 +197,17 @@ local function quality(snapshot, resource)
     return state and state.quality or "unavailable"
 end
 
+local function network_source_status(snapshot, i18n)
+    local state = snapshot.quality and snapshot.quality.network
+    if type(state) ~= "table" then return nil end
+    local label = state.quality == "stale" and "stale"
+        or (state.status and state.status ~= "ok" and state.status or nil)
+    if not label then return nil end
+    local text = Technical.state(i18n, label)
+    if state.reason then text = text .. " · " .. Technical.reason(i18n, state.reason) end
+    return text
+end
+
 local function process_sort_label(i18n, key)
     local labels = {
         cpu = { "process.sort.cpu", "CPU" },
@@ -3315,6 +3326,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                   end } or nil,
             },
             rows = interfaces,
+            status_text = network_source_status(snapshot, i18n),
         },
         address_table = {
             columns = {
