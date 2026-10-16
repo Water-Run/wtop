@@ -844,4 +844,19 @@ do
   assert(not gpu:sample(at(1100000000),warming_gpu).sampling_pending)
 end
 
+-- A group-aware frequency provider can have a valid query before its second
+-- rate sample. Keep this distinct from permanent unavailability.
+do
+  local source=collectors(fake_native({collect_cpufreq={
+    {policies={},quality="gap",_sampling_pending=true},
+    {policies={{id="cpu64",affected_cpus={64},frequencies={current_hz=4000000000}}},quality="partial"}
+  }})).cpufreq
+  local cold=source:sample(at(1000000000))
+  assert(cold.status=="ok" and cold.quality=="gap" and cold.sampling_pending and cold.retry_after_ms==100)
+  assert(cold.data._sampling_pending==nil)
+  local warm=source:sample(at(2000000000),cold)
+  assert(warm.quality=="partial" and warm.reason=="platform_data_partial" and not warm.sampling_pending)
+  assert(warm.data.policies[1].affected_cpus[1]==64)
+end
+
 return true

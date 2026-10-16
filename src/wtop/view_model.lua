@@ -1342,6 +1342,8 @@ local function cpufreq_rows(snapshot, format, i18n)
         cpuinfo_avg_freq = translated(i18n, "cpufreq.source_hardware_average", "HW average"),
         scaling_cur_freq = translated(i18n, "cpufreq.source_scaling", "Scaling"),
         ioreport_residency = "IOReport",
+        pdh = "PDH",
+        CallNtPowerInformation = "PowrProf",
     }
     for _, policy in ipairs(snapshot.cpu_frequency and snapshot.cpu_frequency.policies or {}) do
         local cpus = policy.affected_cpus or policy.related_cpus or {}

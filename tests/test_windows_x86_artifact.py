@@ -147,6 +147,24 @@ with tempfile.TemporaryDirectory() as directory:
     refused(lambda: Check.optional_api_names(pathlib.Path(directory)),
             "optional API scan lost")
 
+# Internal collector headers can resolve optional APIs too. A hard import of
+# such a symbol must still fail even when its name is absent from the .c files.
+with tempfile.TemporaryDirectory() as directory:
+    native = pathlib.Path(directory)
+    (native / "wtop_windows.c").write_text("\n".join(
+        'GetProcAddress(module, "' + name + '");'
+        for name in sorted(Check.SOURCE_ANCHORS)))
+    (native / "wtop_windows_frequency.h").write_text(
+        'GetProcAddress(module, "HeaderOnlyFrequencyApi");')
+    header_optional = Check.optional_api_names(native)
+    assert "HeaderOnlyFrequencyApi" in header_optional
+    header_reports = {name: {"imports": {"kernel32.dll": {"GetTickCount"}}}
+                      for name in Check.CORE_PE_FILES}
+    header_reports["wtop_native.dll"]["imports"]["kernel32.dll"].add(
+        "HeaderOnlyFrequencyApi")
+    refused(lambda: Check.check_reports(header_reports, header_optional),
+            "hard-imported")
+
 # The onefile gate must see all its embedded PE headers, not just its launcher.
 pe = bytearray(512)
 pe[:2] = b"MZ"

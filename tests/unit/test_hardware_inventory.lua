@@ -4356,4 +4356,30 @@ do
     assert(Hardware.build(state).by_id["net:17"].parent_id == nil)
 end
 
+do
+    local Hardware = require("wtop.model.hardware")
+    local state = {
+        cpu_info = { topology = { quality = "fresh", logical_cpus = {
+            { id = 0, processor_group = 0, package_id = 0, core_id = 0,
+                core_key = "0:0", online = true },
+            { id = 64, processor_group = 1, package_id = 1, core_id = 0,
+                core_key = "1:0", online = true },
+        } } },
+        cpu_frequency = { policies = {
+            { id = "cpu0", processor_group = 0, processor_number = 0,
+                affected_cpus = { 0 }, frequencies = { current_hz = 3000000000 } },
+            { id = "cpu64", processor_group = 1, processor_number = 0,
+                affected_cpus = { 64 }, frequencies = { current_hz = 4000000000 } },
+        } },
+    }
+    local graph = Hardware.build(state)
+    assert(graph.by_id["cpu:0"].cpufreq_ids[1] == "cpu0")
+    assert(graph.by_id["cpu:64"].cpufreq_ids[1] == "cpu64")
+    assert(graph.by_id["cpufreq:cpu0"].parent_id == "package:0")
+    assert(graph.by_id["cpufreq:cpu64"].parent_id == "package:1",
+        "a second group's processor zero belongs to its own package")
+    assert(graph.by_id["package:0"].cpufreq_ids[1] == "cpu0"
+        and graph.by_id["package:1"].cpufreq_ids[1] == "cpu64")
+end
+
 return true

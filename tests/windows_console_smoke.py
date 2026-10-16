@@ -13,7 +13,7 @@ def run(executable: Path, harness: Path) -> None:
     environment = {key: value for key, value in os.environ.items()
                    if not key.upper().startswith(("LUA_PATH", "LUA_CPATH", "LUA_INIT"))}
     with tempfile.TemporaryDirectory(prefix="wtop-console-") as temporary:
-        environment["XDG_CONFIG_HOME"] = temporary
+        environment["APPDATA"] = temporary
         environment["TERM"] = "dumb"
         command = subprocess.list2cmdline([str(executable.resolve()), "--lang", "en-US", "--no-color"])
         # The Host tile can be below the visible Overview panels at 80x25.

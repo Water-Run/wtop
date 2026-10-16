@@ -31,7 +31,6 @@
 #define MAX_ENGINES 256
 #define MAX_GPU_PROCESSES 512
 #define MAX_PROCESS_ENGINES 8
-#define MAX_FREQUENCY_CPUS 256
 #define MAX_THERMAL_ZONES 64
 #define MAX_SERVICE_HOSTS 1024
 #define MAX_SERVICES_PER_HOST 64
@@ -858,166 +857,11 @@ static int l_collect_gpu(lua_State *L) {
 
 /* ------------------------------------------------------------------------
  * Processor frequency. PDH's "% Processor Performance" (Windows 7 / 2008 R2
- * and later) tracks the effective clock, including turbo. The power
- * information query exists back to XP, but from Windows 8 on its current
- * frequency is the nominal one, so it is reported as an estimate there. */
+ * and later) scales the nominal frequency, including turbo. This is the
+ * Windows performance-counter view, not an APERF/MPERF interval measurement.
+ * The XP-compatible power-information fallback is marked as estimated. */
 
-typedef struct {
-    ULONG Number;
-    ULONG MaxMhz;
-    ULONG CurrentMhz;
-    ULONG MhzLimit;
-    ULONG MaxIdleState;
-    ULONG CurrentIdleState;
-} processor_power_information;
-
-typedef LONG (WINAPI *call_power_information_function)(int, PVOID, ULONG,
-    PVOID, ULONG);
-typedef DWORD (WINAPI *power_active_scheme_function)(HKEY, GUID **);
-typedef DWORD (WINAPI *power_friendly_name_function)(HKEY, const GUID *,
-    const GUID *, const GUID *, PUCHAR, LPDWORD);
-
-static pdh_set frequency_counters;
-
-static int processor_power(processor_power_information *values, ULONG count) {
-    static int resolved = 0;
-    static call_power_information_function query = NULL;
-    if (!resolved) {
-        HMODULE module = LoadLibraryA("powrprof.dll");
-        resolved = 1;
-        query = module ? (call_power_information_function)(void *)
-            GetProcAddress(module, "CallNtPowerInformation") : NULL;
-    }
-    /* ProcessorInformation = 11 */
-    return query && query(11, NULL, 0, values,
-        count * (ULONG)sizeof(values[0])) == 0;
-}
-
-static void push_power_scheme(lua_State *L) {
-    static int resolved = 0;
-    static power_active_scheme_function active = NULL;
-    static power_friendly_name_function friendly = NULL;
-    GUID *scheme = NULL;
-    WCHAR name[128];
-    DWORD bytes = sizeof(name) - sizeof(WCHAR);
-    if (!resolved) {
-        HMODULE module = LoadLibraryA("powrprof.dll");
-        resolved = 1;
-        if (module) {
-            active = (power_active_scheme_function)(void *)GetProcAddress(module,
-                "PowerGetActiveScheme");
-            friendly = (power_friendly_name_function)(void *)GetProcAddress(module,
-                "PowerReadFriendlyName");
-        }
-    }
-    if (!active || !friendly || active(NULL, &scheme) != ERROR_SUCCESS || !scheme)
-        return;
-    memset(name, 0, sizeof(name));
-    if (friendly(NULL, scheme, NULL, NULL, (PUCHAR)name, &bytes) == ERROR_SUCCESS
-        && name[0]) {
-        utf8_field(L, "governor", name);
-    }
-    LocalFree(scheme);
-}
-
-static int l_collect_cpufreq(lua_State *L) {
-    static const WCHAR *const paths[] = {
-        L"\\Processor Information(*)\\Processor Frequency",
-        L"\\Processor Information(*)\\% Processor Performance",
-    };
-    SYSTEM_INFO system;
-    processor_power_information *power;
-    ULONG count;
-    double performance[MAX_FREQUENCY_CPUS], base[MAX_FREQUENCY_CPUS];
-    int has_effective = 0, have_power;
-    GetSystemInfo(&system);
-    count = system.dwNumberOfProcessors;
-    if (count == 0) count = 1;
-    if (count > MAX_FREQUENCY_CPUS) count = MAX_FREQUENCY_CPUS;
-    for (ULONG index = 0; index < count; ++index) performance[index] = base[index] = -1;
-    power = (processor_power_information *)calloc(count, sizeof(*power));
-    if (!power) return luaL_error(L, "out of memory collecting CPU frequency");
-    have_power = processor_power(power, count);
-
-    if (pdh_set_open(&frequency_counters, paths, 2, 2)
-        && pdh_set_collect(&frequency_counters) && frequency_counters.collections >= 2) {
-        for (int counter = 0; counter < 2; ++counter) {
-            DWORD items_count = 0;
-            PDH_FMT_COUNTERVALUE_ITEM_W *items = pdh_items(
-                frequency_counters.counters[counter], &items_count);
-            for (DWORD index = 0; items && index < items_count; ++index) {
-                unsigned group = 0, number = 0;
-                ULONG cpu;
-                if (!pdh_item_valid(&items[index])
-                    || swscanf(items[index].szName, L"%u,%u", &group, &number) != 2)
-                    continue;
-                /* Processor groups hold up to 64 CPUs each. */
-                cpu = group * 64 + number;
-                if (cpu >= count) continue;
-                if (counter == 0) base[cpu] = items[index].FmtValue.doubleValue;
-                else performance[cpu] = items[index].FmtValue.doubleValue;
-            }
-            free(items);
-        }
-        for (ULONG index = 0; index < count; ++index) {
-            if (base[index] > 0 && performance[index] >= 0) has_effective = 1;
-        }
-    }
-    if (!have_power && !has_effective) {
-        free(power);
-        lua_pushnil(L);
-        lua_pushliteral(L, "processor_frequency_unavailable");
-        return 2;
-    }
-    lua_createtable(L, 0, 2);
-    lua_createtable(L, (int)count, 0);
-    for (ULONG index = 0; index < count; ++index) {
-        char name[32];
-        double current = -1;
-        const char *quality = "fresh";
-        const char *driver = "pdh";
-        if (base[index] > 0 && performance[index] >= 0) {
-            current = base[index] * performance[index] / 100.0;
-        } else if (have_power && power[index].CurrentMhz > 0) {
-            current = power[index].CurrentMhz;
-            driver = "CallNtPowerInformation";
-            quality = "estimated";
-        }
-        lua_createtable(L, 0, 8);
-        snprintf(name, sizeof(name), "cpu%lu", (unsigned long)index);
-        string_field(L, "id", name);
-        string_field(L, "policy", name);
-        integer_field(L, "policy_index", (lua_Integer)index);
-        lua_createtable(L, 1, 0);
-        lua_pushinteger(L, (lua_Integer)index);
-        lua_rawseti(L, -2, 1);
-        lua_setfield(L, -2, "affected_cpus");
-        string_field(L, "driver", driver);
-        push_power_scheme(L);
-        lua_createtable(L, 0, 6);
-        if (current > 0) {
-            integer_field(L, "current_hz", (lua_Integer)(current * 1000000.0));
-            string_field(L, "current_quality", quality);
-        }
-        /* Windows reports the rated frequency, not the turbo ceiling, so
-         * it is a base value; claiming it as the maximum would be wrong on
-         * any CPU that boosts above it. */
-        if (base[index] > 0)
-            integer_field(L, "base_hz", (lua_Integer)(base[index] * 1000000.0));
-        else if (have_power && power[index].MaxMhz > 0)
-            integer_field(L, "base_hz", (lua_Integer)power[index].MaxMhz * 1000000);
-        if (have_power && power[index].MhzLimit > 0
-            && power[index].MhzLimit < power[index].MaxMhz)
-            integer_field(L, "limit_hz", (lua_Integer)power[index].MhzLimit * 1000000);
-        lua_setfield(L, -2, "frequencies");
-        string_field(L, "quality", current > 0 ? quality : "unavailable");
-        string_field(L, "source", driver);
-        lua_rawseti(L, -2, (lua_Integer)index + 1);
-    }
-    lua_setfield(L, -2, "policies");
-    free(power);
-    return 1;
-}
+#include "wtop_windows_frequency.h"
 
 /* ------------------------------------------------------------------------
  * Batteries. A host without a system battery reports the same way a Linux

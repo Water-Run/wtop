@@ -906,6 +906,7 @@ local function export_cpu_frequency(cpu_frequency)
     for index, policy in ipairs(cpu_frequency and cpu_frequency.policies or {}) do
         local exported = copy_fields(policy, {
             "id", "policy", "policy_index", "identity_quality", "driver", "governor",
+            "processor_group", "processor_number",
             "energy_performance_preference", "quality", "source",
         })
         exported.affected_cpus = json.array({})

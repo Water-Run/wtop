@@ -874,4 +874,24 @@ assert(signal_named(partial_core, "data_incomplete", "cpu")
     and not signal_named(partial_core, "data_stale", "cpu"),
     "current but incomplete core data is not mislabeled stale")
 
+do
+    local grouped = Export.snapshot({ cpu_frequency = { policies = {
+        { id = "cpu0", processor_group = 0, processor_number = 0,
+            affected_cpus = { 0 }, driver = "pdh", private = "omit",
+            frequencies = { current_hz = 3000000000 } },
+        { id = "cpu64", processor_group = 1, processor_number = 0,
+            affected_cpus = { 64 }, driver = "pdh", private = "omit",
+            frequencies = { current_hz = 4000000000 } },
+    } } })
+    local policies = grouped.cpu_frequency.policies
+    assert(policies[1].processor_group == 0 and policies[1].processor_number == 0)
+    assert(policies[2].processor_group == 1 and policies[2].processor_number == 0)
+    assert(policies[1].affected_cpus[1] == 0 and policies[2].affected_cpus[1] == 64,
+        "group-relative processor zero must retain two distinct global CPU IDs")
+    assert(policies[1].private == nil and policies[2].private == nil)
+    local encoded = json.encode(grouped)
+    assert(encoded:find('"processor_group":0', 1, true)
+        and encoded:find('"processor_group":1', 1, true))
+end
+
 return true

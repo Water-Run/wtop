@@ -129,5 +129,15 @@ net_snapshot.quality.network = {status = "unavailable", quality = "unavailable"}
 assert(ViewModel.build(engine, net_snapshot, translator, {}, "network").network_table.status_text
   == Technical.state(translator, "unavailable"))
 
+local frequency_models = ViewModel.build(engine, {cpu_frequency = {policies = {
+  {id = "cpu0", affected_cpus = {0}, frequencies = {
+    current_hz = 3000000000, current_source = "pdh", current_quality = "fresh"}},
+  {id = "cpu64", affected_cpus = {64}, frequencies = {
+    current_hz = 4000000000, current_source = "CallNtPowerInformation", current_quality = "estimated"}},
+}}}, translator, {}, "compute")
+assert(frequency_models.cpufreq_table.rows[1].source == "PDH")
+assert(frequency_models.cpufreq_table.rows[2].source == "PowrProf"
+  and frequency_models.cpufreq_table.rows[2].current:sub(1, 1) == "~")
+
 print(string.format("ok: collector table rows (%d registered collectors read "
   .. "their own slot)", #registered))

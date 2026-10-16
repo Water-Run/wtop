@@ -44,8 +44,9 @@ SOURCE_ANCHORS = frozenset({
 
 
 def optional_api_names(native_dir: pathlib.Path) -> set[str]:
-    source_files = sorted(native_dir.glob("wtop_windows*.c"))
-    source_files += sorted(native_dir.glob("wtop_cpuid*.c"))
+    source_files = sorted(path for pattern in (
+        "wtop_windows*.c", "wtop_windows*.h", "wtop_cpuid*.c", "wtop_cpuid*.h",
+    ) for path in native_dir.glob(pattern))
     if not source_files:
         raise ValueError(f"no Windows native sources under {native_dir}")
     source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
