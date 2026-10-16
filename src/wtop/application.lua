@@ -8,7 +8,7 @@ local native = require("wtop.native")
 local M = {}
 
 local REPORT_COLLECTORS = {
-    system_info = true, cpu_info = true, cpu_limits = true, memory = true, numa = true,
+    system_info = true, cpu_info = true, cpu_limits = true, cpu_clocks = true, memory = true, numa = true,
     memory_devices = true, expansion_slots = true, port_connectors = true,
     onboard_devices = true,
     firmware_batteries = true, firmware_power_supplies = true,

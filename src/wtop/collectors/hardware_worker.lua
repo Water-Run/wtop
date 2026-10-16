@@ -6,7 +6,8 @@ local M = {}
 local Proxy = {}
 Proxy.__index = Proxy
 M.sources = { hwmon = true, cpufreq = true, powercap = true, cpu_limits = true,
-    thermal_throttle = true, cpuidle = true, thermal_zones = true, smbios_input = true, gpu_drm = true }
+    thermal_throttle = true, cpuidle = true, thermal_zones = true, smbios_input = true, gpu_drm = true,
+    cpu_clocks = true }
 
 function M.available()
     return Native.available and type(Native.hardware_worker_open) == "function"

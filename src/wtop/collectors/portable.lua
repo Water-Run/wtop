@@ -14,6 +14,7 @@ local sources = {
   cpu = {"collect_cpu", 500},
   cpu_info = {"collect_cpu_info", 30000},
   cpu_limits = {"collect_cpu_limits", 1000},
+  cpu_clocks = {"collect_cpu_clocks", 1000},
   memory = {"collect_memory", 1000},
   numa = {"collect_numa", 2000},
   edac = {"collect_edac", 5000},

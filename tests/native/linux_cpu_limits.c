@@ -30,7 +30,7 @@ static int fixture_close(int);
 #undef close
 
 enum { OK, DENIED, WRONG_TYPE, WRONG_CPU, READ_ERROR, SHORT_READ, CLOSE_ERROR };
-static int scenario, live, opens, reads, closes, serial;
+static int scenario, live, opens, reads, closes, serial, clock_mode;
 
 static int fixture_open(const char *path, int flags, ...) {
     assert(strcmp(path, "/dev/cpu/3/msr") == 0);
@@ -49,7 +49,9 @@ static int fixture_stat(int fd, struct stat *value) {
     return 0;
 }
 static ssize_t fixture_read(int fd, void *bytes, size_t length, off_t offset) {
-    assert(fd == 501 && live == 1 && length == 8 && offset == 0x64f);
+    assert(fd == 501 && live == 1 && length == 8);
+    if (clock_mode) assert(offset == 0xe8 || offset == 0xe7);
+    else assert(offset == 0x64f);
     reads++;
     if (scenario == READ_ERROR) { errno = EIO; return -1; }
     memset(bytes, 0, length); ((unsigned char *)bytes)[0] = (unsigned char)++serial;
@@ -75,7 +77,7 @@ static void *fixture_allocator(void *unused, void *ptr, size_t old, size_t size)
 
 static int call(lua_State *L, lua_Integer cpu) {
     lua_settop(L, 1);
-    lua_getfield(L, 1, "read_cpu_perf_limits"); lua_pushinteger(L, cpu);
+    lua_getfield(L, 1, clock_mode ? "read_cpu_clock_counters" : "read_cpu_perf_limits"); lua_pushinteger(L, cpu);
     return lua_pcall(L, 1, LUA_MULTRET, 0);
 }
 
@@ -84,10 +86,22 @@ int main(void) {
     assert(L); luaopen_wtop_native(L);
     assert(call(L, -1) != LUA_OK && opens == 0);
     assert(call(L, 8192) != LUA_OK && opens == 0);
+    for (clock_mode = 0; clock_mode <= 1; clock_mode++) {
+    int previous_opens=opens;
+    assert(call(L,-1)!=LUA_OK && call(L,8192)!=LUA_OK && opens==previous_opens);
     for (scenario = OK; scenario <= CLOSE_ERROR; scenario++) {
         int old_reads = reads, old_closes = closes;
         assert(call(L, 3) == LUA_OK && live == 0);
-        if (scenario == OK) assert(lua_type(L, 2) == LUA_TSTRING && lua_rawlen(L, 2) == 8);
+        if (scenario == OK) {
+            assert(lua_type(L, 2) == LUA_TSTRING && lua_rawlen(L, 2) == (clock_mode ? 16u : 8u));
+            if (clock_mode) {
+                const unsigned char *raw=(const unsigned char *)lua_tostring(L,2);
+                assert(raw[8] == (unsigned char)(raw[0]+1u));
+                assert(lua_istable(L,3));
+                lua_getfield(L,3,"aperf_started_ns");lua_Integer start=lua_tointeger(L,-1);lua_pop(L,1);
+                lua_getfield(L,3,"mperf_finished_ns");assert(lua_tointeger(L,-1)>=start && start>0);lua_pop(L,1);
+            }
+        }
         else {
             assert(lua_isnil(L, 2) && lua_type(L, 3) == LUA_TSTRING);
             assert(lua_tointeger(L, 4) == (scenario == DENIED ? EACCES
@@ -100,7 +114,7 @@ int main(void) {
     scenario = OK;
     int failed = 0, succeeded = 0;
     for (int budget = 0; budget < 12; budget++) {
-        lua_settop(L, 1); lua_getfield(L, 1, "read_cpu_perf_limits"); lua_pushinteger(L, 3);
+        lua_settop(L, 1); lua_getfield(L, 1, clock_mode ? "read_cpu_clock_counters" : "read_cpu_perf_limits"); lua_pushinteger(L, 3);
         allocations_left = budget;
         int result = lua_pcall(L, 1, LUA_MULTRET, 0);
         allocations_left = -1;
@@ -108,7 +122,8 @@ int main(void) {
         if (result == LUA_OK) succeeded++; else failed++;
     }
     assert(failed > 0 && succeeded > 0);
+    }
     lua_close(L); assert(live == 0);
-    puts("Linux CPU limit MSR: fixed read-only register, device identity, failures and Lua OOM passed");
+    puts("Linux CPU limit/clock MSRs: fixed read-only registers, device identity, brackets, failures and Lua OOM passed");
     return 0;
 }

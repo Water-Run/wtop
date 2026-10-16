@@ -19,6 +19,10 @@ end
 
 function M:sample(context)
     local result = self.collector:_sample_drm(context)
+    if result.status ~= "ok" then
+        result.capability=result.status=="denied" and Capability.denied(result.reason)
+            or Capability.unavailable(result.reason)
+    end
     -- by_id shares the device records; keep it in the child's counter history
     -- and avoid serializing every process/client/device twice.
     if result.data then

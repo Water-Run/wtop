@@ -556,9 +556,15 @@ local function top_processes(snapshot, format, controller, i18n, platform)
     return rows, status, status_text
 end
 
-local function core_rows(snapshot, format)
+local function core_rows(snapshot, format, i18n)
     local rows = {}
+    local clocks = {}
+    for _, row in ipairs(snapshot.cpu_clocks and snapshot.cpu_clocks.cpus or {}) do clocks[row.id] = row end
+    local current = Quality.current_source(snapshot.quality, "cpu_clocks")
     for _, core in ipairs(snapshot.cpu and snapshot.cpu.cores or {}) do
+        local id = type(core.name)=="string" and tonumber(core.name:match("^cpu(%d+)$"))
+        local clock = id and clocks[id]
+        local clock_quality = clock and (current and clock.quality or "stale")
         rows[#rows + 1] = {
             core = core.name,
             total = percent(format, core.utilization),
@@ -568,6 +574,11 @@ local function core_rows(snapshot, format)
             iowait = percent(format, core.iowait),
             irq = percent(format, core.irq),
             steal = percent(format, core.steal),
+            effective = clock and (clock_quality=="fresh" and frequency(format,clock.effective_hz)
+                or Technical.state(i18n,clock_quality)) or "—",
+            effective_value = clock and current and clock.quality=="fresh" and clock.effective_hz or nil,
+            effective_window = clock and clock.interval_ns and string.format("%.1f ms",clock.interval_ns/1000000) or "—",
+            effective_observed_at_ns = clock and clock.observed_at_ns,
         }
     end
     return rows
@@ -2234,6 +2245,7 @@ local COLLECTOR_RESOURCE = {
     host_interfaces = "host_interfaces",
     processor_firmware = "processor_firmware",
     edac = "edac", spd = "spd", thermal_throttle = "thermal_throttle", cpu_limits = "cpu_limits",
+    cpu_clocks = "cpu_clocks",
     cpuidle = "cpuidle",
     pressure = "pressure",
     disk = "disks", network = "network", connections = "connections",
@@ -2651,7 +2663,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
 
     local process_rows, process_status, process_status_display = process_view()
 
-    local cores = on("compute", "core_table") and core_rows(snapshot, format) or {}
+    local cores = on("compute", "core_table") and core_rows(snapshot, format, i18n) or {}
     local core_items = {}
     if on("compute", "core_bars") or on("overview", "core_overview") then
         core_items = core_bar_items(snapshot, format)
@@ -3546,6 +3558,14 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                 options.privilege, linux_host),
         },
     }
+    if snapshot.cpu_clocks and (snapshot.cpu_clocks.supported_cpus or 0)>0 then
+        table.insert(models.core_table.columns,3,{key="effective",
+            label=translated(i18n,"metrics.effective_frequency","Effective"),
+            width=14,min_width=10,align="right",priority=85})
+        models.core_table.columns[#models.core_table.columns+1]={key="effective_window",
+            label=translated(i18n,"cpu_clock.sample_window","Window"),
+            width=14,min_width=10,align="right",priority=20,full_only=true}
+    end
     return models
 end
 

@@ -13,6 +13,8 @@ local fs=Fixture.new(spec)
 local context={fs=fs,now_ns=function() return now end,scan_gpu_processes=false}
 local input=Input.new({fs=fs,scan_processes=false})
 local raw=input:sample(context)
+local denied_input=Input.new({fs={list=function() return nil,{kind="denied",message="permission denied"} end}}):sample({now_ns=context.now_ns})
+assert(denied_input.status=="denied" and denied_input.capability.state=="denied" and not denied_input.capability.available)
 assert(raw.status=="ok" and #raw.data.devices==1 and raw.data.by_id==nil)
 assert(raw.data.devices[1].metrics.utilization_percent==73)
 raw.transport,raw.sample_started_ns,raw.sample_finished_ns,raw.value_timestamp_ns="process",900000000,now,now

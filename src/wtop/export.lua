@@ -928,6 +928,33 @@ local function export_cpu_frequency(cpu_frequency)
     return result
 end
 
+local function export_cpu_clocks(clocks, quality, limit)
+    local result=json.object({schema=clocks and clocks.schema,scope="logical_cpu",includes_idle=true,
+        source=clocks and clocks.source,supported_cpus=clocks and clocks.supported_cpus or 0,
+        measured_cpus=0,read_cpus=clocks and clocks.read_cpus or 0,denied_cpus=clocks and clocks.denied_cpus or 0,
+        truncated=clocks and clocks.truncated==true or false,cpus=json.array({})})
+    local current=Quality.current_source({cpu_clocks=quality},"cpu_clocks")
+    local sum,minimum,maximum=0,nil,nil
+    for index,row in ipairs(clocks and clocks.cpus or {}) do
+        local output=copy_fields(row,{"id","package_id","core_id","source","quality","reason",
+            "effective_hz","active_performance_ratio","observed_at_ns","sample_span_ns","read_errno",
+            "interval_ns","interval_uncertainty_ns","aperf_hex","mperf_hex",
+            "aperf_delta_cycles","mperf_delta_cycles"})
+        if not current then output.quality="stale" end
+        if current and row.quality=="fresh" and type(row.effective_hz)=="number" then
+            sum=sum+row.effective_hz;minimum=math.min(minimum or row.effective_hz,row.effective_hz)
+            maximum=math.max(maximum or row.effective_hz,row.effective_hz)
+            result.measured_cpus=result.measured_cpus+1
+        end
+        if not limit or index<=limit then result.cpus[#result.cpus+1]=output else result.truncated=true end
+    end
+    if result.measured_cpus>0 then
+        result.average_effective_hz=sum/result.measured_cpus
+        result.minimum_effective_hz,result.maximum_effective_hz=minimum,maximum
+    end
+    return result
+end
+
 local function export_thermal_throttle(thermal)
     local result = json.object({ source = thermal and thermal.source,
         truncated = thermal and thermal.truncated == true or false,
@@ -1875,6 +1902,7 @@ function M.snapshot(snapshot, options)
         cpu_info = export_cpu_info(snapshot.cpu_info),
         cpu_limits = export_performance_limits(snapshot.cpu_limits, nil, false,
             snapshot.quality and snapshot.quality.cpu_limits),
+        cpu_clocks = export_cpu_clocks(snapshot.cpu_clocks,snapshot.quality and snapshot.quality.cpu_clocks),
         memory = export_memory(snapshot.memory),
         pressure = export_pressure(snapshot.pressure),
         disks = export_disks(snapshot.disks),
@@ -2497,6 +2525,8 @@ function M.agent(snapshot, options)
                 }) or nil,
                 power_watts = full.power and full.power.total_power_watts,
                 frequency = frequency_metric,
+                effective_clocks = export_cpu_clocks(full.cpu_clocks,
+                    full.quality and full.quality.cpu_clocks,device_limit),
                 thermal_throttle = json.object({
                     maximum_core_new_events_per_cpu = thermal_core_max,
                     maximum_package_new_events_per_cpu = thermal_package_max,

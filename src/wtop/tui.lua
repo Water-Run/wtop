@@ -3799,6 +3799,28 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         local sensor_lines = sensor_detail_lines(sensor_snapshot, i18n, now_ns)
         for _, line in ipairs(sensor_lines) do lines[#lines + 1] = line end
     end
+    if node.kind=="thread" then
+        for _,clock in ipairs(snapshot.cpu_clocks and snapshot.cpu_clocks.cpus or {}) do
+            if clock.id==device.id then
+                local q=Quality.current_source(snapshot.quality,"cpu_clocks") and clock.quality or "stale"
+                if device.package_id~=nil and clock.package_id~=nil and device.package_id~=clock.package_id
+                    or device.core_id~=nil and clock.core_id~=nil and device.core_id~=clock.core_id then q="gap" end
+                lines[#lines + 1]=""
+                lines[#lines + 1]=translated(i18n,"cpu_clock.includes_idle","Effective clock includes idle time")
+                add("metrics.effective_frequency","Effective",q=="fresh" and clock.effective_hz or nil,"hertz")
+                add("cpu_clock.sample_window","Window",clock.interval_ns,"nanoseconds")
+                add("cpu_clock.uncertainty","Interval uncertainty",clock.interval_uncertainty_ns,"nanoseconds")
+                add("inspector.quality","Quality",Technical.state(i18n,q))
+                if clock.reason then add("inspector.reason","Reason",Technical.reason(i18n,clock.reason)) end
+                add("metrics.source","Source",clock.source)
+                add("cpu_clock.counters","APERF / MPERF",clock.aperf_hex and clock.mperf_hex
+                    and clock.aperf_hex.." / "..clock.mperf_hex or nil)
+                add("systemd.sample_age","Sample age",type(now_ns)=="number" and clock.observed_at_ns
+                    and math.max(0,now_ns-clock.observed_at_ns) or nil,"nanoseconds")
+                break
+            end
+        end
+    end
     lines[#lines + 1] = ""
     if Hardware.related(graph, id).total > 0 then
         lines[#lines + 1] = translated(i18n, "inventory.related_key_hint",
@@ -8070,7 +8092,7 @@ local function run_loop(options, backend, renderer, engine, translator)
                 return hardware_detail_lines(engine.snapshot, hardware_detail.id,
                     translator, engine.clock:now_ns(), #hardware_detail.history)
             end, { inventory = true, hwmon = true, disk = true,
-                network = true, mounts = true, cpu_info = true, cpufreq = true, numa = true,
+                network = true, mounts = true, cpu_info = true, cpufreq = true, cpu_clocks = true, numa = true,
                 memory_devices = true }, hardware_detail)
             dirty = true
         elseif (key == "up" or key == "down" or key == "pageup"

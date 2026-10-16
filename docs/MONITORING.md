@@ -316,6 +316,26 @@ CPUFreq 的 `related_cpus` 包含离线 CPU；缺少它时只使用已知的
 [NUMA sysfs ABI](https://www.kernel.org/doc/Documentation/ABI/stable/sysfs-devices-node)与
 [CPUFreq 文档](https://docs.kernel.org/admin-guide/pm/cpufreq.html)。
 
+Linux 另有独立的逐逻辑 CPU `cpu_clocks` 观测：读取只读的
+`IA32_APERF` 与 `IA32_MPERF`，用 APERF 周期增量除以本 CPU 的实际单调
+时间窗口得到有效频率，计入空闲时间。它会低于 CPU 活跃时的时钟，不能与
+策略频率混为一谈。APERF/MPERF 只作为无量纲比值保留，不借用未知的
+参考时钟推算忙时 MHz。这个区分与 [Linux turbostat 的 Avg_MHz 定义](https://github.com/torvalds/linux/blob/master/tools/power/x86/turbostat/turbostat.8)
+一致；寄存器语义参见 [Intel 软件开发手册](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)。
+
+当前支持带相应硬件反馈能力的部分 Intel Core 型号，包含本机的混合 P/E
+核心；不把这个计数布局推广到 Atom、Phi、AMD、虚拟机或其他架构。
+这些主机仍使用各自已有的 CPUFreq/原生频率来源。Linux 需要 `msr` 设备的
+读取权限，普通权限不足时保持 denied，首次读取与计数复位保持预热或 gap，
+不会填入零频率。真实的零只表示该有效窗口没有计到执行周期。
+
+逻辑 CPU 表显示有效频率，CPU 设备详情保留窗口、窗口不确定度、
+原始计数和样本年龄；Snapshot 还保留整个读取跨度。Snapshot 的 `cpu_clocks` 与 Agent 的
+`metrics.cpu.effective_clocks` 保留来源与观测时间；Agent 摘要只使用当前
+有效数据，并明确按逻辑 CPU 求平均，列表按输出上限截断。在线列表或
+CPU 身份变化、读取失败、窗口过短或不可靠时，不发布新的有效频率。
+采集运行在独立读取进程中，超时后重新预热计数基线。
+
 当前值优先采用 `cpuinfo_cur_freq`，其次采用基于硬件反馈的
 `cpuinfo_avg_freq`；只有两者都不可读时才用 `scaling_cur_freq` 并标为
 估算。内核可能在 CPU 空闲时对硬件平均值返回 EAGAIN，此时不会把它

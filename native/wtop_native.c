@@ -1524,6 +1524,52 @@ static int l_read_cpu_perf_limits(lua_State *L) {
     return 1;
 }
 
+/* Fixed architectural frequency-feedback counters. Each read carries its own
+ * monotonic bracket: IPC receive time is not the measurement timestamp. */
+static int l_read_cpu_clock_counters(lua_State *L) {
+    lua_Integer cpu = luaL_checkinteger(L, 1);
+    char path[64], bytes[16];
+    const off_t offsets[2] = { (off_t)0xe8, (off_t)0xe7 };
+    int64_t started[2], finished[2];
+    struct stat metadata;
+    io_guard *guard;
+    luaL_argcheck(L, cpu >= 0 && cpu <= 8191, 1, "CPU must be in 0..8191");
+    (void)snprintf(path, sizeof(path), "/dev/cpu/%u/msr", (unsigned int)cpu);
+    guard = push_io_guard(L);
+    guard->descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW);
+    if (guard->descriptor < 0) return push_errno(L, "open CPU MSR");
+    if (fstat(guard->descriptor, &metadata) != 0) return push_errno(L, "stat CPU MSR");
+    if (!S_ISCHR(metadata.st_mode) || major(metadata.st_rdev) != 202
+        || minor(metadata.st_rdev) != (unsigned int)cpu) {
+        errno = EINVAL;
+        return push_errno(L, "unexpected CPU MSR device");
+    }
+    for (unsigned int index = 0; index < 2; ++index) {
+        ssize_t count;
+        started[index] = monotonic_now_ns();
+        if (started[index] < 0) return push_errno(L, "clock CPU counter read");
+        do {
+            count = pread(guard->descriptor, bytes + index * 8u, 8, offsets[index]);
+        } while (count < 0 && errno == EINTR);
+        if (count < 0) return push_errno(L, "read CPU clock counter");
+        if (count != 8) { errno = EIO; return push_errno(L, "short CPU counter read"); }
+        finished[index] = monotonic_now_ns();
+        if (finished[index] < started[index]) { errno = EIO; return push_errno(L, "CPU counter clock regression"); }
+    }
+    if (close(guard->descriptor) != 0) {
+        int saved = errno; guard->descriptor = -1; errno = saved;
+        return push_errno(L, "close CPU MSR");
+    }
+    guard->descriptor = -1;
+    lua_pushlstring(L, bytes, sizeof(bytes));
+    lua_createtable(L, 0, 4);
+    lua_pushinteger(L, (lua_Integer)started[0]); lua_setfield(L, -2, "aperf_started_ns");
+    lua_pushinteger(L, (lua_Integer)finished[0]); lua_setfield(L, -2, "aperf_finished_ns");
+    lua_pushinteger(L, (lua_Integer)started[1]); lua_setfield(L, -2, "mperf_started_ns");
+    lua_pushinteger(L, (lua_Integer)finished[1]); lua_setfield(L, -2, "mperf_finished_ns");
+    return 2;
+}
+
 /* Batch /proc reader: one Lua->C crossing for a whole process sample.
  * The per-process stat fetch is the collector's floor (open+read+close per
  * PID, ~11 us each through the guarded single-file reader); doing it from Lua
@@ -2185,6 +2231,7 @@ static const luaL_Reg functions[] = {
     {"readfile", l_readfile},
     {"readfile_at", l_readfile_at},
     {"read_cpu_perf_limits", l_read_cpu_perf_limits},
+    {"read_cpu_clock_counters", l_read_cpu_clock_counters},
     {"proc_batch", l_proc_batch},
     {"process_stat_fields", l_process_stat_fields},
     {"readlink", l_readlink},

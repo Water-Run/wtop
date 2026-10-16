@@ -60,6 +60,7 @@ local INTERVAL_FLOORS_MS = {
     spd = 60000,
     cpu_info = 30000,
     cpu_limits = 1000,
+    cpu_clocks = 1000,
     thermal_throttle = 5000,
     cpuidle = 5000,
     process = 1000,
@@ -102,6 +103,7 @@ local BACKGROUND_INTERVALS_MS = {
     cpu_info = 60000,
     thermal_throttle = 30000,
     cpu_limits = 5000,
+    cpu_clocks = 5000,
     cpuidle = 30000,
     memory = 5000,
     pressure = 2000,
@@ -130,7 +132,7 @@ local TAB_COLLECTORS = {
     compute = {
         cpu = true, cpu_info = true, memory = true, pressure = true,
         cpufreq = true, thermal_throttle = true, cpuidle = true,
-        hwmon = true, powercap = true, cpu_limits = true,
+        hwmon = true, powercap = true, cpu_limits = true, cpu_clocks = true,
     },
     memory = { memory = true, numa = true, memory_devices = true, edac = true, spd = true,
         pressure = true, system_info = true },
@@ -177,7 +179,7 @@ local TAB_WIDGET_COLLECTORS = {
     compute = {
         cpu_total = { "cpu" }, cpu_identity = { "cpu_info" },
         core_bars = { "cpu" }, load_summary = { "cpu" },
-        core_table = { "cpu" }, cpufreq_table = { "cpufreq", "cpu_info", "hwmon" },
+        core_table = { "cpu", "cpu_clocks" }, cpufreq_table = { "cpufreq", "cpu_info", "hwmon" },
         cpuidle_table = { "cpuidle" },
         thermal_throttle_table = { "thermal_throttle" }, sensor_table = { "hwmon" },
         power_table = { "powercap", "cpu_limits" },
@@ -465,7 +467,7 @@ function Engine.new(options)
         return Users.default:user(uid, clock.now_ns())
     end
     local ordered = {
-        "cpu", "cpu_info", "cpu_limits", "memory", "numa", "memory_devices", "expansion_slots",
+        "cpu", "cpu_info", "cpu_limits", "cpu_clocks", "memory", "numa", "memory_devices", "expansion_slots",
         "port_connectors",
         "onboard_devices", "firmware_batteries",
         "firmware_power_supplies",

@@ -335,6 +335,9 @@ if [ "$run_suite" = "suite" ] || [ "$run_suite" = "native" ]; then
     echo "== isolated DRM and fdinfo with this libc"
     python3 tests/test_linux_drm_worker.py --lua-prefix /opt/lua \
         --module /b/native-build/wtop_native.so --output /b/fake-drm --native-only
+    echo "== isolated CPU effective clocks with this libc"
+    python3 tests/test_linux_cpu_clocks.py --lua-prefix /opt/lua \
+        --module /b/native-build/wtop_native.so --output /b/fake-cpu-clocks
 fi
 '
 
