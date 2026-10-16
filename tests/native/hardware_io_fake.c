@@ -33,6 +33,9 @@ static const char *redirect(const char *path,char output[8192]) {
     if(firmware&&!strncmp(path,"/sys/firmware/dmi/tables",24)){
         root=firmware;prefix="/sys/firmware/dmi/tables";
     }
+    const char *drm=getenv("WTOP_DRM_FIXTURE_ROOT"),*proc=getenv("WTOP_GPU_PROC_FIXTURE_ROOT");
+    if(drm&&!strncmp(path,"/sys/class/drm",14)){root=drm;prefix="/sys/class/drm";}
+    if(proc&&!strncmp(path,"/proc",5)){root=proc;prefix="/proc";}
     size_t size=strlen(prefix);
     if(enabled&&root&&!strncmp(path,prefix,size)&&(path[size]=='/'||!path[size])){
         if(snprintf(output,8192,"%s%s",root,path+size)<8192)return output;
@@ -63,6 +66,9 @@ int open(const char *path,int flags,...) {
     if(enabled&&fd>=0&&!strcmp(path,"/sys/firmware/dmi/tables/DMI")&&getenv("WTOP_SMBIOS_FIXTURE_ROOT")){
         target_fd=fd;target_kind=2;write_pid(getenv("WTOP_SMBIOS_FIXTURE_READS"),1);
     }
+    if(enabled&&fd>=0&&strstr(path,"/gpu_busy_percent")&&getenv("WTOP_DRM_FIXTURE_ROOT")){
+        target_fd=fd;target_kind=3;write_pid(getenv("WTOP_DRM_FIXTURE_READS"),1);
+    }
     return fd;
 }
 int close(int fd) {if(fd==target_fd)target_fd=-1;return real_close(fd);}
@@ -70,13 +76,13 @@ DIR *opendir(const char *path) {char mapped[8192];return real_opendir(redirect(p
 ssize_t readlink(const char *path,char *buffer,size_t size) {char mapped[8192];return real_readlink(redirect(path,mapped),buffer,size);}
 int lstat(const char *path,struct stat *value) {char mapped[8192];return real_lstat(redirect(path,mapped),value);}
 static int blocked(void) {
-    const char *path=getenv(target_kind==2?"WTOP_SMBIOS_FIXTURE_CONTROL":"WTOP_HARDWARE_FIXTURE_CONTROL");if(!path)return 0;
+    const char *path=getenv(target_kind==3?"WTOP_DRM_FIXTURE_CONTROL":target_kind==2?"WTOP_SMBIOS_FIXTURE_CONTROL":"WTOP_HARDWARE_FIXTURE_CONTROL");if(!path)return 0;
     int fd=real_open(path,O_RDONLY|O_CLOEXEC);if(fd<0)return 0;
     char value=0;ssize_t size=real_read(fd,&value,1);real_close(fd);return size==1&&value=='1';
 }
 ssize_t read(int fd,void *buffer,size_t size) {
     if(enabled&&fd==target_fd&&blocked()){
-        write_pid(getenv(target_kind==2?"WTOP_SMBIOS_FIXTURE_ENTERED":"WTOP_HARDWARE_FIXTURE_ENTERED"),0);
+        write_pid(getenv(target_kind==3?"WTOP_DRM_FIXTURE_ENTERED":target_kind==2?"WTOP_SMBIOS_FIXTURE_ENTERED":"WTOP_HARDWARE_FIXTURE_ENTERED"),0);
         while(blocked()){struct timespec delay={0,10000000};(void)nanosleep(&delay,NULL);}
     }
     return real_read(fd,buffer,size);

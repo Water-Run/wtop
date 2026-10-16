@@ -94,13 +94,14 @@ int main(int argc,char **argv) {
     while(receive_exact(command,sizeof(command))){
         uint64_t sequence=gpu_u64(command+8);uint32_t flags=gpu_u32(command+16);
         if(gpu_u32(command)!=GPU_WIRE_MAGIC||gpu_u32(command+4)!=GPU_WIRE_VERSION
-            ||gpu_u32(command+20)||!sequence||sequence<=previous||flags>2)break;
+            ||gpu_u32(command+20)||!sequence||sequence<=previous
+            ||(flags!=2&&(flags&~5u)))break;
         previous=sequence;if(flags==2)break;
         uint64_t start=now_ns();int success=0;size_t length=0;
         const char *data="hardware_collector_error";
         if(initialized){
-            lua_pushvalue(L,1);lua_pushboolean(L,flags==1);
-            if(lua_pcall(L,1,1,0)==LUA_OK&&lua_type(L,-1)==LUA_TSTRING){
+            lua_pushvalue(L,1);lua_pushboolean(L,(flags&1u)!=0);lua_pushboolean(L,(flags&4u)!=0);
+            if(lua_pcall(L,2,1,0)==LUA_OK&&lua_type(L,-1)==LUA_TSTRING){
                 data=lua_tolstring(L,-1,&length);success=length>0&&length<=GPU_WIRE_LIMIT;
             }
         }

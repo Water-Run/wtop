@@ -377,6 +377,9 @@ static struct gpu_job *new_job(int processes,unsigned vendor,const char *configu
 }
 static int query_session(lua_State *L,unsigned wait_ms) {
     struct gpu_session *session=luaL_checkudata(L,1,GPU_SESSION_META);int processes=lua_toboolean(L,2);
+    /* Hardware bit 0 is safe mode; DRM bit 2 selects a deep fdinfo scan.
+     * The frame policy check below also discards replies for the old page. */
+    if(session->vendor>=GPU_VENDOR_COUNT&&!strcmp(vendor_names[session->vendor],"gpu_drm")&&lua_toboolean(L,4))processes|=4;
     if(session->closed){lua_pushnil(L);lua_pushstring(L,worker_error(session->vendor,CLOSED));return 2;}
     struct gpu_frame_guard *guard=lua_newuserdatauv(L,sizeof(*guard),0);guard->frame=NULL;guard->job=NULL;
     luaL_newmetatable(L,GPU_FRAME_META);lua_pushcfunction(L,frame_gc);lua_setfield(L,-2,"__gc");lua_setmetatable(L,-2);

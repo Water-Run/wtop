@@ -829,7 +829,7 @@ end
 
 local function export_gpu_providers(providers)
     local result = json.object({})
-    for _, name in ipairs({ "nvml", "amdsmi", "levelzero" }) do
+    for _, name in ipairs({ "nvml", "amdsmi", "levelzero", "drm" }) do
         local provider = type(providers) == "table" and providers[name]
         if type(provider) == "table" then
             result[name] = copy_fields(provider, {
@@ -837,6 +837,7 @@ local function export_gpu_providers(providers)
                 "transport", "sample_started_ns", "sample_finished_ns",
                 "device_count", "merged_devices", "added_devices", "incomplete_devices", "truncated",
                 "quality", "retained", "retained_device_count", "retention_truncated", "attempted_at_ns",
+                "observed_at_ns",
             })
         end
     end

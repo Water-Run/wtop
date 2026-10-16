@@ -1133,7 +1133,7 @@ local function commit_process(observations, stat, uid, previous_by_id)
   end
 end
 
-local function scan_processes(self, fs, devices, lookup, previous, context)
+local function scan_processes(self, fs, devices, lookup, previous, context, process_names)
   local enabled = self.scan_processes and (not context or context.scan_gpu_processes ~= false)
   local scan = {
     enabled = enabled,
@@ -1189,6 +1189,7 @@ local function scan_processes(self, fs, devices, lookup, previous, context)
       if stat_error and stat_error.kind == "denied" then scan.denied = scan.denied + 1
       else scan.races = scan.races + 1 end
     else
+      if process_names then process_names[pid] = Common.safe_text(stat.comm,64) end
       local fd_entries, fd_error, fd_list_truncated = fs:list(
         base .. "/fdinfo", self.max_fds_per_process
       )
@@ -1663,7 +1664,31 @@ function GPU:_levelzero_provider(fs)
   return self._levelzero_host or nil
 end
 
+function GPU:_query_sdks(context, fs)
+  local now = Common.now_ns(context)
+  local cached = self._sdk_batch
+  -- DRM round trips are polled every 25 ms. They must not pull the SDKs
+  -- below their 100 ms energy window and turn a valid watt reading back into
+  -- warmup. Reusing a reply keeps its original source observation time.
+  if self._drm_worker and cached and cached.fs == fs and now >= cached.at_ns
+      and now - cached.at_ns < 100000000
+      and cached.processes == (not context or context.scan_gpu_processes ~= false) then
+    return cached.data, cached.reasons
+  end
+  local data, reasons = {}, {}
+  data.nvml, reasons.nvml = NVML.query(self:_nvml_provider(fs),
+    not context or context.scan_gpu_processes ~= false)
+  data.amdsmi, reasons.amdsmi = AMDSMI.query(self:_amdsmi_provider(fs), false)
+  data.levelzero, reasons.levelzero = LEVELZERO.query(self:_levelzero_provider(fs))
+  if self._drm_worker then
+    self._sdk_batch = {fs=fs,at_ns=now,data=data,reasons=reasons,
+      processes=not context or context.scan_gpu_processes ~= false}
+  end
+  return data, reasons
+end
+
 function GPU:probe(context)
+  if self._drm_worker then return self._drm_worker:probe(context) end
   local fs = Common.fs(context, self.fs)
   self._observations:begin(fs, Common.now_ns(context), context and context.safe_mode)
   local found, err = inventory(fs, self.drm_path, self.max_class_entries, self.max_cards, self.max_render_nodes)
@@ -1706,61 +1731,14 @@ function GPU:probe(context)
   })
 end
 
-function GPU:sample(context, previous)
+-- This stage has no vendor queries. The isolated reader owns fdinfo counter
+-- history while the terminal composes its result with three independent SDKs.
+function GPU:_sample_drm(context, previous)
   local started = Common.now_ns(context)
   local fs = Common.fs(context, self.fs)
-  self._observations:begin(fs, started, context and context.safe_mode)
-  if context and context.scan_gpu_processes ~= nil
-      and type(context.scan_gpu_processes) ~= "boolean" then
-    return Common.result("error", started, nil, {
-      quality = "error", reason = "invalid_gpu_process_scan_policy", source = self.proc_path,
-    })
-  end
   local found, list_error = inventory(
-    fs, self.drm_path, self.max_class_entries, self.max_cards, self.max_render_nodes
-  )
-  if not found then
-    return Common.error_result(list_error, Common.now_ns(context), self.drm_path)
-  end
-  -- Loading a vendor library is an optional provider, which safe mode excludes.
-  local nvml_data, nvml_reason
-  local amdsmi_data, amdsmi_reason
-  local levelzero_data, levelzero_reason
-  if context and context.safe_mode then
-    nvml_reason = "safe_mode"
-    amdsmi_reason = "safe_mode"
-    levelzero_reason = "safe_mode"
-  else
-    nvml_data, nvml_reason = NVML.query(self:_nvml_provider(fs),
-      not context or context.scan_gpu_processes ~= false)
-    amdsmi_data, amdsmi_reason = AMDSMI.query(self:_amdsmi_provider(fs), false)
-    levelzero_data, levelzero_reason = LEVELZERO.query(self:_levelzero_provider(fs))
-  end
-  local vendor_data = { nvml=nvml_data, amdsmi=amdsmi_data, levelzero=levelzero_data }
-  local vendor_reasons = { nvml=nvml_reason, amdsmi=amdsmi_reason, levelzero=levelzero_reason }
-  if #found.cards == 0 then
-    for source, data in pairs(vendor_data) do
-      self._observations:observe(source, data, {}, Common.now_ns(context))
-    end
-  end
-  local cached = false
-  for _, state in pairs(self._observations.sources) do cached = cached or #state.records > 0 end
-  if #found.cards == 0 and not cached and next(vendor_data) == nil then
-    local finished = Common.now_ns(context)
-    local source_reason, retry, failed = GPUWorker.retry(nvml_reason, amdsmi_reason, levelzero_reason)
-    local reason = source_reason or "no_drm_card_devices"
-    local result = Common.result(failed and "error" or "unavailable", finished, nil, {
-      quality = failed and "error" or "unavailable",
-      reason = reason,
-      retry_after_ms = retry,
-      duration_ns = Common.elapsed_ns(finished, started) or 0,
-      source = self.drm_path,
-    })
-    result.capability = Capability.unavailable(reason, { source = self.drm_path, retry_after_ms = retry })
-    result.sampling_pending = retry == 250
-    return result
-  end
-
+    fs, self.drm_path, self.max_class_entries, self.max_cards, self.max_render_nodes)
+  if not found then return Common.error_result(list_error, Common.now_ns(context), self.drm_path) end
   local devices = {}
   local by_id = {}
   local used_ids = {}
@@ -1784,20 +1762,14 @@ function GPU:sample(context, previous)
     estimated_render_links = 0,
   }
   attach_render_nodes(fs, self.drm_path, found.render_nodes, devices, lookup, drm_scan)
-  local anchors = Observations.anchors(devices)
-  if #found.cards > 0 then
-    for source, data in pairs(vendor_data) do
-      self._observations:observe(source, data, anchors, Common.now_ns(context))
-    end
-  end
-
   local previous_data = Common.previous_data(previous)
   local previous_scan = previous_data and previous_data.process_scan
   local process_previous = previous
   if (not previous_scan or previous_scan.enabled ~= true) and self._last_process_result then
     process_previous = self._last_process_result
   end
-  local process_scan = scan_processes(self, fs, devices, lookup, process_previous, context)
+  local process_names = {}
+  local process_scan = scan_processes(self, fs, devices, lookup, process_previous, context, process_names)
   local partial = found.truncated or drm_scan.unattached_render_nodes > 0
     or process_scan.quality == "partial"
     or (process_scan.enabled and process_scan.status ~= "ok")
@@ -1806,17 +1778,115 @@ function GPU:sample(context, previous)
   for _, device in ipairs(devices) do
     finalize_processes(device, process_scan)
   end
+  local finished = Common.now_ns(context)
+  local result = Common.result("ok", finished, {
+    devices = devices, by_id = by_id, process_scan = process_scan, drm_scan = drm_scan,
+    process_names = process_names,
+    anchors = Observations.anchors(devices),
+  }, { quality = partial and "partial" or (estimated and "estimated" or "fresh"),
+    reason = partial and "gpu_data_incomplete" or (estimated and "gpu_identity_inferred" or nil),
+    duration_ns = Common.elapsed_ns(finished, started) or 0, source = {self.drm_path, self.proc_path} })
+  result.capability = #devices > 0 and Capability.available({source=self.drm_path,
+    details={cards=#devices,render_nodes=#found.render_nodes,truncated=truncated}})
+    or Capability.unavailable("no_drm_card_devices",{source=self.drm_path})
+  if process_scan.enabled and process_scan.status == "ok" then self._last_process_result = result end
+  return result
+end
+
+function GPU:sample(context, previous)
+  local started = Common.now_ns(context)
+  local fs = Common.fs(context, self.fs)
+  self._observations:begin(fs, started, context and context.safe_mode)
+  if context and context.scan_gpu_processes ~= nil
+      and type(context.scan_gpu_processes) ~= "boolean" then
+    return Common.result("error", started, nil, {
+      quality = "error", reason = "invalid_gpu_process_scan_policy", source = self.proc_path,
+    })
+  end
+  local drm = self._drm_worker and self._drm_worker:sample(context) or self:_sample_drm(context, previous)
+  if not self._drm_worker and drm.status ~= "ok" then return drm end
+  local drm_cards = #drm.data.devices
+  -- Loading a vendor library is an optional provider, which safe mode excludes.
+  local nvml_data, nvml_reason
+  local amdsmi_data, amdsmi_reason
+  local levelzero_data, levelzero_reason
+  if context and context.safe_mode then
+    self._sdk_batch = nil
+    nvml_reason = "safe_mode"
+    amdsmi_reason = "safe_mode"
+    levelzero_reason = "safe_mode"
+  else
+    local data, reasons = self:_query_sdks(context, fs)
+    nvml_data, nvml_reason = data.nvml, reasons.nvml
+    amdsmi_data, amdsmi_reason = data.amdsmi, reasons.amdsmi
+    levelzero_data, levelzero_reason = data.levelzero, reasons.levelzero
+  end
+  local vendor_data = { nvml=nvml_data, amdsmi=amdsmi_data, levelzero=levelzero_data }
+  local vendor_reasons = { nvml=nvml_reason, amdsmi=amdsmi_reason, levelzero=levelzero_reason }
+  if #drm.data.devices == 0 then
+    for source, data in pairs(vendor_data) do
+      self._observations:observe(source, data, {}, Common.now_ns(context))
+    end
+  end
+  local cached = false
+  for _, state in pairs(self._observations.sources) do cached = cached or #state.records > 0 end
+  if #drm.data.devices == 0 and not cached and next(vendor_data) == nil then
+    local finished = Common.now_ns(context)
+    local source_reason, retry, failed = GPUWorker.retry(nvml_reason, amdsmi_reason, levelzero_reason)
+    retry = retry or drm.retry_after_ms
+    local reason = source_reason or (drm.status ~= "ok" and drm.reason) or "no_drm_card_devices"
+    local result = Common.result(failed and "error" or "unavailable", finished, nil, {
+      quality = failed and "error" or "unavailable",
+      reason = reason,
+      retry_after_ms = retry,
+      duration_ns = Common.elapsed_ns(finished, started) or 0,
+      source = self.drm_path,
+    })
+    result.capability = Capability.unavailable(reason, { source = self.drm_path, retry_after_ms = retry })
+    result.sampling_pending = retry == 250 or drm.sampling_pending
+    if drm.sampling_pending then result.retry_after_ms = 25 end
+    result.defer_publish = drm.defer_publish
+    return result
+  end
+
+  local devices = drm.data.devices
+  local by_id, used_ids = {}, {}
+  local lookup = {by_bdf={},by_device_key={},by_driver={},by_node={}}
+  for _, device in ipairs(devices) do
+    by_id[device.id], used_ids[device.id] = device, true
+    if device.pci_bdf then lookup.by_bdf[device.pci_bdf] = device end
+    if device.device_target then lookup.by_device_key[device.device_target] = device end
+    if device.driver then
+      lookup.by_driver[device.driver] = lookup.by_driver[device.driver] or {}
+      lookup.by_driver[device.driver][#lookup.by_driver[device.driver]+1] = device
+    end
+    for _, node in ipairs(device.drm_nodes or {}) do lookup.by_node[node.name] = device end
+  end
+  local drm_scan, process_scan = drm.data.drm_scan, drm.data.process_scan
+  local anchors = drm.data.anchors
+  if #devices > 0 then
+    for source, data in pairs(vendor_data) do
+      self._observations:observe(source, data, anchors, Common.now_ns(context))
+    end
+  end
+  local partial = drm.retained or drm.status ~= "ok" or drm_scan.truncated
+    or drm_scan.unattached_render_nodes > 0 or process_scan.quality == "partial"
+    or (process_scan.enabled and process_scan.status ~= "ok")
+  local estimated = drm_scan.estimated_render_links > 0
+  local truncated = drm_scan.truncated or process_scan.truncated
   local providers = {
     nvml = { status = "unavailable", reason = nvml_reason },
     amdsmi = { status = "unavailable", reason = amdsmi_reason },
     levelzero = { status = "unavailable", reason = levelzero_reason },
   }
+  local drm_fallback = self._drm_worker and self._drm_worker:prepare(drm)
   if nvml_data then
     local before = Observations.before(devices)
     providers.nvml = NVML.merge(devices, lookup, nvml_data, {
       used_ids = used_ids, now_ns = Common.now_ns(context),
       include_processes = process_scan.enabled == true,
       process_name = function(pid)
+        if self._drm_worker then return (drm.data.process_names or {})[pid] end
         local comm = fs:read(self.proc_path .. "/" .. tostring(pid) .. "/comm", 4096)
         return type(comm) == "string" and Common.safe_text(Common.trim(comm), 64) or nil
       end,
@@ -1837,6 +1907,7 @@ function GPU:sample(context, previous)
     Observations.mark(devices, before, "levelzero", levelzero_data, Common.now_ns(context))
     for _, device in ipairs(devices) do by_id[device.id] = device end
   end
+  if self._drm_worker then self._drm_worker:restore(drm_fallback) end
   local retained = 0
   for _, source in ipairs({ "nvml", "amdsmi", "levelzero" }) do
     local count, state = self._observations:apply(source, devices, lookup, used_ids,
@@ -1872,9 +1943,11 @@ function GPU:sample(context, previous)
   end)
 
   local finished = Common.now_ns(context)
-  local current = #found.cards > 0
+  local current = drm_cards > 0 and drm.status == "ok" and not drm.retained
   for _, data in pairs(vendor_data) do current = current or #data.devices > 0 end
   local source_reason, retry = GPUWorker.retry(nvml_reason, amdsmi_reason, levelzero_reason)
+  source_reason = source_reason or (drm.status ~= "ok" and drm.reason)
+  if self._drm_worker then providers.drm = self._drm_worker:metadata(drm) end
   local result = Common.result("ok", finished, {
     schema = "dev.waterrun.wtop.gpu/v2",
     devices = devices,
@@ -1885,7 +1958,7 @@ function GPU:sample(context, previous)
     partial = partial,
     truncated = truncated,
   }, {
-    quality = not current and (retained > 0 and "stale" or "unavailable")
+    quality = not current and ((retained > 0 or drm.retained) and "stale" or "unavailable")
       or (partial and "partial" or (estimated and "estimated" or "fresh")),
     -- Two categories, and the measurement that chose them is in the tests
     -- rather than here: instrumenting the two locals above across the whole
@@ -1916,18 +1989,13 @@ function GPU:sample(context, previous)
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = { self.drm_path, self.proc_path },
   })
-  -- A transient /proc denial must not erase the last good counter baseline;
-  -- otherwise the next successful deep scan reports a synthetic gap.
-  if process_scan.enabled and process_scan.status == "ok" then
-    self._last_process_result = result
-  end
   if current then
     result.capability = Capability.available({source = self.drm_path,
       details = {cards = #devices, truncated = truncated}})
   else
     result.capability = Capability.unavailable(source_reason or "no_drm_card_devices",
       {source = self.drm_path, retry_after_ms = retry})
-    if retained > 0 then
+    if retained > 0 or drm.retained then
       local latest = 0
       for _, device in ipairs(devices) do
         for _, observation in pairs(device.observations or {}) do
@@ -1937,12 +2005,24 @@ function GPU:sample(context, previous)
       result.value_timestamp_ns = latest
     end
   end
-  result.sampling_pending = retry == 250 or providers.levelzero.pending_measurements == true
-  if result.sampling_pending then result.retry_after_ms = 100 end
+  result.sampling_pending = retry == 250 or drm.sampling_pending or providers.levelzero.pending_measurements == true
+  result.defer_publish = drm.defer_publish and next(vendor_data) == nil
+  if result.sampling_pending then result.retry_after_ms = drm.sampling_pending and 25 or 100 end
+  if self._drm_worker then
+    local latest = drm.value_timestamp_ns or 0
+    for _,device in ipairs(devices) do
+      for _,observation in pairs(device.observations or {}) do
+        latest = math.max(latest,observation.observed_at_ns or 0)
+      end
+    end
+    if latest > 0 then result.value_timestamp_ns = latest end
+  end
   return result
 end
 
 function GPU:stop()
+  self._sdk_batch = nil
+  if self._drm_worker then self._drm_worker:close() end
   self._observations:clear()
   for _, source in ipairs({ "nvml", "amdsmi", "levelzero" }) do
     local close = self["_" .. source .. "_close"]

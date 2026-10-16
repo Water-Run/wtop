@@ -332,6 +332,9 @@ if [ "$run_suite" = "suite" ] || [ "$run_suite" = "native" ]; then
     echo "== isolated hardware I/O with this libc"
     python3 tests/test_linux_hardware_worker.py --lua-prefix /opt/lua \
         --module /b/native-build/wtop_native.so --output /b/fake-hardware --native-only
+    echo "== isolated DRM and fdinfo with this libc"
+    python3 tests/test_linux_drm_worker.py --lua-prefix /opt/lua \
+        --module /b/native-build/wtop_native.so --output /b/fake-drm --native-only
 fi
 '
 

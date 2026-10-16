@@ -6,7 +6,7 @@ local M = {}
 local Proxy = {}
 Proxy.__index = Proxy
 M.sources = { hwmon = true, cpufreq = true, powercap = true, cpu_limits = true,
-    thermal_throttle = true, cpuidle = true, thermal_zones = true, smbios_input = true }
+    thermal_throttle = true, cpuidle = true, thermal_zones = true, smbios_input = true, gpu_drm = true }
 
 function M.available()
     return Native.available and type(Native.hardware_worker_open) == "function"
@@ -35,7 +35,9 @@ function Proxy:_read(context)
         if not ok or not session then return nil, "hardware_worker_unavailable" end
         self.session = session
     end
-    local ok, bytes, metadata = pcall(Native.hardware_worker_query, self.session, safe_mode)
+    local scan = not context or context.scan_gpu_processes ~= false
+    self.scan = scan
+    local ok, bytes, metadata = pcall(Native.hardware_worker_query, self.session, safe_mode, 0, scan)
     if not ok then return nil, "hardware_allocation_failed" end
     if not bytes then
         if metadata == "hardware_query_pending" then
@@ -77,9 +79,11 @@ end
 function Proxy:sample(context)
     local result, reason
     local safe_mode = context and context.safe_mode == true or false
-    if self.ready and self.safe_mode == safe_mode and not self.closed then
+    local scan = not context or context.scan_gpu_processes ~= false
+    if self.ready and self.safe_mode == safe_mode and not self.closed
+        and (self.id ~= "gpu_drm" or self.scan == scan) then
         result, self.ready = self.ready, nil
-    else result, reason = self:_read(context) end
+    else self.ready = nil; result, reason = self:_read(context) end
     if result then return result end
     local pending = reason == "hardware_query_pending"
     local now = Common.now_ns(context)

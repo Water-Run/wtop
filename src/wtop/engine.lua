@@ -457,6 +457,9 @@ function Engine.new(options)
                 collectors[id] = hardware_inputs.smbios:wrap(collectors[id])
             end
         end
+        if collectors.gpu and not collector_options.gpu and not collector_options.common then
+            collectors.gpu._drm_worker = require("wtop.collectors.gpu_drm_worker").new()
+        end
     end
     context.resolve_username = context.resolve_username or function(uid)
         return Users.default:user(uid, clock.now_ns())
