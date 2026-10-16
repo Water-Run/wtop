@@ -203,8 +203,8 @@ assert(cleanup.first and cleanup.second,"one failed input cleanup prevented anot
 -- without calling a synchronous native API on pending/error paths.
 local Portable = require("wtop.collectors.portable")
 local slots, portable_closes, pending_energy = {}, 0, false
-local transport = {available=true,hardware_worker_sources={powercap=true,cpufreq=true,gpu=true}}
-for _,id in ipairs({"powercap","cpufreq","gpu"}) do
+local transport = {available=true,hardware_worker_sources={powercap=true,cpufreq=true,gpu=true,hwmon=true}}
+for _,id in ipairs({"powercap","cpufreq","gpu","hwmon"}) do
     transport["collect_"..id]=function() error("parent entered a synchronous hardware API") end
 end
 transport.hardware_worker_open=function(id,configuration)
@@ -222,7 +222,7 @@ transport.hardware_worker_close=function(slot,wait)
     assert(wait==0 and slots[slot.id]==slot);portable_closes=portable_closes+1
 end
 local portable_readers={};now=100
-for _,id in ipairs({"powercap","cpufreq","gpu"}) do
+for _,id in ipairs({"powercap","cpufreq","gpu","hwmon"}) do
     local collector=Portable.new(id,{native=transport});portable_readers[id]=collector
     assert(collector:probe(context).available)
     local result=collector:sample(context)
@@ -233,7 +233,7 @@ assert(portable_readers.powercap:sample(context).sampling_pending)
 assert(portable_readers.cpufreq:sample(context).data.source=="cpufreq")
 assert(portable_readers.gpu:sample(context).data.source=="gpu")
 for _,collector in pairs(portable_readers) do collector:close() end
-assert(portable_closes==3)
+assert(portable_closes==4)
 local direct_calls=0
 local direct=Portable.new("powercap",{native={collect_powercap=function()
     direct_calls=direct_calls+1;return {zones={}}
@@ -266,6 +266,23 @@ child_now,energy=5000000000,3
 assert(Wire.decode(child(false)).result.data.zones[1].power_watts==3)
 local restarted=create_reader("powercap",Wire.encode({}))
 assert(Wire.decode(restarted(false)).result.data.zones[1].power_watts==nil)
+local temperature=40
+child_native.collect_hwmon=function()return {devices={{id="hid:chip",name="chip",class="hid",source="iohid",
+    quality="fresh",identity_quality="fresh",_source_epoch="hid-epoch",channels={{id="ioreg:100",
+    _source_instance="ioreg:100",type="temperature",unit="celsius",label="Core",quality="fresh",
+    identity_quality="fresh",input=temperature}}}}}end
+local sensors=create_reader("hwmon",Wire.encode({}))
+child_now=6000000000
+local sensor_first=Wire.decode(sensors(false)).result.data.devices[1].channels[1]
+assert(sensor_first.session.samples==1 and sensor_first.session.minimum==40)
+child_now,temperature=7000000000,50
+local sensor_second=Wire.decode(sensors(false)).result.data.devices[1].channels[1]
+assert(sensor_second.session.samples==2 and sensor_second.session.minimum==40
+    and sensor_second.session.maximum==50 and sensor_second.session.average==45)
+local new_sensors=create_reader("hwmon",Wire.encode({}))
+local new_sensor=Wire.decode(new_sensors(false)).result.data.devices[1].channels[1]
+assert(new_sensor.session.samples==1 and new_sensor.session.minimum==50 and new_sensor.session.maximum==50,
+    "a new sensor reader reused another reader's session statistics")
 package.loaded["wtop.native"],package.loaded["wtop.core.hardware_worker"]=prior_native,prior_core
 
 -- Default construction is a different path from an injected collector set.

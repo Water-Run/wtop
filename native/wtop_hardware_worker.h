@@ -5,8 +5,8 @@ int wtop_hardware_worker_open(lua_State *L);
 int wtop_hardware_worker_query(lua_State *L);
 int wtop_hardware_worker_close(lua_State *L);
 #ifdef __APPLE__
-#define WTOP_HARDWARE_COUNT 3
-#define WTOP_HARDWARE_NAMES "cpufreq","powercap","gpu"
+#define WTOP_HARDWARE_COUNT 4
+#define WTOP_HARDWARE_NAMES "cpufreq","powercap","gpu","hwmon"
 #else
 #define WTOP_HARDWARE_COUNT 10
 #define WTOP_HARDWARE_NAMES \

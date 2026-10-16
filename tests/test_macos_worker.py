@@ -32,28 +32,29 @@ def main():
             time.sleep(.01)
         raise AssertionError('owned reader was not reaped: '+str(pid))
 
-    with (work/'transport.stderr').open('wb') as error_log:
-        parent=subprocess.Popen([str(lua),str(ROOT/'tests/native/macos_worker_smoke.lua'),str(ROOT)],
-            cwd=ROOT,env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=error_log,text=True,bufsize=1)
-        def event(expected):
-            ready,_,_=select.select([parent.stdout],[],[],20)
-            assert ready,'reader test event timed out: '+expected
-            text=parent.stdout.readline();assert text,'reader test exited before '+expected
-            value=json.loads(text);assert value['event']==expected,value
-            return value
-        try:
-            initial=event('ready')['pids'];assert len(set(initial.values()))==3
-            for pid in initial.values():path_for(pid)
-            stopped=initial['powercap'];os.kill(stopped,signal.SIGSTOP)
-            parent.stdin.write('stopped\n');parent.stdin.flush()
-            event('timeout');gone(stopped)
-            parent.stdin.write('recover\n');parent.stdin.flush()
-            recovered=event('recovered')['pids'];assert recovered['powercap']!=stopped
-            path_for(recovered['powercap'])
-            parent.stdin.write('close\n');parent.stdin.flush()
-            assert parent.wait(timeout=4)==0
-        finally:
-            if parent.poll()is None:parent.kill();parent.wait(timeout=3)
+    for suspended in ['powercap','hwmon']:
+        with (work/('transport-'+suspended+'.stderr')).open('wb') as error_log:
+            parent=subprocess.Popen([str(lua),str(ROOT/'tests/native/macos_worker_smoke.lua'),str(ROOT),suspended],
+                cwd=ROOT,env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=error_log,text=True,bufsize=1)
+            def event(expected):
+                ready,_,_=select.select([parent.stdout],[],[],20)
+                assert ready,'reader test event timed out: '+expected
+                text=parent.stdout.readline();assert text,'reader test exited before '+expected
+                value=json.loads(text);assert value['event']==expected,value
+                return value
+            try:
+                initial=event('ready')['pids'];assert len(set(initial.values()))==4
+                for pid in initial.values():path_for(pid)
+                stopped=initial[suspended];os.kill(stopped,signal.SIGSTOP)
+                parent.stdin.write('stopped\n');parent.stdin.flush()
+                assert event('timeout')['source']==suspended;gone(stopped)
+                parent.stdin.write('recover\n');parent.stdin.flush()
+                recovered=event('recovered')['pids'];assert recovered[suspended]!=stopped
+                path_for(recovered[suspended])
+                parent.stdin.write('close\n');parent.stdin.flush()
+                assert parent.wait(timeout=4)==0
+            finally:
+                if parent.poll()is None:parent.kill();parent.wait(timeout=3)
     for pid in readers:gone(pid)
     for path,identity in images.items():
         assert not path.exists()or (path.stat().st_dev,path.stat().st_ino)!=identity,'reader image leaked: '+str(path)
@@ -71,16 +72,16 @@ def main():
                     for line in result.stdout.splitlines():
                         columns=line.split(None,2)
                         if len(columns)==3 and columns[1]==str(process.pid) and 'wtop-hardware-' in columns[2]:owned.append(int(columns[0]))
-                    if len(owned)==3:break
+                    if len(owned)==4:break
                     time.sleep(.01)
-                assert len(owned)==3,'shutdown fixture did not start all three readers'
+                assert len(owned)==4,'shutdown fixture did not start all four readers'
                 vm_images=[path_for(pid) for pid in owned]
                 process.stdin.write('close\n');process.stdin.flush();assert process.wait(timeout=3)==0
                 for pid in owned:gone(pid)
                 for path in vm_images:assert not path.exists(),'VM shutdown leaked its reader image'
             finally:
                 if process.poll()is None:process.kill();process.wait(timeout=3)
-    print('ok: macOS three independent readers, monotonic frames, suspended-source timeout/reap, recovery, malformed config, private-image cleanup and three standalone VM exits')
+    print('ok: macOS four independent readers, monotonic frames, power/sensor timeout/reap, independent recovery, malformed config, private-image cleanup and three standalone VM exits')
 
 
 if __name__=="__main__":

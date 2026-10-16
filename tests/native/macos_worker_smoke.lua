@@ -3,7 +3,9 @@ package.path=root.."/src/?.lua;"..root.."/src/?/init.lua;"..package.path
 local Native=require("wtop.native")
 local Wire=require("wtop.core.worker_wire")
 local Json=require("wtop.format.json")
-local names={"cpufreq","powercap","gpu"}
+local names={"cpufreq","powercap","gpu","hwmon"}
+local suspended=arg[2]or "powercap"
+assert(suspended=="powercap"or suspended=="hwmon")
 local sessions,pids,counts={},{},{}
 local function emit(value)print(Json.encode(value));io.stdout:flush()end
 local function now()return Native.monotonic_ns()end
@@ -19,7 +21,7 @@ local function query(id)
     pids[id]=metadata.worker_pid;counts[id]=(counts[id]or 0)+1
     return decoded,metadata
 end
-assert(not pcall(Native.hardware_worker_open,"hwmon",Wire.encode({})))
+assert(not pcall(Native.hardware_worker_open,"thermal_zones",Wire.encode({})))
 for _,id in ipairs(names)do
     assert(Native.hardware_worker_sources[id]);sessions[id]=Native.hardware_worker_open(id,Wire.encode({}))
 end
@@ -27,27 +29,36 @@ local deadline=now()+4e9
 repeat
     for _,id in ipairs(names)do if not pids[id]then query(id)end end
     Native.sleep_ms(10)
-until (pids.cpufreq and pids.powercap and pids.gpu)or now()>deadline
-assert(pids.cpufreq and pids.powercap and pids.gpu,"initial reader frames unavailable")
-local old_power=pids.powercap
+until (pids.cpufreq and pids.powercap and pids.gpu and pids.hwmon)or now()>deadline
+assert(pids.cpufreq and pids.powercap and pids.gpu and pids.hwmon,"initial reader frames unavailable")
+local old_pid=pids[suspended]
 emit({event="ready",pids=pids})
 assert(io.read("l")=="stopped")
-local healthy_cpu,healthy_gpu=counts.cpufreq,counts.gpu
+local before={}
+for _,id in ipairs(names)do before[id]=counts[id]end
+local function healthy_advanced()
+    for _,id in ipairs(names)do
+        if id~=suspended and counts[id]<=before[id]then return false end
+    end
+    return true
+end
 deadline=now()+4e9;local failure
 repeat
-    local _,reason=query("powercap");failure=reason
-    query("cpufreq");query("gpu");Native.sleep_ms(10)
-until (failure=="hardware_query_timeout" and counts.cpufreq>healthy_cpu and counts.gpu>healthy_gpu)or now()>deadline
-assert(failure=="hardware_query_timeout" and counts.cpufreq>healthy_cpu and counts.gpu>healthy_gpu,
+    local _,reason=query(suspended);failure=reason
+    for _,id in ipairs(names)do if id~=suspended then query(id)end end
+    Native.sleep_ms(10)
+until (failure=="hardware_query_timeout" and healthy_advanced())or now()>deadline
+assert(failure=="hardware_query_timeout" and healthy_advanced(),
     "a suspended reader stopped independent polling or escaped its deadline")
-emit({event="timeout",reason=failure,healthy={"cpufreq","gpu"}})
+emit({event="timeout",reason=failure,source=suspended})
 assert(io.read("l")=="recover")
 deadline=now()+11e9;local recovered
 repeat
-    local bytes=query("powercap");if bytes then recovered=true;break end
-    query("cpufreq");query("gpu");Native.sleep_ms(25)
+    local bytes=query(suspended);if bytes then recovered=true;break end
+    for _,id in ipairs(names)do if id~=suspended then query(id)end end
+    Native.sleep_ms(25)
 until now()>deadline
-assert(recovered and pids.powercap~=old_power,"reader did not recover with a new process")
+assert(recovered and pids[suspended]~=old_pid,"reader did not recover with a new process")
 local invalid=Native.hardware_worker_open("powercap","bad")
 deadline=now()+3e9;local reason
 repeat
