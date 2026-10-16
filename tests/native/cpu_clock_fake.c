@@ -18,11 +18,17 @@ static int (*real_stat)(int,struct stat *);
 static int (*real_fxstat)(int,int,struct stat *);
 static ssize_t (*real_read)(int,void *,size_t);
 static ssize_t (*real_pread)(int,void *,size_t,off_t);
+static ssize_t (*real_pread64)(int,void *,size_t,off64_t);
+static ssize_t (*real_pread_chk)(int,void *,size_t,off_t,size_t);
+static ssize_t (*real_pread64_chk)(int,void *,size_t,off64_t,size_t);
 static int enabled,tracked[4096];
 __attribute__((constructor)) static void setup(void) {
     real_open=dlsym(RTLD_NEXT,"open");real_close=dlsym(RTLD_NEXT,"close");
     real_stat=dlsym(RTLD_NEXT,"fstat");real_read=dlsym(RTLD_NEXT,"read");real_pread=dlsym(RTLD_NEXT,"pread");
     real_fxstat=dlsym(RTLD_NEXT,"__fxstat");
+    real_pread64=dlsym(RTLD_NEXT,"pread64");
+    real_pread_chk=dlsym(RTLD_NEXT,"__pread_chk");
+    real_pread64_chk=dlsym(RTLD_NEXT,"__pread64_chk");
     char command[64]={0};int fd=real_open("/proc/self/cmdline",O_RDONLY|O_CLOEXEC);
     if(fd>=0){ssize_t n=real_read(fd,command,sizeof(command)-1);real_close(fd);
         if(n>0&&!strcmp(command,"wtop-hardware-reader")){
@@ -79,13 +85,32 @@ int __fxstat(int version,int fd,struct stat *value) {
     return decorate_stat(real_fxstat(version,fd,value),fd,value);
 }
 int close(int fd) {if(fd>=0&&fd<4096)tracked[fd]=0;return real_close(fd);}
-ssize_t pread(int fd,void *data,size_t size,off_t offset) {
+static off64_t counter_offset(int fd,size_t size,off64_t offset) {
     if(fd>=0&&fd<4096&&tracked[fd]){
         assert(size==8&&(offset==0xe8||offset==0xe7));
         if(blocked()){
             entered();while(blocked()){struct timespec pause={0,10000000};(void)nanosleep(&pause,NULL);}
         }
-        return real_pread(fd,data,size,offset==0xe8?0:8);
+        return offset==0xe8?0:8;
     }
-    return real_pread(fd,data,size,offset);
+    return offset;
+}
+ssize_t pread(int fd,void *data,size_t size,off_t offset) {
+    return real_pread(fd,data,size,(off_t)counter_offset(fd,size,(off64_t)offset));
+}
+/* Cover large-file and fortified entry points as well as ordinary pread.
+ * Ubuntu's GCC 13 sanitizer build emits __pread_chk for this native call. */
+ssize_t pread64(int fd,void *data,size_t size,off64_t offset) {
+    if(!real_pread64){errno=ENOSYS;return -1;}
+    return real_pread64(fd,data,size,counter_offset(fd,size,offset));
+}
+ssize_t __pread_chk(int fd,void *data,size_t size,off_t offset,size_t capacity) {
+    if(!real_pread_chk){errno=ENOSYS;return -1;}
+    if(size>capacity)return real_pread_chk(fd,data,size,offset,capacity);
+    return real_pread_chk(fd,data,size,(off_t)counter_offset(fd,size,(off64_t)offset),capacity);
+}
+ssize_t __pread64_chk(int fd,void *data,size_t size,off64_t offset,size_t capacity) {
+    if(!real_pread64_chk){errno=ENOSYS;return -1;}
+    if(size>capacity)return real_pread64_chk(fd,data,size,offset,capacity);
+    return real_pread64_chk(fd,data,size,counter_offset(fd,size,offset),capacity);
 }

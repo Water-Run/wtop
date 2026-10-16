@@ -18,7 +18,9 @@ local function settle(seconds,predicate)
  until false
 end
 local warm=settle(3,function(r)return r.data~=nil end)
-assert(warm.data.cpus[1].reason=="cpu_clock_warmup" and warm.data.cpus[1].effective_hz==nil)
+assert(warm.data.cpus[1].reason=="cpu_clock_warmup" and warm.data.cpus[1].effective_hz==nil,
+ "initial clock sample: quality="..tostring(warm.data.cpus[1].quality)
+ .." reason="..tostring(warm.data.cpus[1].reason).." errno="..tostring(warm.data.cpus[1].read_errno))
 Native.sleep_ms(150);write(counters,string.pack("<i8i8",1100000000,1200000000))
 local fresh=settle(3,function(r)return r.data and r.data.measured_cpus==1 end)
 local row=fresh.data.cpus[1]

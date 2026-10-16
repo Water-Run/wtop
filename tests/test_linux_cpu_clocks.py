@@ -13,6 +13,8 @@ def main():
  args=p.parse_args();work=args.output.resolve();work.mkdir(parents=True,exist_ok=True)
  library=work/'cpu_clock_fake.so'
  subprocess.run(shlex.split(args.cc)+shlex.split(args.cflags)+['-shared','-fPIC',str(ROOT/'tests/native/cpu_clock_fake.c'),'-ldl','-o',str(library)],check=True)
+ probe=work/'cpu-clock-fake-probe'
+ subprocess.run(shlex.split(args.cc)+shlex.split(args.cflags)+[str(ROOT/'tests/native/cpu_clock_fake_probe.c'),'-o',str(probe)],check=True)
  with tempfile.TemporaryDirectory(prefix='cpu-clock-',dir=work) as temp:
   directory=Path(temp);tree=directory/'cpu';topology=tree/'cpu0/topology';topology.mkdir(parents=True)
   (tree/'online').write_text('0\n');(topology/'physical_package_id').write_text('0\n');(topology/'core_id').write_text('0\n')
@@ -23,5 +25,8 @@ def main():
        'LUA_CPATH':str(args.module.resolve().parent/'?.so')+';;',
        'LD_PRELOAD':(os.environ['LD_PRELOAD']+':' if os.environ.get('LD_PRELOAD') else '')+str(library),
        'WTOP_CPU_CLOCK_ROOT':str(devices),'WTOP_CPU_CLOCK_CONTROL':str(control),'WTOP_CPU_CLOCK_ENTERED':str(entered)}
+  counters.write_bytes(struct.pack('<QQ',0x1122334455667788,0x0102030405060708))
+  subprocess.run(['wtop-hardware-reader','fixture','cpu_clocks'],executable=str(probe),cwd=ROOT,env=env,check=True,timeout=10)
+  counters.write_bytes(struct.pack('<QQ',1000000000,1000000000))
   subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/cpu_clock_worker_smoke.lua'),str(ROOT),str(tree),str(info),str(counters),str(control),str(entered)],cwd=ROOT,env=env,check=True,timeout=25)
 if __name__=='__main__':main()

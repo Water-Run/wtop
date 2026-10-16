@@ -268,6 +268,8 @@ check-native-warnings: $(LUA_STAMP) $(NATIVE_REVISION_HEADER) $(NATIVE_VERSION_H
 	@$(CC) $(filter-out -fPIC -shared,$(STRICT_NATIVE_CFLAGS)) -DWTOP_HARDWARE_WORKER -o /dev/null $(HARDWARE_WORKER_SOURCES) $(LUA_PREFIX)/lib/liblua.a -ldl -lm -pthread
 	@$(CC) $(STRICT_NATIVE_CFLAGS) -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 \
 		-o /dev/null tests/native/hardware_io_fake.c -ldl
+	@$(CC) $(STRICT_NATIVE_CFLAGS) -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 \
+		-o /dev/null tests/native/cpu_clock_fake.c -ldl
 	@echo "wtop: $(words $(NATIVE_SOURCES)) native sources clean under: $(STRICT_NATIVE_CFLAGS)"
 
 # The sanitized module is a separate file on purpose.  Overwriting
