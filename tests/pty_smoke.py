@@ -2180,6 +2180,9 @@ def run_process_numa_placement() -> None:
         (("sleep", 0.5), None),
         (b"\r", None),
         (("sleep", 2.0), None),
+        # NUMA is near the end of the detail body. Reader/controller threads
+        # can make the preceding sections exceed a 70-row viewport.
+        (b"\x1b[F", None),
         (("resize", 71, 200), None),
         (("resize", 70, 200), None),
         (("sleep", 0.5), None),

@@ -442,11 +442,19 @@ function Engine.new(options)
     -- Injected collectors, clocks and filesystems keep their explicit execution
     -- contract. The selected default Linux sources cross a process boundary.
     local HardwareWorker = require("wtop.collectors.hardware_worker")
+    local hardware_inputs = {}
     if not options.collectors and not options.clock and not options.context
         and HardwareWorker.available() then
         for id in pairs(HardwareWorker.sources) do
             if collectors[id] and not collector_options[id] and not collector_options.common then
                 collectors[id] = HardwareWorker.new(collectors[id])
+            end
+        end
+        local SmbiosWorker = require("wtop.collectors.smbios_worker")
+        for id in pairs(SmbiosWorker.sources) do
+            if collectors[id] and not collector_options[id] and not collector_options.common then
+                hardware_inputs.smbios = hardware_inputs.smbios or SmbiosWorker.new()
+                collectors[id] = hardware_inputs.smbios:wrap(collectors[id])
             end
         end
     end
@@ -513,6 +521,7 @@ function Engine.new(options)
         clock = clock,
         context = context,
         scheduler = scheduler,
+        hardware_inputs = hardware_inputs,
         collectors = collectors,
         snapshot = Snapshot.new(0, clock:now_ns()),
         history = history,
@@ -747,6 +756,7 @@ end
 
 function Engine:stop()
     self.scheduler:stop(self.context)
+    for _, input in pairs(self.hardware_inputs or {}) do pcall(input.close, input) end
     self.pending_collectors = {}
 end
 

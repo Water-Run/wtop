@@ -3,7 +3,7 @@ package.path=root.."/src/?.lua;"..root.."/src/?/init.lua;"..package.path
 local native=require("wtop.native")
 local wire=require("wtop.core.worker_wire")
 local sessions={}
-for _, name in ipairs({"hwmon","cpufreq","powercap","cpu_limits","thermal_throttle","cpuidle","thermal_zones"}) do
+for _, name in ipairs({"hwmon","cpufreq","powercap","cpu_limits","thermal_throttle","cpuidle","thermal_zones","smbios_input"}) do
     local session=native.hardware_worker_open(name,wire.encode({}))
     native.hardware_worker_query(session,false)
     sessions[#sessions+1]=session

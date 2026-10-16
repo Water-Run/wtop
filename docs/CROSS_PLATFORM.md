@@ -67,6 +67,24 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 ## 验证矩阵
 
+2026-10-16 核对：硬件 I/O 隔离提交 `9b3f43b` 的
+[主 CI](https://github.com/Water-Run/wtop/actions/runs/38824471534) 16 个作业与
+[Windows CI](https://github.com/Water-Run/wtop/actions/runs/38824471536) 两个作业
+全部通过，包括两个 Linux 架构的 140 个 Lua 测试文件、消毒器、完整终端
+矩阵，以及下载最终归档后的原生运行。x86_64 归档 `4649b611` 两形态在本机
+另验五 CLI、quick PTY、七类硬件读取和三个 GPU SDK 的预热后故障、独立
+恢复与退出；普通权限拒绝、root 当前 MSR 限制、功耗条和三个功耗入口、
+Snapshot/Agent 算术均通过。真实 Intel Sysman 两形态读到 300 MHz 和
+fresh 零限制掩码，缺失的 GPU 功耗域保持缺失。
+ARM 归档 `cc99c469` 的本机证据为摘要与包内检查，运行证据来自原生 CI。
+两个 Linux 归档仍需 glibc 2.38，源码在 glibc 2.17 的另验不改变该下限。
+M4 归档 `5f8f81b7` 两形态通过五 CLI、GPU/时钟/功耗、43 个传感器、10 个
+Mach CPU 与当前网卡父设备导航。Windows 归档 `c57fa968` 在 Windows 11
+和 Server 2008 两形态通过五 CLI、80×25 无 ANSI 控制台、CPUID/缓存与
+父设备导航、三个功耗入口。四归档静态门禁通过；原始摘要与验收收据见
+`build/hardware-io-isolation-20261016/ACCEPTANCE.json`。XP 和旧 macOS
+仍缺实际运行证据。
+
 2026-10-16 核对：混合 GPU 连续观测提交 `de92b1e` 的
 [主 CI](https://github.com/Water-Run/wtop/actions/runs/38813098799) 16 个作业与
 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/38813098741) 两个作业
@@ -283,8 +301,27 @@ glibc 2.17 的 140 个 Lua 文件通过后，新增独立解释器验收暴露�
 讨论见 [glibc 维护记录](https://sourceware.org/legacy-ml/libc-alpha/2015-07/msg00434.html)。
 
 这覆盖上述七类默认 Linux 来源。DRM/sysfs、固件及其余 Linux 读取仍需
-隔离；macOS 和 Windows 的同步驱动调用尚未由本次改动隔离。完整发布链与
-最终包验收另行记录，不能用源树夹具代替。
+隔离；macOS 和 Windows 的同步驱动调用尚未由本次改动隔离。`9b3f43b`
+完整发布链与精确最终包已通过，范围见上方验证矩阵。
+
+### 2026-10-16：共享 SMBIOS 输入隔离（开发中）
+
+七类读取器之外的 DMI 表仍能阻塞终端：使用实际 FUSE 常规文件替换一次
+固件表读取，正常界面进入 raw 模式后按 `q`，仍等待约 1.2 秒，释放读取后
+正常退出。这份负例保留在上一节的任务目录，挂载与进程已核对清理。
+
+当前开发增量为 11 个 SMBIOS 视图共用一个原始输入读取器。传输有界的
+二进制表和入口元数据，父进程继续共用一次批量解析，各视图保有独立结果
+及能力状态；测量时间使用原始输入的读取时间。挂死时不会回退到父进程
+文件读取，其他硬件来源仍可更新。单个视图关闭不会取消其他视图的输入，
+读取器由 Engine 统一关闭。
+
+本机真实 FUSE 阻塞下，释放 DMI 读取之前约 91 ms 正常退出。原生故障
+夹具验证 11 个视图每批只读一次、原始时间一致、过期旧值、两秒超时回收、
+五秒重试恢复及独立来源继续响应；八个异步读取器的三次独立 Lua 退出和
+本地 GCC ASan/UBSan 通过。普通权限保留 denied，root 安装数据来自同一
+输入时间。记录在 `build/hardware-smbios-isolation-20261016/`。完整源码、
+旧 libc、打包与最终 CI 尚待本增量的后续验收。
 
 ### 2026-10-16：三个 GPU SDK 隔离与 Sysman 原生遥测
 

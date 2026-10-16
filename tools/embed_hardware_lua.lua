@@ -1,7 +1,8 @@
 -- Embed the transitive, literal require graph of the hardware entry point.
 local targets = { "wtop.core.hardware_worker", "wtop.native", "wtop.collectors.hwmon",
     "wtop.collectors.cpufreq", "wtop.collectors.powercap", "wtop.collectors.cpu_limits",
-    "wtop.collectors.thermal_throttle", "wtop.collectors.cpuidle", "wtop.collectors.thermal_zones" }
+    "wtop.collectors.thermal_throttle", "wtop.collectors.cpuidle", "wtop.collectors.thermal_zones",
+    "wtop.collectors.smbios_input" }
 local seen, modules = {}, {}
 local function visit(name)
     if seen[name] or name == "wtop_native" then return end

@@ -120,4 +120,82 @@ assert(models.sensor_table.rows[1].status=="stale" and not models.sensor_table.r
 assert(models.cpufreq_table.rows[1].quality=="stale")
 assert(models.cpuidle_table.rows[1].quality=="stale" and models.cpuidle_table.rows[1].usage_delta=="—")
 assert(models.thermal_throttle_table.rows[1].core_new=="—")
+
+local SmbiosWorker = require("wtop.collectors.smbios_worker")
+local SMBIOS = require("wtop.format.smbios")
+local function record(kind, handle, body, strings)
+    return string.char(kind, 4 + #body) .. string.pack("<I2", handle) .. body
+        .. table.concat(strings or {}, "\0") .. "\0\0"
+end
+local blob = record(10, 0x1000, "\133\1", {"Ethernet"})
+    .. record(8, 0x0800, "\1\0\2\18\16", {"Internal", "USB"})
+    .. record(127, 0xffff, "")
+local reads, parses, stops, mode = 0, 0, 0, "fresh"
+local parser = SMBIOS.parse
+SMBIOS.parse = function(...) parses = parses + 1; return parser(...) end
+local shared = SmbiosWorker.new({reader={ sample=function()
+    reads = reads + 1
+    if mode ~= "fresh" then return {status="error",quality="stale",timestamp_ns=now,
+        reason=mode,sampling_pending=mode=="hardware_query_pending",retry_after_ms=25,
+        defer_publish=mode=="hardware_query_pending"} end
+    return {status="ok",quality="fresh",timestamp_ns=now,value_timestamp_ns=80,
+        transport="process",sample_started_ns=70,sample_finished_ns=90,
+        data={data=blob,source="/sys/firmware/dmi/tables/DMI"}}
+end, close=function() stops=stops+1 end}})
+local forbidden = {read=function() error("parent must not read firmware files") end}
+local onboard = shared:wrap(require("wtop.collectors.onboard_devices").new({platform="linux",fs=forbidden}))
+local ports = shared:wrap(require("wtop.collectors.port_connectors").new({platform="linux",fs=forbidden}))
+local ctx = {now_ns=function() return now end,_collector_batch={}}
+now = 100
+assert(onboard:probe(ctx).available and ports:probe(ctx).available)
+assert(reads==1 and parses==1, "one raw input and parse per batch")
+ctx._collector_batch = {}
+local first_onboard, first_ports = onboard:sample(ctx), ports:sample(ctx)
+assert(reads==1 and parses==1, "probing must retain the first complete results")
+assert(first_onboard.status=="ok" and first_ports.status=="ok")
+assert(first_onboard.value_timestamp_ns==80 and first_ports.value_timestamp_ns==80)
+assert(first_onboard.timestamp_ns==100 and first_onboard.capability.available)
+assert(first_onboard.data~=first_ports.data, "each view owns its parsed records")
+local firmware_snapshot=Snapshot.merge(Snapshot.new(0,0),{onboard_devices=first_onboard},1,now)
+mode = "hardware_query_pending"; now = 200; ctx._collector_batch = {}
+local pending_onboard, pending_ports = onboard:sample(ctx), ports:sample(ctx)
+assert(reads==2 and parses==1 and pending_onboard.sampling_pending and pending_ports.sampling_pending)
+assert(pending_onboard~=pending_ports and pending_onboard.capability~=pending_ports.capability)
+assert(pending_onboard.defer_publish and not pending_onboard.capability.available)
+firmware_snapshot=Snapshot.merge(firmware_snapshot,{onboard_devices=pending_onboard},2,now)
+assert(firmware_snapshot.quality.onboard_devices.value_timestamp_ns==80
+    and firmware_snapshot.quality.onboard_devices.quality=="stale")
+mode = "hardware_query_timeout"; ctx._collector_batch = {}
+assert(onboard:sample(ctx).reason==mode and ports:sample(ctx).reason==mode)
+assert(reads==3 and parses==1)
+mode = "fresh"; ctx._collector_batch = {}
+assert(onboard:sample(ctx).status=="ok" and ports:sample(ctx).status=="ok")
+assert(reads==4 and parses==2)
+-- The parser cache must follow the input provider as well as its filesystem.
+-- Different shared readers can appear alongside explicit collector injections.
+ctx._collector_batch = {}
+local a=onboard:sample(ctx)
+local second = SmbiosWorker.new({reader={sample=function()
+    return {status="ok",quality="fresh",timestamp_ns=now,value_timestamp_ns=85,
+        data={data=blob:gsub("Ethernet","OtherBoard"),source="second/DMI"}}
+end,close=function() end}})
+local second_onboard=second:wrap(require("wtop.collectors.onboard_devices").new({platform="linux",fs=forbidden}))
+local other=second_onboard:sample(ctx)
+assert(a.data.devices[1].designation=="Ethernet" and other.data.devices[1].designation=="OtherBoard",
+    "different raw input readers shared the first reader's parsed table")
+assert(other.value_timestamp_ns==85 and other.source=="second/DMI")
+second:close()
+onboard:close(); assert(stops==0 and onboard:sample(ctx).reason=="hardware_worker_closed")
+shared:close(); shared:close(); ctx._collector_batch = {}
+assert(stops==1 and ports:sample(ctx).reason=="hardware_worker_closed")
+SMBIOS.parse = parser
+local cleanup = {first=false,second=false}
+local closing_engine=Engine.new({collectors={},clock={now_ns=function() return now end,
+    wall_ns=function() return now end}})
+closing_engine.hardware_inputs={
+    first={close=function() cleanup.first=true;error("failed close") end},
+    second={close=function() cleanup.second=true end},
+}
+closing_engine:stop()
+assert(cleanup.first and cleanup.second,"one failed input cleanup prevented another from closing")
 return true

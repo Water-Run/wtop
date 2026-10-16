@@ -36,6 +36,13 @@ def main() -> None:
                            'max_energy_range_uj':'1000000000\n','enabled':'1\n',
                            'constraint_0_name':'long_term\n','constraint_0_power_limit_uw':'25000000\n'}.items():
             (zone/name).write_text(value)
+        firmware=directory/'firmware';firmware.mkdir()
+        def record(kind,handle,body,strings=()):
+            return bytes([kind,len(body)+4])+handle.to_bytes(2,'little')+body+b'\0'.join(strings)+b'\0\0'
+        (firmware/'DMI').write_bytes(record(10,0x1000,bytes([133,1]),[b'Firmware Ethernet'])
+            +record(8,0x0800,bytes([1,0,2,18,16]),[b'Internal',b'USB'])+record(127,0xffff,b''))
+        firmware_control=directory/'firmware-control';firmware_control.write_text('0\n')
+        firmware_entered=directory/'firmware-entered';firmware_reads=directory/'firmware-reads'
         env={**os.environ,'LD_PRELOAD':(os.environ['LD_PRELOAD']+':' if os.environ.get('LD_PRELOAD') else '')+str(library),
              'LUA_PATH':str(ROOT/'src/?.lua')+';'+str(ROOT/'src/?/init.lua')+';;',
              'LUA_CPATH':str(args.module.resolve().parent/'?.so')+';;',
@@ -43,10 +50,17 @@ def main() -> None:
              'WTOP_HARDWARE_FIXTURE_ENTERED':str(entered)}
         subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/hardware_worker_smoke.lua'),
                         str(ROOT),str(control),str(entered),str(power)],cwd=ROOT,env=env,check=True,timeout=20)
+        firmware_env={**env,'WTOP_SMBIOS_FIXTURE_ROOT':str(firmware),
+                      'WTOP_SMBIOS_FIXTURE_CONTROL':str(firmware_control),
+                      'WTOP_SMBIOS_FIXTURE_ENTERED':str(firmware_entered),
+                      'WTOP_SMBIOS_FIXTURE_READS':str(firmware_reads)}
+        subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/smbios_worker_smoke.lua'),
+                        str(ROOT),str(firmware_control),str(firmware_entered),str(firmware_reads)],
+                       cwd=ROOT,env=firmware_env,check=True,timeout=20)
         for _ in range(3):
             subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/hardware_worker_shutdown.lua'),
                             str(ROOT)],cwd=ROOT,env=env,check=True,timeout=5)
-        print('ok: three standalone Lua VM exits with seven asynchronous readers being reaped',flush=True)
+        print('ok: three standalone Lua VM exits with eight asynchronous readers being reaped',flush=True)
         if not args.native_only:
             control.write_text('0\n'); entered.unlink(missing_ok=True)
             saved=os.environ.copy(); os.environ.update(env)

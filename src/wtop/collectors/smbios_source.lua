@@ -16,6 +16,9 @@ local function copy(value, seen)
 end
 
 function M.read(collector, context)
+  if context and context.smbios_input and collector.platform == "linux" then
+    return context.smbios_input:read(collector, context)
+  end
   if collector.platform == "linux" then
     local fs = Common.fs(context, collector.fs)
     local source = collector.base_path .. "/DMI"
@@ -63,7 +66,7 @@ function M.load(collector, context)
     and context._collector_batch or nil
   local entries = batch and batch.smbios or nil
   local provider = collector.platform == "linux"
-    and Common.fs(context, collector.fs)
+    and (context and context.smbios_input or Common.fs(context, collector.fs))
     or context and context.native or collector.native
   if entries then
     for _, entry in ipairs(entries) do
