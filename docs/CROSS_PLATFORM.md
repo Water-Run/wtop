@@ -678,8 +678,20 @@ SMART 属性，未按 190/194 等编号合成温度。默认查询不发送 ATA 
 JSON 契约、硬件导航、Storage 与所选 NVMe/ATA 健康详情的真实控制台检查。
 私有包版本与生成的完整本地构建标识一致；初始启动器误按浅克隆的短标识
 断言失败，记录保留，核对真实构建标识后仅继续未完成的项目。
-证据位于 `build/hardware-windows-storage-20261017/`；该提交的最终 CI 与
-归档安装验收仍待完成。
+实现提交 `75feed3` 的 [主 CI](https://github.com/Water-Run/wtop/actions/runs/38963276009)
+16 个作业与 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/38963276013)
+两个作业均通过。精确提交的 Linux x86_64、Linux ARM64、macOS ARM64、
+Windows x86 四类归档已核对外层和载荷摘要、原生格式与许可；Windows 包
+共检查 15 个 PE、1385 个命名导入，Mac 保留声明的 Mach-O 切片。
+Windows CI 日志另核对 41 项传输、35 项频率和六项磁盘 API 生命周期测试。
+
+两台 Windows 的两种精确包均通过五种 CLI、JSON、硬件导航、Storage 和
+NVMe/ATA 详情的经典控制台检查。提供的 M4 两种包保留 43 个传感器通道、
+七个功耗域和 CPU/GPU 数据；Linux 两种包通过普通用户/root 频率、功耗比例、
+真实终端、原生故障与 30 次多读取器退出检查，14 个 CPU/NVMe/DIMM 临界温度
+通道及中英文余量界面也通过。证据位于
+`build/hardware-windows-storage-20261017/ACCEPTANCE.json`；完整 HWiNFO 范围、
+XP 真机及广泛旧设备性能预算仍未完成。
 
 ### 2026-10-17：温度临界余量与首屏摘要
 
