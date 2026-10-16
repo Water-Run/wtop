@@ -62,6 +62,8 @@ jobs:
           i686-w64-mingw32-gcc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc \
             -Idist/windows-x86/include -Ibuild/windows-x86 tests/native/windows_cpuid.c \
             dist/windows-x86/liblua55.dll.a -o ci-inputs/cpuid-fixture.exe
+          python3 tests/test_windows_nvml.py --build --output ci-inputs/nvml-fixtures
+          rm -rf ci-inputs/nvml-fixtures
           tar -czf ci-inputs/runtime.tar.gz -C dist windows-x86
       - name: Fetch the native x86 compiler
         run: |
@@ -71,7 +73,7 @@ jobs:
           test "$(stat -c %s ci-inputs/w64devkit-i686-1.23.0.zip)" = 72803726
           cd ci-inputs
           echo '033ef6a29bfcb5ef4452ec5219ed74b64b95d56ae71c9252996e77dd777ab7bf  w64devkit-i686-1.23.0.zip' | sha256sum -c -
-          sha256sum runtime.tar.gz w64devkit-i686-1.23.0.zip inventory-fixture.exe disk-fixture.exe network-fixture.exe network-table-fixture.exe cpu-fixture.exe frequency-fixture.exe hardware-worker-fixture.exe cpuid-fixture.exe | tee SHA256SUMS
+          sha256sum runtime.tar.gz w64devkit-i686-1.23.0.zip inventory-fixture.exe disk-fixture.exe network-fixture.exe network-table-fixture.exe cpu-fixture.exe frequency-fixture.exe hardware-worker-fixture.exe cpuid-fixture.exe nvml-fixtures.zip | tee SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: windows-build-inputs
@@ -132,6 +134,12 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             Remove-Item (Join-Path dist/windows-x86 $fixture)
           }
+      - name: Native NVML reader and cache regressions
+        shell: pwsh
+        run: |
+          Expand-Archive ci-inputs/nvml-fixtures.zip build/nvml-fixtures
+          python tests/test_windows_nvml.py --output build/nvml-fixtures
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package both forms and check every PE image
         shell: pwsh
         run: |

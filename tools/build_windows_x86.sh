@@ -51,6 +51,19 @@ for architecture in x86 x64; do
         -Wl,--major-subsystem-version,5,--minor-subsystem-version,"$worker_version" \
         "$project_dir/native/wtop_cpuid_helper.c" -o "$work_dir/cpuid-$architecture.exe"
 done
+for architecture in x86 x64; do
+    worker_compiler="$compiler"
+    worker_version=1
+    if [ "$architecture" = x64 ]; then worker_compiler="$compiler64"; worker_version=2; fi
+    "$worker_compiler" -std=c17 -Os -s -Wall -Wextra -Werror -static-libgcc -municode -DWTOP_GPU_WORKER \
+        -Wl,--no-insert-timestamp,--major-os-version,5,--minor-os-version,"$worker_version" \
+        -Wl,--major-subsystem-version,5,--minor-subsystem-version,"$worker_version" \
+        "$project_dir/native/wtop_windows_nvml_helper.c" "$project_dir/native/wtop_nvml.c" \
+        -o "$work_dir/nvml-$architecture.exe"
+done
+python3 "$project_dir/tools/embed_cpuid_helpers.py" --kind nvml \
+    --x86 "$work_dir/nvml-x86.exe" --x64 "$work_dir/nvml-x64.exe" \
+    --output "$work_dir/wtop_nvml_helpers.h"
 python3 "$project_dir/tools/embed_cpuid_helpers.py" \
     --x86 "$work_dir/cpuid-x86.exe" --x64 "$work_dir/cpuid-x64.exe" \
     --output "$work_dir/wtop_cpuid_helpers.h"
@@ -72,6 +85,7 @@ for header in lua.h luaconf.h lualib.h lauxlib.h; do
     cp "$source_dir/src/$header" "$output_dir/include/$header"
 done
 cp "$work_dir/wtop_native.dll" "$output_dir/wtop_native.dll"
+cp "$project_dir/native/licenses/NVML-NVIDIA.txt" "$output_dir/NVML-NVIDIA.txt"
 cp -R "$project_dir/src" "$output_dir/"
 cat > "$output_dir/wtop.cmd" <<'EOF'
 @echo off

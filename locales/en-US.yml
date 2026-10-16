@@ -1337,6 +1337,7 @@ messages:
   reason.no_cpufreq_policies: "No cpufreq policies were found"
   reason.no_cpuidle_states: "CPU idle states unavailable"
   reason.no_device_inventory: "No PCI or USB devices found"
+  reason.no_display_adapters: "No display adapters were found"
   reason.no_drm_card_devices: "No DRM devices were found"
   reason.no_edac_controllers: "No EDAC memory controllers exposed"
   reason.no_esrt_entries: "No UEFI ESRT entries exposed"

@@ -55,7 +55,10 @@ SDK test excerpts retain AMD's MIT notice in the source tree.
 
 The NVML interface notice ships in the Linux native module and at
 `.luai/licenses/NVML-NVIDIA.txt` in the onedir bundle. NVIDIA's implementation
-is not bundled. The disclaimer and U.S. Government notice also follow here.
+is not bundled. Windows development bundles carry the same text at
+`NVML-NVIDIA.txt`, with another copy under `.luai/licenses/` in the directory
+bundle. The Windows native readers also embed the notice. The disclaimer and
+U.S. Government notice follow here.
 
 <details>
 <summary>NVIDIA NVML header notice</summary>

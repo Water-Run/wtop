@@ -1331,6 +1331,7 @@ messages:
   reason.no_cpufreq_policies: "cpufreq ポリシーが見つかりません"
   reason.no_cpuidle_states: "CPU アイドル状態を取得できません"
   reason.no_device_inventory: "PCI/USB デバイスが見つかりません"
+  reason.no_display_adapters: "ディスプレイアダプターが見つかりません"
   reason.no_drm_card_devices: "DRM デバイスが見つかりません"
   reason.no_edac_controllers: "EDAC メモリーコントローラーはありません"
   reason.no_esrt_entries: "UEFI ESRT 項目はありません"

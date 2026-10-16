@@ -15,6 +15,7 @@
 #include <wchar.h>
 #include "wtop_cpuid_protocol.h"
 #include "wtop_cpuid_helpers.h"
+#include "wtop_windows_spawn.h"
 #define CPUID_META "wtop.cpuid.session.v1"
 #define CPUID_CACHE_MS 60000u
 #define CPUID_RETRY_MS 5000u
@@ -101,7 +102,8 @@ static DWORD WINAPI cpuid_worker(void *opaque) {
     STARTUPINFOW startup;memset(&startup,0,sizeof(startup));startup.cb=sizeof(startup);startup.dwFlags=STARTF_USESTDHANDLES;
     startup.hStdInput=NULL;startup.hStdOutput=writer;startup.hStdError=writer;
     if(!keep_running(job)){job->reason="cpuid_probe_timeout";goto finish;}
-    if(!CreateProcessW(path,command,NULL,NULL,TRUE,CREATE_NO_WINDOW,NULL,NULL,&startup,&process))goto finish;
+    HANDLE inherited[]={guard,writer};
+    if(!wtop_spawn_reader(path,command,&startup,inherited,2,&process))goto finish;
     CloseHandle(process.hThread);process.hThread=NULL;
     CloseHandle(writer);writer=NULL;CloseHandle(guard);guard=NULL;free(command);command=NULL;
     job->data=malloc(WTOP_CPUID_BYTES);if(!job->data){job->reason="cpuid_allocation_failed";goto finish;}

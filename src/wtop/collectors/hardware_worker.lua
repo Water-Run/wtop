@@ -87,7 +87,7 @@ function Proxy:sample(context)
     local safe_mode = context and context.safe_mode == true or false
     local scan = not context or context.scan_gpu_processes ~= false
     if self.ready and self.safe_mode == safe_mode and not self.closed
-        and (self.id ~= "gpu_drm" or self.scan == scan) then
+        and ((self.id ~= "gpu_drm" and self.id ~= "gpu") or self.scan == scan) then
         result, self.ready = self.ready, nil
     else self.ready = nil; result, reason = self:_read(context) end
     if result then return result end

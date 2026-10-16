@@ -13,14 +13,40 @@
 #include <limits.h>
 #include <math.h>
 #include <time.h>
+#ifndef _WIN32
 #include <unistd.h>
+#else
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 #include <signal.h>
 #include <sys/stat.h>
 
 static int mode, refs, inits, shutdowns, calls, count_calls, uuid_calls[2], legacy_calls, power_calls;
 static unsigned long long last_seen[2];
 static int cards[2];
-static void fixture_hang(void){for(;;)pause();}
+static void fixture_hang(void){
+#ifdef _WIN32
+    char path[1024],text[160];DWORD n=GetEnvironmentVariableA("WTOP_HW_ENTERED",path,sizeof(path));
+    if(n&&n<sizeof(path)){
+        FILETIME created,ended,kernel,user;
+        if(GetProcessTimes(GetCurrentProcess(),&created,&ended,&kernel,&user)){
+            int size=snprintf(text,sizeof(text),"%lu %lu %lu nvml\n",(unsigned long)GetCurrentProcessId(),
+                (unsigned long)created.dwHighDateTime,(unsigned long)created.dwLowDateTime);
+            HANDLE f=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,CREATE_ALWAYS,0,NULL);
+            if(f!=INVALID_HANDLE_VALUE){DWORD done;WriteFile(f,text,(DWORD)size,&done,NULL);CloseHandle(f);}
+        }
+    }
+    n=GetEnvironmentVariableA("WTOP_HW_BLOCK",path,sizeof(path));
+    if(n&&n<sizeof(path)){
+        while(GetFileAttributesA(path)!=INVALID_FILE_ATTRIBUTES)Sleep(5);
+        return;
+    }
+    for(;;)Sleep(INFINITE);
+#else
+    for(;;)pause();
+#endif
+}
 static void fixture_control(void) {
     const char *path=getenv("WTOP_NVML_FIXTURE_CONTROL");if(!path)return;
     FILE *file=fopen(path,"r");if(!file)return;
@@ -30,12 +56,14 @@ __attribute__((constructor)) static void fixture_constructor(void) {
     const char *setting=getenv("WTOP_NVML_FIXTURE_MODE");int scenario=setting?atoi(setting):0;
     if(scenario==45)fixture_hang();
     if(scenario==50){puts("driver stdout must not enter the protocol");fputs("driver stderr noise\n",stderr);fflush(stdout);fflush(stderr);}
+#ifndef _WIN32
     if(scenario==56){const char bad[]="corrupt driver bytes";ssize_t sent=write(3,bad,sizeof(bad));(void)sent;}
     if(scenario==57){uint32_t bad[16]={0x4d4e5457,1,UINT32_MAX};ssize_t sent=write(3,bad,sizeof(bad));(void)sent;}
     if(scenario==58){
         const char *value=getenv("WTOP_NVML_TEST_FD_INO");struct stat st;
         if(value&&!fstat(20,&st)&&(unsigned long long)st.st_ino==strtoull(value,NULL,10))_exit(123);
     }
+#endif
 }
 void fixture_reset(int scenario) { assert(!refs); mode = scenario; inits = shutdowns = calls = count_calls = legacy_calls = power_calls = 0; memset(uuid_calls,0,sizeof(uuid_calls)); memset(last_seen,0,sizeof(last_seen)); }
 void fixture_mode(int scenario) { mode = scenario; count_calls = 0; memset(uuid_calls,0,sizeof(uuid_calls)); }
@@ -60,7 +88,13 @@ nvmlReturn_t nvmlInit_v2(void)
 { const char *setting = getenv("WTOP_NVML_FIXTURE_MODE");
   if (setting) mode = atoi(setting);
   if(mode==46)fixture_hang();
-  if(mode==52){struct timespec delay={0,800000000};nanosleep(&delay,NULL);}
+  if(mode==52){
+#ifdef _WIN32
+    Sleep(800);
+#else
+    struct timespec delay={0,800000000};nanosleep(&delay,NULL);
+#endif
+  }
   inits++; if (mode == 1) return 9; refs++; return 0; }
 #if WTOP_NVML_VARIANT != 3
 nvmlReturn_t nvmlShutdown(void) { if(mode==49)fixture_hang();assert(refs > 0); refs--; shutdowns++; return 0; }
@@ -126,7 +160,13 @@ nvmlReturn_t nvmlDeviceGetPciInfo_v3(nvmlDevice_t device, nvmlPciInfo_t *out)
 }
 nvmlReturn_t nvmlDeviceGetUtilizationRates(nvmlDevice_t device, nvmlUtilization_t *out) {
     if(mode==48)fixture_hang();
-    if(mode==51){raise(SIGSEGV);_exit(99);}
+    if(mode==51){
+#ifdef _WIN32
+        TerminateProcess(GetCurrentProcess(),99);
+#else
+        raise(SIGSEGV);_exit(99);
+#endif
+    }
     if (failed(device)) return 1;
     out->gpu = mode == 7 ? 101 : mode == 8 ? 0 : 71;
     out->memory = mode == 7 ? UINT_MAX : mode == 8 ? 0 : 12; return 0;
@@ -181,9 +221,15 @@ nvmlReturn_t nvmlDeviceGetFieldValues(nvmlDevice_t device, int count, nvmlFieldV
     assert(count == 2 && out[0].fieldId == 186 && out[1].fieldId == 185);
     assert(out[0].scopeId == 0 && out[1].scopeId == 0);
     for (int i = 0; i < 2; ++i) {
+#ifdef _WIN32
+        FILETIME ft;GetSystemTimeAsFileTime(&ft);
+        int64_t timestamp=(int64_t)(((((uint64_t)ft.dwHighDateTime<<32)|ft.dwLowDateTime)-UINT64_C(116444736000000000))/10);
+#else
         struct timespec now; assert(clock_gettime(CLOCK_REALTIME, &now)==0);
+        int64_t timestamp=(int64_t)now.tv_sec*1000000+now.tv_nsec/1000;
+#endif
         out[i].nvmlReturn = 0; out[i].valueType = 1;
-        out[i].timestamp = (long long)now.tv_sec * 1000000 + now.tv_nsec / 1000;
+        out[i].timestamp = timestamp;
         if ((mode==40 && i==0) || mode==41) out[i].timestamp -= 6000000;
         if (mode==42) out[i].timestamp += 6000000;
         if (mode==43) out[i].timestamp = 0;

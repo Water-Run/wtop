@@ -1345,6 +1345,7 @@ messages:
   reason.no_cpufreq_policies: "Nenhuma política cpufreq encontrada"
   reason.no_cpuidle_states: "Estados ociosos da CPU indisponíveis"
   reason.no_device_inventory: "Nenhum dispositivo PCI ou USB encontrado"
+  reason.no_display_adapters: "Nenhum adaptador de vídeo encontrado"
   reason.no_drm_card_devices: "Nenhum dispositivo DRM encontrado"
   reason.no_edac_controllers: "Nenhum controlador de memória EDAC disponível"
   reason.no_esrt_entries: "Nenhuma entrada UEFI ESRT disponível"

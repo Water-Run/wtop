@@ -1331,6 +1331,7 @@ messages:
   reason.no_cpufreq_policies: "cpufreq 정책을 찾을 수 없습니다"
   reason.no_cpuidle_states: "CPU 유휴 상태를 사용할 수 없음"
   reason.no_device_inventory: "PCI 또는 USB 장치를 찾을 수 없습니다"
+  reason.no_display_adapters: "디스플레이 어댑터를 찾을 수 없습니다"
   reason.no_drm_card_devices: "DRM 장치를 찾을 수 없습니다"
   reason.no_edac_controllers: "EDAC 메모리 컨트롤러가 없습니다"
   reason.no_esrt_entries: "UEFI ESRT 항목이 없습니다"

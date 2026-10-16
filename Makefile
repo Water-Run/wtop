@@ -85,7 +85,7 @@ SOURCE_ROCK_ARGS ?=
 
 NATIVE_SOURCES := native/wtop_native.c native/wtop_nvml.c native/wtop_worker_client.c native/wtop_amdsmi.c \
   native/wtop_levelzero.c
-NATIVE_HEADERS := native/wtop_nvml.h native/wtop_gpu_output.h native/wtop_gpu_protocol.h native/wtop_gpu_lua.h native/wtop_gpu_worker.h native/wtop_amdsmi.h native/wtop_amdsmi_abi.h native/licenses/AMD-SMI-MIT.txt native/licenses/NVML-NVIDIA.txt native/wtop_levelzero.h native/wtop_levelzero_abi.h native/licenses/Level-Zero-MIT.txt native/wtop_build.h
+NATIVE_HEADERS := native/wtop_nvml_platform.h native/wtop_nvml.h native/wtop_gpu_output.h native/wtop_gpu_protocol.h native/wtop_gpu_lua.h native/wtop_gpu_worker.h native/wtop_amdsmi.h native/wtop_amdsmi_abi.h native/licenses/AMD-SMI-MIT.txt native/licenses/NVML-NVIDIA.txt native/wtop_levelzero.h native/wtop_levelzero_abi.h native/licenses/Level-Zero-MIT.txt native/wtop_build.h
 NATIVE_DIR := $(CURDIR)/build/native
 NATIVE_MODULE := $(NATIVE_DIR)/wtop_native.so
 GPU_WORKER_SOURCES := native/wtop_gpu_worker.c native/wtop_nvml.c native/wtop_amdsmi.c native/wtop_levelzero.c

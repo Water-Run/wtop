@@ -32,13 +32,14 @@ function M.normalize_bdf(value)
   return string.format("%04x:%s:%s.%s", domain_number, bus, device, func)
 end
 
-function M.default_provider()
-  local query, stop = require("wtop.collectors.gpu_worker").default_provider("nvml")
+function M.default_provider(native_override)
+  local query, stop = require("wtop.collectors.gpu_worker").default_provider("nvml", native_override)
   if not query then return nil end
   return function(include_processes)
     local data, reason = query(include_processes)
     if type(data) == "table" then
-      local ok, native = pcall(require, "wtop.native")
+      local ok, native = true, native_override
+      if not native then ok, native = pcall(require, "wtop.native") end
       if ok and type(native.realtime_ns) == "function" then
         local read, realtime = pcall(native.realtime_ns)
         if read and finite_number(realtime) then M.refresh_power(data, realtime / 1000) end

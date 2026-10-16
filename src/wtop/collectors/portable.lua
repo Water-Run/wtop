@@ -651,7 +651,9 @@ local function new_collector(id, description, options)
         reason = "unsupported_on_this_platform",
       })
     end
-    local called, data, reason = pcall(self.native[self.method])
+    local called, data, reason
+    if id == "gpu" then called, data, reason = pcall(self.native[self.method], not context or context.scan_gpu_processes ~= false)
+    else called, data, reason = pcall(self.native[self.method]) end
     if not called or type(data) ~= "table" then
       return Common.result("unavailable", timestamp_ns, nil, {
         reason = tostring(called and reason or data or "native_collection_failed"),
@@ -758,7 +760,14 @@ function M.new(id, options)
       and type(native.hardware_worker_sources) == "table"
       and native.hardware_worker_sources[id] then
     local Hardware = require("wtop.collectors.hardware_worker")
-    return Hardware.new(collector, {}, native)
+    collector = Hardware.new(collector, {}, native)
+  end
+  if id == "gpu" and not (options and options._hardware_direct)
+      and type(native.gpu_worker_open) == "function" and type(native.uname) == "function" then
+    local ok, host = pcall(native.uname)
+    if ok and type(host) == "table" and host.sysname == "Windows" then
+      collector = require("wtop.collectors.windows_gpu").new(collector, options or {}, native)
+    end
   end
   return collector
 end

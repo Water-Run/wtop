@@ -12,6 +12,8 @@
 #include <string.h>
 #include <wchar.h>
 #include "wtop_gpu_protocol.h"
+#include "wtop_windows_sdk_image.h"
+#include "wtop_windows_spawn.h"
 #define SESSION_META "wtop.windows.hardware.session.v1"
 #define FRAME_META "wtop.windows.hardware.frame.v1"
 #define QUERY_NS UINT64_C(2000000000)
@@ -19,9 +21,9 @@
 #define FRAME_NS UINT64_C(5000000000)
 static char launcher_key;
 #define HARDWARE_SOURCES 3u
-static const char *const source_names[HARDWARE_SOURCES]={"cpufreq","gpu","hwmon"};
-static const WCHAR *const wide_source_names[HARDWARE_SOURCES]={L"cpufreq",L"gpu",L"hwmon"};
-static volatile LONG controllers,source_controllers[HARDWARE_SOURCES];
+static const char *const source_names[HARDWARE_SOURCES+1]={"cpufreq","gpu","hwmon","nvml"};
+static const WCHAR *const wide_source_names[HARDWARE_SOURCES+1]={L"cpufreq",L"gpu",L"hwmon",L"nvml"};
+static volatile LONG controllers,source_controllers[HARDWARE_SOURCES+1];
 static unsigned source_index(const char *name,size_t size){
     for(unsigned i=0;i<HARDWARE_SOURCES;++i)if(size==strlen(source_names[i])&&!memcmp(name,source_names[i],size))return i;
     return HARDWARE_SOURCES;
@@ -39,6 +41,7 @@ struct job {
     uint64_t requested,failed_at,sequence;
     struct frame *frame;
     const char *reason;
+    char sdk_reason[96];
     size_t configuration_size;
     char *configuration,*entry;
 };
@@ -117,11 +120,16 @@ static DWORD WINAPI controller(void *opaque) {
     struct job *job=opaque;
     HANDLE input=NULL,input_child=NULL,output=NULL,output_child=NULL,parent=NULL,stop=NULL,null_file=INVALID_HANDLE_VALUE;
     PROCESS_INFORMATION process;memset(&process,0,sizeof(process));
+    HANDLE sdk_image=NULL;
     WCHAR *executable=calloc(32768,sizeof(WCHAR)),*entry=NULL,*command=NULL;
     job->reason="hardware_worker_unavailable";
     if(!executable)goto finish;
-    DWORD length=GetModuleFileNameW(NULL,executable,32768);
-    if(!length||length>=32768)goto finish;
+    if(job->source==HARDWARE_SOURCES){
+        sdk_image=nvml_reader_image(executable,32768);if(!sdk_image)goto finish;
+    }else{
+        DWORD length=GetModuleFileNameW(NULL,executable,32768);
+        if(!length||length>=32768)goto finish;
+    }
     entry=wide_string(job->entry);if(!entry)goto finish;
     size_t capacity=2*wcslen(executable)+2*wcslen(entry)+256;
     if(capacity>32767)goto finish;
@@ -141,7 +149,8 @@ static DWORD WINAPI controller(void *opaque) {
     if(used<0||(size_t)used>=capacity-at||cancelled(job))goto finish;
     STARTUPINFOW startup;memset(&startup,0,sizeof(startup));startup.cb=sizeof(startup);
     startup.dwFlags=STARTF_USESTDHANDLES;startup.hStdInput=startup.hStdOutput=startup.hStdError=null_file;
-    if(!CreateProcessW(executable,command,NULL,NULL,TRUE,CREATE_NO_WINDOW,NULL,NULL,&startup,&process))goto finish;
+    HANDLE inherited[]={parent,stop,input_child,output_child,null_file};
+    if(!wtop_spawn_reader(executable,command,&startup,inherited,5,&process))goto finish;
     CloseHandle(process.hThread);process.hThread=NULL;
     CloseHandle(input_child);input_child=NULL;CloseHandle(output_child);output_child=NULL;
     CloseHandle(parent);parent=NULL;CloseHandle(stop);stop=NULL;CloseHandle(null_file);null_file=INVALID_HANDLE_VALUE;
@@ -171,7 +180,19 @@ static DWORD WINAPI controller(void *opaque) {
         frame->refs=1;frame->size=size;frame->started=start;frame->finished=end;frame->flags=flags;
         if(!receive(output,process.hProcess,frame->data,size,job)){frame_release(frame);break;}
         if(gpu_checksum(frame->data,size)!=gpu_u32(header+44)){frame_release(frame);job->reason="hardware_invalid_response";break;}
-        if(status){frame_release(frame);job->reason="hardware_collector_error";break;}
+        if(status){
+            job->reason="hardware_collector_error";
+            if(job->source==HARDWARE_SOURCES){
+                int valid=size>5&&size<sizeof(job->sdk_reason)&&!memcmp(frame->data,"nvml_",5);
+                for(uint32_t i=0;valid&&i<size;++i){unsigned char c=frame->data[i];valid=(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='_';}
+                if(valid){memcpy(job->sdk_reason,frame->data,size);job->sdk_reason[size]=0;job->reason=job->sdk_reason;}
+                else job->reason="hardware_invalid_response";
+            }
+            frame_release(frame);break;
+        }
+        if(job->source==HARDWARE_SOURCES&&!gpu_wire_valid(frame->data,frame->size)){
+            frame_release(frame);job->reason="hardware_invalid_response";break;
+        }
         EnterCriticalSection(&job->mutex);
         job->frame=frame;job->state=READY;SetEvent(job->changed);
         LeaveCriticalSection(&job->mutex);
@@ -197,6 +218,7 @@ finish:
     if(parent)CloseHandle(parent);
     if(stop)CloseHandle(stop);
     if(null_file!=INVALID_HANDLE_VALUE)CloseHandle(null_file);
+    if(sdk_image)CloseHandle(sdk_image);
     free(executable);free(entry);free(command);
     EnterCriticalSection(&job->mutex);job->failed_at=now_ns();job->state=FAILED;
     InterlockedExchange(&job->done,1);SetEvent(job->changed);LeaveCriticalSection(&job->mutex);
@@ -248,6 +270,7 @@ int wtop_windows_hardware_open(lua_State *L) {
 int wtop_windows_hardware_close(lua_State *L) { session_close(L);lua_pushboolean(L,1);return 1; }
 int wtop_windows_hardware_query(lua_State *L) {
     struct session *session=luaL_checkudata(L,1,SESSION_META);unsigned flags=lua_toboolean(L,2)?1u:0u;
+    if(session->source==1&&lua_type(L,4)==LUA_TBOOLEAN&&!lua_toboolean(L,4))flags|=2;
     lua_Integer wait=luaL_optinteger(L,3,0);luaL_argcheck(L,wait>=0&&wait<=50,3,"wait must be 0..50 ms");
     struct guard *guard=lua_newuserdatauv(L,sizeof(*guard),0);guard->job=NULL;guard->frame=NULL;
     luaL_newmetatable(L,FRAME_META);lua_pushcfunction(L,guard_close);lua_setfield(L,-2,"__gc");lua_setmetatable(L,-2);
@@ -286,11 +309,53 @@ int wtop_windows_hardware_query(lua_State *L) {
     if(job->frame==frame&&job->state==READY){old=job->frame;job->frame=NULL;job->state=IDLE;}
     LeaveCriticalSection(&job->mutex);frame_release(old);release_guard(guard);lua_remove(L,guard_index);return 2;
 }
+int wtop_windows_gpu_open(lua_State *L) {
+    size_t size;const char *source=luaL_checklstring(L,1,&size);
+    luaL_argcheck(L,size==4&&!memcmp(source,"nvml",4),1,"unknown GPU source");
+    struct session *session=lua_newuserdatauv(L,sizeof(*session),2);
+    session->job=NULL;session->closed=0;session->source=HARDWARE_SOURCES;
+    luaL_newmetatable(L,SESSION_META);lua_pushcfunction(L,session_close);lua_setfield(L,-2,"__gc");
+    lua_pushcfunction(L,session_close);lua_setfield(L,-2,"__close");lua_setmetatable(L,-2);
+    lua_pushliteral(L,"x");lua_setiuservalue(L,-2,1);lua_pushliteral(L,"");lua_setiuservalue(L,-2,2);return 1;
+}
+static void decode_sdk_frame(lua_State *L,const unsigned char *data,size_t length) {
+    size_t p=0;luaL_checkstack(L,80,"GPU response");
+    while(p<length){
+        unsigned op=data[p++];
+        if(op==GPU_TABLE){p+=8;lua_createtable(L,0,0);continue;}
+        if(op==GPU_INDEX){lua_Integer index=(lua_Integer)gpu_u32(data+p);p+=4;lua_rawseti(L,-2,index);continue;}
+        if(op==GPU_DISCARD){lua_pop(L,1);continue;}
+        size_t n=data[p++];char key[64];memcpy(key,data+p,n);key[n]=0;p+=n;
+        if(op==GPU_FIELD){lua_setfield(L,-2,key);continue;}
+        if(op==GPU_INTEGER){lua_pushinteger(L,(lua_Integer)(int64_t)gpu_u64(data+p));p+=8;}
+        else if(op==GPU_NUMBER){uint64_t bits=gpu_u64(data+p);double number;memcpy(&number,&bits,8);p+=8;lua_pushnumber(L,number);}
+        else if(op==GPU_BOOLEAN)lua_pushboolean(L,data[p++]!=0);
+        else {n=(size_t)data[p]|((size_t)data[p+1]<<8);p+=2;lua_pushlstring(L,(const char *)data+p,n);p+=n;}
+        lua_setfield(L,-2,key);
+    }
+}
+int wtop_windows_gpu_query(lua_State *L) {
+    struct session *session=luaL_checkudata(L,1,SESSION_META);
+    luaL_argcheck(L,session->source==HARDWARE_SOURCES,1,"not a GPU reader");
+    int result=wtop_windows_hardware_query(L);
+    if(result!=2||lua_type(L,-2)!=LUA_TSTRING){
+        const char *reason=lua_tostring(L,-1);
+        if(reason&&!strncmp(reason,"hardware_",9))lua_pushfstring(L,"nvml_%s",reason+9);
+        else lua_pushstring(L,reason?reason:"nvml_query_failed");
+        lua_replace(L,-2);return 2;
+    }
+    size_t size;const unsigned char *bytes=(const unsigned char *)lua_tolstring(L,-2,&size);
+    int metadata=lua_gettop(L);decode_sdk_frame(L,bytes,size);
+    const char *keys[]={"sample_started_ns","sample_finished_ns","worker_pid","transport"};
+    for(unsigned i=0;i<4;++i){lua_getfield(L,metadata,keys[i]);lua_setfield(L,-2,keys[i]);}
+    return 1;
+}
 /* Child-only side. The watcher never accesses Lua, even if the collector is
  * stuck while holding its own Lua stack or a loader/provider lock. */
-struct watcher { HANDLE parent,cancel,stop; };
+struct watcher { HANDLE parent,cancel,stop,ready; };
 static DWORD WINAPI watch_parent(void *opaque) {
     struct watcher watch=*(struct watcher *)opaque;free(opaque);
+    SetEvent(watch.ready);
     HANDLE handles[]={watch.parent,watch.cancel,watch.stop};
     DWORD status=WaitForMultipleObjects(3,handles,FALSE,INFINITE);
     if(status!=WAIT_OBJECT_0+2)(void)TerminateProcess(GetCurrentProcess(),3);
@@ -319,19 +384,23 @@ static int child_initialize(lua_State *L) {
     lua_pushvalue(L,1);lua_pushvalue(L,2);lua_call(L,2,1);return 1;
 }
 int wtop_windows_hardware_run(lua_State *L) {
-    struct watcher watch={handle_argument(L,1),handle_argument(L,2),NULL};
+    struct watcher watch={handle_argument(L,1),handle_argument(L,2),NULL,NULL};
     HANDLE input=handle_argument(L,3),output=handle_argument(L,4);
     size_t name_size;const char *source=luaL_checklstring(L,5,&name_size);
     unsigned source_id=source_index(source,name_size);
     if(lua_gettop(L)!=5||source_id==HARDWARE_SOURCES||!watch.parent||!watch.cancel||!input||!output
         ||GetFileType(input)!=FILE_TYPE_PIPE||GetFileType(output)!=FILE_TYPE_PIPE
         ||WaitForSingleObject(watch.parent,0)!=WAIT_TIMEOUT||WaitForSingleObject(watch.cancel,0)!=WAIT_TIMEOUT){lua_pushinteger(L,2);return 1;}
-    watch.stop=CreateEventW(NULL,TRUE,FALSE,NULL);if(!watch.stop){lua_pushinteger(L,3);return 1;}
+    if(!SetHandleInformation(watch.parent,HANDLE_FLAG_INHERIT,0)||!SetHandleInformation(watch.cancel,HANDLE_FLAG_INHERIT,0)
+        ||!SetHandleInformation(input,HANDLE_FLAG_INHERIT,0)||!SetHandleInformation(output,HANDLE_FLAG_INHERIT,0)){lua_pushinteger(L,2);return 1;}
+    watch.stop=CreateEventW(NULL,TRUE,FALSE,NULL);watch.ready=CreateEventW(NULL,TRUE,FALSE,NULL);
+    if(!watch.stop||!watch.ready){if(watch.stop)CloseHandle(watch.stop);if(watch.ready)CloseHandle(watch.ready);lua_pushinteger(L,3);return 1;}
     struct watcher *copy=malloc(sizeof(*copy));
-    if(!copy){CloseHandle(watch.stop);lua_pushinteger(L,5);return 1;}
+    if(!copy){CloseHandle(watch.stop);CloseHandle(watch.ready);lua_pushinteger(L,5);return 1;}
     *copy=watch;HANDLE thread=CreateThread(NULL,0,watch_parent,copy,0,NULL);
-    if(!thread){free(copy);CloseHandle(watch.stop);lua_pushinteger(L,3);return 1;}
+    if(!thread){free(copy);CloseHandle(watch.stop);CloseHandle(watch.ready);lua_pushinteger(L,3);return 1;}
     int code=4;unsigned char prefix[4];
+    if(WaitForSingleObject(watch.ready,5000)!=WAIT_OBJECT_0)goto finish;
     if(!child_receive(input,prefix,4))goto finish;
     uint32_t size=gpu_u32(prefix);if(!size||size>65536)goto finish;
     char *configuration=malloc(size);if(!configuration){code=5;goto finish;}
@@ -342,9 +411,9 @@ int wtop_windows_hardware_run(lua_State *L) {
     while(child_receive(input,command,sizeof(command))){
         uint64_t sequence=gpu_u64(command+8);uint32_t flags=gpu_u32(command+16);
         if(gpu_u32(command)!=GPU_WIRE_MAGIC||gpu_u32(command+4)!=GPU_WIRE_VERSION||gpu_u32(command+20)
-            ||!sequence||sequence<=previous||(flags&~1u))break;
+            ||!sequence||sequence<=previous||(flags&~(source_id==1?3u:1u)))break;
         previous=sequence;uint64_t start=now_ns();int success=0;size_t length=0;const char *data;
-        if(initialized){lua_pushvalue(L,factory);lua_pushboolean(L,flags!=0);lua_pushboolean(L,0);
+        if(initialized){lua_pushvalue(L,factory);lua_pushboolean(L,(flags&1)!=0);lua_pushboolean(L,(flags&2)==0);
             if(lua_pcall(L,2,1,0)==LUA_OK&&lua_type(L,-1)==LUA_TSTRING){data=lua_tolstring(L,-1,&length);success=length&&length<=GPU_WIRE_LIMIT;}}
         if(!success){data="hardware_collector_error";length=strlen(data);}
         uint64_t end=now_ns();unsigned char header[GPU_WIRE_HEADER]={0};
@@ -356,6 +425,6 @@ int wtop_windows_hardware_run(lua_State *L) {
     }
 finish:
     SetEvent(watch.stop);(void)WaitForSingleObject(thread,INFINITE);
-    CloseHandle(thread);CloseHandle(watch.stop);CloseHandle(watch.parent);CloseHandle(watch.cancel);CloseHandle(input);CloseHandle(output);
+    CloseHandle(thread);CloseHandle(watch.stop);CloseHandle(watch.ready);CloseHandle(watch.parent);CloseHandle(watch.cancel);CloseHandle(input);CloseHandle(output);
     lua_pushinteger(L,code);return 1;
 }

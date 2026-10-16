@@ -40,6 +40,16 @@ def installer_archive(root: Path) -> Path:
     return archive
 
 
+def copy_vendor_notices(root: Path, output_root: Path) -> None:
+    notice = root / "native" / "licenses" / "NVML-NVIDIA.txt"
+    shutil.copy2(notice, output_root / "NVML-NVIDIA.txt")
+    directory = output_root / "wtop"
+    if directory.is_dir():
+        licenses = directory / ".luai" / "licenses"
+        licenses.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(notice, licenses / "NVML-NVIDIA.txt")
+
+
 def build(root: Path, kind: str, compiler: str | None = None, verbose: bool = False) -> Path:
     if os.name != "nt":
         raise ValueError("Windows packaging must run on Windows")
@@ -101,6 +111,7 @@ def build(root: Path, kind: str, compiler: str | None = None, verbose: bool = Fa
     shutil.copy2(root / "LICENSE", output_root / "LICENSE")
     if kind == "dir":
         shutil.copy2(root / "LICENSE", output / "LICENSE")
+    copy_vendor_notices(root, output_root)
     images, symbols = check_packaged(output_root, str(objdump), root / "native", kind)
     print(f"wtop: checked {images} PE images (primary x86, declared workers checked) and {symbols} named imports")
     return output

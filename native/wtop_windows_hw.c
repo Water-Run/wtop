@@ -575,6 +575,7 @@ static void push_process_names(lua_State *L, gpu_process *processes, int count) 
 }
 
 static int l_collect_gpu(lua_State *L) {
+    int include_processes=lua_isnoneornil(L,1)||lua_toboolean(L,1);
     static const WCHAR *const paths[] = {
         L"\\GPU Engine(*)\\Utilization Percentage",
         L"\\GPU Adapter Memory(*)\\Dedicated Usage",
@@ -607,8 +608,8 @@ static int l_collect_gpu(lua_State *L) {
         PDH_FMT_COUNTERVALUE_ITEM_W *items;
         counters_ready = 1;
         engines = (engine_total *)calloc(MAX_ENGINES, sizeof(*engines));
-        processes = (gpu_process *)calloc(MAX_GPU_PROCESSES, sizeof(*processes));
-        if (!engines || !processes) {
+        processes = include_processes ? (gpu_process *)calloc(MAX_GPU_PROCESSES, sizeof(*processes)) : NULL;
+        if (!engines || (include_processes && !processes)) {
             free(engines);
             free(processes);
             return luaL_error(L, "out of memory collecting GPU counters");
@@ -647,7 +648,7 @@ static int l_collect_gpu(lua_State *L) {
                 wcsncpy(total->type, type, 31);
             }
             if (total) total->value += value;
-            if (swscanf(name, L"pid_%lu_", &pid) == 1 && pid > 0 && value > 0) {
+            if (include_processes && swscanf(name, L"pid_%lu_", &pid) == 1 && pid > 0 && value > 0) {
                 process = find_gpu_process(processes, &process_count,
                     (DWORD)pid, luid);
                 if (process) {
@@ -686,7 +687,7 @@ static int l_collect_gpu(lua_State *L) {
             }
             free(items);
         }
-        items = pdh_items(gpu_counters.counters[3], &count);
+        items = include_processes ? pdh_items(gpu_counters.counters[3], &count) : NULL;
         for (DWORD index = 0; items && index < count; ++index) {
             unsigned long pid = 0;
             LUID luid;
@@ -798,7 +799,7 @@ static int l_collect_gpu(lua_State *L) {
         lua_createtable(L, 0, 2);
         boolean_field(L, "utilization", counters_ready && info->has_luid);
         boolean_field(L, "memory", info->dedicated_bytes > 0 || info->shared_bytes > 0);
-        boolean_field(L, "process_usage", counters_ready && info->has_luid);
+        boolean_field(L, "process_usage", include_processes && counters_ready && info->has_luid);
         lua_setfield(L, -2, "capabilities");
         lua_createtable(L, 0, 1);
         string_field(L, "utilization", !counters_ready || !info->has_luid

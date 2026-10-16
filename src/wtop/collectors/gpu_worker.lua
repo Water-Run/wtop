@@ -25,10 +25,12 @@ end
 
 function M.is_pending(reason) return pending[reason] == true end
 
-function M.default_provider(source)
+function M.default_provider(source, native_override)
   assert(sources[source], "unknown GPU source")
-  local ok, native = pcall(require, "wtop.native")
+  local ok, native = true, native_override
+  if not native then ok, native = pcall(require, "wtop.native") end
   if not ok or type(native) ~= "table" then return nil end
+  if type(native.gpu_worker_sources) == "table" and not native.gpu_worker_sources[source] then return nil end
   local open, query, close = native.gpu_worker_open, native.gpu_worker_query, native.gpu_worker_close
   if type(open) ~= "function" or type(query) ~= "function" or type(close) ~= "function" then
     if source ~= "nvml" then return nil end

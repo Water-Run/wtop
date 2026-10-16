@@ -2180,6 +2180,8 @@ static int l_collect_system_info(lua_State *L) {
     return 1;
 }
 
+int wtop_windows_gpu_open(lua_State *L);
+int wtop_windows_gpu_query(lua_State *L);
 int wtop_windows_hardware_configure(lua_State *L);
 int wtop_windows_hardware_run(lua_State *L);
 int wtop_windows_hardware_open(lua_State *L);
@@ -2187,6 +2189,9 @@ int wtop_windows_hardware_query(lua_State *L);
 int wtop_windows_hardware_close(lua_State *L);
 
 static const luaL_Reg functions[] = {
+    {"gpu_worker_open", wtop_windows_gpu_open},
+    {"gpu_worker_query", wtop_windows_gpu_query},
+    {"gpu_worker_close", wtop_windows_hardware_close},
     {"hardware_worker_configure", wtop_windows_hardware_configure},
     {"hardware_worker_run", wtop_windows_hardware_run},
     {"hardware_worker_open", wtop_windows_hardware_open},
@@ -2236,6 +2241,7 @@ static const luaL_Reg functions[] = {
 int __declspec(dllexport) luaopen_wtop_native(lua_State *L) {
     luaL_newlib(L, functions);
     wtop_register_hardware(L);
+    lua_createtable(L,0,1);lua_pushboolean(L,1);lua_setfield(L,-2,"nvml");lua_setfield(L,-2,"gpu_worker_sources");
     string_field(L, "VERSION", WTOP_VERSION);
     return 1;
 }

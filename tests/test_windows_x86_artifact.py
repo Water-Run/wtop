@@ -250,6 +250,14 @@ images = Check.pe_images(container)
 refused(lambda: Check.worker_images(container, images), "complete embedded")
 images = images[1:]
 assert Check.worker_images(container, images) == {512: "x86", 1024: "x64"}
+nvml_manifest = manifest.replace(b"CPUID", b"NVML")
+nvml_container = bytes(pe) * 2 + bytes(helper64) + nvml_manifest
+assert Check.worker_images(nvml_container, images, "NVML") == {512:"x86",1024:"x64"}
+refused(lambda: Check.worker_images(nvml_container, images[:-1], "NVML"), "NVML worker is missing")
+refused(lambda: Check.worker_images(nvml_container + nvml_manifest, images, "NVML"), "manifest")
+refused(lambda: Check.worker_images(nvml_container, images + [images[0]], "NVML"), "duplicate NVML")
+assert Check.worker_images(nvml_container, images) == {}
+
 refused(lambda: Check.worker_images(container, images[:-1]), "missing, duplicated or changed")
 refused(lambda: Check.worker_images(container, images + [images[0]]), "duplicate CPUID")
 refused(lambda: Check.worker_images(container + manifest, images), "manifest")

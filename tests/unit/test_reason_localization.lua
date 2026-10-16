@@ -190,6 +190,7 @@ local interface_reasons = {
   "no_cpuidle_states",
   "no_thermal_throttle_counters",
   "no_device_inventory",
+  "no_display_adapters",
   "no_drm_card_devices",
   "no_hwmon_devices",
   "no_power_supplies",

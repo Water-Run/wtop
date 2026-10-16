@@ -8,6 +8,7 @@ from pathlib import Path
 
 def main() -> None:
     p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--kind',choices=['cpuid','nvml'],default='cpuid')
     p.add_argument('--x86',type=Path,required=True)
     p.add_argument('--x64',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
@@ -29,6 +30,7 @@ def main() -> None:
     lines.extend('  "'+line+'\\n"' for line in manifest)
     lines.append(';')
     lines.append('#endif')
+    if args.kind=='nvml':lines=[line.replace('CPUID','NVML').replace('cpuid','nvml') for line in lines]
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text('\n'.join(lines)+'\n')
 

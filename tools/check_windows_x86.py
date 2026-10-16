@@ -159,38 +159,38 @@ def parse_objdump(output: str, name: str, architecture: str = "x86") -> dict[str
     return {"imports": imports, "versions": versions}
 
 
-def worker_images(data: bytes, images: list[tuple[int, bytes]]) -> dict[int, str]:
-    """Only the two self-contained workers declared inside the module may
+def worker_images(data: bytes, images: list[tuple[int, bytes]], kind: str = "CPUID") -> dict[int, str]:
+    """Only declared, self-contained workers inside the module may
     have a different architecture. Primary programs/DLLs stay PE32/XP x86.
     Digests and complete lengths bind each role to one embedded PE image.
     This is an artifact consistency check, not a substitute for signatures.
     """
-    marker = b"WTOP_CPUID_WORKERS_V1\n"
+    if kind not in {"CPUID", "NVML"}:raise ValueError("unknown worker kind")
+    marker = ("WTOP_" + kind + "_WORKERS_V1\n").encode()
     if marker not in data:
         return {}
-    matches = list(re.finditer(
-        rb"WTOP_CPUID_WORKERS_V1\nx86:([1-9][0-9]*):([0-9a-f]{64})\n"
-        rb"x64:([1-9][0-9]*):([0-9a-f]{64})\nEND_WTOP_CPUID_WORKERS\n", data))
+    pattern = re.escape(marker) + rb"x86:([1-9][0-9]*):([0-9a-f]{64})\n" + rb"x64:([1-9][0-9]*):([0-9a-f]{64})\n" + ("END_WTOP_"+kind+"_WORKERS\n").encode()
+    matches = list(re.finditer(pattern, data))
     if len(matches) != 1 or data.count(marker) != 1:
-        raise ValueError("invalid CPUID worker manifest")
+        raise ValueError("invalid " + kind + " worker manifest")
     manifest = matches[0]
     expected = {manifest[2].decode(): (int(manifest[1]), "x86"),
                 manifest[4].decode(): (int(manifest[3]), "x64")}
     if len(expected) != 2 or any(not 0 < length <= 512 * 1024 for length, _ in expected.values()):
-        raise ValueError("invalid CPUID worker lengths or identities")
+        raise ValueError(f"invalid {kind} worker lengths or identities")
     found, consumed = {}, set()
     for offset, image in images:
         digest = hashlib.sha256(image).hexdigest()
         if digest in consumed:
-            raise ValueError("duplicate CPUID worker image")
+            raise ValueError(f"duplicate {kind} worker image")
         if digest in expected:
             length, architecture = expected.pop(digest)
             if offset == 0 or len(image) != length:
-                raise ValueError("CPUID worker must be a complete embedded image")
+                raise ValueError(f"{kind} worker must be a complete embedded image")
             found[offset] = architecture
             consumed.add(digest)
     if expected:
-        raise ValueError("CPUID worker is missing, duplicated or changed")
+        raise ValueError(f"{kind} worker is missing, duplicated or changed")
     return found
 
 
@@ -281,7 +281,12 @@ def parse_worker64(data: bytes, name: str) -> dict[str, object]:
 
 def inspect_images(data: bytes, objdump: str, name: str):
     images = pe_images(data)
-    workers = worker_images(data, images)
+    cpu_workers = worker_images(data, images)
+    sdk_workers = worker_images(data, images, "NVML")
+    if cpu_workers.keys() & sdk_workers.keys():raise ValueError("overlapping worker roles")
+    workers = {**cpu_workers, **sdk_workers}
+    roles = {offset: ("nvml-" if offset in sdk_workers else "cpuid-") + architecture + ".exe"
+             for offset, architecture in workers.items()}
     reports = []
     with tempfile.TemporaryDirectory(prefix="wtop-pe-") as directory:
         for index, (offset, image) in enumerate(images):
@@ -291,7 +296,7 @@ def inspect_images(data: bytes, objdump: str, name: str):
             if architecture == "x64":
                 result = parse_worker64(image, name)
                 check_reports({"worker.exe": result}, set(), ())
-                reports.append((offset, result, "cpuid-x64.exe"))
+                reports.append((offset, result, roles[offset]))
                 continue
             output = subprocess.run([objdump, "-p", str(path)], check=True,
                                     capture_output=True, text=True,
@@ -300,7 +305,7 @@ def inspect_images(data: bytes, objdump: str, name: str):
             if offset in workers:
                 check_reports({"worker.exe": result}, set(), ())
             exported = re.search(r"^Name\s+[0-9a-fA-F]+\s+(\S+\.dll)\s*$", output, re.M | re.I)
-            role = "cpuid-" + architecture + ".exe" if offset in workers else None
+            role = roles.get(offset)
             reports.append((offset, result, role or (exported[1].lower() if exported else None)))
     return reports
 

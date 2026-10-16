@@ -37,20 +37,23 @@
  * without the driver reports the provider as unavailable. Only read-only
  * queries are used. */
 #define _GNU_SOURCE
+#ifdef _WIN32
+#define WINVER 0x0501
+#define _WIN32_WINNT 0x0501
+#endif
 
 #ifndef WTOP_GPU_WORKER
 #include <lua.h>
 #include <lauxlib.h>
 #endif
 
-#include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <limits.h>
 #include <math.h>
-#include <time.h>
+#include "wtop_nvml_platform.h"
 
 #ifndef WTOP_GPU_WORKER
 #include "wtop_nvml.h"
@@ -204,7 +207,7 @@ static char nvml_registry_key;
 
 NVML_ABI static void nvml_close(nvml_api *a) {
     if (a->state && a->shutdown) a->shutdown();
-    if (a->library) dlclose(a->library);
+    if (a->library) nvml_library_close(a->library);
     memset(a, 0, sizeof(*a));
 }
 #ifndef WTOP_GPU_WORKER
@@ -227,14 +230,14 @@ static nvml_api *nvml_context(lua_State *L) {
 #endif
 
 static void *symbol(void *library, const char *name, const char *fallback) {
-    void *found = dlsym(library, name);
-    if (!found && fallback) found = dlsym(library, fallback);
+    void *found = nvml_library_symbol(library, name);
+    if (!found && fallback) found = nvml_library_symbol(library, fallback);
     return found;
 }
 
 NVML_ABI static const char *nvml_open(nvml_api *a) {
     if (a->state) return NULL;
-    void *library = dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL);
+    void *library = nvml_library_open();
     if (!library) return "nvml_library_not_found";
     a->library = library;
     nvml_init_function init = (nvml_init_function)symbol(library, "nvmlInit_v2", "nvmlInit");
@@ -488,10 +491,8 @@ static int field_power(const nvml_field *field, unsigned int expected, double *w
 /* Field timestamps are documented UTC microseconds, unlike process sample
  * timestamps. A successful read of an old cache is not fresh power. */
 static const char *field_freshness(const nvml_field *field) {
-    struct timespec now;
-    if (field->timestamp <= 0 || clock_gettime(CLOCK_REALTIME, &now) != 0
-        || now.tv_sec < 0 || now.tv_sec >= LLONG_MAX / 1000000) return "gap";
-    long long current = (long long)now.tv_sec * 1000000 + now.tv_nsec / 1000;
+    int64_t current;
+    if (field->timestamp <= 0 || !nvml_realtime_us(&current)) return "gap";
     long long age = current - field->timestamp;
     if (age < -1000000) return "gap";
     return age > 5000000 ? "stale" : "fresh";

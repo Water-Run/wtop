@@ -50,6 +50,8 @@ local function metadata(source,data,now,retained,reason)
     retained=retained or false,reason=reason}
 end
 
+function M.copy(value, budget) return clone(value, budget) end
+
 function M.new() return setmetatable({sources={},generation=0},M) end
 function M:begin(fs,now,safe)
   if self.fs~=fs or (self.now and now<self.now) or safe or self.generation==math.maxinteger then

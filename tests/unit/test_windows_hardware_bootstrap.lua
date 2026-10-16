@@ -49,7 +49,7 @@ function adapter.uname() return {sysname = "Windows"} end
 function adapter.monotonic_ns() return 123456 end
 adapter.realtime_ns = adapter.monotonic_ns
 function adapter.collect_cpufreq() calls = calls + 1;return {policies = {}} end
-function adapter.collect_gpu() calls = calls + 1;return {devices = {}} end
+function adapter.collect_gpu(scan) assert(scan == false);calls = calls + 1;return {devices = {}} end
 function adapter.collect_hwmon() calls = calls + 1;return {devices = {}} end
 function adapter.hardware_worker_open() error("recursive reader") end
 package.loaded["wtop.native"] = adapter

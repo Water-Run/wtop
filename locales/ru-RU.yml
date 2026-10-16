@@ -1352,6 +1352,7 @@ messages:
   reason.no_cpufreq_policies: "Политики cpufreq не найдены"
   reason.no_cpuidle_states: "Состояния простоя ЦП недоступны"
   reason.no_device_inventory: "Устройства PCI или USB не найдены"
+  reason.no_display_adapters: "Видеоадаптеры не найдены"
   reason.no_drm_card_devices: "Устройства DRM не найдены"
   reason.no_edac_controllers: "Контроллеры памяти EDAC недоступны"
   reason.no_esrt_entries: "Записи UEFI ESRT не доступны"
