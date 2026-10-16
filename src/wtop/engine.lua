@@ -446,6 +446,7 @@ function Engine.new(options)
     local HardwareWorker = require("wtop.collectors.hardware_worker")
     local hardware_inputs = {}
     if not options.collectors and not options.clock and not options.context
+        and require("wtop.platform").id(native) == "linux"
         and HardwareWorker.available() then
         for id in pairs(HardwareWorker.sources) do
             if collectors[id] and not collector_options[id] and not collector_options.common then

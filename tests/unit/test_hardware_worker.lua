@@ -267,4 +267,33 @@ assert(Wire.decode(child(false)).result.data.zones[1].power_watts==3)
 local restarted=create_reader("powercap",Wire.encode({}))
 assert(Wire.decode(restarted(false)).result.data.zones[1].power_watts==nil)
 package.loaded["wtop.native"],package.loaded["wtop.core.hardware_worker"]=prior_native,prior_core
+
+-- Default construction is a different path from an injected collector set.
+-- A portable backend's own proxies must not enter the Linux sysfs/SMBIOS
+-- wrapping pass, even when it exposes the shared process transport API.
+local saved={}
+for _,name in ipairs({"wtop.native","wtop.collectors","wtop.collectors.hardware_worker","wtop.engine"})do
+    saved[name]=package.loaded[name]
+end
+local sysname,wrapped="Darwin",0
+local sensor={id="hwmon",default_interval_ms=1000,sample=function()end}
+package.loaded["wtop.native"]={available=true,uname=function()return {sysname=sysname}end,
+    monotonic_ns=function()return 1000000000 end,realtime_ns=function()return 1000000000 end}
+package.loaded["wtop.collectors"]={new_all=function()return {hwmon=sensor}end}
+package.loaded["wtop.collectors.hardware_worker"]={sources={hwmon=true},available=function()return true end,
+    new=function(collector)wrapped=wrapped+1;return {id=collector.id,default_interval_ms=1000,sample=function()end}end}
+package.loaded["wtop.engine"]=nil
+local DefaultEngine=require("wtop.engine")
+for _,platform in ipairs({"Darwin","Windows"})do
+    sysname=platform
+    local instance=DefaultEngine.new()
+    assert(instance.collectors.hwmon==sensor and next(instance.hardware_inputs)==nil and wrapped==0,
+        "portable default engine replaced a sensor with a Linux-only reader")
+    instance:stop()
+end
+sysname="Linux"
+local linux_instance=DefaultEngine.new()
+assert(wrapped==1 and linux_instance.collectors.hwmon~=sensor,"Linux lost its default isolated reader")
+linux_instance:stop()
+for name,value in pairs(saved)do package.loaded[name]=value end
 return true
