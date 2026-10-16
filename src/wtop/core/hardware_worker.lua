@@ -2,15 +2,32 @@
 local Wire = require("wtop.core.worker_wire")
 local Native = require("wtop.native")
 
+-- Literal constructors keep the child entry graph discoverable in both
+-- directory and onefile bundles without running platform-specific readers.
+local constructors = {
+    hwmon = function(o) return require("wtop.collectors.hwmon").new(o) end,
+    cpufreq = function(o) return require("wtop.collectors.cpufreq").new(o) end,
+    powercap = function(o) return require("wtop.collectors.powercap").new(o) end,
+    cpu_limits = function(o) return require("wtop.collectors.cpu_limits").new(o) end,
+    thermal_throttle = function(o) return require("wtop.collectors.thermal_throttle").new(o) end,
+    cpuidle = function(o) return require("wtop.collectors.cpuidle").new(o) end,
+    thermal_zones = function(o) return require("wtop.collectors.thermal_zones").new(o) end,
+    smbios_input = function(o) return require("wtop.collectors.smbios_input").new(o) end,
+    gpu_drm = function(o) return require("wtop.collectors.gpu_drm").new(o) end,
+    cpu_clocks = function(o) return require("wtop.collectors.cpu_clocks").new(o) end,
+}
+
 return function(id, configuration)
     local options = Wire.decode(configuration)
     assert(type(options) == "table", "hardware_configuration")
     local collector
-    if require("wtop.platform").id(Native) == "macos" then
+    local platform = require("wtop.platform").id(Native)
+    if platform == "macos" or platform == "windows" then
         options.native = Native
+        options._hardware_direct = true
         collector = require("wtop.collectors.portable").new(id, options)
     else
-        collector = require("wtop.collectors." .. id).new(options)
+        collector = assert(constructors[id], "hardware_collector")(options)
     end
     local previous
     return function(safe_mode, scan_gpu_processes)

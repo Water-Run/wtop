@@ -51,10 +51,12 @@ enum frequency_scenario {
     SCHEME_NAME_FAILURE = 30,
     SCHEME_NAME_OVERSIZE = 31,
     LUA_OOM = 32,
+    TRANSIENT_OPEN = 33,
+    MISSING_PDH_API = 34,
 };
 
 typedef struct {int state; PDH_HQUERY query; PDH_HCOUNTER counters[4]; unsigned collections;} pdh_set;
-static int scenario,power_queries;
+static int scenario,power_queries,open_attempts;
 static unsigned opened_queries,closed_queries,collect_calls,group_calls,active_calls;
 static unsigned scheme_queries,scheme_releases,schemes_alive,arrays_alive;
 static void *array_pointer,*scheme_pointer;
@@ -62,7 +64,7 @@ static PDH_STATUS WINAPI fixture_close_query(PDH_HQUERY q){assert(q);++closed_qu
 static struct{PDH_STATUS(WINAPI *close_query)(PDH_HQUERY);}pdh={fixture_close_query};
 static DWORD fixture_tick=1000;
 static DWORD fixture_get_tick(void){return fixture_tick;}
-static unsigned cpu_count(void){return scenario==LEGACY_POWER?6:scenario==REORDERED_POWER?3:1;}
+static unsigned cpu_count(void){return scenario==LEGACY_POWER||scenario==MISSING_PDH_API?6:scenario==REORDERED_POWER?3:1;}
 static void fixture_system(SYSTEM_INFO *s){s->dwNumberOfProcessors=cpu_count();}
 static WORD WINAPI fixture_groups(void){
  ++group_calls;
@@ -96,17 +98,21 @@ static FARPROC fixture_address(HMODULE module,const char *name){
     (void)module;
     if(!strcmp(name,"PowerGetActiveScheme"))return(FARPROC)(void*)fixture_scheme;
     if(!strcmp(name,"PowerReadFriendlyName"))return(FARPROC)(void*)fixture_friendly;
-    if(!strcmp(name,"CallNtPowerInformation"))return(scenario>=LEGACY_POWER&&scenario<=MULTIGROUP_NO_PDH)||scenario==POWER_QUERY_FAILURE?(FARPROC)(void*)fixture_power_query:NULL;
+    if(!strcmp(name,"CallNtPowerInformation"))return(scenario>=LEGACY_POWER&&scenario<=MULTIGROUP_NO_PDH)||scenario==POWER_QUERY_FAILURE||scenario==MISSING_PDH_API?(FARPROC)(void*)fixture_power_query:NULL;
     if(scenario==LEGACY_POWER)return NULL;
     if(!strcmp(name,"GetActiveProcessorGroupCount"))return(FARPROC)(void*)fixture_groups;
     if(!strcmp(name,"GetActiveProcessorCount"))return(FARPROC)(void*)fixture_active;
     return NULL;
 }
+static int pdh_ready(void){return scenario!=MISSING_PDH_API&&scenario!=LEGACY_POWER;}
 static int pdh_set_open(pdh_set *s,const WCHAR *const *p,int n,int required){
  (void)p;(void)n;(void)required;if(s->state)return s->state>0;
+ ++open_attempts;
+ if(scenario==MISSING_PDH_API||(scenario==TRANSIENT_OPEN&&open_attempts==1)){s->state=-1;return 0;}
  if((scenario>=LEGACY_POWER&&scenario<=MULTIGROUP_NO_PDH)||scenario==POWER_QUERY_FAILURE){s->state=-1;return 0;}
  s->state=1;s->query=(PDH_HQUERY)(uintptr_t)100;++opened_queries;
  s->collections=((scenario>=COLD_QUERY&&scenario<=MISSING_ARRAY)||(scenario==COLLECT_FAILURE&&opened_queries>1)||(scenario==TOPOLOGY_DURING_SAMPLE&&opened_queries>1)||(scenario==TOPOLOGY_BETWEEN_SAMPLES&&opened_queries>1))?0:1;
+ if(scenario==TRANSIENT_OPEN)s->collections=0;
  s->counters[0]=(PDH_HCOUNTER)(uintptr_t)1;s->counters[1]=(PDH_HCOUNTER)(uintptr_t)2;return 1;
 }
 static int pdh_set_collect(pdh_set *s){++collect_calls;if(scenario==COLLECT_FAILURE&&collect_calls==1)return 0;++s->collections;return 1;}
@@ -181,14 +187,23 @@ static void oom_test(void){
 }
 int main(int argc,char **argv){
  if(argc==1){
-  for(unsigned i=BASELINE;i<=LUA_OOM;i++){char text[16];snprintf(text,sizeof(text),"%u",i);assert(_spawnl(_P_WAIT,argv[0],argv[0],text,(char*)NULL)==0);}
-  puts("Windows frequency:33 typed API scenarios, group identities, numeric bounds, warmup/wrap, query reset, topology changes and Lua OOM passed");return 0;
+  for(unsigned i=BASELINE;i<=MISSING_PDH_API;i++){char text[16];snprintf(text,sizeof(text),"%u",i);assert(_spawnl(_P_WAIT,argv[0],argv[0],text,(char*)NULL)==0);}
+  puts("Windows frequency:35 typed API scenarios, group identities, numeric bounds, warmup/wrap, query reset, topology changes and Lua OOM passed");return 0;
  }
- assert(argc==2);scenario=atoi(argv[1]);assert(scenario>=BASELINE&&scenario<=LUA_OOM);
+ assert(argc==2);scenario=atoi(argv[1]);assert(scenario>=BASELINE&&scenario<=MISSING_PDH_API);
  if(scenario==TICK_WRAP)fixture_tick=UINT32_MAX-255;
  if(scenario==LUA_OOM){oom_test();return 0;}
  lua_State *L=luaL_newstate();assert(L);assert(invoke(L)==LUA_OK);
- if(scenario==COLD_QUERY||scenario==TICK_WRAP){
+ if(scenario==TRANSIENT_OPEN){
+  assert(lua_isnil(L,-2)&&open_attempts==1);
+  fixture_tick+=4999;assert(invoke(L)==LUA_OK&&lua_isnil(L,-2)&&open_attempts==1);
+  fixture_tick+=1;assert(invoke(L)==LUA_OK&&pending(L)&&open_attempts==2);
+  fixture_tick+=999;assert(invoke(L)==LUA_OK&&pending(L)&&collect_calls==1);
+  fixture_tick+=1;assert(invoke(L)==LUA_OK&&!pending(L)&&policies(L)==1&&collect_calls==2);
+ }else if(scenario==MISSING_PDH_API){
+  assert(policies(L)==6&&open_attempts==1);
+  fixture_tick+=10000;assert(invoke(L)==LUA_OK&&policies(L)==6&&open_attempts==1);
+ }else if(scenario==COLD_QUERY||scenario==TICK_WRAP){
   assert(pending(L)&&policies(L)==0&&collect_calls==1);
   fixture_tick+=500;assert(invoke(L)==LUA_OK&&pending(L)&&collect_calls==1);
   fixture_tick+=500;assert(invoke(L)==LUA_OK&&!pending(L)&&policies(L)==2&&collect_calls==2);
@@ -210,7 +225,7 @@ int main(int argc,char **argv){
   int absent=scenario==WRAPPED_GROUP||scenario==TRAILING_NAME||scenario==INVALID_GROUP||scenario==INVALID_NUMBER||scenario==INCOMPLETE_NAME||scenario==NEGATIVE_GROUP||scenario==MULTIGROUP_NO_PDH||scenario==NULL_NAME||scenario==GROUP_QUERY_FAILURE||scenario==POWER_QUERY_FAILURE;
   if(absent){assert(lua_isnil(L,-2));if(scenario==MULTIGROUP_NO_PDH)assert(power_queries==0);}
   else{
-   size_t count=policies(L),wanted=scenario==MULTIGROUP?2:scenario==LEGACY_POWER?6:scenario==REORDERED_POWER?3:scenario==POLICY_LIMIT||scenario==POLICY_OVERFLOW?512:1;
+   size_t count=policies(L),wanted=scenario==MULTIGROUP?2:scenario==LEGACY_POWER||scenario==MISSING_PDH_API?6:scenario==REORDERED_POWER?3:scenario==POLICY_LIMIT||scenario==POLICY_OVERFLOW?512:1;
    assert(count==wanted);lua_getfield(L,-1,"truncated");assert(lua_toboolean(L,-1)==(scenario==POLICY_OVERFLOW));lua_pop(L,1);
    lua_getfield(L,-1,"policies");
    for(size_t i=1;i<=count;i++){

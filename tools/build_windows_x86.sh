@@ -59,7 +59,7 @@ python3 "$project_dir/tools/embed_cpuid_helpers.py" \
     "$project_dir/native/wtop_windows.c" "$project_dir/native/wtop_windows_net.c" \
     "$project_dir/native/wtop_windows_hw.c" "$project_dir/native/wtop_windows_cpu.c" \
     "$project_dir/native/wtop_windows_disk.c" \
-    "$project_dir/native/wtop_windows_cpuid.c" \
+    "$project_dir/native/wtop_windows_cpuid.c" "$project_dir/native/wtop_windows_worker.c" \
     "$work_dir/lua-src/src/lua55.dll" -lpsapi -liphlpapi -lsetupapi
 
 rm -rf "$output_dir"

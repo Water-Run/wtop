@@ -2180,7 +2180,18 @@ static int l_collect_system_info(lua_State *L) {
     return 1;
 }
 
+int wtop_windows_hardware_configure(lua_State *L);
+int wtop_windows_hardware_run(lua_State *L);
+int wtop_windows_hardware_open(lua_State *L);
+int wtop_windows_hardware_query(lua_State *L);
+int wtop_windows_hardware_close(lua_State *L);
+
 static const luaL_Reg functions[] = {
+    {"hardware_worker_configure", wtop_windows_hardware_configure},
+    {"hardware_worker_run", wtop_windows_hardware_run},
+    {"hardware_worker_open", wtop_windows_hardware_open},
+    {"hardware_worker_query", wtop_windows_hardware_query},
+    {"hardware_worker_close", wtop_windows_hardware_close},
     {"terminal_start", l_terminal_start},
     {"terminal_stop", l_terminal_stop},
     {"terminal_capabilities", l_terminal_capabilities},

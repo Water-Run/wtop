@@ -32,22 +32,22 @@ jobs:
           mkdir ci-inputs
           i686-w64-mingw32-gcc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc \
             -Idist/windows-x86/include -Ibuild/native -Ibuild/windows-x86 \
-            tests/native/windows_inventory.c native/wtop_windows.c native/wtop_windows_cpuid.c native/wtop_windows_cpu.c native/wtop_windows_net.c native/wtop_windows_disk.c \
+            tests/native/windows_inventory.c native/wtop_windows.c native/wtop_windows_worker.c native/wtop_windows_cpuid.c native/wtop_windows_cpu.c native/wtop_windows_net.c native/wtop_windows_disk.c \
             dist/windows-x86/liblua55.dll.a -lpsapi -liphlpapi -lsetupapi \
             -o ci-inputs/inventory-fixture.exe
           i686-w64-mingw32-gcc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc \
             -Idist/windows-x86/include -Ibuild/native -Ibuild/windows-x86 \
-            tests/native/windows_disk.c native/wtop_windows.c native/wtop_windows_cpuid.c native/wtop_windows_cpu.c native/wtop_windows_hw.c native/wtop_windows_net.c \
+            tests/native/windows_disk.c native/wtop_windows.c native/wtop_windows_worker.c native/wtop_windows_cpuid.c native/wtop_windows_cpu.c native/wtop_windows_hw.c native/wtop_windows_net.c \
             dist/windows-x86/liblua55.dll.a -lpsapi -liphlpapi -lsetupapi \
             -o ci-inputs/disk-fixture.exe
           i686-w64-mingw32-gcc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc \
             -Idist/windows-x86/include -Ibuild/native -Ibuild/windows-x86 \
-            tests/native/windows_network.c native/wtop_windows.c native/wtop_windows_cpuid.c native/wtop_windows_cpu.c native/wtop_windows_net.c native/wtop_windows_disk.c \
+            tests/native/windows_network.c native/wtop_windows.c native/wtop_windows_worker.c native/wtop_windows_cpuid.c native/wtop_windows_cpu.c native/wtop_windows_net.c native/wtop_windows_disk.c \
             dist/windows-x86/liblua55.dll.a -lpsapi -liphlpapi -lsetupapi \
             -o ci-inputs/network-fixture.exe
           i686-w64-mingw32-gcc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc \
             -Idist/windows-x86/include -Ibuild/native -Ibuild/windows-x86 \
-            tests/native/windows_network_table.c native/wtop_windows.c native/wtop_windows_cpuid.c native/wtop_windows_cpu.c native/wtop_windows_hw.c native/wtop_windows_disk.c \
+            tests/native/windows_network_table.c native/wtop_windows.c native/wtop_windows_worker.c native/wtop_windows_cpuid.c native/wtop_windows_cpu.c native/wtop_windows_hw.c native/wtop_windows_disk.c \
             dist/windows-x86/liblua55.dll.a -lpsapi -liphlpapi -lsetupapi \
             -o ci-inputs/network-table-fixture.exe
           i686-w64-mingw32-gcc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc \
@@ -56,6 +56,9 @@ jobs:
           i686-w64-mingw32-gcc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc \
             -Idist/windows-x86/include tests/native/windows_frequency.c \
             dist/windows-x86/liblua55.dll.a -o ci-inputs/frequency-fixture.exe
+          i686-w64-mingw32-gcc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc \
+            -Idist/windows-x86/include tests/native/windows_hardware_worker.c \
+            dist/windows-x86/liblua55.dll.a -o ci-inputs/hardware-worker-fixture.exe
           i686-w64-mingw32-gcc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc \
             -Idist/windows-x86/include -Ibuild/windows-x86 tests/native/windows_cpuid.c \
             dist/windows-x86/liblua55.dll.a -o ci-inputs/cpuid-fixture.exe
@@ -68,7 +71,7 @@ jobs:
           test "$(stat -c %s ci-inputs/w64devkit-i686-1.23.0.zip)" = 72803726
           cd ci-inputs
           echo '033ef6a29bfcb5ef4452ec5219ed74b64b95d56ae71c9252996e77dd777ab7bf  w64devkit-i686-1.23.0.zip' | sha256sum -c -
-          sha256sum runtime.tar.gz w64devkit-i686-1.23.0.zip inventory-fixture.exe disk-fixture.exe network-fixture.exe network-table-fixture.exe cpu-fixture.exe frequency-fixture.exe cpuid-fixture.exe | tee SHA256SUMS
+          sha256sum runtime.tar.gz w64devkit-i686-1.23.0.zip inventory-fixture.exe disk-fixture.exe network-fixture.exe network-table-fixture.exe cpu-fixture.exe frequency-fixture.exe hardware-worker-fixture.exe cpuid-fixture.exe | tee SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: windows-build-inputs
@@ -123,7 +126,7 @@ jobs:
           & ./dist/windows-x86/disk-fixture.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Remove-Item dist/windows-x86/disk-fixture.exe
-          foreach ($fixture in 'network-fixture.exe', 'network-table-fixture.exe', 'cpu-fixture.exe', 'frequency-fixture.exe', 'cpuid-fixture.exe') {
+          foreach ($fixture in 'network-fixture.exe', 'network-table-fixture.exe', 'cpu-fixture.exe', 'frequency-fixture.exe', 'hardware-worker-fixture.exe', 'cpuid-fixture.exe') {
             Copy-Item (Join-Path ci-inputs $fixture) dist/windows-x86/
             & (Join-Path ./dist/windows-x86 $fixture)
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

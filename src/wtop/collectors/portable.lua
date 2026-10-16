@@ -754,7 +754,8 @@ function M.new(id, options)
   assert(sources[id], "unsupported portable collector")
   local collector = new_collector(id, sources[id], options)
   local native = collector.native
-  if type(native.hardware_worker_sources) == "table"
+  if not (options and options._hardware_direct)
+      and type(native.hardware_worker_sources) == "table"
       and native.hardware_worker_sources[id] then
     local Hardware = require("wtop.collectors.hardware_worker")
     return Hardware.new(collector, {}, native)

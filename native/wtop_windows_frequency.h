@@ -150,7 +150,8 @@ static int l_collect_cpufreq(lua_State *L) {
         L"\\Processor Information(*)\\Processor Frequency",
         L"\\Processor Information(*)\\% Processor Performance",
     };
-    static DWORD first_collection_tick;
+    static DWORD first_collection_tick, open_failed_tick;
+    static int have_open_failure;
     static struct frequency_topology epoch;
     static int have_epoch;
     struct frequency_topology before, after;
@@ -174,8 +175,13 @@ static int l_collect_cpufreq(lua_State *L) {
             row->power_present = 1; row->power = *power;
         }
     }
+    DWORD tick = GetTickCount();
+    if (frequency_counters.state < 0 && have_open_failure
+        && (DWORD)(tick - open_failed_tick) >= 5000 && pdh_ready())
+        frequency_reset_query();
+    int opening = frequency_counters.state == 0;
     if (pdh_set_open(&frequency_counters, paths, 2, 2)) {
-        DWORD tick = GetTickCount();
+        have_open_failure = 0;
         if (frequency_counters.collections == 1
             && (DWORD)(tick - first_collection_tick) < 1000) {
             sampling_pending = 1;
@@ -184,6 +190,8 @@ static int l_collect_cpufreq(lua_State *L) {
                 first_collection_tick = tick; sampling_pending = 1;
             } else pdh_current = 1;
         } else { all->partial = 1; frequency_reset_query(); }
+    } else if (opening) {
+        open_failed_tick = tick; have_open_failure = 1;
     }
     if (pdh_current) {
         int arrays_complete = 1;
