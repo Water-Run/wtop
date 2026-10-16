@@ -301,4 +301,29 @@ assert(#local_runs > 0)
 assert(local_metadata.changed_cells < page_frame_c.width * page_frame_c.height)
 equal(page_calls, 2)
 
+-- Styles may be edited between presentations. Equivalent distinct tables
+-- must suppress output, while both new and removed attributes repaint.
+local left_style = {fg = {mode = "rgb", r = 1, g = 2, b = 3}, bg = {mode = "index", index = 4}}
+local right_style = {fg = {mode = "rgb", r = 1, g = 2, b = 3}, bg = {mode = "index", index = 4}}
+local left_grid = Grid.new(8, 2, {default_style = left_style})
+local right_grid = Grid.new(8, 2, {default_style = right_style})
+equal(#Diff.runs(left_grid, right_grid), 0, "equivalent distinct styles")
+for _, attribute in ipairs({"bold", "dim", "italic", "underline", "blink", "reverse",
+    "strikethrough", "fg_token", "bg_token"}) do
+  right_style[attribute] = attribute == "fg_token" and "accent.primary"
+    or attribute == "bg_token" and "surface.base" or true
+  local _, metadata = Diff.runs(left_grid, right_grid)
+  equal(metadata.changed_cells, 16, "changed style attribute " .. attribute)
+  right_style[attribute] = nil
+  equal(#Diff.runs(left_grid, right_grid), 0, "restored style attribute " .. attribute)
+end
+right_style.fg.r = 9
+equal(select(2, Diff.runs(left_grid, right_grid)).changed_cells, 16, "mutated RGB component")
+right_style.fg.r = 1
+right_style.bg.index = 6
+equal(select(2, Diff.runs(left_grid, right_grid)).changed_cells, 16, "mutated indexed background")
+right_style.bg.index = 4
+equal(#Diff.runs(left_grid, right_grid), 0, "restored colour components")
+assert(Diff.cell_equal(left_grid:get(1, 1), right_grid:get(1, 1)))
+
 print("test_ui_renderer: ok")
