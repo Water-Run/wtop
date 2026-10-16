@@ -632,6 +632,7 @@ local function power_detail_lines(snapshot, i18n)
         lines[#lines + 1] = ""
         lines[#lines + 1] = inspector_text("GPU " .. row.card .. " · " .. row.gpu, INSPECTOR_ROW_WIDTH)
         field("metrics.power", "Power", row.power)
+        if row.power_scope then field("limits.scope", "Scope", row.power_scope) end
         if row.power_age_ns then
             field("systemd.sample_age", "Sample age", format_value(row.power_age_ns, i18n, "nanoseconds"))
         end

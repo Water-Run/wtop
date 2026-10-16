@@ -31,7 +31,7 @@ enum scenario {
     BAD_SEQUENCE, BAD_FLAGS, BAD_SOURCE, BAD_RESERVED, PAST_TIME, FUTURE_TIME,
     REVERSED_TIME, ERROR_RESPONSE, EARLY_EXIT, HANG, PARTIAL_HEADER,
     CLOSED_PIPE, POLICY_CHANGE, EXPIRED_REPLY, INVALID_INPUT, LUA_OOM,
-    VM_CLOSE_PENDING, NATIVE_ALLOC_FAILURE, THREAD_FAILURE, WORKER_LIMIT, SOURCE_ROUNDTRIP, SOURCE_SLOT_FAIRNESS, SOURCE_MISMATCH, SDK_ROUNDTRIP, SDK_BAD_OPERATIONS, SDK_ERROR, SDK_WRONG_SOURCE, SDK_LUA_OOM, SDK_SLOT_FAIRNESS, SDK_SCAN_CHANGE, HANDLE_WHITELIST, ATTRIBUTE_LIST_FAILURE, XP_SPAWN_FALLBACK, HEALTH_SLOT_FAIRNESS, DISK_SLOT_FAIRNESS, LEVELZERO_ROUNDTRIP, LEVELZERO_SLOT_FAIRNESS, LEVELZERO_LEGACY_FRESH, SCENARIOS
+    VM_CLOSE_PENDING, NATIVE_ALLOC_FAILURE, THREAD_FAILURE, WORKER_LIMIT, SOURCE_ROUNDTRIP, SOURCE_SLOT_FAIRNESS, SOURCE_MISMATCH, SDK_ROUNDTRIP, SDK_BAD_OPERATIONS, SDK_ERROR, SDK_WRONG_SOURCE, SDK_LUA_OOM, SDK_SLOT_FAIRNESS, SDK_SCAN_CHANGE, HANDLE_WHITELIST, ATTRIBUTE_LIST_FAILURE, XP_SPAWN_FALLBACK, HEALTH_SLOT_FAIRNESS, DISK_SLOT_FAIRNESS, LEVELZERO_ROUNDTRIP, LEVELZERO_SLOT_FAIRNESS, LEVELZERO_LEGACY_FRESH, ADL_ROUNDTRIP, ADL_SLOT_FAIRNESS, ADL_WRONG_SOURCE, ADL_ERROR, ADL_LUA_OOM, SCENARIOS
 };
 static int selected;
 static HANDLE decoy;
@@ -68,6 +68,7 @@ static HANDLE WINAPI fixture_thread(LPSECURITY_ATTRIBUTES security,SIZE_T stack,
 #define WTOP_WINDOWS_SDK_IMAGE_H
 static HANDLE nvml_reader_image(WCHAR *path,DWORD capacity);
 static HANDLE levelzero_reader_image(WCHAR *path,DWORD capacity);
+static HANDLE adl_reader_image(WCHAR *path,DWORD capacity);
 #include "../../native/wtop_windows_worker.c"
 static HANDLE nvml_reader_image(WCHAR *path,DWORD capacity){
  DWORD size=GetModuleFileNameW(NULL,path,capacity);
@@ -75,6 +76,7 @@ static HANDLE nvml_reader_image(WCHAR *path,DWORD capacity){
  return CreateEventW(NULL,TRUE,FALSE,NULL);
 }
 static HANDLE levelzero_reader_image(WCHAR *path,DWORD capacity){return nvml_reader_image(path,capacity);}
+static HANDLE adl_reader_image(WCHAR *path,DWORD capacity){return nvml_reader_image(path,capacity);}
 #undef GetProcAddress
 #undef CreatePipe
 #undef DuplicateHandle
@@ -112,6 +114,7 @@ static int fake_child(int argc,char **argv) {
         if(selected==HANG||selected==VM_CLOSE_PENDING||selected==WORKER_LIMIT
             ||(selected==SOURCE_SLOT_FAIRNESS&&source==0)||(selected==SDK_SLOT_FAIRNESS&&source==NVML_SOURCE)
             ||(selected==LEVELZERO_SLOT_FAIRNESS&&source==LEVELZERO_SOURCE)
+            ||(selected==ADL_SLOT_FAIRNESS&&source==ADL_SOURCE)
             ||(selected==HEALTH_SLOT_FAIRNESS&&source==4)||(selected==DISK_SLOT_FAIRNESS&&source==5)){
             WaitForSingleObject(cancel,10000);return 0;
         }
@@ -126,21 +129,21 @@ static int fake_child(int argc,char **argv) {
             *p++=GPU_INDEX;gpu_put32(p,1);p+=4;
             *p++=GPU_FIELD;*p++=7;memcpy(p,"devices",7);p+=7;bytes=(uint32_t)(p-(unsigned char *)body);
             if(selected==SDK_BAD_OPERATIONS)body[0]=255;
-            if(selected==SDK_ERROR||(selected==LEVELZERO_LEGACY_FRESH&&!legacy)){
-                const char *reason=selected==SDK_ERROR?"nvml_library_not_found":"levelzero_legacy_required";
+            if(selected==SDK_ERROR||selected==ADL_ERROR||(selected==LEVELZERO_LEGACY_FRESH&&!legacy)){
+                const char *reason=selected==SDK_ERROR?"nvml_library_not_found":selected==ADL_ERROR?"adl_library_not_found":"levelzero_legacy_required";
                 bytes=(uint32_t)strlen(reason);memcpy(body,reason,bytes);}
 
         }
         gpu_put32(header,selected==BAD_MAGIC?0:GPU_WIRE_MAGIC);
         gpu_put32(header+4,selected==BAD_VERSION?99:GPU_WIRE_VERSION);
         gpu_put32(header+8,selected==EMPTY_BODY?0:selected==OVERSIZE_BODY?GPU_WIRE_LIMIT+1:bytes);
-        gpu_put32(header+12,(selected==ERROR_RESPONSE||selected==SDK_ERROR||(selected==LEVELZERO_LEGACY_FRESH&&!legacy))?1:0);
+        gpu_put32(header+12,(selected==ERROR_RESPONSE||selected==SDK_ERROR||selected==ADL_ERROR||(selected==LEVELZERO_LEGACY_FRESH&&!legacy))?1:0);
         gpu_put64(header+16,selected==BAD_SEQUENCE?sequence+1:sequence);
         gpu_put64(header+24,selected==PAST_TIME?0:selected==FUTURE_TIME?start+UINT64_C(10000000000):start);
         gpu_put64(header+32,selected==REVERSED_TIME?start-1:selected==FUTURE_TIME?end+UINT64_C(10000000000):end);
         gpu_put32(header+40,selected==BAD_FLAGS?flags^1:flags);
         gpu_put32(header+44,gpu_checksum(body,bytes)^(selected==BAD_CHECKSUM?1u:0u));
-        gpu_put32(header+48,selected==BAD_SOURCE?99:(selected==SOURCE_MISMATCH||selected==SDK_WRONG_SOURCE)?3:3+source);
+        gpu_put32(header+48,selected==BAD_SOURCE?99:(selected==SOURCE_MISMATCH||selected==SDK_WRONG_SOURCE||selected==ADL_WRONG_SOURCE)?3:3+source);
         if(selected==BAD_RESERVED)header[63]=1;
         if(selected==PARTIAL_HEADER){assert(child_send(output,header,7));WaitForSingleObject(cancel,10000);return 0;}
         if(!child_send(output,header,sizeof(header))||!child_send(output,body,bytes))return 0;
@@ -252,7 +255,7 @@ static void native_failure_cases(DWORD before){
  assert(errors==6&&successes==3);puts("Worker native allocation: six failing sites and three complete reads drained");
 }
 static int sdk_reference(lua_State *L){
- lua_settop(L,0);lua_pushcfunction(L,wtop_windows_gpu_open);lua_pushstring(L,selected>=LEVELZERO_ROUNDTRIP?"levelzero":"nvml");
+ lua_settop(L,0);lua_pushcfunction(L,wtop_windows_gpu_open);lua_pushstring(L,selected>=ADL_ROUNDTRIP?"adl":selected>=LEVELZERO_ROUNDTRIP?"levelzero":"nvml");
  assert(lua_pcall(L,1,1,0)==LUA_OK&&luaL_testudata(L,-1,SESSION_META));return luaL_ref(L,LUA_REGISTRYINDEX);
 }
 static int sdk_query(lua_State *L,int ref,int scan){
@@ -272,12 +275,12 @@ static void sdk_oom(DWORD before){
  assert(failures&&successes);printf("SDK worker OOM: %u failures and %u successes; owned resources drained\n",failures,successes);
 }
 static void sdk_case(DWORD before){
- if(selected==SDK_LUA_OOM){sdk_oom(before);return;}
+ if(selected==SDK_LUA_OOM||selected==ADL_LUA_OOM){sdk_oom(before);return;}
  lua_State *L=luaL_newstate();assert(L);int ref=sdk_reference(L);assert(sdk_query(L,ref,1)==LUA_OK);
  lua_rawgeti(L,LUA_REGISTRYINDEX,ref);struct session *slot=lua_touserdata(L,-1);lua_pop(L,1);
- if(selected==SDK_SLOT_FAIRNESS||selected==LEVELZERO_SLOT_FAIRNESS){
+ if(selected==SDK_SLOT_FAIRNESS||selected==LEVELZERO_SLOT_FAIRNESS||selected==ADL_SLOT_FAIRNESS){
   int second=sdk_reference(L);assert(sdk_query(L,second,1)==LUA_OK);
-  int third=sdk_reference(L);assert(sdk_query(L,third,1)==LUA_OK&&lua_isnil(L,-2)&&!strcmp(lua_tostring(L,-1),selected==LEVELZERO_SLOT_FAIRNESS?"levelzero_worker_busy":"nvml_worker_busy"));
+  int third=sdk_reference(L);assert(sdk_query(L,third,1)==LUA_OK&&lua_isnil(L,-2)&&!strcmp(lua_tostring(L,-1),selected==ADL_SLOT_FAIRNESS?"adl_worker_busy":selected==LEVELZERO_SLOT_FAIRNESS?"levelzero_worker_busy":"nvml_worker_busy"));
   for(unsigned i=0;i<HARDWARE_SOURCES;++i)if(!sdk_source(i)){int other=source_reference(L,source_names[i]);assert(call_query(L,other,0)==LUA_OK);
    lua_rawgeti(L,LUA_REGISTRYINDEX,other);struct session *healthy=lua_touserdata(L,-1);lua_pop(L,1);wait_state(healthy,READY);
    assert(call_query(L,other,0)==LUA_OK&&lua_type(L,-2)==LUA_TSTRING);}
@@ -287,7 +290,7 @@ static void sdk_case(DWORD before){
   DWORD began=GetTickCount();
   for(;;){assert(sdk_query(L,healthy,0)==LUA_OK);if(lua_istable(L,-2))break;
    assert((DWORD)(GetTickCount()-began)<5000);Sleep(2);}
- }else if(selected==SDK_ROUNDTRIP||selected==SDK_SCAN_CHANGE||selected==LEVELZERO_ROUNDTRIP){
+ }else if(selected==SDK_ROUNDTRIP||selected==SDK_SCAN_CHANGE||selected==LEVELZERO_ROUNDTRIP||selected==ADL_ROUNDTRIP){
   wait_state(slot,READY);
   if(selected==SDK_SCAN_CHANGE){assert(sdk_query(L,ref,0)==LUA_OK&&lua_isnil(L,-2));wait_state(slot,READY);}
   assert(sdk_query(L,ref,selected!=SDK_SCAN_CHANGE)==LUA_OK&&lua_istable(L,-2));
@@ -303,7 +306,7 @@ static void sdk_case(DWORD before){
  }else{
   DWORD started=GetTickCount();
   for(;;){assert(sdk_query(L,ref,1)==LUA_OK&&lua_isnil(L,-2));const char *reason=lua_tostring(L,-1);assert(reason);
-   if(strcmp(reason,"nvml_query_pending")){assert(!strcmp(reason,selected==SDK_ERROR?"nvml_library_not_found":"nvml_invalid_response"));break;}
+   if(strcmp(reason,selected>=ADL_ROUNDTRIP?"adl_query_pending":"nvml_query_pending")){assert(!strcmp(reason,selected==ADL_ERROR?"adl_library_not_found":selected==SDK_ERROR?"nvml_library_not_found":selected>=ADL_ROUNDTRIP?"adl_invalid_response":"nvml_invalid_response"));break;}
    assert((DWORD)(GetTickCount()-started)<5000);Sleep(2);}
  }
  lua_close(L);drained(before);

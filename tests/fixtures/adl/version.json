@@ -1,0 +1,21 @@
+{
+  "repository": "GPUOpen-LibrariesAndSDKs/display-library",
+  "commit": "84c881cb2136f04287eb3af12de00a9e2867aa9e",
+  "headers": [
+    {
+      "file": "adl_sdk.h",
+      "sha256": "1d0141f0ff0d8ce11c40b1e37174827f6e0536620365b20d24b55f19adf97d63",
+      "bytes": 1843
+    },
+    {
+      "file": "adl_structures.h",
+      "sha256": "58843d1fdd39f8003a7ab6dfa424a2a3f12d8ba01568b70a1976db528b9db336",
+      "bytes": 177742
+    },
+    {
+      "file": "adl_defines.h",
+      "sha256": "d1c39f8523ecb224160c99ee3b043219bc8e2265c5993ec57548e382c22bd10b",
+      "bytes": 117950
+    }
+  ]
+}

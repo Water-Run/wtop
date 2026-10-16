@@ -260,6 +260,12 @@ assert Check.worker_images(nvml_container, images) == {}
 levelzero_manifest = manifest.replace(b"CPUID", b"LEVELZERO")
 levelzero_container = bytes(pe) * 2 + bytes(helper64) + levelzero_manifest
 assert Check.worker_images(levelzero_container, images, "LEVELZERO") == {512: "x86", 1024: "x64"}
+adl_manifest = manifest.replace(b"CPUID", b"ADL")
+adl_container = bytes(pe) * 2 + bytes(helper64) + adl_manifest
+assert Check.worker_images(adl_container, images, "ADL") == {512:"x86",1024:"x64"}
+refused(lambda: Check.worker_images(adl_container + adl_manifest, images, "ADL"), "manifest")
+refused(lambda: Check.worker_images(adl_container, images[:-1], "ADL"), "ADL worker is missing")
+
 refused(lambda: Check.worker_images(levelzero_container, images[:-1], "LEVELZERO"), "LEVELZERO worker is missing")
 refused(lambda: Check.worker_images(levelzero_container + levelzero_manifest, images, "LEVELZERO"), "manifest")
 refused(lambda: Check.worker_images(levelzero_container, images + [images[0]], "LEVELZERO"), "duplicate LEVELZERO")

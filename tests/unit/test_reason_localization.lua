@@ -211,6 +211,25 @@ local interface_reasons = {
   "amdsmi_worker_closed",
   "amdsmi_worker_exited",
   "amdsmi_worker_unavailable",
+  "adl_allocation_failed",
+  "adl_invalid_response",
+  "adl_output_too_large",
+  "adl_query_pending",
+  "adl_query_timeout",
+  "adl_unavailable",
+  "adl_worker_busy",
+  "adl_worker_closed",
+  "adl_worker_exited",
+  "adl_worker_unavailable",
+  "adl_query_failed",
+  "adl_provider_unavailable",
+  "adl_device_count_failed",
+  "adl_device_list_failed",
+  "adl_identity_changed",
+  "adl_data_incomplete",
+  "adl_library_not_found",
+  "adl_symbols_missing",
+  "adl_initialization_failed",
   "levelzero_allocation_failed",
   "levelzero_invalid_response",
   "levelzero_output_too_large",
@@ -1311,6 +1330,18 @@ for word in spelling:lines() do
   if code then spelled[code] = true end
 end
 spelling:close()
+-- Windows prefixes shared transport errors with the selected SDK source.
+-- Derive those spellings from the production source roster and hardware error
+-- literals, rather than requiring an unrelated Linux backend to spell them.
+local windows_worker=assert(io.open(root.."/native/wtop_windows_worker.c","rb"))
+local windows_source=windows_worker:read("a");windows_worker:close()
+assert(windows_source:find('lua_pushfstring(L,"%s_%s",name,reason+9)',1,true))
+local roster=assert(windows_source:match('source_names%[[^%]]*%]%s*=%s*{([^}]+)}'))
+for provider in roster:gmatch('"([a-z][a-z0-9_]*)"') do
+  for suffix in windows_source:gmatch('"hardware_([a-z][a-z0-9_]*)"') do
+    spelled[provider.."_"..suffix]=true
+  end
+end
 local unspellable = {}
 for _, code in ipairs(interface_reasons) do
   if not spelled[code] then unspellable[#unspellable + 1] = code end

@@ -165,7 +165,7 @@ def worker_images(data: bytes, images: list[tuple[int, bytes]], kind: str = "CPU
     Digests and complete lengths bind each role to one embedded PE image.
     This is an artifact consistency check, not a substitute for signatures.
     """
-    if kind not in {"CPUID", "NVML", "LEVELZERO"}:raise ValueError("unknown worker kind")
+    if kind not in {"CPUID", "NVML", "LEVELZERO", "ADL"}:raise ValueError("unknown worker kind")
     marker = ("WTOP_" + kind + "_WORKERS_V1\n").encode()
     if marker not in data:
         return {}
@@ -281,14 +281,12 @@ def parse_worker64(data: bytes, name: str) -> dict[str, object]:
 
 def inspect_images(data: bytes, objdump: str, name: str):
     images = pe_images(data)
-    cpu_workers = worker_images(data, images)
-    sdk_workers = worker_images(data, images, "NVML")
-    ze_workers = worker_images(data, images, "LEVELZERO")
-    if (cpu_workers.keys() & sdk_workers.keys() or cpu_workers.keys() & ze_workers.keys()
-            or sdk_workers.keys() & ze_workers.keys()):raise ValueError("overlapping worker roles")
-    workers = {**cpu_workers, **sdk_workers, **ze_workers}
-    roles = {offset: ("levelzero-" if offset in ze_workers else "nvml-" if offset in sdk_workers else "cpuid-") + architecture + ".exe"
-             for offset, architecture in workers.items()}
+    workers,roles={},{}
+    for kind in ("CPUID", "NVML", "LEVELZERO", "ADL"):
+        found=worker_images(data, images, kind)
+        if workers.keys() & found.keys():raise ValueError("overlapping worker roles")
+        workers.update(found)
+        roles.update({offset:kind.lower()+"-"+architecture+".exe" for offset,architecture in found.items()})
     reports = []
     with tempfile.TemporaryDirectory(prefix="wtop-pe-") as directory:
         for index, (offset, image) in enumerate(images):

@@ -904,6 +904,7 @@ local function export_gpus(gpus, quality)
                 "class", "pci_bdf", "device_target", "source",
             })
         end
+        exported.adl = copy_object(device.adl)
         exported.sysman = copy_object(device.sysman)
         exported.frequencies = export_gpu_frequencies(device.frequencies)
         exported.processes = export_gpu_processes(device.processes)
@@ -2359,7 +2360,7 @@ function M.agent(snapshot, options)
             -- different quantities, and a summary carrying one of them
             -- unnamed reads as "the" frequency of the device.
             "frequency_current_hz", "frequency_domain", "frequency_source_kind",
-            "temperature_celsius", "power_watts", "power_source", "power_measurement", "power_limit_watts", "power_limit_source",
+            "temperature_celsius", "power_watts", "power_source", "power_scope", "power_measurement", "power_limit_watts", "power_limit_source",
             "power_limit_percent", "power_headroom_watts", "power_instant_watts", "power_average_watts",
             "power_interval_ns", "power_average_interval_ns", "power_instant_timestamp_us", "power_average_timestamp_us",
             "power_instant_quality", "power_average_quality",
@@ -2367,6 +2368,7 @@ function M.agent(snapshot, options)
         output.performance_limits = export_performance_limits(device.performance_limits, device_limit, true)
         output.observations = export_gpu_observations(device.observations)
         output.metric_observations = export_gpu_observations(device.metric_observations)
+        output.adl = copy_object(device.adl)
         -- The full clock set, in the same shape the snapshot uses.  This
         -- summary is what an agent or an insight reads, and it is also the
         -- only view that survives into whatever consumes it, so dropping the

@@ -1211,6 +1211,7 @@ local function gpu_rows(snapshot, format, i18n)
             power_usage = power_usage(format, power_budget.comparison),
             power_percent = power_budget.comparison and power_budget.comparison.percent,
             power_budget_source = power_budget.source or power_budget.limit_source,
+            power_scope = metrics.power_scope=="asic" and translated(i18n,"power.scope.asic","ASIC chip") or nil,
             power_measurement = not power_from_sensor and (metrics.power_measurement == "current" or metrics.power_measurement == "average"
                 or metrics.power_measurement == "device_sample") and translated(i18n,
                     "power.measurement." .. metrics.power_measurement, metrics.power_measurement) or nil,

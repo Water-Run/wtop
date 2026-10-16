@@ -4,7 +4,8 @@
 #define WTOP_WINDOWS_SDK_IMAGE_H
 #include "wtop_nvml_helpers.h"
 #include "wtop_levelzero_helpers.h"
-static HANDLE sdk_reader_image(WCHAR *path,DWORD capacity,int levelzero) {
+#include "wtop_adl_helpers.h"
+static HANDLE sdk_reader_image(WCHAR *path,DWORD capacity,int source) {
     SYSTEM_INFO info;GetSystemInfo(&info);
     typedef void (WINAPI *native_info_fn)(LPSYSTEM_INFO);
     native_info_fn native_info=(native_info_fn)(void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"),"GetNativeSystemInfo");
@@ -12,9 +13,10 @@ static HANDLE sdk_reader_image(WCHAR *path,DWORD capacity,int levelzero) {
     int bits=info.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_AMD64?64:32;
     if(info.wProcessorArchitecture!=PROCESSOR_ARCHITECTURE_AMD64
         &&info.wProcessorArchitecture!=PROCESSOR_ARCHITECTURE_INTEL)return NULL;
-    const unsigned char *image=levelzero?(bits==64?wtop_levelzero_x64:wtop_levelzero_x86)
-        :(bits==64?wtop_nvml_x64:wtop_nvml_x86);
-    DWORD size=(DWORD)(levelzero?(bits==64?sizeof(wtop_levelzero_x64):sizeof(wtop_levelzero_x86))
+    const unsigned char *image=source==2?(bits==64?wtop_adl_x64:wtop_adl_x86)
+        :source==1?(bits==64?wtop_levelzero_x64:wtop_levelzero_x86):(bits==64?wtop_nvml_x64:wtop_nvml_x86);
+    DWORD size=(DWORD)(source==2?(bits==64?sizeof(wtop_adl_x64):sizeof(wtop_adl_x86))
+        :source==1?(bits==64?sizeof(wtop_levelzero_x64):sizeof(wtop_levelzero_x86))
         :(bits==64?sizeof(wtop_nvml_x64):sizeof(wtop_nvml_x86)));
     DWORD length=GetEnvironmentVariableW(L"APPDATA",path,capacity);
     if(!length||length>=capacity-80||!((length>=3&&path[1]==L':'
@@ -24,7 +26,7 @@ static HANDLE sdk_reader_image(WCHAR *path,DWORD capacity,int levelzero) {
     wcscat(path,L"\\readers");
     if(!CreateDirectoryW(path,NULL)&&GetLastError()!=ERROR_ALREADY_EXISTS)return NULL;
     length=(DWORD)wcslen(path);
-    int used=_snwprintf(path+length,capacity-length,L"\\%ls-x%d-%08lx.exe",levelzero?L"levelzero":L"nvml",bits,(unsigned long)gpu_checksum(image,size));
+    int used=_snwprintf(path+length,capacity-length,L"\\%ls-x%d-%08lx.exe",source==2?L"adl":source==1?L"levelzero":L"nvml",bits,(unsigned long)gpu_checksum(image,size));
     if(used<=0||(DWORD)used>=capacity-length)return NULL;
     HANDLE writer=CreateFileW(path,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
     if(writer!=INVALID_HANDLE_VALUE){
@@ -51,4 +53,5 @@ static HANDLE sdk_reader_image(WCHAR *path,DWORD capacity,int levelzero) {
 }
 static HANDLE nvml_reader_image(WCHAR *path,DWORD capacity) {return sdk_reader_image(path,capacity,0);}
 static HANDLE levelzero_reader_image(WCHAR *path,DWORD capacity) {return sdk_reader_image(path,capacity,1);}
+static HANDLE adl_reader_image(WCHAR *path,DWORD capacity) {return sdk_reader_image(path,capacity,2);}
 #endif

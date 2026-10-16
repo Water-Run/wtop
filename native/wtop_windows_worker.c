@@ -23,11 +23,12 @@ static char launcher_key;
 /* Source numbers are wire identifiers. NVML remains 3 (wire kind 6). */
 #define NVML_SOURCE 3u
 #define LEVELZERO_SOURCE 6u
-#define HARDWARE_SOURCES 7u
-static const char *const source_names[HARDWARE_SOURCES]={"cpufreq","gpu","hwmon","nvml","disk_health","disk","levelzero"};
-static const WCHAR *const wide_source_names[HARDWARE_SOURCES]={L"cpufreq",L"gpu",L"hwmon",L"nvml",L"disk_health",L"disk",L"levelzero"};
+#define ADL_SOURCE 7u
+#define HARDWARE_SOURCES 8u
+static const char *const source_names[HARDWARE_SOURCES]={"cpufreq","gpu","hwmon","nvml","disk_health","disk","levelzero","adl"};
+static const WCHAR *const wide_source_names[HARDWARE_SOURCES]={L"cpufreq",L"gpu",L"hwmon",L"nvml",L"disk_health",L"disk",L"levelzero",L"adl"};
 static volatile LONG controllers,source_controllers[HARDWARE_SOURCES];
-static int sdk_source(unsigned source) {return source==NVML_SOURCE||source==LEVELZERO_SOURCE;}
+static int sdk_source(unsigned source) {return source==NVML_SOURCE||source==LEVELZERO_SOURCE||source==ADL_SOURCE;}
 static unsigned source_index(const char *name,size_t size){
     for(unsigned i=0;i<HARDWARE_SOURCES;++i)if(size==strlen(source_names[i])&&!memcmp(name,source_names[i],size))return i;
     return HARDWARE_SOURCES;
@@ -129,7 +130,8 @@ static DWORD WINAPI controller(void *opaque) {
     job->reason="hardware_worker_unavailable";
     if(!executable)goto finish;
     if(sdk_source(job->source)){
-        sdk_image=job->source==NVML_SOURCE?nvml_reader_image(executable,32768):levelzero_reader_image(executable,32768);if(!sdk_image)goto finish;
+        sdk_image=job->source==NVML_SOURCE?nvml_reader_image(executable,32768)
+            :job->source==LEVELZERO_SOURCE?levelzero_reader_image(executable,32768):adl_reader_image(executable,32768);if(!sdk_image)goto finish;
     }else{
         DWORD length=GetModuleFileNameW(NULL,executable,32768);
         if(!length||length>=32768)goto finish;
@@ -187,7 +189,7 @@ static DWORD WINAPI controller(void *opaque) {
         if(status){
             job->reason="hardware_collector_error";
             if(sdk_source(job->source)){
-                const char *prefix=job->source==NVML_SOURCE?"nvml_":"levelzero_";size_t prefix_size=strlen(prefix);
+                const char *prefix=job->source==NVML_SOURCE?"nvml_":job->source==LEVELZERO_SOURCE?"levelzero_":"adl_";size_t prefix_size=strlen(prefix);
                 int valid=size>prefix_size&&size<sizeof(job->sdk_reason)&&!memcmp(frame->data,prefix,prefix_size);
                 for(uint32_t i=0;valid&&i<size;++i){unsigned char c=frame->data[i];valid=(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='_';}
                 if(valid){memcpy(job->sdk_reason,frame->data,size);job->sdk_reason[size]=0;job->reason=job->sdk_reason;}

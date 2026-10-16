@@ -3,14 +3,15 @@ local Common = require("wtop.collectors.common")
 local Capability = require("wtop.core.capability")
 local NVML = require("wtop.collectors.nvml")
 local ZE = require("wtop.collectors.levelzero")
+local ADL = require("wtop.collectors.adl")
 local Worker = require("wtop.collectors.gpu_worker")
 local Observations = require("wtop.collectors.gpu_observations")
 local Wire = require("wtop.core.worker_wire")
 local M = {}
 M.__index = M
-local sources = { "nvml", "levelzero" }
-local vendors = { nvml = "0x10de", levelzero = "0x8086" }
-local adapters = { nvml = NVML, levelzero = ZE }
+local sources = { "nvml", "levelzero", "adl" }
+local vendors = { nvml = "0x10de", levelzero = "0x8086", adl = "0x1002" }
+local adapters = { nvml = NVML, levelzero = ZE, adl = ADL }
 
 function M.new(base, options, native)
   return setmetatable({id="gpu",default_interval_ms=1000,_method_style=true,
@@ -27,7 +28,7 @@ end
 
 function M:probe(context)
   self.base:probe(context)
-  return Capability.available({source="windows+nvml+levelzero"})
+  return Capability.available({source="windows+nvml+levelzero+adl"})
 end
 
 local function base_observations(data, result, now, retained, reason)
@@ -145,7 +146,8 @@ function M:sample(context)
             local device=bdf and lookup.by_bdf[bdf]
             if device and (entry.vendor_id~=pci_id(device.vendor_id)
                 or entry.device_id and entry.device_id~=pci_id(device.device_id)
-                or source=="levelzero" and not entry.device_id) then
+                or source=="levelzero" and not entry.device_id
+                or source=="adl" and entry.identity_verified~=true) then
               lookup.by_bdf[bdf]=nil;association[bdf]=false
             end
           end
@@ -154,7 +156,7 @@ function M:sample(context)
         local before=Observations.before(data.devices)
         if source=="nvml" then
           provider=NVML.merge(data.devices,lookup,merge_data,{used_ids=used,now_ns=now,include_processes=scan})
-        else provider=ZE.merge(data.devices,merge_data,lookup,{used_ids=used,now_ns=now}) end
+        else provider=adapters[source].merge(data.devices,merge_data,lookup,{used_ids=used,now_ns=now}) end
         Observations.mark(data.devices,before,source,merge_data,now)
         if sdk.sample_started_ns then observed=math.max(observed or 0,sdk.sample_started_ns) end
       else
@@ -200,7 +202,7 @@ function M:sample(context)
   data.summary=data.summary or {};data.summary.device_count=#data.devices;data.summary.process_count=processes
   local output=Common.result("ok",now,data,{quality=partial and "partial" or "fresh",
     reason=partial and "gpu_data_incomplete" or nil,retry_after_ms=result.retry_after_ms or ((pending or warming) and 250 or nil)})
-  output.capability=Capability.available({source="windows+nvml+levelzero"})
+  output.capability=Capability.available({source="windows+nvml+levelzero+adl"})
   output.sampling_pending=result.sampling_pending or pending or warming
   for _,state in pairs(self.readers) do
     if state.pending and now-state.pending<100000000 then output.retry_after_ms=25 end

@@ -1,7 +1,7 @@
 -- Leases for isolated SDK readers. The old NVML process API is still safe;
 -- none of the direct vendor-query entry points is a fallback.
 local M = {}
-local sources = { nvml = true, amdsmi = true, levelzero = true }
+local sources = { nvml = true, amdsmi = true, levelzero = true, adl = true }
 local failures, pending = {}, {}
 for source in pairs(sources) do
   pending[source .. "_query_pending"] = true

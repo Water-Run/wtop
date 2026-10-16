@@ -8,7 +8,7 @@ from pathlib import Path
 
 def main() -> None:
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--kind',choices=['cpuid','nvml','levelzero'],default='cpuid')
+    p.add_argument('--kind',choices=['cpuid','nvml','levelzero','adl'],default='cpuid')
     p.add_argument('--x86',type=Path,required=True)
     p.add_argument('--x64',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)

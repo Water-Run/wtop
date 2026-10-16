@@ -3,6 +3,7 @@
 local NVML = require("wtop.collectors.nvml")
 local AMD = require("wtop.collectors.amdsmi")
 local ZE = require("wtop.collectors.levelzero")
+local ADL = require("wtop.collectors.adl")
 local M = {}
 M.__index = M
 
@@ -10,7 +11,7 @@ local groups = {
   utilization_percent = "utilization", memory_used_bytes = "memory",
   memory_total_bytes = "memory", frequency_current_hz = "frequency",
   temperature_celsius = "temperature", power_watts = "power",
-  fan_speed_percent = "fan",
+  fan_speed_percent = "fan", fan_speed_rpm = "fan",
 }
 local function finite(value)
   return type(value)=="number" and value==value and value>=0 and value<math.huge
@@ -124,6 +125,7 @@ function M:observe(source,data,anchors,now)
   local options={used_ids={},now_ns=observed(data,now),include_processes=false}
   if source=="nvml" then NVML.merge(devices,lookup,limited,options)
   elseif source=="amdsmi" then AMD.merge(devices,lookup,limited,options)
+  elseif source=="adl" then ADL.merge(devices,limited,lookup,options)
   else ZE.merge(devices,limited,lookup,options) end
   local state={records={},data={sample_started_ns=data.sample_started_ns,
     sample_finished_ns=data.sample_finished_ns,transport=data.transport},truncated=#data.devices>64}
@@ -171,6 +173,7 @@ local function stale(device)
     domain.quality="stale"
   end
   for _,domain in ipairs(device.frequencies and device.frequencies.domains or {}) do domain.quality="stale" end
+  if device.adl then device.adl.quality="stale" end
   if device.sysman then
     device.sysman.quality="stale"
     for _,domain in ipairs(device.sysman.frequency_domains or {}) do domain.throttle_quality="stale" end
@@ -217,6 +220,7 @@ function M:apply(source,devices,lookup,used,anchors,now,reason)
             end
           end
           if target~=value then
+            if value.adl and not target.adl then target.adl=value.adl end
             if value.sysman and not target.sysman then target.sysman=value.sysman end
             if value.frequencies and #(value.frequencies.domains or {})>0
                 and #(target.frequencies and target.frequencies.domains or {})==0 then

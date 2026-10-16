@@ -10,7 +10,11 @@
 #include <wchar.h>
 #include "wtop_gpu_protocol.h"
 #include "wtop_gpu_worker.h"
-#ifdef WTOP_WINDOWS_LEVELZERO
+#if defined(WTOP_WINDOWS_ADL)
+#define WINDOWS_SDK_SOURCE 10u
+#define WINDOWS_SDK_NAME L"adl"
+#define WINDOWS_SDK_INVALID "adl_invalid_response"
+#elif defined(WTOP_WINDOWS_LEVELZERO)
 #define WINDOWS_SDK_SOURCE 9u
 #define WINDOWS_SDK_NAME L"levelzero"
 #define WINDOWS_SDK_INVALID "levelzero_invalid_response"
@@ -115,7 +119,9 @@ int wmain(int argc,WCHAR **argv) {
         if(gpu_u32(command)!=GPU_WIRE_MAGIC||gpu_u32(command+4)!=GPU_WIRE_VERSION
             ||gpu_u32(command+20)||!sequence||sequence<=previous||flags>1)break;
         previous=sequence;buffer.size=0;gpu_output out={&buffer,0,emit};uint64_t start=now_ns();
-#ifdef WTOP_WINDOWS_LEVELZERO
+#if defined(WTOP_WINDOWS_ADL)
+        const char *reason=wtop_adl_collect(&out,0);
+#elif defined(WTOP_WINDOWS_LEVELZERO)
         const char *reason=boot_reason?boot_reason:wtop_levelzero_collect(&out,0);
 #else
         const char *reason=wtop_nvml_collect(&out,flags!=0);
@@ -131,7 +137,9 @@ int wmain(int argc,WCHAR **argv) {
         code=0;if(reason)break;
     }
 finish:
-#ifdef WTOP_WINDOWS_LEVELZERO
+#if defined(WTOP_WINDOWS_ADL)
+    wtop_adl_finish();
+#elif defined(WTOP_WINDOWS_LEVELZERO)
     wtop_levelzero_finish();
 #else
     wtop_nvml_finish();

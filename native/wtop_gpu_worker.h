@@ -4,6 +4,8 @@
 enum gpu_vendor { GPU_NVML, GPU_AMDSMI, GPU_LEVELZERO, GPU_VENDOR_COUNT };
 #ifdef WTOP_GPU_WORKER
 const char *wtop_nvml_collect(gpu_output *out,int processes);
+const char *wtop_adl_collect(gpu_output *out,int processes);
+void wtop_adl_finish(void);
 void wtop_nvml_finish(void);
 const char *wtop_amdsmi_collect(gpu_output *out,int processes);
 const char *wtop_levelzero_prepare(int legacy);
