@@ -59,6 +59,7 @@ vraie machine XP.
   Réseau, GPU, Charges de travail, Système et Analyses.
 - Une liste de processus avec recherche, tri, navigation dans l'arbre, accès aux
   charges de travail et menu de signaux avec confirmation.
+- Les versions Windows en développement peuvent utiliser Intel Sysman pour la puissance GPU, les plafonds annoncés, les fréquences et les causes de limitation.
 - Les versions Windows en développement affichent la température NVMe et les limites indiquées par le disque. Appuyez sur `s` pour consulter son état en lecture seule ; les données SMART ATA sont lues après sélection du disque.
 - Des inspections approfondies facultatives (SMART/NVMe, bande passante
   mémoire, unités systemd, sshd) quand les outils sont présents sur la machine.

@@ -4,7 +4,7 @@
  * handle, devices join by PCI address, and overlapping power domains are not
  * summed. See wtop_levelzero_abi.h and the SDK layout/function fixtures. */
 #define _GNU_SOURCE
-#include <dlfcn.h>
+#include "wtop_levelzero_platform.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -33,14 +33,14 @@ const char wtop_levelzero_abi_license[]="MIT License\n\nCopyright (C) 2019-2026 
 #define L0_UNINITIALIZED UINT32_C(0x78000001)
 #define L0_UNSUPPORTED UINT32_C(0x78000003)
 typedef void *l0_handle;
-typedef uint32_t (*l0_init_fn)(uint32_t);
-typedef uint32_t (*l0_drivers_fn)(uint32_t *,l0_handle *);
-typedef uint32_t (*l0_enum_fn)(l0_handle,uint32_t *,l0_handle *);
-typedef uint32_t (*l0_output_fn)(l0_handle,void *);
-typedef uint32_t (*l0_temperature_fn)(l0_handle,double *);
-typedef uint32_t (*l0_card_fn)(l0_handle,l0_handle *);
-typedef uint32_t (*l0_limits_ext_fn)(l0_handle,uint32_t *,wtop_zes_power_limit_ext_desc_t *);
-typedef uint32_t (*l0_limits_fn)(l0_handle,wtop_zes_power_sustained_limit_t *,
+typedef uint32_t (WTOP_L0_CALL *l0_init_fn)(uint32_t);
+typedef uint32_t (WTOP_L0_CALL *l0_drivers_fn)(uint32_t *,l0_handle *);
+typedef uint32_t (WTOP_L0_CALL *l0_enum_fn)(l0_handle,uint32_t *,l0_handle *);
+typedef uint32_t (WTOP_L0_CALL *l0_output_fn)(l0_handle,void *);
+typedef uint32_t (WTOP_L0_CALL *l0_temperature_fn)(l0_handle,double *);
+typedef uint32_t (WTOP_L0_CALL *l0_card_fn)(l0_handle,l0_handle *);
+typedef uint32_t (WTOP_L0_CALL *l0_limits_ext_fn)(l0_handle,uint32_t *,wtop_zes_power_limit_ext_desc_t *);
+typedef uint32_t (WTOP_L0_CALL *l0_limits_fn)(l0_handle,wtop_zes_power_sustained_limit_t *,
     wtop_zes_power_burst_limit_t *,wtop_zes_power_peak_limit_t *);
 struct l0_power_cursor {l0_handle power;uint64_t energy,timestamp;};
 struct l0_cursor {
@@ -59,7 +59,7 @@ struct l0_api {
     struct l0_cursor cursors[L0_DEVICES];
 };
 static void l0_close(struct l0_api *a) {
-    void *library=a->library;memset(a,0,sizeof(*a));if(library)dlclose(library);
+    void *library=a->library;memset(a,0,sizeof(*a));if(library)l0_library_close(library);
 }
 static int l0_ok(struct l0_api *a,uint32_t result) {
     if(result==L0_LOST||result==L0_UNINITIALIZED)a->lost=1;
@@ -69,17 +69,16 @@ L0_ABI static const char *l0_open(struct l0_api *a,int legacy) {
     if(a->ready)return NULL;
     if(a->library)l0_close(a);
     a->legacy=legacy;
-    a->library=dlopen("libze_loader.so.1",RTLD_NOW|RTLD_LOCAL);
-    if(!a->library)a->library=dlopen("libze_loader.so",RTLD_NOW|RTLD_LOCAL);
+    a->library=l0_library_open();
     if(!a->library)return "levelzero_library_not_found";
-    l0_init_fn init=(l0_init_fn)dlsym(a->library,legacy?"zeInit":"zesInit");
-    a->drivers=(l0_drivers_fn)dlsym(a->library,legacy?"zeDriverGet":"zesDriverGet");
-    a->devices=(l0_enum_fn)dlsym(a->library,legacy?"zeDeviceGet":"zesDeviceGet");
+    l0_init_fn init=(l0_init_fn)l0_library_symbol(a->library,legacy?"zeInit":"zesInit");
+    a->drivers=(l0_drivers_fn)l0_library_symbol(a->library,legacy?"zeDriverGet":"zesDriverGet");
+    a->devices=(l0_enum_fn)l0_library_symbol(a->library,legacy?"zeDeviceGet":"zesDeviceGet");
     if(!init||!a->drivers||!a->devices)return legacy?"levelzero_symbols_missing":"levelzero_legacy_required";
     uint32_t status=init(legacy?1u:0u);
     if(!legacy&&status==L0_UNSUPPORTED)return "levelzero_legacy_required";
     if(status)return "levelzero_initialization_failed";
-#define RESOLVE(field,type,name) a->field=(type)dlsym(a->library,name)
+#define RESOLVE(field,type,name) a->field=(type)l0_library_symbol(a->library,name)
     RESOLVE(properties,l0_output_fn,"zesDeviceGetProperties");
     RESOLVE(pci,l0_output_fn,"zesDevicePciGetProperties");
     RESOLVE(temperatures,l0_enum_fn,"zesDeviceEnumTemperatureSensors");

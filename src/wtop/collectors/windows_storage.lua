@@ -50,12 +50,22 @@ function M:sample(context)
             device.quality = "partial"
             partial = true
         end
-        if not device.temperature and device.nvme and device.nvme.temperature_celsius then
-            device.temperature = { channels = {
-                { id = "temperature:0", index = 0, label = "Composite", type = "temperature",
-                    unit = "celsius", quality = "fresh", input = device.nvme.temperature_celsius,
-                    source = device.nvme.source, thresholds = {} },
-            } }
+        local has_temperature = false
+        for _, channel in ipairs(device.temperature and device.temperature.channels or {}) do
+            if type(channel.input) == "number" then has_temperature = true; break end
+        end
+        if not has_temperature and device.nvme and device.nvme.temperature_celsius then
+            device.temperature = device.temperature or { channels = {} }
+            local composite = { id = "temperature:0", index = 0, label = "Composite", type = "temperature",
+                unit = "celsius", quality = "fresh", input = device.nvme.temperature_celsius,
+                source = device.nvme.source, thresholds = {} }
+            -- Keep descriptor metadata and unsupported sensors, but do not turn
+            -- a missing property reading into a measured property temperature.
+            local replaced = false
+            for index, channel in ipairs(device.temperature.channels) do
+                if channel.index == 0 then device.temperature.channels[index] = composite; replaced = true; break end
+            end
+            if not replaced then table.insert(device.temperature.channels, 1, composite) end
         end
     end
     return Common.result("ok", now, data, { quality = partial and "partial" or "fresh",

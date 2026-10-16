@@ -41,13 +41,14 @@ def installer_archive(root: Path) -> Path:
 
 
 def copy_vendor_notices(root: Path, output_root: Path) -> None:
-    notice = root / "native" / "licenses" / "NVML-NVIDIA.txt"
-    shutil.copy2(notice, output_root / "NVML-NVIDIA.txt")
-    directory = output_root / "wtop"
-    if directory.is_dir():
-        licenses = directory / ".luai" / "licenses"
-        licenses.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(notice, licenses / "NVML-NVIDIA.txt")
+    for name in ("NVML-NVIDIA.txt", "Level-Zero-MIT.txt"):
+        notice = root / "native" / "licenses" / name
+        shutil.copy2(notice, output_root / name)
+        directory = output_root / "wtop"
+        if directory.is_dir():
+            licenses = directory / ".luai" / "licenses"
+            licenses.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(notice, licenses / name)
 
 
 def build(root: Path, kind: str, compiler: str | None = None, verbose: bool = False) -> Path:

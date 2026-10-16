@@ -22,8 +22,8 @@ end
 local function missing(metrics,key,value)
   if metrics[key]==nil and finite(value) and value>=0 then metrics[key]=value;return true end
 end
-function M.default_provider()
-  return require("wtop.collectors.gpu_worker").default_provider("levelzero")
+function M.default_provider(native)
+  return require("wtop.collectors.gpu_worker").default_provider("levelzero",native)
 end
 function M.query(provider)
   if type(provider)~="function" then return nil,"levelzero_provider_unavailable" end

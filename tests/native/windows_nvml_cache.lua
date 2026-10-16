@@ -32,7 +32,9 @@ repeat
     N.sleep_ms(5)
 until N.monotonic_ns()>deadline
 assert(file,"reader image remained pinned after close")
-file:write("X");file:close()
+-- Change the DOS stub while leaving a valid PE header and image. Rejection
+-- must come from the byte guard, not the OS rejecting an invalid executable.
+assert(file:seek("set",64));file:write(string.char((original:byte(65)+1)%256));file:close()
 local bad=assert(N.gpu_worker_open("nvml"));deadline=N.monotonic_ns()+3e9
 repeat
     value,reason=N.gpu_worker_query(bad,true)

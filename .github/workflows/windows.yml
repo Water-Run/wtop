@@ -64,6 +64,8 @@ jobs:
             dist/windows-x86/liblua55.dll.a -o ci-inputs/cpuid-fixture.exe
           python3 tests/test_windows_nvml.py --build --output ci-inputs/nvml-fixtures
           rm -rf ci-inputs/nvml-fixtures
+          python3 tests/test_windows_levelzero.py --build --output ci-inputs/levelzero-fixtures
+          rm -rf ci-inputs/levelzero-fixtures
           python3 tests/test_windows_storage.py --build --output ci-inputs/storage-fixtures
           rm -rf ci-inputs/storage-fixtures
           tar -czf ci-inputs/runtime.tar.gz -C dist windows-x86
@@ -75,7 +77,7 @@ jobs:
           test "$(stat -c %s ci-inputs/w64devkit-i686-1.23.0.zip)" = 72803726
           cd ci-inputs
           echo '033ef6a29bfcb5ef4452ec5219ed74b64b95d56ae71c9252996e77dd777ab7bf  w64devkit-i686-1.23.0.zip' | sha256sum -c -
-          sha256sum runtime.tar.gz w64devkit-i686-1.23.0.zip inventory-fixture.exe disk-fixture.exe network-fixture.exe network-table-fixture.exe cpu-fixture.exe frequency-fixture.exe hardware-worker-fixture.exe cpuid-fixture.exe nvml-fixtures.zip storage-fixtures.zip | tee SHA256SUMS
+          sha256sum runtime.tar.gz w64devkit-i686-1.23.0.zip inventory-fixture.exe disk-fixture.exe network-fixture.exe network-table-fixture.exe cpu-fixture.exe frequency-fixture.exe hardware-worker-fixture.exe cpuid-fixture.exe nvml-fixtures.zip levelzero-fixtures.zip storage-fixtures.zip | tee SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: windows-build-inputs
@@ -148,6 +150,12 @@ jobs:
           Expand-Archive ci-inputs/storage-fixtures.zip build/storage-fixtures
           python tests/test_windows_storage.py --output build/storage-fixtures
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native Intel Sysman ABI, energy and lifecycle regressions
+        shell: pwsh
+        run: |
+          Expand-Archive ci-inputs/levelzero-fixtures.zip build/levelzero-fixtures
+          python tests/test_windows_levelzero.py --output build/levelzero-fixtures
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package both forms and check every PE image
         shell: pwsh
         run: |
@@ -192,6 +200,7 @@ jobs:
           path: |
             dist/windows-bundle/
             build/storage-fixtures/
+            build/levelzero-fixtures/
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 3

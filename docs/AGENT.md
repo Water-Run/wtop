@@ -52,6 +52,12 @@ Linux GPU 的 `top.gpus[].observations` 按来源记录观测时间、接收时�
 
 温度条目的 `critical_celsius` 来自同一通道的 `crit`，`headroom_celsius` 为临界值减去当前温度；完整 Snapshot、硬件报告与 `top.sensors` 使用同一计算。`max` 和 `emergency` 分别保留，不作为缺失 `crit` 的替代。`metrics.sensors.minimum_headroom_celsius` 与 `closest_to_critical` 保留全部有效温度通道中的最小余量及对应设备，独立于最热列表的数量限制。余量不表示限频位；过期、故障或不可用的读数没有当前余量，也不产生新的温度阈值信号。
 
+Windows GPU 的 `providers.levelzero`、设备 `sysman` 和 `observations.levelzero`
+保留独立 Sysman 观测。当前功率是同一功耗域的能量增量除以 SDK 微秒窗口，
+`power_interval_ns` 给出换算窗口；`power_limit_watts` 使用同一选中域的有效瓦数
+上限，电流上限、禁用项和有歧义的多个上限不成为功耗墙。原始功耗域与限频
+原因仍可下钻。过期功率没有当前百分比，厂商来源之间不借用时间或设备身份。
+
 Windows 的 Snapshot `disk_health` 保留磁盘自己的温度通道、标准 NVMe 健康字段和
 按需读取的 ATA 原始属性。已核对身份的磁盘在 `disks.devices[].temperature` 和
 Agent `top.disks[].temperature` 携带当前温度、临界值、余量、来源、质量和观测时间。

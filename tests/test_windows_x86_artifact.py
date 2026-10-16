@@ -257,6 +257,13 @@ refused(lambda: Check.worker_images(nvml_container, images[:-1], "NVML"), "NVML 
 refused(lambda: Check.worker_images(nvml_container + nvml_manifest, images, "NVML"), "manifest")
 refused(lambda: Check.worker_images(nvml_container, images + [images[0]], "NVML"), "duplicate NVML")
 assert Check.worker_images(nvml_container, images) == {}
+levelzero_manifest = manifest.replace(b"CPUID", b"LEVELZERO")
+levelzero_container = bytes(pe) * 2 + bytes(helper64) + levelzero_manifest
+assert Check.worker_images(levelzero_container, images, "LEVELZERO") == {512: "x86", 1024: "x64"}
+refused(lambda: Check.worker_images(levelzero_container, images[:-1], "LEVELZERO"), "LEVELZERO worker is missing")
+refused(lambda: Check.worker_images(levelzero_container + levelzero_manifest, images, "LEVELZERO"), "manifest")
+refused(lambda: Check.worker_images(levelzero_container, images + [images[0]], "LEVELZERO"), "duplicate LEVELZERO")
+
 
 refused(lambda: Check.worker_images(container, images[:-1]), "missing, duplicated or changed")
 refused(lambda: Check.worker_images(container, images + [images[0]]), "duplicate CPUID")

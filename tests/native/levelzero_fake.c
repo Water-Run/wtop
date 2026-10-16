@@ -11,11 +11,42 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <io.h>
+#include <process.h>
+#define getpid _getpid
+#define write _write
+#define ssize_t int
+#else
 #include <unistd.h>
+#endif
 #include <signal.h>
 static int mode,stage,walk,manual;
 static uint64_t tick=1000000;
-static void hang(void) {for(;;)pause();}
+static void lifecycle_marker(const char *state) {
+#ifdef _WIN32
+    const char *root=getenv("WTOP_LEVELZERO_LIFECYCLE_MARKER");if(!root)return;
+    char path[1024];int length=snprintf(path,sizeof(path),"%s.%s",root,state);
+    assert(length>0&&(size_t)length<sizeof(path));
+    FILETIME created,ended,kernel,user;
+    assert(GetProcessTimes(GetCurrentProcess(),&created,&ended,&kernel,&user));
+    unsigned long long birth=(unsigned long long)created.dwHighDateTime<<32|created.dwLowDateTime;
+    FILE *file=fopen(path,"wb");assert(file);
+    assert(fprintf(file,"{\"pid\":%lu,\"birth\":\"%llu\"}\n",(unsigned long)GetCurrentProcessId(),birth)>0);
+    assert(!fclose(file));
+#else
+    (void)state;
+#endif
+}
+static void hang(void) {
+#ifdef _WIN32
+    Sleep(10000);
+#else
+    for(;;)pause();
+#endif
+}
 static void fixture_control(void) {
     const char *path=getenv("WTOP_LEVELZERO_FIXTURE_CONTROL");if(!path)return;
     FILE *file=fopen(path,"r");if(!file)return;
@@ -23,6 +54,8 @@ static void fixture_control(void) {
 }
 __attribute__((constructor)) static void setup(void) {
     const char *s=getenv("WTOP_LEVELZERO_FIXTURE_MODE");mode=s?atoi(s):0;
+    lifecycle_marker("loaded");
+    if(mode==40)lifecycle_marker("blocked");
     if(mode==40)hang();
     if(mode==46){puts("driver noise");fputs("driver stderr\n",stderr);fflush(stdout);fflush(stderr);}
     if(mode==47){const char bytes[]="corrupt frame";ssize_t sent=write(3,bytes,sizeof(bytes));(void)sent;}
@@ -33,7 +66,16 @@ __attribute__((constructor)) static void setup(void) {
 __attribute__((destructor)) static void finish(void) {if(mode==45)hang();}
 void fixture_mode(int value) {mode=value;walk=0;}
 void fixture_tick(uint64_t value) {manual=1;tick=value;}
-static uint64_t clock_us(void) {if(manual)return tick;struct timespec t;assert(!clock_gettime(CLOCK_MONOTONIC,&t));return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u;}
+static uint64_t clock_us(void) {
+    if(manual)return tick;
+#ifdef _WIN32
+    LARGE_INTEGER count,frequency;assert(QueryPerformanceCounter(&count)&&QueryPerformanceFrequency(&frequency));
+    uint64_t n=(uint64_t)count.QuadPart,f=(uint64_t)frequency.QuadPart;
+    return n/f*1000000u+(n%f)*1000000u/f;
+#else
+    struct timespec t;assert(!clock_gettime(CLOCK_MONOTONIC,&t));return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u;
+#endif
+}
 ze_result_t zeInit(ze_init_flags_t flags) {
     assert(flags==1&&(stage==0||stage==1));assert(getenv("ZES_ENABLE_SYSMAN")&&!strcmp(getenv("ZES_ENABLE_SYSMAN"),"1"));
     if(mode==41)hang();
@@ -114,7 +156,8 @@ ze_result_t zesPowerGetProperties(zes_pwr_handle_t h,zes_power_properties_t *p) 
     void *next=p->pNext;memset(p,0,sizeof(*p));p->pNext=next;p->onSubdevice=x%16==2;p->subdeviceId=1;p->defaultLimit=40000;p->maxLimit=100000;p->canControl=1;return ZE_RESULT_SUCCESS;
 }
 ze_result_t zesPowerGetEnergyCounter(zes_pwr_handle_t h,zes_power_energy_counter_t *p) {
-    uintptr_t x=(uintptr_t)h-0x8000;assert(x/16<3&&x%16<4);if(mode==44)hang();uint64_t t=clock_us();
+    uintptr_t x=(uintptr_t)h-0x8000;assert(x/16<3&&x%16<4);
+    if(mode==44){lifecycle_marker("blocked");hang();}uint64_t t=clock_us();
     if(mode==24)return ZE_RESULT_ERROR_DEVICE_LOST;
     unsigned watts=x%16==0?30+(unsigned)(x/16)*10:x%16==1?10:x%16==2?5:2;
     p->energy=mode==13?UINT64_MAX:(mode==15?UINT64_C(0x8000000000000000):UINT64_C(1000000))+t*watts;p->timestamp=t;return ZE_RESULT_SUCCESS;

@@ -2242,7 +2242,7 @@ static const luaL_Reg functions[] = {
 int __declspec(dllexport) luaopen_wtop_native(lua_State *L) {
     luaL_newlib(L, functions);
     wtop_register_hardware(L);
-    lua_createtable(L,0,1);lua_pushboolean(L,1);lua_setfield(L,-2,"nvml");lua_setfield(L,-2,"gpu_worker_sources");
+    lua_createtable(L,0,2);lua_pushboolean(L,1);lua_setfield(L,-2,"nvml");lua_pushboolean(L,1);lua_setfield(L,-2,"levelzero");lua_setfield(L,-2,"gpu_worker_sources");
     string_field(L, "VERSION", WTOP_VERSION);
     return 1;
 }

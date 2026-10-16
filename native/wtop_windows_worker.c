@@ -22,10 +22,12 @@
 static char launcher_key;
 /* Source numbers are wire identifiers. NVML remains 3 (wire kind 6). */
 #define NVML_SOURCE 3u
-#define HARDWARE_SOURCES 6u
-static const char *const source_names[HARDWARE_SOURCES]={"cpufreq","gpu","hwmon","nvml","disk_health","disk"};
-static const WCHAR *const wide_source_names[HARDWARE_SOURCES]={L"cpufreq",L"gpu",L"hwmon",L"nvml",L"disk_health",L"disk"};
+#define LEVELZERO_SOURCE 6u
+#define HARDWARE_SOURCES 7u
+static const char *const source_names[HARDWARE_SOURCES]={"cpufreq","gpu","hwmon","nvml","disk_health","disk","levelzero"};
+static const WCHAR *const wide_source_names[HARDWARE_SOURCES]={L"cpufreq",L"gpu",L"hwmon",L"nvml",L"disk_health",L"disk",L"levelzero"};
 static volatile LONG controllers,source_controllers[HARDWARE_SOURCES];
+static int sdk_source(unsigned source) {return source==NVML_SOURCE||source==LEVELZERO_SOURCE;}
 static unsigned source_index(const char *name,size_t size){
     for(unsigned i=0;i<HARDWARE_SOURCES;++i)if(size==strlen(source_names[i])&&!memcmp(name,source_names[i],size))return i;
     return HARDWARE_SOURCES;
@@ -126,8 +128,8 @@ static DWORD WINAPI controller(void *opaque) {
     WCHAR *executable=calloc(32768,sizeof(WCHAR)),*entry=NULL,*command=NULL;
     job->reason="hardware_worker_unavailable";
     if(!executable)goto finish;
-    if(job->source==NVML_SOURCE){
-        sdk_image=nvml_reader_image(executable,32768);if(!sdk_image)goto finish;
+    if(sdk_source(job->source)){
+        sdk_image=job->source==NVML_SOURCE?nvml_reader_image(executable,32768):levelzero_reader_image(executable,32768);if(!sdk_image)goto finish;
     }else{
         DWORD length=GetModuleFileNameW(NULL,executable,32768);
         if(!length||length>=32768)goto finish;
@@ -184,15 +186,16 @@ static DWORD WINAPI controller(void *opaque) {
         if(gpu_checksum(frame->data,size)!=gpu_u32(header+44)){frame_release(frame);job->reason="hardware_invalid_response";break;}
         if(status){
             job->reason="hardware_collector_error";
-            if(job->source==NVML_SOURCE){
-                int valid=size>5&&size<sizeof(job->sdk_reason)&&!memcmp(frame->data,"nvml_",5);
+            if(sdk_source(job->source)){
+                const char *prefix=job->source==NVML_SOURCE?"nvml_":"levelzero_";size_t prefix_size=strlen(prefix);
+                int valid=size>prefix_size&&size<sizeof(job->sdk_reason)&&!memcmp(frame->data,prefix,prefix_size);
                 for(uint32_t i=0;valid&&i<size;++i){unsigned char c=frame->data[i];valid=(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='_';}
                 if(valid){memcpy(job->sdk_reason,frame->data,size);job->sdk_reason[size]=0;job->reason=job->sdk_reason;}
                 else job->reason="hardware_invalid_response";
             }
             frame_release(frame);break;
         }
-        if(job->source==NVML_SOURCE&&!gpu_wire_valid(frame->data,frame->size)){
+        if(sdk_source(job->source)&&!gpu_wire_valid(frame->data,frame->size)){
             frame_release(frame);job->reason="hardware_invalid_response";break;
         }
         EnterCriticalSection(&job->mutex);
@@ -253,13 +256,13 @@ int wtop_windows_hardware_configure(lua_State *L) {
     luaL_argcheck(L,size<=16383&&!memchr(entry,0,size),1,"invalid reader entry");
     lua_pushlstring(L,entry,size);lua_rawsetp(L,LUA_REGISTRYINDEX,&launcher_key);
     lua_createtable(L,0,HARDWARE_SOURCES);
-    for(unsigned i=0;i<HARDWARE_SOURCES;++i)if(i!=NVML_SOURCE){lua_pushboolean(L,1);lua_setfield(L,-2,source_names[i]);}
+    for(unsigned i=0;i<HARDWARE_SOURCES;++i)if(!sdk_source(i)){lua_pushboolean(L,1);lua_setfield(L,-2,source_names[i]);}
     return 1;
 }
 int wtop_windows_hardware_open(lua_State *L) {
     size_t name_size;const char *name=luaL_checklstring(L,1,&name_size);
     unsigned source=source_index(name,name_size);
-    luaL_argcheck(L,source<HARDWARE_SOURCES&&source!=NVML_SOURCE,1,"unknown hardware source");
+    luaL_argcheck(L,source<HARDWARE_SOURCES&&!sdk_source(source),1,"unknown hardware source");
     size_t size;(void)luaL_checklstring(L,2,&size);luaL_argcheck(L,size&&size<=65536,2,"invalid configuration size");
     lua_rawgetp(L,LUA_REGISTRYINDEX,&launcher_key);
     if(lua_type(L,-1)!=LUA_TSTRING)return failure(L,"hardware_worker_unavailable");
@@ -313,9 +316,10 @@ int wtop_windows_hardware_query(lua_State *L) {
 }
 int wtop_windows_gpu_open(lua_State *L) {
     size_t size;const char *source=luaL_checklstring(L,1,&size);
-    luaL_argcheck(L,size==4&&!memcmp(source,"nvml",4),1,"unknown GPU source");
+    unsigned source_id=source_index(source,size);
+    luaL_argcheck(L,sdk_source(source_id),1,"unknown GPU source");
     struct session *session=lua_newuserdatauv(L,sizeof(*session),2);
-    session->job=NULL;session->closed=0;session->source=NVML_SOURCE;
+    session->job=NULL;session->closed=0;session->source=source_id;
     luaL_newmetatable(L,SESSION_META);lua_pushcfunction(L,session_close);lua_setfield(L,-2,"__gc");
     lua_pushcfunction(L,session_close);lua_setfield(L,-2,"__close");lua_setmetatable(L,-2);
     lua_pushliteral(L,"x");lua_setiuservalue(L,-2,1);lua_pushliteral(L,"");lua_setiuservalue(L,-2,2);return 1;
@@ -338,12 +342,25 @@ static void decode_sdk_frame(lua_State *L,const unsigned char *data,size_t lengt
 }
 int wtop_windows_gpu_query(lua_State *L) {
     struct session *session=luaL_checkudata(L,1,SESSION_META);
-    luaL_argcheck(L,session->source==NVML_SOURCE,1,"not a GPU reader");
+    luaL_argcheck(L,sdk_source(session->source),1,"not a GPU reader");
+    const char *name=source_names[session->source];
     int result=wtop_windows_hardware_query(L);
     if(result!=2||lua_type(L,-2)!=LUA_TSTRING){
         const char *reason=lua_tostring(L,-1);
-        if(reason&&!strncmp(reason,"hardware_",9))lua_pushfstring(L,"nvml_%s",reason+9);
-        else lua_pushstring(L,reason?reason:"nvml_query_failed");
+        if(reason&&session->source==LEVELZERO_SOURCE&&!strcmp(reason,"levelzero_legacy_required")
+            &&session->job&&InterlockedCompareExchange(&session->job->done,0,0)){
+            lua_getiuservalue(L,1,1);int legacy=lua_tostring(L,-1)[0]=='l';lua_pop(L,1);
+            if(!legacy){
+                /* done is set only after the original process is signalled.
+                 * No initialized Sysman state crosses into the legacy reader. */
+                lua_pushliteral(L,"l");lua_setiuservalue(L,1,1);
+                struct job *old=session->job;session->job=NULL;job_release(old);
+                lua_pushliteral(L,"levelzero_query_pending");lua_replace(L,-2);return 2;
+            }
+        }
+        if(reason&&!strncmp(reason,"hardware_",9))lua_pushfstring(L,"%s_%s",name,reason+9);
+        else if(reason)lua_pushstring(L,reason);
+        else lua_pushfstring(L,"%s_query_failed",name);
         lua_replace(L,-2);return 2;
     }
     size_t size;const unsigned char *bytes=(const unsigned char *)lua_tolstring(L,-2,&size);
@@ -390,7 +407,7 @@ int wtop_windows_hardware_run(lua_State *L) {
     HANDLE input=handle_argument(L,3),output=handle_argument(L,4);
     size_t name_size;const char *source=luaL_checklstring(L,5,&name_size);
     unsigned source_id=source_index(source,name_size);
-    if(lua_gettop(L)!=5||(source_id>=HARDWARE_SOURCES||source_id==NVML_SOURCE)||!watch.parent||!watch.cancel||!input||!output
+    if(lua_gettop(L)!=5||(source_id>=HARDWARE_SOURCES||sdk_source(source_id))||!watch.parent||!watch.cancel||!input||!output
         ||GetFileType(input)!=FILE_TYPE_PIPE||GetFileType(output)!=FILE_TYPE_PIPE
         ||WaitForSingleObject(watch.parent,0)!=WAIT_TIMEOUT||WaitForSingleObject(watch.cancel,0)!=WAIT_TIMEOUT){lua_pushinteger(L,2);return 1;}
     if(!SetHandleInformation(watch.parent,HANDLE_FLAG_INHERIT,0)||!SetHandleInformation(watch.cancel,HANDLE_FLAG_INHERIT,0)

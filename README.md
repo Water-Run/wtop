@@ -54,6 +54,7 @@ build target but hasn't been tested on a real XP machine yet.
   Workloads, System and Insights.
 - A process list with search, sorting, tree navigation, links to workloads,
   and a confirmed signal menu.
+- Windows development builds can use Intel Sysman for GPU power, reported caps, clocks and throttling reasons.
 - Windows development builds show NVMe temperature and reported limits in Storage. Press `s` for read-only drive health; ATA SMART is read after selecting a drive.
 - Optional deep checks (SMART/NVMe, memory bandwidth, systemd units, sshd) when the host
   tools are available.

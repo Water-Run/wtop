@@ -31,7 +31,7 @@ enum scenario {
     BAD_SEQUENCE, BAD_FLAGS, BAD_SOURCE, BAD_RESERVED, PAST_TIME, FUTURE_TIME,
     REVERSED_TIME, ERROR_RESPONSE, EARLY_EXIT, HANG, PARTIAL_HEADER,
     CLOSED_PIPE, POLICY_CHANGE, EXPIRED_REPLY, INVALID_INPUT, LUA_OOM,
-    VM_CLOSE_PENDING, NATIVE_ALLOC_FAILURE, THREAD_FAILURE, WORKER_LIMIT, SOURCE_ROUNDTRIP, SOURCE_SLOT_FAIRNESS, SOURCE_MISMATCH, SDK_ROUNDTRIP, SDK_BAD_OPERATIONS, SDK_ERROR, SDK_WRONG_SOURCE, SDK_LUA_OOM, SDK_SLOT_FAIRNESS, SDK_SCAN_CHANGE, HANDLE_WHITELIST, ATTRIBUTE_LIST_FAILURE, XP_SPAWN_FALLBACK, HEALTH_SLOT_FAIRNESS, DISK_SLOT_FAIRNESS, SCENARIOS
+    VM_CLOSE_PENDING, NATIVE_ALLOC_FAILURE, THREAD_FAILURE, WORKER_LIMIT, SOURCE_ROUNDTRIP, SOURCE_SLOT_FAIRNESS, SOURCE_MISMATCH, SDK_ROUNDTRIP, SDK_BAD_OPERATIONS, SDK_ERROR, SDK_WRONG_SOURCE, SDK_LUA_OOM, SDK_SLOT_FAIRNESS, SDK_SCAN_CHANGE, HANDLE_WHITELIST, ATTRIBUTE_LIST_FAILURE, XP_SPAWN_FALLBACK, HEALTH_SLOT_FAIRNESS, DISK_SLOT_FAIRNESS, LEVELZERO_ROUNDTRIP, LEVELZERO_SLOT_FAIRNESS, LEVELZERO_LEGACY_FRESH, SCENARIOS
 };
 static int selected;
 static HANDLE decoy;
@@ -67,12 +67,14 @@ static HANDLE WINAPI fixture_thread(LPSECURITY_ATTRIBUTES security,SIZE_T stack,
  * loading and 32/64 ABI are exercised by windows_nvml_smoke separately. */
 #define WTOP_WINDOWS_SDK_IMAGE_H
 static HANDLE nvml_reader_image(WCHAR *path,DWORD capacity);
+static HANDLE levelzero_reader_image(WCHAR *path,DWORD capacity);
 #include "../../native/wtop_windows_worker.c"
 static HANDLE nvml_reader_image(WCHAR *path,DWORD capacity){
  DWORD size=GetModuleFileNameW(NULL,path,capacity);
  if(!size||size>=capacity)return NULL;
  return CreateEventW(NULL,TRUE,FALSE,NULL);
 }
+static HANDLE levelzero_reader_image(WCHAR *path,DWORD capacity){return nvml_reader_image(path,capacity);}
 #undef GetProcAddress
 #undef CreatePipe
 #undef DuplicateHandle
@@ -99,7 +101,7 @@ static int fake_child(int argc,char **argv) {
     if(selected==EARLY_EXIT)return 7;
     unsigned char prefix[4];if(!child_receive(input,prefix,4))return 2;
     uint32_t size=gpu_u32(prefix);assert(size&&size<=65536);unsigned char *configuration=malloc(size);assert(configuration);
-    assert(child_receive(input,configuration,size));free(configuration);
+    assert(child_receive(input,configuration,size));int legacy=size==1&&configuration[0]=='l';free(configuration);
     unsigned char command[GPU_WIRE_COMMAND];char body[131072];memset(body,'v',sizeof(body));
     for(;;){
         if(WaitForSingleObject(cancel,0)!=WAIT_TIMEOUT||WaitForSingleObject(parent,0)!=WAIT_TIMEOUT)return 0;
@@ -109,12 +111,13 @@ static int fake_child(int argc,char **argv) {
         if(selected==CLOSED_PIPE){CloseHandle(output);WaitForSingleObject(cancel,10000);return 0;}
         if(selected==HANG||selected==VM_CLOSE_PENDING||selected==WORKER_LIMIT
             ||(selected==SOURCE_SLOT_FAIRNESS&&source==0)||(selected==SDK_SLOT_FAIRNESS&&source==NVML_SOURCE)
+            ||(selected==LEVELZERO_SLOT_FAIRNESS&&source==LEVELZERO_SOURCE)
             ||(selected==HEALTH_SLOT_FAIRNESS&&source==4)||(selected==DISK_SLOT_FAIRNESS&&source==5)){
             WaitForSingleObject(cancel,10000);return 0;
         }
         uint64_t start=now_ns(),end=now_ns(),sequence=gpu_u64(command+8);unsigned flags=gpu_u32(command+16);
         unsigned char header[GPU_WIRE_HEADER]={0};uint32_t bytes=selected==LUA_OOM?sizeof(body):16;
-        if(source==NVML_SOURCE){
+        if(sdk_source(source)){
             unsigned char *p=(unsigned char *)body;
             for(unsigned i=0;i<3;++i){*p++=GPU_TABLE;gpu_put64(p,0);p+=8;}
             const char *keys[]={"power_watts","power_limit_watts"};double numbers[]={300,355.5};
@@ -123,12 +126,15 @@ static int fake_child(int argc,char **argv) {
             *p++=GPU_INDEX;gpu_put32(p,1);p+=4;
             *p++=GPU_FIELD;*p++=7;memcpy(p,"devices",7);p+=7;bytes=(uint32_t)(p-(unsigned char *)body);
             if(selected==SDK_BAD_OPERATIONS)body[0]=255;
-            if(selected==SDK_ERROR){const char *reason="nvml_library_not_found";bytes=(uint32_t)strlen(reason);memcpy(body,reason,bytes);}
+            if(selected==SDK_ERROR||(selected==LEVELZERO_LEGACY_FRESH&&!legacy)){
+                const char *reason=selected==SDK_ERROR?"nvml_library_not_found":"levelzero_legacy_required";
+                bytes=(uint32_t)strlen(reason);memcpy(body,reason,bytes);}
+
         }
         gpu_put32(header,selected==BAD_MAGIC?0:GPU_WIRE_MAGIC);
         gpu_put32(header+4,selected==BAD_VERSION?99:GPU_WIRE_VERSION);
         gpu_put32(header+8,selected==EMPTY_BODY?0:selected==OVERSIZE_BODY?GPU_WIRE_LIMIT+1:bytes);
-        gpu_put32(header+12,(selected==ERROR_RESPONSE||selected==SDK_ERROR)?1:0);
+        gpu_put32(header+12,(selected==ERROR_RESPONSE||selected==SDK_ERROR||(selected==LEVELZERO_LEGACY_FRESH&&!legacy))?1:0);
         gpu_put64(header+16,selected==BAD_SEQUENCE?sequence+1:sequence);
         gpu_put64(header+24,selected==PAST_TIME?0:selected==FUTURE_TIME?start+UINT64_C(10000000000):start);
         gpu_put64(header+32,selected==REVERSED_TIME?start-1:selected==FUTURE_TIME?end+UINT64_C(10000000000):end);
@@ -163,7 +169,7 @@ static void drained(DWORD before) {
 }
 static int source_reference(lua_State *L,const char *name) {
     assert(call_configure(L)==LUA_OK);
-    for(unsigned i=0;i<HARDWARE_SOURCES;++i)if(i!=NVML_SOURCE){lua_getfield(L,-1,source_names[i]);assert(lua_toboolean(L,-1));lua_pop(L,1);}
+    for(unsigned i=0;i<HARDWARE_SOURCES;++i)if(!sdk_source(i)){lua_getfield(L,-1,source_names[i]);assert(lua_toboolean(L,-1));lua_pop(L,1);}
     assert(call_open(L,name,strlen(name),"x",1)==LUA_OK);
     assert(luaL_testudata(L,-1,SESSION_META));return luaL_ref(L,LUA_REGISTRYINDEX);
 }
@@ -246,7 +252,7 @@ static void native_failure_cases(DWORD before){
  assert(errors==6&&successes==3);puts("Worker native allocation: six failing sites and three complete reads drained");
 }
 static int sdk_reference(lua_State *L){
- lua_settop(L,0);lua_pushcfunction(L,wtop_windows_gpu_open);lua_pushliteral(L,"nvml");
+ lua_settop(L,0);lua_pushcfunction(L,wtop_windows_gpu_open);lua_pushstring(L,selected>=LEVELZERO_ROUNDTRIP?"levelzero":"nvml");
  assert(lua_pcall(L,1,1,0)==LUA_OK&&luaL_testudata(L,-1,SESSION_META));return luaL_ref(L,LUA_REGISTRYINDEX);
 }
 static int sdk_query(lua_State *L,int ref,int scan){
@@ -269,18 +275,31 @@ static void sdk_case(DWORD before){
  if(selected==SDK_LUA_OOM){sdk_oom(before);return;}
  lua_State *L=luaL_newstate();assert(L);int ref=sdk_reference(L);assert(sdk_query(L,ref,1)==LUA_OK);
  lua_rawgeti(L,LUA_REGISTRYINDEX,ref);struct session *slot=lua_touserdata(L,-1);lua_pop(L,1);
- if(selected==SDK_SLOT_FAIRNESS){
+ if(selected==SDK_SLOT_FAIRNESS||selected==LEVELZERO_SLOT_FAIRNESS){
   int second=sdk_reference(L);assert(sdk_query(L,second,1)==LUA_OK);
-  int third=sdk_reference(L);assert(sdk_query(L,third,1)==LUA_OK&&lua_isnil(L,-2)&&!strcmp(lua_tostring(L,-1),"nvml_worker_busy"));
-  for(unsigned i=0;i<HARDWARE_SOURCES;++i)if(i!=NVML_SOURCE){int other=source_reference(L,source_names[i]);assert(call_query(L,other,0)==LUA_OK);
+  int third=sdk_reference(L);assert(sdk_query(L,third,1)==LUA_OK&&lua_isnil(L,-2)&&!strcmp(lua_tostring(L,-1),selected==LEVELZERO_SLOT_FAIRNESS?"levelzero_worker_busy":"nvml_worker_busy"));
+  for(unsigned i=0;i<HARDWARE_SOURCES;++i)if(!sdk_source(i)){int other=source_reference(L,source_names[i]);assert(call_query(L,other,0)==LUA_OK);
    lua_rawgeti(L,LUA_REGISTRYINDEX,other);struct session *healthy=lua_touserdata(L,-1);lua_pop(L,1);wait_state(healthy,READY);
    assert(call_query(L,other,0)==LUA_OK&&lua_type(L,-2)==LUA_TSTRING);}
- }else if(selected==SDK_ROUNDTRIP||selected==SDK_SCAN_CHANGE){
+  lua_settop(L,0);lua_pushcfunction(L,wtop_windows_gpu_open);
+  lua_pushstring(L,selected==SDK_SLOT_FAIRNESS?"levelzero":"nvml");
+  assert(lua_pcall(L,1,1,0)==LUA_OK);int healthy=luaL_ref(L,LUA_REGISTRYINDEX);
+  DWORD began=GetTickCount();
+  for(;;){assert(sdk_query(L,healthy,0)==LUA_OK);if(lua_istable(L,-2))break;
+   assert((DWORD)(GetTickCount()-began)<5000);Sleep(2);}
+ }else if(selected==SDK_ROUNDTRIP||selected==SDK_SCAN_CHANGE||selected==LEVELZERO_ROUNDTRIP){
   wait_state(slot,READY);
   if(selected==SDK_SCAN_CHANGE){assert(sdk_query(L,ref,0)==LUA_OK&&lua_isnil(L,-2));wait_state(slot,READY);}
   assert(sdk_query(L,ref,selected!=SDK_SCAN_CHANGE)==LUA_OK&&lua_istable(L,-2));
   lua_getfield(L,-2,"devices");lua_rawgeti(L,-1,1);lua_getfield(L,-1,"power_watts");assert(lua_tonumber(L,-1)==300);
   lua_pop(L,1);lua_getfield(L,-1,"power_limit_watts");assert(lua_tonumber(L,-1)==355.5);
+ }else if(selected==LEVELZERO_LEGACY_FRESH){
+  wait_state(slot,FAILED);DWORD previous=slot->job->pid;assert(InterlockedCompareExchange(&slot->job->done,0,0));
+  DWORD began=GetTickCount();
+  for(;;){assert(sdk_query(L,ref,0)==LUA_OK);if(lua_istable(L,-2))break;
+   assert(!strcmp(lua_tostring(L,-1),"levelzero_query_pending"));
+   assert((DWORD)(GetTickCount()-began)<5000);Sleep(2);}
+  lua_getfield(L,-2,"worker_pid");assert((DWORD)lua_tointeger(L,-1)!=previous);
  }else{
   DWORD started=GetTickCount();
   for(;;){assert(sdk_query(L,ref,1)==LUA_OK&&lua_isnil(L,-2));const char *reason=lua_tostring(L,-1);assert(reason);
@@ -295,7 +314,7 @@ static void one_case(void) {
     printf("transport case %d: starting\n",selected);fflush(stdout);
     DWORD before=handles();
     if(selected==INVALID_INPUT){invalid_inputs();drained(before);return;}
-    if(selected>=SDK_ROUNDTRIP&&selected<=SDK_SCAN_CHANGE){sdk_case(before);return;}
+    if((selected>=SDK_ROUNDTRIP&&selected<=SDK_SCAN_CHANGE)||selected>=LEVELZERO_ROUNDTRIP){sdk_case(before);return;}
     if(selected==SOURCE_ROUNDTRIP||selected==SOURCE_SLOT_FAIRNESS
         ||selected==HEALTH_SLOT_FAIRNESS||selected==DISK_SLOT_FAIRNESS){
         lua_State *L=luaL_newstate();assert(L);int refs[6];unsigned count=0;
@@ -303,7 +322,7 @@ static void one_case(void) {
         unsigned first=selected==SOURCE_ROUNDTRIP?0:2;
         for(unsigned i=0;i<first;++i){refs[count]=source_reference(L,source_names[hanging]);assert(call_query(L,refs[count++],0)==LUA_OK);}
         for(unsigned slot=0;slot<HARDWARE_SOURCES;++slot){
-            if(slot==NVML_SOURCE||(first&&slot==hanging))continue;
+            if(sdk_source(slot)||(first&&slot==hanging))continue;
             refs[count]=source_reference(L,source_names[slot]);assert(call_query(L,refs[count++],0)==LUA_OK);
         }
         if(first){int extra=source_reference(L,source_names[hanging]);assert(call_query(L,extra,0)==LUA_OK&&lua_isnil(L,-2)&&!strcmp(lua_tostring(L,-1),"hardware_worker_busy"));}

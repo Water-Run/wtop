@@ -3,7 +3,8 @@
 #ifndef WTOP_WINDOWS_SDK_IMAGE_H
 #define WTOP_WINDOWS_SDK_IMAGE_H
 #include "wtop_nvml_helpers.h"
-static HANDLE nvml_reader_image(WCHAR *path,DWORD capacity) {
+#include "wtop_levelzero_helpers.h"
+static HANDLE sdk_reader_image(WCHAR *path,DWORD capacity,int levelzero) {
     SYSTEM_INFO info;GetSystemInfo(&info);
     typedef void (WINAPI *native_info_fn)(LPSYSTEM_INFO);
     native_info_fn native_info=(native_info_fn)(void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"),"GetNativeSystemInfo");
@@ -11,8 +12,10 @@ static HANDLE nvml_reader_image(WCHAR *path,DWORD capacity) {
     int bits=info.wProcessorArchitecture==PROCESSOR_ARCHITECTURE_AMD64?64:32;
     if(info.wProcessorArchitecture!=PROCESSOR_ARCHITECTURE_AMD64
         &&info.wProcessorArchitecture!=PROCESSOR_ARCHITECTURE_INTEL)return NULL;
-    const unsigned char *image=bits==64?wtop_nvml_x64:wtop_nvml_x86;
-    DWORD size=(DWORD)(bits==64?sizeof(wtop_nvml_x64):sizeof(wtop_nvml_x86));
+    const unsigned char *image=levelzero?(bits==64?wtop_levelzero_x64:wtop_levelzero_x86)
+        :(bits==64?wtop_nvml_x64:wtop_nvml_x86);
+    DWORD size=(DWORD)(levelzero?(bits==64?sizeof(wtop_levelzero_x64):sizeof(wtop_levelzero_x86))
+        :(bits==64?sizeof(wtop_nvml_x64):sizeof(wtop_nvml_x86)));
     DWORD length=GetEnvironmentVariableW(L"APPDATA",path,capacity);
     if(!length||length>=capacity-80||!((length>=3&&path[1]==L':'
         &&(path[2]==L'\\'||path[2]==L'/'))||(length>=2&&path[0]==L'\\'&&path[1]==L'\\')))return NULL;
@@ -21,7 +24,7 @@ static HANDLE nvml_reader_image(WCHAR *path,DWORD capacity) {
     wcscat(path,L"\\readers");
     if(!CreateDirectoryW(path,NULL)&&GetLastError()!=ERROR_ALREADY_EXISTS)return NULL;
     length=(DWORD)wcslen(path);
-    int used=_snwprintf(path+length,capacity-length,L"\\nvml-x%d-%08lx.exe",bits,(unsigned long)gpu_checksum(image,size));
+    int used=_snwprintf(path+length,capacity-length,L"\\%ls-x%d-%08lx.exe",levelzero?L"levelzero":L"nvml",bits,(unsigned long)gpu_checksum(image,size));
     if(used<=0||(DWORD)used>=capacity-length)return NULL;
     HANDLE writer=CreateFileW(path,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
     if(writer!=INVALID_HANDLE_VALUE){
@@ -46,4 +49,6 @@ static HANDLE nvml_reader_image(WCHAR *path,DWORD capacity) {
         done+=n;}
     return guard;
 }
+static HANDLE nvml_reader_image(WCHAR *path,DWORD capacity) {return sdk_reader_image(path,capacity,0);}
+static HANDLE levelzero_reader_image(WCHAR *path,DWORD capacity) {return sdk_reader_image(path,capacity,1);}
 #endif

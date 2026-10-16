@@ -10,7 +10,15 @@
 #include <wchar.h>
 #include "wtop_gpu_protocol.h"
 #include "wtop_gpu_worker.h"
-#define WINDOWS_NVML_SOURCE 6u
+#ifdef WTOP_WINDOWS_LEVELZERO
+#define WINDOWS_SDK_SOURCE 9u
+#define WINDOWS_SDK_NAME L"levelzero"
+#define WINDOWS_SDK_INVALID "levelzero_invalid_response"
+#else
+#define WINDOWS_SDK_SOURCE 6u
+#define WINDOWS_SDK_NAME L"nvml"
+#define WINDOWS_SDK_INVALID "nvml_invalid_response"
+#endif
 struct wire_buffer {unsigned char *data;size_t size,capacity;};
 struct watcher {HANDLE parent,cancel,stop,ready;};
 static uint64_t now_ns(void) {
@@ -68,7 +76,7 @@ static void emit(gpu_output *out,enum gpu_operation op,const char *key,int64_t i
     else if(op==GPU_STRING){p[0]=(unsigned char)n;p[1]=(unsigned char)(n>>8);memcpy(p+2,text,n);}
 }
 int wmain(int argc,WCHAR **argv) {
-    if(argc!=7||wcscmp(argv[1],L"--wtop-hardware-reader")||wcscmp(argv[6],L"nvml"))return 2;
+    if(argc!=7||wcscmp(argv[1],L"--wtop-hardware-reader")||wcscmp(argv[6],WINDOWS_SDK_NAME))return 2;
     struct watcher watch={argument(argv[2]),argument(argv[3]),NULL,NULL};
     HANDLE input=argument(argv[4]),output=argument(argv[5]);
     if(!watch.parent||!watch.cancel||!input||!output||GetFileType(input)!=FILE_TYPE_PIPE
@@ -84,7 +92,22 @@ int wmain(int argc,WCHAR **argv) {
     struct wire_buffer buffer={0};uint64_t previous=0;int code=2;
     if(WaitForSingleObject(watch.ready,5000)!=WAIT_OBJECT_0)goto finish;
     unsigned char prefix[4],configuration;
-    if(!transfer(input,prefix,4,0)||gpu_u32(prefix)!=1||!transfer(input,&configuration,1,0)||configuration!='x')goto finish;
+    if(!transfer(input,prefix,4,0)||gpu_u32(prefix)!=1||!transfer(input,&configuration,1,0))goto finish;
+#ifdef WTOP_WINDOWS_LEVELZERO
+    if(configuration!='x'&&configuration!='l')goto finish;
+#else
+    if(configuration!='x')goto finish;
+#endif
+#ifdef WTOP_WINDOWS_LEVELZERO
+    /* Environment and loader initialization happen after the watchdog is ready.
+     * Legacy retry always receives a fresh process from the controller. */
+    int legacy=configuration=='l';
+    /* Some SDK builds use the CRT environment, others use Win32 APIs. Update
+     * both inside this new reader, before loading either SDK runtime. */
+    const char *boot_reason=(!_putenv(legacy?"ZES_ENABLE_SYSMAN=1":"ZES_ENABLE_SYSMAN=")
+        &&SetEnvironmentVariableW(L"ZES_ENABLE_SYSMAN",legacy?L"1":NULL))
+        ?wtop_levelzero_prepare(legacy):"levelzero_initialization_failed";
+#endif
     for(;;){
         unsigned char command[GPU_WIRE_COMMAND];
         if(!transfer(input,command,sizeof(command),0))break;
@@ -92,19 +115,28 @@ int wmain(int argc,WCHAR **argv) {
         if(gpu_u32(command)!=GPU_WIRE_MAGIC||gpu_u32(command+4)!=GPU_WIRE_VERSION
             ||gpu_u32(command+20)||!sequence||sequence<=previous||flags>1)break;
         previous=sequence;buffer.size=0;gpu_output out={&buffer,0,emit};uint64_t start=now_ns();
+#ifdef WTOP_WINDOWS_LEVELZERO
+        const char *reason=boot_reason?boot_reason:wtop_levelzero_collect(&out,0);
+#else
         const char *reason=wtop_nvml_collect(&out,flags!=0);
-        if(!reason&&!gpu_wire_valid(buffer.data,buffer.size))reason="nvml_invalid_response";
+#endif
+        if(!reason&&!gpu_wire_valid(buffer.data,buffer.size))reason=WINDOWS_SDK_INVALID;
         const void *data=reason?(const void *)reason:buffer.data;
         size_t size=reason?strlen(reason):buffer.size;
         unsigned char header[GPU_WIRE_HEADER]={0};gpu_put32(header,GPU_WIRE_MAGIC);
         gpu_put32(header+4,GPU_WIRE_VERSION);gpu_put32(header+8,(uint32_t)size);gpu_put32(header+12,reason!=NULL);
         gpu_put64(header+16,sequence);gpu_put64(header+24,start);gpu_put64(header+32,now_ns());
-        gpu_put32(header+40,flags);gpu_put32(header+44,gpu_checksum(data,size));gpu_put32(header+48,WINDOWS_NVML_SOURCE);
+        gpu_put32(header+40,flags);gpu_put32(header+44,gpu_checksum(data,size));gpu_put32(header+48,WINDOWS_SDK_SOURCE);
         if(!transfer(output,header,sizeof(header),1)||!transfer(output,(void *)data,size,1))break;
         code=0;if(reason)break;
     }
 finish:
-    wtop_nvml_finish();free(buffer.data);SetEvent(watch.stop);WaitForSingleObject(thread,INFINITE);
+#ifdef WTOP_WINDOWS_LEVELZERO
+    wtop_levelzero_finish();
+#else
+    wtop_nvml_finish();
+#endif
+    free(buffer.data);SetEvent(watch.stop);WaitForSingleObject(thread,INFINITE);
     CloseHandle(thread);CloseHandle(watch.stop);CloseHandle(watch.ready);CloseHandle(watch.parent);CloseHandle(watch.cancel);
     CloseHandle(input);CloseHandle(output);return code;
 }

@@ -97,3 +97,89 @@ local big=Windows.new(big_base,{nvml_provider=sdk},{})
 local big_result=big:sample({now_ns=function()return now end})
 assert(big_result.status=="ok" and #big_result.data.devices[1].processes.list==1024)
 assert(big_result.data.devices[1].metrics.power_watts==100 and large.devices[1].metrics.power_watts==nil)
+
+-- Two vendor sources have independent clocks, identity guards and failures.
+local mixed_now,nvidia_wait,intel_wait=20e9,false,false
+local intel_id=0x5600
+local host_intel_id="0x5600"
+local mixed_base={probe=function()return {available=true}end}
+function mixed_base:sample()
+ return {status="ok",quality="fresh",timestamp_ns=mixed_now,value_timestamp_ns=mixed_now,data={devices={
+  {id="nvidia",pci_bdf="0000:01:00.0",vendor_id="0x10de",device_id="0x1234",driver="nvidia",
+   identity_quality="fresh",metrics={utilization_percent=20},quality={},capabilities={}},
+  {id="intel",pci_bdf="0000:02:00.0",vendor_id="0x8086",device_id=host_intel_id,driver="intel",
+   identity_quality="fresh",metrics={utilization_percent=40},quality={},capabilities={}},
+ }}}
+end
+local function intel_data()
+ return {status="ok",sample_started_ns=mixed_now,sample_finished_ns=mixed_now,transport="process",devices={
+  {index=0,vendor_id=0x8086,device_id=intel_id,pci_bdf="0000:02:00.0",uuid="intel-fixture",
+   power_watts=30,power_limit_watts=40,power_quality="fresh",power_measurement="average",power_interval_ns=1e9,
+   power_domains={{index=0,scope="card",quality="fresh",power_watts=30,interval_ns=1e9}},
+   frequency_domains={{index=0,kind="gpu",actual_hz=8e8,throttle_quality="fresh",throttle_raw_hex="0x1"}},
+  }}}
+end
+local mixed=Windows.new(mixed_base,{
+ nvml_provider=function()
+  if nvidia_wait then return nil,"nvml_query_timeout"end
+  return {devices={{pci_bdf="0000:01:00.0",device_id="0x1234",power_watts=100,power_limit_watts=200,
+   uuid="nvidia-fixture",power_quality="fresh"}},sample_started_ns=mixed_now,sample_finished_ns=mixed_now}
+ end,
+ levelzero_provider=function()
+  if intel_wait then return nil,"levelzero_query_timeout"end
+  return intel_data()
+ end,
+},{})
+local mixed_context={now_ns=function()return mixed_now end}
+local mixed_first=mixed:sample(mixed_context)
+assert(#mixed_first.data.devices==2)
+assert(mixed_first.data.by_id.intel.metrics.power_watts==30)
+assert(mixed_first.data.by_id.intel.metrics.power_limit_watts==40)
+assert(mixed_first.data.by_id.intel.metric_observations.power_watts.source=="levelzero")
+assert(mixed_first.data.by_id.nvidia.metrics.power_watts==100)
+local mixed_export=Export.snapshot({gpus=mixed_first.data})
+assert(mixed_export.gpus.devices[2].metrics.power_limit_percent==75)
+assert(mixed_first.data.by_id.intel.sysman.frequency_domains[1].actual_hz==8e8)
+mixed_now=21e9;intel_wait=true
+local intel_stalled=mixed:sample(mixed_context)
+assert(intel_stalled.data.by_id.intel.quality.power=="stale")
+assert(intel_stalled.data.by_id.intel.metric_observations.power_watts.observed_at_ns==20e9)
+assert(intel_stalled.data.by_id.nvidia.metric_observations.power_watts.observed_at_ns==21e9)
+assert(intel_stalled.data.by_id.intel.sysman.power_domains[1].quality=="stale")
+mixed_now=22e9;intel_wait=false;nvidia_wait=true
+local nvidia_stalled=mixed:sample(mixed_context)
+assert(nvidia_stalled.data.by_id.intel.quality.power=="fresh")
+assert(nvidia_stalled.data.by_id.intel.metric_observations.power_watts.observed_at_ns==22e9)
+assert(nvidia_stalled.data.by_id.nvidia.quality.power=="stale")
+mixed_now=23e9;intel_id=0x5601
+local conflict=mixed:sample(mixed_context)
+assert(conflict.data.by_id.intel.metrics.power_watts==nil)
+mixed_now=24e9;intel_wait=true
+local conflict_stalled=mixed:sample(mixed_context)
+assert(conflict_stalled.data.by_id.intel.metrics.power_watts==nil,
+ "a conflicting fresh SDK device cannot later leak retained power onto the host adapter")
+assert(not _G.pending and not _G.warming,"collector state escaped its instance")
+mixed:close()
+print("ok: Windows Intel/NVIDIA power ratios, independent failures, Sysman limits and conflicting identity retention")
+
+-- A missing Sysman property response cannot identify a vendor from the loader.
+local unidentified=Windows.new(mixed_base,{nvml_provider=false,levelzero_provider=function()
+ return {devices={{pci_bdf="0000:02:00.0",uuid="unknown-vendor",power_watts=30,power_quality="fresh"}},
+  sample_started_ns=mixed_now,sample_finished_ns=mixed_now}
+end},{})
+local unknown=unidentified:sample(mixed_context)
+assert(unknown.data.by_id.intel.metrics.power_watts==nil)
+local separate
+for _,row in ipairs(unknown.data.devices)do if row.vendor_uuid=="unknown-vendor"then separate=row end end
+assert(separate and separate.vendor_id==nil,"the loader name became a fabricated PCI vendor")
+unidentified:close()
+
+-- Hex parsing on Lua integers wraps huge inputs; it must not forge PCI IDs.
+local overflowed=Windows.new(mixed_base,{nvml_provider=false,levelzero_provider=function()
+ return {devices={{pci_bdf="0000:02:00.0",vendor_id="0x10000000000008086",
+  device_id="0x10000000000005600",uuid="overflowed-ids",power_watts=30,power_quality="fresh"}},
+  sample_started_ns=mixed_now,sample_finished_ns=mixed_now}
+end},{})
+local rejected=overflowed:sample(mixed_context)
+assert(rejected.data.by_id.intel.metrics.power_watts==nil,"overflowed PCI IDs forged a matching identity")
+overflowed:close()

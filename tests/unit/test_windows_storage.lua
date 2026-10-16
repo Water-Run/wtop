@@ -105,4 +105,22 @@ end},_hardware_direct=true})
 assert(direct:sample({safe_mode=true,now_ns=ctx.now_ns}).reason=="safe_mode")
 local result=direct:sample(ctx)
 assert(result.status=="ok"and result.data.devices[1].nvme.data_units_read==nvme.data_units_read)
+-- A successful temperature-property query can contain no usable samples.
+local function temperature_result(bytes)
+ local reader=require("wtop.collectors.windows_storage").new({_hardware_direct=true,native={
+  collect_disk_health=function()return {devices={{raw_health={temperature_data=bytes,nvme_data=page,
+   temperature_error=0,nvme_error=0,ata_error=0}}}}end}})
+ return reader:sample(ctx).data.devices[1]
+end
+local sentinel_fallback=temperature_result(sentinel)
+assert(math.abs(sentinel_fallback.temperature.channels[1].input-39.85)<1e-10)
+assert(sentinel_fallback.temperature.channels[1].source=="NVMe SMART/Health Information Log")
+assert(sentinel_fallback.temperature.channels[1].thresholds.crit==nil)
+assert(sentinel_fallback.temperature.critical_celsius==140,
+ "descriptor metadata must survive without being reassigned to another source")
+local empty=replace(descriptor,13,string.pack("<I2",0))
+local empty_fallback=temperature_result(empty)
+assert(#empty_fallback.temperature.channels==1 and empty_fallback.temperature.channels[1].input~=nil)
+assert(temperature_result(descriptor).temperature.channels[1].input==40,
+ "a valid property measurement retains precedence over the fallback")
 return true
