@@ -629,9 +629,9 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
-### 2026-10-17：Windows Intel Sysman 功耗与独立读取（候选验证）
+### 2026-10-17：Windows Intel Sysman 功耗与独立读取
 
-候选实现将 Linux 的只读 Level Zero Sysman 能量、功耗域、上限、频率与限制原因
+当前实现将 Linux 的只读 Level Zero Sysman 能量、功耗域、上限、频率与限制原因
 接入 Windows 原生位数读取器。主程序仍为 PE32，Intel 与 NVIDIA 各有独立额度、
 缓存、原观测时间和失败状态。SDK 只在读取进程加载；旧初始化回退先确认旧进程
 已退出，再以新进程的独立环境启动。没有新增设置、超频或驱动安装命令。
@@ -669,8 +669,27 @@ GPU 页采用相同编译器、Lua 运行时及 CPUID/NVML 读取器输入作 AB
 | Windows 11 | 2.33% / 2.29% | 68.93 / 69.88 MiB |
 
 这是记录中候选源码哈希的短时观测，不用作最终版本或旧硬件预算证明，也不把
-CPU 小幅变化解释为性能改善。完整回归、最终包与精确 CI 验收仍在进行；
-证据目录为 `build/hardware-windows-levelzero-20261017/`。
+CPU 小幅变化解释为性能改善。
+
+实现提交 `6bb9278` 的 [主 CI](https://github.com/Water-Run/wtop/actions/runs/38973884554)
+16 个作业与 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/38973884466)
+两个作业全部通过，包含两种 Linux 架构的下载后完整终端测试。精确提交的
+Linux x86_64/ARM64、macOS ARM64、Windows x86 四归档已核对外层和载荷摘要、
+原生格式及许可；Windows 两种包共验证 19 个 PE、1681 个命名导入，两个厂商
+读取器的位数、声明摘要和 SDK 许可均已核对。
+
+两台 Windows 的两种精确包通过五种 CLI、JSON、硬件导航、Storage/SMART、
+经典控制台和缺失 Level Zero 的实际降级检查。M4 两种包仍有 43 个传感器通道、
+七个功耗域及 CPU/GPU 数据；Linux 两种包通过普通用户/root 实测频率、功耗墙
+比例、原生故障和 30 次多读取器退出测试，14 个 CPU/NVMe/DIMM 临界温度通道
+及中英文余量界面通过。源码哈希、CI、四归档和五项主机验收的最终核对已完成，
+记录位于 `build/hardware-windows-levelzero-20261017/ACCEPTANCE.json`。
+
+后续只读探测确认旧主机有 AMD ADL1/ADL2 驱动，但当前服务会话中的重复适配器
+记录标为未显示，读取返回无效适配器索引，且无当前功率接口导出。旧/新上下文
+和全适配器枚举对照均未得到可用数据，未修改显示状态或驱动设置，也未接入
+程序或生成 AMD 瓦数。其 SDK 版本、声明、日志和范围另存上述目录的
+`next-amd-readonly/`，不据此泛化其他 Radeon 或驱动的能力。
 
 接口与调用约定按 [Sysman API](https://oneapi-src.github.io/level-zero-spec/level-zero/1.7.8/sysman/api.html)
 及 [固定版 SDK 声明](https://github.com/oneapi-src/level-zero/blob/v1.34.0/include/ze_api.h) 核对；

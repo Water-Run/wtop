@@ -2,9 +2,11 @@
 
 ## 开发概览（2026-10-17）
 
-Windows 存储健康增量 `75feed3` 的 18 个 CI 作业、四类最终归档检查与
-现有 Linux、Mac、两台 Windows 主机的安装验收已完成。Windows 存储页现有
-NVMe 温度、临界余量和按需 SMART，磁盘 I/O 与健康查询各用独立读取器。
+Windows Intel Sysman 增量 `6bb9278` 的 18 个 CI 作业、四类最终归档检查与
+现有 Linux、Mac、两台 Windows 主机的安装验收已完成。Intel/NVIDIA 读取器
+各自隔离、保留观测时间，支持的接口可提供 GPU 功耗、上限、频率和限制原因；
+现有 Windows 主机报告 Level Zero 不可用，实际 Intel 瓦数尚未验证。存储页的 NVMe
+温度、临界余量和按需 SMART 保留独立 I/O/健康读取器。
 本机 CPU 功耗条、各档上限、占比及当前限制已实测；完整范围见
 [跨平台验证](CROSS_PLATFORM.md#验证矩阵)。
 
