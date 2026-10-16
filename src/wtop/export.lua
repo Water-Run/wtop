@@ -5,6 +5,7 @@ local Privacy = require("wtop.privacy")
 local Hardware = require("wtop.model.hardware")
 local Quality = require("wtop.model.quality")
 local Power = require("wtop.model.power")
+local Thermal = require("wtop.model.thermal")
 local NVMe = require("wtop.linux.nvme_diagnostics")
 
 local M = {}
@@ -1423,7 +1424,8 @@ local function export_spd(spd)
     return result
 end
 
-local function export_sensors(sensors)
+local function export_sensors(snapshot)
+    local sensors = snapshot.sensors
     local result = copy_fields(sensors, { "quality", "partial" })
     result.devices = json.array({})
     for device_index, device in ipairs(sensors and sensors.devices or {}) do
@@ -1440,6 +1442,11 @@ local function export_sensors(sensors)
             output.readings = copy_object(channel.readings)
             output.thresholds = copy_object(channel.thresholds)
             output.errors = copy_object(channel.errors)
+            local thermal = Thermal.channel(snapshot, device, channel)
+            if thermal then
+                output.critical_celsius = thermal.critical_celsius
+                output.headroom_celsius = thermal.headroom_celsius
+            end
             if type(channel.session) == "table" then
                 output.session = copy_fields(channel.session, {
                     "minimum", "maximum", "average", "samples",
@@ -1934,7 +1941,7 @@ function M.snapshot(snapshot, options)
         processor_firmware = export_processor_firmware(snapshot.processor_firmware),
         edac = export_edac(snapshot.edac),
         spd = export_spd(snapshot.spd),
-        sensors = export_sensors(snapshot.sensors),
+        sensors = export_sensors(snapshot),
         power = export_power(snapshot.power, snapshot.quality and snapshot.quality.power),
         mounts = export_mounts(snapshot.mounts),
         workloads = export_workloads(snapshot.workloads, options.workload_limit),
@@ -2315,7 +2322,7 @@ function M.agent(snapshot, options)
 
     local temperature_count, fan_count, sensor_power_count = 0, 0, 0
     local top_temperatures = json.array({})
-    local threshold_temperature
+    local threshold_temperature, closest_critical
     for _, device in ipairs(full.sensors and full.sensors.devices or {}) do
         for _, channel in ipairs(device.channels or {}) do
             if channel.type == "temperature" and finite_number(channel.input) then
@@ -2328,8 +2335,14 @@ function M.agent(snapshot, options)
                     temperature_celsius = channel.input,
                     quality = channel.quality,
                     thresholds = copy_fields(channel.thresholds, { "max", "crit", "emergency" }),
+                    critical_celsius = channel.critical_celsius,
+                    headroom_celsius = channel.headroom_celsius,
                 })
                 top_temperatures[#top_temperatures + 1] = temperature
+                if finite_number(temperature.headroom_celsius) and (not closest_critical
+                    or temperature.headroom_celsius < closest_critical.headroom_celsius) then
+                    closest_critical = temperature
+                end
                 local critical = temperature.thresholds and (temperature.thresholds.crit
                     or temperature.thresholds.emergency)
                 local warning = temperature.thresholds and temperature.thresholds.max
@@ -2339,7 +2352,7 @@ function M.agent(snapshot, options)
                 elseif finite_number(warning) and temperature.temperature_celsius >= warning then
                     severity = "warning"
                 end
-                if severity and not Quality.UNUSABLE_FOR_ALERT[channel.quality]
+                if severity and Thermal.input_current(snapshot, device, channel)
                     and (not threshold_temperature
                     or severity_rank[severity] > severity_rank[threshold_temperature.severity]
                     or (severity == threshold_temperature.severity
@@ -2590,6 +2603,8 @@ function M.agent(snapshot, options)
                 fan_count = fan_count,
                 power_count = sensor_power_count,
                 maximum_temperature_celsius = hottest and hottest.temperature_celsius,
+                minimum_headroom_celsius = closest_critical and closest_critical.headroom_celsius,
+                closest_to_critical = closest_critical,
             }),
             processes = json.object({ total = full.processes and full.processes.total }),
         }),

@@ -7,6 +7,7 @@ local WorkloadFilter = require("wtop.model.workload_filter")
 local MountFilter = require("wtop.model.mount_filter")
 local Quality = require("wtop.model.quality")
 local Power = require("wtop.model.power")
+local Thermal = require("wtop.model.thermal")
 local Hardware = require("wtop.model.hardware")
 local HardwareFilter = require("wtop.model.hardware_filter")
 local Privacy = require("wtop.privacy")
@@ -1454,7 +1455,12 @@ end
 
 local function sensor_rows(snapshot, format)
     local rows = {}
-    local current = Quality.current_source(snapshot.quality, "sensors")
+    local current = Thermal.current(snapshot)
+    local source_quality = quality(snapshot, "sensors")
+    if not current and (source_quality == "fresh" or source_quality == "estimated"
+        or source_quality == "partial" or source_quality == "measured") then
+        source_quality = "stale"
+    end
     local function better(left, right)
         if left.alarm ~= right.alarm then return left.alarm end
         if left.device == right.device then return left.sensor < right.sensor end
@@ -1462,12 +1468,18 @@ local function sensor_rows(snapshot, format)
     end
     for _, device in ipairs(snapshot.sensors and snapshot.sensors.devices or {}) do
         for _, channel in ipairs(device.channels or {}) do
+            local thermal = Thermal.channel(snapshot, device, channel)
             bounded_best_add(rows, TABLE_ROW_LIMIT, better, {
                 device = device.name or device.class or "?",
                 sensor = channel.label or (channel.type .. " " .. tostring(channel.index)),
                 type = channel.type,
                 value = sensor_value(channel, format),
-                status = not current and quality(snapshot, "sensors")
+                critical = thermal and temperature(format, thermal.critical_celsius) or "—",
+                headroom = thermal and thermal.headroom_celsius ~= nil
+                    and formatted(function() return assert(format:temperature_delta(
+                        thermal.headroom_celsius, { precision = 1 })) end) or "—",
+                headroom_value = thermal and thermal.headroom_celsius,
+                status = not current and source_quality
                     or (channel.fault and "FAULT" or (channel.alarm and "ALARM" or channel.quality or "—")),
                 alarm = current and (channel.alarm == true or channel.fault == true),
             })
@@ -1475,6 +1487,38 @@ local function sensor_rows(snapshot, format)
     end
     table.sort(rows, better)
     return rows
+end
+
+local function sensor_columns(i18n, rows)
+    local columns = {
+        { key = "device", label = translated(i18n, "metrics.device", "Device"),
+            width = 16, min_width = 9, priority = 80 },
+        { key = "sensor", label = translated(i18n, "metrics.sensor", "Sensor"),
+            width = 22, min_width = 12, priority = 90 },
+        { key = "value", label = translated(i18n, "metrics.value", "Value"),
+            width = 14, min_width = 9, align = "right", priority = 95 },
+        { key = "status", label = translated(i18n, "metrics.state", "State"),
+            width = STATE_COLUMN_WIDTH, min_width = 8, priority = 60,
+            format = function(value) return Technical.state(i18n, value) end,
+            token = function(value) return (value == "ALARM" or value == "FAULT")
+                and "metric.critical" or nil end },
+    }
+    for _, row in ipairs(rows) do
+        if row.critical ~= "—" then
+            columns[#columns + 1] = {
+                key = "critical", label = translated(i18n, "sensor.critical", "Critical"),
+                width = 13, min_width = 8, align = "right", priority = 50,
+            }
+            columns[#columns + 1] = {
+                key = "headroom", label = translated(i18n, "sensor.headroom", "To critical"),
+                width = 14, min_width = 9, align = "right", priority = 55,
+                token = function(_, row) return row.headroom_value
+                    and row.headroom_value <= 0 and "metric.critical" or nil end,
+            }
+            break
+        end
+    end
+    return columns
 end
 
 -- proc, sysfs, cgroup2, devpts, tracefs and friends are kernel plumbing.  A
@@ -3083,26 +3127,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                     visible = #cpuidle_table_rows, total = cpuidle_table_total }) or nil,
         },
         sensor_table = {
-            columns = {
-                { key = "device", label = translated(i18n, "metrics.device", "Device"), width = 16, min_width = 9, priority = 80 },
-                { key = "sensor", label = translated(i18n, "metrics.sensor", "Sensor"), width = 22, min_width = 12, priority = 90 },
-                { key = "value", label = translated(i18n, "metrics.value", "Value"), width = 14, min_width = 9, align = "right", priority = 95 },
-                -- The state columns are sized to the widest label the shipped
-                -- catalogues actually produce, not to the English one.  The
-                -- worst is French "Échantillon manquant" for `gap` at 20 cells;
-                -- `min_width` stays where it was, because a column is *included*
-                -- by its minimum and only grows toward `width` with whatever
-                -- cells are left over.  Measured across the eight sizes the PTY
-                -- matrix uses, raising the preferred width removes no column
-                -- anywhere -- 22 of 64 (column, size) pairs change, all of them
-                -- where there were spare cells to spend -- and the sizes that do
-                -- not change are the ones where the column was already sitting
-                -- at its minimum and would have been clipped either way.
-                { key = "status", label = translated(i18n, "metrics.state", "State"), width = STATE_COLUMN_WIDTH, min_width = 8, priority = 60,
-                    format = function(value) return Technical.state(i18n, value) end,
-                    token = function(value) return (value == "ALARM" or value == "FAULT")
-                        and "metric.critical" or nil end },
-            },
+            columns = sensor_columns(i18n, sensor_table_rows),
             rows = sensor_table_rows,
         },
         power_table = {

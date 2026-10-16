@@ -248,7 +248,7 @@ function M.duration(value_seconds, options)
   return formatted and (formatted .. " " .. unit) or nil, format_err
 end
 
-function M.temperature(value_celsius, options)
+local function temperature(value_celsius, options, delta)
   local options_err
   options, options_err = options_table(options)
   if not options then return nil, options_err end
@@ -258,12 +258,20 @@ function M.temperature(value_celsius, options)
   end
   local unit = options.unit or "C"
   if unit == "F" then
-    number = number * 9 / 5 + 32
+    number = number * 9 / 5 + (delta and 0 or 32)
   elseif unit ~= "C" then
     return nil, 'temperature unit must be "C" or "F"'
   end
   local formatted, format_err = M.number(number, options)
   return formatted and (formatted .. " \194\176" .. unit) or nil, format_err
+end
+
+function M.temperature(value_celsius, options)
+  return temperature(value_celsius, options, false)
+end
+
+function M.temperature_delta(value_celsius, options)
+  return temperature(value_celsius, options, true)
 end
 
 function M.interpolate(template, variables)
@@ -361,6 +369,7 @@ for _, method in ipairs({
   "frequency",
   "duration",
   "temperature",
+  "temperature_delta",
 }) do
   Formatter[method] = function(self, value, options)
     local merged, err = copy_options(self.defaults, options)

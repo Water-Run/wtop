@@ -138,7 +138,9 @@ local inspector_result = { status = "partial", reason = "gpu_identity_inferred",
       listenaddress = { "0.0.0.0:22", "[::]:2222" }, authenticationmethods = LONG } } } } },
   details = { configuration = { data = { scope = "global", file = "/etc/ssh/" .. LONG } } } }
 local snapshot = { sensors = { devices = { { class = "hwmon0", name = "probe",
-  channels = { { type = "temperature", input = 69.8, quality = "fresh" } } } } } }
+  channels = { { id = "temperature:1", type = "temperature", unit = "celsius",
+    label = "Critical probe", input = 69.8, quality = "fresh",
+    thresholds = { max = 80, crit = 85.8 } } } } } } }
 local entity = { id = "enp0s31f1", name = "enp0s31f1", model = "I219-V",
   vendor = "Intel", path = "/sys/class/net/enp0s31f1", rotational = false }
 local widget_items = { { kind = "metric", title = "CPU usage" },

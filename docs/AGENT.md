@@ -50,6 +50,8 @@ Linux GPU 的 `top.gpus[].observations` 按来源记录观测时间、接收时�
 界面可优先使用同一当前设备的有效 hwmon 功耗通道；厂商原始观测及其质量
 仍在导出中保留，通道读数和上限可在 `sensors` 中核对。
 
+温度条目的 `critical_celsius` 来自同一通道的 `crit`，`headroom_celsius` 为临界值减去当前温度；完整 Snapshot、硬件报告与 `top.sensors` 使用同一计算。`max` 和 `emergency` 分别保留，不作为缺失 `crit` 的替代。`metrics.sensors.minimum_headroom_celsius` 与 `closest_to_critical` 保留全部有效温度通道中的最小余量及对应设备，独立于最热列表的数量限制。余量不表示限频位；过期、故障或不可用的读数没有当前余量，也不产生新的温度阈值信号。
+
 每条 `signals` 条目使用稳定的 `resource`、`code`、`severity` 字段；
 有数值时再提供 `value` 和 `unit`，`message` 仅供展示。当前阈值为
 保守提示，例如 CPU 75/90%、内存 85/95%、设备忙 80/95%、PSI

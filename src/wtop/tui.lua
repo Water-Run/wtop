@@ -20,6 +20,7 @@ local NVMe = require("wtop.linux.nvme_diagnostics")
 local ThreadMembers = require("wtop.linux.thread_members")
 local ProcessCgroup = require("wtop.linux.process_cgroup")
 local Quality = require("wtop.model.quality")
+local Thermal = require("wtop.model.thermal")
 local WorkloadNavigation = require("wtop.model.workload_navigation")
 local Terminal = require("wtop.terminal")
 local UI = require("wtop.ui")
@@ -583,7 +584,6 @@ local function session_lines(view, i18n, now_ns)
 end
 
 local SENSOR_DETAIL_LIMIT = 256
-local SENSOR_STALE_AFTER_NS = 15 * 1000000000
 
 local function power_detail_lines(snapshot, i18n)
     local zones, gpus, total = ViewModel.power_detail_rows(snapshot, i18n)
@@ -683,7 +683,7 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
     local state = type(quality) == "table" and quality or {}
     local age_ns = type(now_ns) == "number" and type(state.value_timestamp_ns) == "number"
         and math.max(0, now_ns - state.value_timestamp_ns) or nil
-    local stale_sample = age_ns and age_ns > SENSOR_STALE_AFTER_NS
+    local stale_sample = not Thermal.current(snapshot, now_ns)
     local shown_quality = state.quality or data.quality or "unavailable"
     if stale_sample
         and (shown_quality == "fresh" or shown_quality == "estimated") then
@@ -698,7 +698,7 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
         translated(i18n, "inspector.quality", "Quality") .. ": "
             .. tostring(Technical.state(i18n, shown_quality)),
     }
-    if stale_sample and #devices > 0 then
+    if stale_sample and age_ns and age_ns > Thermal.STALE_AFTER_NS and #devices > 0 then
         lines[#lines + 1] = translated(i18n, "collector.stale",
             "{name} has not updated for {age}", {
                 name = title, age = format_value(age_ns / 1000000000, i18n, "seconds"),
@@ -718,6 +718,25 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
         lines[#lines + 1] = ""
         lines[#lines + 1] = translated(i18n, "inspector.close_hint", "Esc/Enter closes")
         return lines
+    end
+
+    local closest = Thermal.closest(snapshot, 3, now_ns)
+    if #closest > 0 then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = translated(i18n, "sensor.closest_critical", "Closest to critical")
+        for _, thermal in ipairs(closest) do
+            local device, channel = thermal.device, thermal.channel
+            local margin = i18n and i18n.format and i18n.format:temperature_delta(
+                thermal.headroom_celsius, { precision = 1 }) or "—"
+            lines[#lines + 1] = inspector_text("  "
+                .. (device.name or device.class or "?") .. "/"
+                .. (channel.label or channel.id or "?") .. ": "
+                .. format_value(channel.input, i18n, "celsius") .. " · "
+                .. translated(i18n, "sensor.critical", "Critical") .. ": "
+                .. format_value(thermal.critical_celsius, i18n, "celsius") .. " · "
+                .. translated(i18n, "sensor.headroom", "To critical") .. ": "
+                .. margin, INSPECTOR_ROW_WIDTH)
+        end
     end
 
     local function add_values(values, unit, skip_input)
@@ -849,6 +868,22 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
                 .. Technical.state(i18n, status) .. "]", INSPECTOR_ROW_WIDTH)
             add_values(channel.readings, channel.unit, true)
             add_values(channel.thresholds, channel.unit, false)
+            local thermal = Thermal.channel(snapshot, device, channel, now_ns)
+            if thermal then
+                local margin = "—"
+                if thermal.headroom_celsius ~= nil then
+                    local ok, value = pcall(function()
+                        return i18n.format:temperature_delta(thermal.headroom_celsius,
+                            { precision = 1 })
+                    end)
+                    if ok and type(value) == "string" then margin = value end
+                end
+                lines[#lines + 1] = inspector_text("    "
+                    .. translated(i18n, "sensor.critical", "Critical") .. ": "
+                    .. format_value(thermal.critical_celsius, i18n, "celsius")
+                    .. " · " .. translated(i18n, "sensor.headroom", "To critical")
+                    .. ": " .. margin, INSPECTOR_ROW_WIDTH)
+            end
             local session = type(channel.session) == "table" and channel.session or nil
             if session and type(session.samples) == "number"
                 and type(session.minimum) == "number"

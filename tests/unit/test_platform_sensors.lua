@@ -494,4 +494,133 @@ invalid_utf8_files[hwmon_base .. "/hwmon0/name"] = "bad\255name\n"
 local repaired = Hwmon.new():sample({ fs = invalid_utf8_fs, now_ns = function() return now end })
 assert(repaired.data.devices[1].name == "bad�name")
 
+-- Critical headroom belongs to the same channel, and is a temperature
+-- difference rather than a percentage or a claim that throttling is active.
+do
+  local Thermal = require("wtop.model.thermal")
+  local channel = { id = "temperature:1", type = "temperature", unit = "celsius",
+    label = "Package", input = 65, quality = "fresh",
+    thresholds = { max = 85, crit = 100, emergency = 110 } }
+  local device = { id = "thermal-test", name = "coretemp", quality = "fresh",
+    channels = { channel } }
+  local sample = Snapshot.merge(nil, { hwmon = { status = "ok", quality = "fresh",
+    data = { devices = { device } } } }, 1, 1000000000)
+  local function margin() return Thermal.channel(sample, device, channel) end
+  near(margin().critical_celsius, 100)
+  near(margin().headroom_celsius, 35)
+  local exported = Export.snapshot(sample)
+  near(exported.sensors.devices[1].channels[1].headroom_celsius, 35)
+  near(Export.agent(sample).top.sensors[1].headroom_celsius, 35)
+  device.channels[2] = { id = "temperature:2", type = "temperature", unit = "celsius",
+    label = "Lower threshold", input = 50, quality = "fresh", thresholds = { crit = 55 } }
+  local closest = Thermal.closest(sample, 1)
+  assert(#closest == 1 and closest[1].channel == device.channels[2])
+  near(closest[1].headroom_celsius, 5)
+  local bounded_agent = Export.agent(sample, { device_limit = 1 })
+  assert(#bounded_agent.top.sensors == 1 and bounded_agent.top.sensors[1].label == "Package")
+  near(bounded_agent.metrics.sensors.minimum_headroom_celsius, 5)
+  assert(bounded_agent.metrics.sensors.closest_to_critical.channel_id == "temperature:2",
+    "a cooler probe near its lower critical threshold survives the hottest-list cap")
+  device.channels[2] = nil
+  local view = ViewModel.build({ history_values = function() return {} end }, sample,
+    translator, {}, "compute", nil, { sensor_table = true })
+  assert(view.sensor_table.rows[1].critical == "100 °C"
+    and view.sensor_table.rows[1].headroom == "35 °C")
+  local detail = table.concat(TUI.sensor_detail_lines(sample, translator, sample.timestamp_ns), "\n")
+  assert(detail:find("Critical: 100 °C · To critical: 35 °C", 1, true))
+  local fahrenheit = assert(I18n.new({ locale = "en-US", format = { unit = "F" } }))
+  local fahrenheit_view = ViewModel.build({ history_values = function() return {} end }, sample,
+    fahrenheit, {}, "compute", nil, { sensor_table = true })
+  assert(fahrenheit_view.sensor_table.rows[1].critical == "212 °F"
+    and fahrenheit_view.sensor_table.rows[1].headroom == "63 °F")
+  local fahrenheit_detail = table.concat(TUI.sensor_detail_lines(sample, fahrenheit,
+    sample.timestamp_ns), "\n")
+  assert(fahrenheit_detail:find("Critical: 212 °F · To critical: 63 °F", 1, true))
+  local report = require("wtop.report").render(exported)
+  assert(report:find("| Critical | To critical |", 1, true)
+    and report:find("100.00 °C | 35.00 °C", 1, true))
+
+  channel.input = 102.5
+  near(margin().headroom_celsius, -2.5)
+  local function has_temperature_signal(state)
+    for _, signal in ipairs(Export.agent(state).signals) do
+      if signal.code == "temperature_threshold" then return true end
+    end
+    return false
+  end
+  assert(has_temperature_signal(sample))
+  assert(channel.alarm == nil and next(sample.cpu_limits) == nil,
+    "crossing a configured critical threshold must not invent a throttle bit or hardware alarm")
+  channel.input = 100
+  near(margin().headroom_celsius, 0)
+  channel.input = -5
+  near(margin().headroom_celsius, 105)
+  channel.input = 65
+
+  channel.thresholds.crit = nil
+  assert(margin() == nil, "maximum/emergency are not substitutes for the critical threshold")
+  channel.thresholds.crit = 100
+  channel.errors = { crit = { reason = "query_denied" } }
+  assert(margin() == nil)
+  channel.errors = { max = { reason = "query_denied" } }
+  channel.quality, device.quality = "partial", "partial"
+  near(margin().headroom_celsius, 35, 1e-9)
+  channel.errors = { input = { reason = "query_denied" } }
+  assert(margin().headroom_celsius == nil)
+  channel.errors = nil
+  for _, quality in ipairs({ "stale", "gap", "reset", "held", "missing",
+      "denied", "error", "unavailable" }) do
+    channel.quality, device.quality = quality, "fresh"
+    assert(margin().headroom_celsius == nil, "unusable input: " .. quality)
+    channel.quality, device.quality = "fresh", quality
+    assert(margin().headroom_celsius == nil, "unusable device: " .. quality)
+    device.quality = "fresh"
+    sample.quality.sensors.quality = quality
+    assert(margin().headroom_celsius == nil, "unusable source: " .. quality)
+    sample.quality.sensors.quality = "fresh"
+  end
+  channel.quality, device.quality = "fresh", "fresh"
+  channel.fault = true
+  assert(margin().headroom_celsius == nil)
+  channel.input = 102.5
+  assert(not has_temperature_signal(sample), "a faulted probe cannot raise a current thermal alert")
+  channel.input = 65
+  channel.fault = false
+  for _, value in ipairs({ math.huge, -math.huge, 0/0 }) do
+    channel.input = value
+    assert(margin().headroom_celsius == nil)
+    channel.input, channel.thresholds.crit = 65, value
+    assert(margin() == nil)
+    channel.thresholds.crit = 100
+  end
+  channel.unit = "millivolts"
+  assert(margin() == nil, "a voltage from a thermistor is not a Celsius margin")
+  channel.unit = "celsius"
+
+  sample.timestamp_ns = 16000000000
+  near(margin().headroom_celsius, 35)
+  sample.timestamp_ns = 16000000001
+  assert(margin().headroom_celsius == nil, "a retained observation ages out")
+  assert(#Thermal.closest(sample, 3) == 0)
+  assert(Export.agent(sample).metrics.sensors.minimum_headroom_celsius == nil)
+  assert(Export.agent(sample).top.sensors[1].headroom_celsius == nil)
+  channel.input = 102.5
+  assert(not has_temperature_signal(sample), "an aged source cannot raise a new thermal alert")
+  channel.input = 65
+  view = ViewModel.build({ history_values = function() return {} end }, sample,
+    translator, {}, "compute", nil, { sensor_table = true })
+  assert(view.sensor_table.rows[1].status == "stale"
+    and view.sensor_table.rows[1].headroom == "—")
+  detail = table.concat(TUI.sensor_detail_lines(sample, translator, sample.timestamp_ns), "\n")
+  assert(detail:find("To critical: —", 1, true)
+    and not detail:find("To critical: 35", 1, true))
+  sample.timestamp_ns = 999999999
+  assert(margin().headroom_celsius == nil, "clock rollback cannot renew a comparison")
+  sample.timestamp_ns = 1000000000
+  local failed = Snapshot.merge(sample, { hwmon = { status = "error", quality = "error" } },
+    2, 2000000000)
+  assert(Export.snapshot(failed).sensors.devices[1].channels[1].headroom_celsius == nil)
+  assert(Thermal.channel(sample, device, channel, 999999999).headroom_celsius == nil)
+end
+
 return true

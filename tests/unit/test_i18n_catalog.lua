@@ -110,6 +110,13 @@ equal(Format.percent(0.125, { locale = "en-US", ratio = true, precision = 1 }), 
 equal(Format.bytes(1536, { locale = "en-US", precision = 1 }), "1.5 KiB", "IEC bytes")
 equal(Format.frequency(4800000000, { locale = "en-US", precision = 1 }), "4.8 GHz", "frequency")
 equal(Format.temperature(25, { locale = "en-US", unit = "F", precision = 0 }), "77 °F", "temperature")
+equal(Format.temperature_delta(25, { locale = "en-US", unit = "F", precision = 0 }), "45 °F",
+  "temperature headroom converts a difference without the Fahrenheit offset")
+equal(Format.temperature_delta(-2.5, { locale = "de-DE", precision = 1 }), "-2,5 °C",
+  "temperature headroom preserves a negative margin and the locale")
+equal(Format.temperature_delta(0, { unit = "F" }), "0 °F", "zero margin stays zero")
+equal(Format.temperature_delta(math.huge), nil, "non-finite margin is refused")
+equal(Format.temperature_delta(1, { unit = "K" }), nil, "unsupported margin unit is refused")
 equal(Format.number(1, {min_precision = "invalid"}), nil, "invalid minimum precision")
 equal(Format.bytes(1, {system = "invalid"}), nil, "invalid byte system")
 equal(Format.interpolate("{value}", {value = "\27[2J"}), nil,

@@ -607,12 +607,14 @@ function M.render(snapshot)
             readings[#readings + 1] = { device = device, channel = channel }
         end
     end
-    table_section(lines, "Sensors", { "Device", "Channel", "Reading", "Quality" },
+    table_section(lines, "Sensors", { "Device", "Channel", "Reading", "Critical", "To critical", "Quality" },
         readings, function(item)
             local device, channel = object(item.device), object(item.channel)
             return { named_id(device), channel.label or channel.id,
                 quantity(channel.input, 1,
                     " " .. tostring(SENSOR_UNITS[channel.unit] or channel.unit or ""), 2),
+                quantity(channel.critical_celsius, 1, " °C", 2),
+                quantity(channel.headroom_celsius, 1, " °C", 2),
                 channel.quality }
         end, sensors)
 
