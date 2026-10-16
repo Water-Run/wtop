@@ -11,7 +11,7 @@ local function bootstrap(arguments, worker)
         assert(not worker)
         assert(entry == (arguments[-1] and arguments[0] or nil))
         configured = true
-        return {cpufreq = true}
+        return {cpufreq = true, gpu = true, hwmon = true}
     end
     function adapter.hardware_worker_run(...)
         assert(worker and not configured)
@@ -25,7 +25,7 @@ local function bootstrap(arguments, worker)
     package.loaded["wtop.core.hardware_worker"] = function() error("the native runner owns initialization") end
     package.loaded["wtop.cli"] = {run = function(received)
         assert(not worker and configured and received == arguments)
-        assert(adapter.hardware_worker_sources.cpufreq)
+        assert(adapter.hardware_worker_sources.cpufreq and adapter.hardware_worker_sources.gpu and adapter.hardware_worker_sources.hwmon)
         ran_cli = true
         return 0
     end}
@@ -44,17 +44,24 @@ arg, os.exit = original_arg, original_exit
 -- A reader uses the complete Windows adapter directly. Advertising the same
 -- source in its native table must not recursively start another process.
 local calls = 0
-local adapter = {available = true, hardware_worker_sources = {cpufreq = true}}
+local adapter = {available = true, hardware_worker_sources = {cpufreq = true, gpu = true, hwmon = true}}
 function adapter.uname() return {sysname = "Windows"} end
 function adapter.monotonic_ns() return 123456 end
 adapter.realtime_ns = adapter.monotonic_ns
 function adapter.collect_cpufreq() calls = calls + 1;return {policies = {}} end
+function adapter.collect_gpu() calls = calls + 1;return {devices = {}} end
+function adapter.collect_hwmon() calls = calls + 1;return {devices = {}} end
 function adapter.hardware_worker_open() error("recursive reader") end
 package.loaded["wtop.native"] = adapter
 package.loaded["wtop.core.hardware_worker"] = nil
-local run = require("wtop.core.hardware_worker")("cpufreq", require("wtop.core.worker_wire").encode({}))
-local message = require("wtop.core.worker_wire").decode(run(false, false))
-assert(calls == 1 and message.result.status == "ok" and message.result.data.policies)
+local factory = require("wtop.core.hardware_worker")
+for _, id in ipairs({"cpufreq", "gpu", "hwmon"}) do
+    local before = calls
+    local run = factory(id, require("wtop.core.worker_wire").encode({}))
+    local message = require("wtop.core.worker_wire").decode(run(false, false))
+    assert(calls == before + 1 and message.result.status == "ok")
+    assert(message.result.data[id == "cpufreq" and "policies" or "devices"])
+end
 for name, value in pairs(saved) do package.loaded[name] = value end
 if saved["wtop.native"] == nil then package.loaded["wtop.native"] = nil end
 if saved["wtop.cli"] == nil then package.loaded["wtop.cli"] = nil end

@@ -18,7 +18,14 @@
 #define RETRY_NS UINT64_C(5000000000)
 #define FRAME_NS UINT64_C(5000000000)
 static char launcher_key;
-static volatile LONG controllers;
+#define HARDWARE_SOURCES 3u
+static const char *const source_names[HARDWARE_SOURCES]={"cpufreq","gpu","hwmon"};
+static const WCHAR *const wide_source_names[HARDWARE_SOURCES]={L"cpufreq",L"gpu",L"hwmon"};
+static volatile LONG controllers,source_controllers[HARDWARE_SOURCES];
+static unsigned source_index(const char *name,size_t size){
+    for(unsigned i=0;i<HARDWARE_SOURCES;++i)if(size==strlen(source_names[i])&&!memcmp(name,source_names[i],size))return i;
+    return HARDWARE_SOURCES;
+}
 enum state { REQUESTED, READY, IDLE, FAILED };
 struct frame { volatile LONG refs; uint64_t started,finished; unsigned flags; size_t size; unsigned char data[]; };
 struct job {
@@ -27,7 +34,7 @@ struct job {
     HANDLE cancel,request,changed;
     HMODULE module;
     enum state state;
-    unsigned flags;
+    unsigned flags,source;
     DWORD pid;
     uint64_t requested,failed_at,sequence;
     struct frame *frame;
@@ -35,7 +42,7 @@ struct job {
     size_t configuration_size;
     char *configuration,*entry;
 };
-struct session { struct job *job; int closed; };
+struct session { struct job *job; int closed; unsigned source; };
 struct guard { struct job *job; struct frame *frame; };
 static uint64_t now_ns(void) {
     LARGE_INTEGER counter,frequency;
@@ -128,9 +135,9 @@ static DWORD WINAPI controller(void *opaque) {
     if(null_file==INVALID_HANDLE_VALUE)goto finish;
     size_t at=quote_argument(command,executable);
     if(entry[0]){command[at++]=L' ';at+=quote_argument(command+at,entry);}
-    int used=_snwprintf(command+at,capacity-at,L" --wtop-hardware-reader %lx %lx %lx %lx cpufreq",
+    int used=_snwprintf(command+at,capacity-at,L" --wtop-hardware-reader %lx %lx %lx %lx %ls",
         (unsigned long)(uintptr_t)parent,(unsigned long)(uintptr_t)stop,
-        (unsigned long)(uintptr_t)input_child,(unsigned long)(uintptr_t)output_child);
+        (unsigned long)(uintptr_t)input_child,(unsigned long)(uintptr_t)output_child,wide_source_names[job->source]);
     if(used<0||(size_t)used>=capacity-at||cancelled(job))goto finish;
     STARTUPINFOW startup;memset(&startup,0,sizeof(startup));startup.cb=sizeof(startup);
     startup.dwFlags=STARTF_USESTDHANDLES;startup.hStdInput=startup.hStdOutput=startup.hStdError=null_file;
@@ -158,7 +165,7 @@ static DWORD WINAPI controller(void *opaque) {
         unsigned reserved=0;for(unsigned i=52;i<GPU_WIRE_HEADER;++i)reserved|=header[i];
         if(gpu_u32(header)!=GPU_WIRE_MAGIC||gpu_u32(header+4)!=GPU_WIRE_VERSION||!size||size>GPU_WIRE_LIMIT
             ||status>1||gpu_u64(header+16)!=sequence||start<job->requested||end<start||end>now_ns()
-            ||gpu_u32(header+40)!=flags||gpu_u32(header+48)!=3||reserved){job->reason="hardware_invalid_response";break;}
+            ||gpu_u32(header+40)!=flags||gpu_u32(header+48)!=3+job->source||reserved){job->reason="hardware_invalid_response";break;}
         struct frame *frame=malloc(sizeof(*frame)+size);
         if(!frame){job->reason="hardware_allocation_failed";break;}
         frame->refs=1;frame->size=size;frame->started=start;frame->finished=end;frame->flags=flags;
@@ -193,17 +200,18 @@ finish:
     free(executable);free(entry);free(command);
     EnterCriticalSection(&job->mutex);job->failed_at=now_ns();job->state=FAILED;
     InterlockedExchange(&job->done,1);SetEvent(job->changed);LeaveCriticalSection(&job->mutex);
-    HMODULE module=job->module;InterlockedDecrement(&controllers);job_release(job);
+    HMODULE module=job->module;InterlockedDecrement(&source_controllers[job->source]);InterlockedDecrement(&controllers);job_release(job);
     FreeLibraryAndExitThread(module,0);return 0;
 }
-static struct job *new_job(const char *configuration,size_t size,const char *entry,unsigned flags,const char **reason) {
+static struct job *new_job(const char *configuration,size_t size,const char *entry,unsigned flags,unsigned source,const char **reason) {
     *reason="hardware_allocation_failed";
-    if(InterlockedIncrement(&controllers)>2){InterlockedDecrement(&controllers);*reason="hardware_worker_busy";return NULL;}
+    if(InterlockedIncrement(&source_controllers[source])>2){InterlockedDecrement(&source_controllers[source]);*reason="hardware_worker_busy";return NULL;}
+    InterlockedIncrement(&controllers);
     size_t entry_size=strlen(entry)+1;
     struct job *job=calloc(1,sizeof(*job)+size+entry_size);
     if(!job)goto failed;
     if(!InitializeCriticalSectionAndSpinCount(&job->mutex,0)){free(job);job=NULL;goto failed;}
-    job->refs=1;
+    job->refs=1;job->source=source;
     job->cancel=CreateEventW(NULL,TRUE,FALSE,NULL);job->request=CreateEventW(NULL,FALSE,TRUE,NULL);job->changed=CreateEventW(NULL,TRUE,FALSE,NULL);
     if(!job->cancel||!job->request||!job->changed){job_release(job);job=NULL;goto failed;}
     if(!GetModuleHandleExW(4,(LPCWSTR)(uintptr_t)&new_job,&job->module)){job_release(job);job=NULL;*reason="hardware_worker_unavailable";goto failed;}
@@ -214,22 +222,25 @@ static struct job *new_job(const char *configuration,size_t size,const char *ent
     if(!thread){HMODULE module=job->module;job->refs=1;job_release(job);FreeLibrary(module);job=NULL;*reason="hardware_worker_unavailable";goto failed;}
     CloseHandle(thread);return job;
 failed:
-    InterlockedDecrement(&controllers);return NULL;
+    InterlockedDecrement(&source_controllers[source]);InterlockedDecrement(&controllers);return NULL;
 }
 int wtop_windows_hardware_configure(lua_State *L) {
     size_t size=0;const char *entry=luaL_optlstring(L,1,"",&size);
     luaL_argcheck(L,size<=16383&&!memchr(entry,0,size),1,"invalid reader entry");
     lua_pushlstring(L,entry,size);lua_rawsetp(L,LUA_REGISTRYINDEX,&launcher_key);
-    lua_createtable(L,0,1);lua_pushboolean(L,1);lua_setfield(L,-2,"cpufreq");return 1;
+    lua_createtable(L,0,HARDWARE_SOURCES);
+    for(unsigned i=0;i<HARDWARE_SOURCES;++i){lua_pushboolean(L,1);lua_setfield(L,-2,source_names[i]);}
+    return 1;
 }
 int wtop_windows_hardware_open(lua_State *L) {
     size_t name_size;const char *name=luaL_checklstring(L,1,&name_size);
-    luaL_argcheck(L,name_size==7&&!memcmp(name,"cpufreq",7),1,"unknown hardware source");
+    unsigned source=source_index(name,name_size);
+    luaL_argcheck(L,source<HARDWARE_SOURCES,1,"unknown hardware source");
     size_t size;(void)luaL_checklstring(L,2,&size);luaL_argcheck(L,size&&size<=65536,2,"invalid configuration size");
     lua_rawgetp(L,LUA_REGISTRYINDEX,&launcher_key);
     if(lua_type(L,-1)!=LUA_TSTRING)return failure(L,"hardware_worker_unavailable");
     int launcher=lua_gettop(L);
-    struct session *session=lua_newuserdatauv(L,sizeof(*session),2);session->job=NULL;session->closed=0;
+    struct session *session=lua_newuserdatauv(L,sizeof(*session),2);session->job=NULL;session->closed=0;session->source=source;
     luaL_newmetatable(L,SESSION_META);lua_pushcfunction(L,session_close);lua_setfield(L,-2,"__gc");
     lua_pushcfunction(L,session_close);lua_setfield(L,-2,"__close");lua_setmetatable(L,-2);
     lua_pushvalue(L,2);lua_setiuservalue(L,-2,1);lua_pushvalue(L,launcher);lua_setiuservalue(L,-2,2);return 1;
@@ -247,7 +258,7 @@ int wtop_windows_hardware_query(lua_State *L) {
     if(!job){
         lua_getiuservalue(L,1,1);size_t size;const char *configuration=lua_tolstring(L,-1,&size);
         lua_getiuservalue(L,1,2);const char *entry=lua_tostring(L,-1),*reason;
-        job=new_job(configuration,size,entry,flags,&reason);lua_pop(L,2);
+        job=new_job(configuration,size,entry,flags,session->source,&reason);lua_pop(L,2);
         if(!job)return failure(L,reason);
         session->job=job;
     }
@@ -310,8 +321,9 @@ static int child_initialize(lua_State *L) {
 int wtop_windows_hardware_run(lua_State *L) {
     struct watcher watch={handle_argument(L,1),handle_argument(L,2),NULL};
     HANDLE input=handle_argument(L,3),output=handle_argument(L,4);
-    const char *source=luaL_checkstring(L,5);
-    if(lua_gettop(L)!=5||strcmp(source,"cpufreq")||!watch.parent||!watch.cancel||!input||!output
+    size_t name_size;const char *source=luaL_checklstring(L,5,&name_size);
+    unsigned source_id=source_index(source,name_size);
+    if(lua_gettop(L)!=5||source_id==HARDWARE_SOURCES||!watch.parent||!watch.cancel||!input||!output
         ||GetFileType(input)!=FILE_TYPE_PIPE||GetFileType(output)!=FILE_TYPE_PIPE
         ||WaitForSingleObject(watch.parent,0)!=WAIT_TIMEOUT||WaitForSingleObject(watch.cancel,0)!=WAIT_TIMEOUT){lua_pushinteger(L,2);return 1;}
     watch.stop=CreateEventW(NULL,TRUE,FALSE,NULL);if(!watch.stop){lua_pushinteger(L,3);return 1;}
@@ -338,7 +350,7 @@ int wtop_windows_hardware_run(lua_State *L) {
         uint64_t end=now_ns();unsigned char header[GPU_WIRE_HEADER]={0};
         gpu_put32(header,GPU_WIRE_MAGIC);gpu_put32(header+4,GPU_WIRE_VERSION);gpu_put32(header+8,(uint32_t)length);
         gpu_put32(header+12,success?0:1);gpu_put64(header+16,sequence);gpu_put64(header+24,start);gpu_put64(header+32,end);
-        gpu_put32(header+40,flags);gpu_put32(header+44,gpu_checksum(data,length));gpu_put32(header+48,3);
+        gpu_put32(header+40,flags);gpu_put32(header+44,gpu_checksum(data,length));gpu_put32(header+48,3+source_id);
         if(!child_send(output,header,sizeof(header))||!child_send(output,data,length)||!success)break;
         lua_settop(L,factory);code=0;
     }

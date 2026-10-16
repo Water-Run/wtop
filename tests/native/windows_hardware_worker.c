@@ -64,11 +64,11 @@ enum scenario {
     BAD_SEQUENCE, BAD_FLAGS, BAD_SOURCE, BAD_RESERVED, PAST_TIME, FUTURE_TIME,
     REVERSED_TIME, ERROR_RESPONSE, EARLY_EXIT, HANG, PARTIAL_HEADER,
     CLOSED_PIPE, POLICY_CHANGE, EXPIRED_REPLY, INVALID_INPUT, LUA_OOM,
-    VM_CLOSE_PENDING, NATIVE_ALLOC_FAILURE, THREAD_FAILURE, WORKER_LIMIT, SCENARIOS
+    VM_CLOSE_PENDING, NATIVE_ALLOC_FAILURE, THREAD_FAILURE, WORKER_LIMIT, SOURCE_ROUNDTRIP, SOURCE_SLOT_FAIRNESS, SOURCE_MISMATCH, SCENARIOS
 };
 static int selected;
 static int fake_child(int argc,char **argv) {
-    assert(argc==7);
+    assert(argc==7);unsigned source=source_index(argv[6],strlen(argv[6]));assert(source<HARDWARE_SOURCES);
     HANDLE parent=(HANDLE)(uintptr_t)strtoul(argv[2],NULL,16),cancel=(HANDLE)(uintptr_t)strtoul(argv[3],NULL,16);
     HANDLE input=(HANDLE)(uintptr_t)strtoul(argv[4],NULL,16),output=(HANDLE)(uintptr_t)strtoul(argv[5],NULL,16);
     if(selected==EARLY_EXIT)return 7;
@@ -82,7 +82,7 @@ static int fake_child(int argc,char **argv) {
         if(available<sizeof(command)){Sleep(1);continue;}
         assert(child_receive(input,command,sizeof(command)));
         if(selected==CLOSED_PIPE){CloseHandle(output);WaitForSingleObject(cancel,10000);return 0;}
-        if(selected==HANG||selected==VM_CLOSE_PENDING||selected==WORKER_LIMIT){WaitForSingleObject(cancel,10000);return 0;}
+        if(selected==HANG||selected==VM_CLOSE_PENDING||selected==WORKER_LIMIT||(selected==SOURCE_SLOT_FAIRNESS&&source==0)){WaitForSingleObject(cancel,10000);return 0;}
         uint64_t start=now_ns(),end=now_ns(),sequence=gpu_u64(command+8);unsigned flags=gpu_u32(command+16);
         unsigned char header[GPU_WIRE_HEADER]={0};uint32_t bytes=selected==LUA_OOM?sizeof(body):16;
         gpu_put32(header,selected==BAD_MAGIC?0:GPU_WIRE_MAGIC);
@@ -94,7 +94,7 @@ static int fake_child(int argc,char **argv) {
         gpu_put64(header+32,selected==REVERSED_TIME?start-1:selected==FUTURE_TIME?end+UINT64_C(10000000000):end);
         gpu_put32(header+40,selected==BAD_FLAGS?flags^1:flags);
         gpu_put32(header+44,gpu_checksum(body,bytes)^(selected==BAD_CHECKSUM?1u:0u));
-        gpu_put32(header+48,selected==BAD_SOURCE?99:3);
+        gpu_put32(header+48,selected==BAD_SOURCE?99:selected==SOURCE_MISMATCH?3:3+source);
         if(selected==BAD_RESERVED)header[63]=1;
         if(selected==PARTIAL_HEADER){assert(child_send(output,header,7));WaitForSingleObject(cancel,10000);return 0;}
         if(!child_send(output,header,sizeof(header))||!child_send(output,body,bytes))return 0;
@@ -117,14 +117,17 @@ static void drained(DWORD before) {
         Sleep(5);
     }
     assert(!InterlockedCompareExchange(&native_blocks,0,0));
+    for(unsigned i=0;i<HARDWARE_SOURCES;++i)assert(!InterlockedCompareExchange(&source_controllers[i],0,0));
     assert(!InterlockedCompareExchange(&owned_sections,0,0));
     for(unsigned i=0;i<128;++i)assert(!InterlockedCompareExchange(&owned_handles[i],0,0));
 }
-static int session_reference(lua_State *L) {
+static int source_reference(lua_State *L,const char *name) {
     assert(call_configure(L)==LUA_OK);
-    assert(call_open(L,"cpufreq",7,"x",1)==LUA_OK);
+    for(unsigned i=0;i<HARDWARE_SOURCES;++i){lua_getfield(L,-1,source_names[i]);assert(lua_toboolean(L,-1));lua_pop(L,1);}
+    assert(call_open(L,name,strlen(name),"x",1)==LUA_OK);
     assert(luaL_testudata(L,-1,SESSION_META));return luaL_ref(L,LUA_REGISTRYINDEX);
 }
+static int session_reference(lua_State *L){return source_reference(L,"cpufreq");}
 static void wait_state(struct session *session,enum state wanted) {
     DWORD started=GetTickCount();
     for(;;){struct job *job=session->job;assert(job);EnterCriticalSection(&job->mutex);enum state state=job->state;LeaveCriticalSection(&job->mutex);
@@ -208,6 +211,27 @@ static void one_case(void) {
     printf("transport case %d: starting\n",selected);fflush(stdout);
     DWORD before=handles();
     if(selected==INVALID_INPUT){invalid_inputs();drained(before);return;}
+    if(selected==SOURCE_ROUNDTRIP||selected==SOURCE_SLOT_FAIRNESS){
+        lua_State *L=luaL_newstate();assert(L);int refs[4];unsigned count=selected==SOURCE_SLOT_FAIRNESS?4:3;
+        for(unsigned i=0;i<count;++i){const char *name=selected==SOURCE_SLOT_FAIRNESS?source_names[i<2?0:i-1]:source_names[i];refs[i]=source_reference(L,name);assert(call_query(L,refs[i],0)==LUA_OK);}
+        if(selected==SOURCE_SLOT_FAIRNESS){int extra=source_reference(L,"cpufreq");assert(call_query(L,extra,0)==LUA_OK&&lua_isnil(L,-2)&&!strcmp(lua_tostring(L,-1),"hardware_worker_busy"));}
+        DWORD pids[3]={0,0,0};unsigned first=selected==SOURCE_SLOT_FAIRNESS?2:0;
+        for(unsigned i=first;i<count;++i){
+            lua_rawgeti(L,LUA_REGISTRYINDEX,refs[i]);struct session *slot=lua_touserdata(L,-1);lua_pop(L,1);wait_state(slot,READY);
+            assert(call_query(L,refs[i],0)==LUA_OK&&lua_type(L,-2)==LUA_TSTRING);
+            lua_getfield(L,-1,"worker_pid");DWORD pid=(DWORD)lua_tointeger(L,-1);lua_pop(L,1);assert(pid&&pid!=GetCurrentProcessId());
+            for(unsigned previous=first;previous<i;++previous)assert(pids[previous-first]!=pid);
+            pids[i-first]=pid;
+        }
+        lua_close(L);drained(before);return;
+    }
+    if(selected==SOURCE_MISMATCH){
+        lua_State *L=luaL_newstate();assert(L);int ref=source_reference(L,"gpu");DWORD start=GetTickCount();
+        for(;;){assert(call_query(L,ref,0)==LUA_OK&&lua_isnil(L,-2));const char *reason=lua_tostring(L,-1);assert(reason);
+            if(strcmp(reason,"hardware_query_pending")){assert(!strcmp(reason,"hardware_invalid_response"));break;}
+            assert((DWORD)(GetTickCount()-start)<5000);Sleep(2);}
+        lua_close(L);drained(before);return;
+    }
     if(selected==NATIVE_ALLOC_FAILURE){native_failure_cases(before);return;}
     if(selected==THREAD_FAILURE){
         lua_State *L=luaL_newstate();assert(L);int ref=session_reference(L);fail_thread=1;
