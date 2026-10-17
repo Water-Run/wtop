@@ -192,8 +192,8 @@ CI/评审还可以额外验证生成输出是否为最新：
 | `make snapshot` | 输出一份 JSON 快照 |
 | `make check` | 校验 Lua、POSIX shell 和 Python，解析 Agent JSON schema，并**将其应用到一次实时的 `--agent` 采集** |
 | `make test-fast` | 全部 Lua 单元/夹具文件加快速 PTY 配置 |
-| `make test-55` | 149 个 Lua 5.5 单元与夹具测试文件 |
-| `make test-54` | 用系统 Lua 5.4 运行同样的 149 个文件，验证纯 Lua 兼容子集 |
+| `make test-55` | 150 个 Lua 5.5 单元与夹具测试文件 |
+| `make test-54` | 用系统 Lua 5.4 运行同样的 150 个文件，验证纯 Lua 兼容子集 |
 | `make test-fuzz` | 用随机按键、鼠标报告、非法转义、无效 UTF-8 和尺寸变化，针对真实终端循环测试 |
 | `make test-pty` | 场景台账，然后针对响应式尺寸、翻页切换和四种颜色/字符能力配置运行真实 PTY 冒烟测试。台账（`tests/pty_scenario_ledger.py`）是静态检查：套件运行的每个场景都必须在 `SCENARIOS` 中命名，因此矩阵中的任何失败都可以单独用 `--scenario` 重跑；它存在的原因，是一个没有自己名字、藏在 `main` 内部的步骤，正是一个失败场景变得不可诊断的方式 |
 | `make test-pty-isolation` | `SCENARIOS` 中的场景分别在独立进程中运行 |
@@ -310,7 +310,7 @@ onefile 把同一载荷包进一个自解压可执行文件。它仍依赖目标
 
 ### 8.1 源码与 PTY
 
-先确认资源余量，然后运行这 149 个 Lua 文件：
+先确认资源余量，然后运行这 150 个 Lua 文件：
 
 ```bash
 make check
@@ -318,11 +318,11 @@ make test
 make test-54
 ```
 
-`make test-54` 用系统 Lua 5.4 运行同样的 149 个文件，验证纯 Lua 兼容子集。
+`make test-54` 用系统 Lua 5.4 运行同样的 150 个文件，验证纯 Lua 兼容子集。
 
 PTY 矩阵目前覆盖 `40×10`、`60×20`、`80×24/25`、`80×50`、`160×24`、`200×22`、`180×45` 和 `200×45` 翻页切换，检查中文帧、交互路径、备用屏幕进入/恢复、完整帧和干净退出。额外的配置断言 truecolor、256 色、16 色和无色 ASCII 输出，覆盖 Water Light、High Contrast 和 Colorblind。第 2–8 页各自作为带页面专属语义标记的最终完整帧校验。
 
-Lua 测试还覆盖 JSON 的 4 MiB/深度/100000 节点预算、线性数值解析冒烟、无效 UTF-8 值与键的 U+FFFD 替换、连接导出 ID 的默认脱敏、有界常规文件读取、异构 CPU 标识/拓扑/缓存夹具、powercap 能量差值/回绕/重置/约束、GPU PCI ID/PCIe/fdinfo 利用率、hwmon 哨兵过滤、感知 cgroup 的资源预检，以及 sudo 特权元数据。通过 149 个夹具文件并不是形式化证明——它不覆盖内核、硬件或恶意输入类别。
+Lua 测试还覆盖 JSON 的 4 MiB/深度/100000 节点预算、线性数值解析冒烟、无效 UTF-8 值与键的 U+FFFD 替换、连接导出 ID 的默认脱敏、有界常规文件读取、异构 CPU 标识/拓扑/缓存夹具、powercap 能量差值/回绕/重置/约束、GPU PCI ID/PCIe/fdinfo 利用率、hwmon 哨兵过滤、感知 cgroup 的资源预检，以及 sudo 特权元数据。通过 150 个夹具文件并不是形式化证明——它不覆盖内核、硬件或恶意输入类别。
 
 ### 8.2 打包后的 PTY
 

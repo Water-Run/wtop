@@ -149,6 +149,12 @@ local widget_items = { { kind = "metric", title = "CPU usage" },
 local function build(i18n, name)
   if name == "inspector_lines" then
     return TUI.inspector_lines("SMART / NVMe health", inspector_result, i18n)
+  elseif name == "nvme_warning_lines" then
+    return TUI.nvme_warning_lines({ timestamp_ns = 1000000000,
+      quality = { disk_health = { status = "ok", quality = "fresh", value_timestamp_ns = 1000000000 } },
+      disks = { devices = { { id = "259:0", name = "nvme0n1", _health_key = "key" } } },
+      disk_health = { devices = { { id = "259:0", _health_key = "key", quality = "fresh",
+        observed_at_ns = 1000000000, nvme = { critical_warning = 0xff } } } } }, i18n)
   elseif name == "systemd_unit_lines" then
     return TUI.systemd_unit_lines({ status = "ok", quality = "partial",
       reason = "systemd_data_incomplete", source = "/usr/bin/systemctl", timestamp_ns = 0,
@@ -281,6 +287,7 @@ local FIXTURED = {
   "event_stats_lines",
   "thread_detail_lines", "thread_picker_lines",
   "widget_picker_lines", "workspace_lines", "power_detail_lines",
+  "nvme_warning_lines",
 }
 table.sort(FIXTURED)
 local only_exported, only_fixtured = {}, {}

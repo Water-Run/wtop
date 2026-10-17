@@ -337,6 +337,20 @@ local function inspector_lines(title, result, i18n)
         for index, key in ipairs(keys) do
             lines[#lines + 1] = field_lines[index]
             local field = section.fields[key]
+            if nvme and key == "critical_warning" then
+                local decoded = require("wtop.model.nvme_warnings").decode(field and field.value)
+                if decoded then
+                    for _, reason in ipairs(decoded.reasons) do
+                        lines[#lines + 1] = "    " .. translated(i18n, "nvme.warning." .. reason, reason)
+                            .. " [" .. Technical.state(i18n, field.quality or "unknown") .. "]"
+                    end
+                    if decoded.unknown_mask ~= 0 then
+                        lines[#lines + 1] = "    " .. translated(i18n, "nvme.warning.unknown_bits", "Unrecognized warning bits")
+                            .. ": " .. string.format("0x%02x", decoded.unknown_mask)
+                            .. " [" .. Technical.state(i18n, field.quality or "unknown") .. "]"
+                    end
+                end
+            end
             local expanded = INSPECTOR_EXPAND_FIELDS[section.id]
             if field and type(field.value) == "table" and expanded and expanded[key] then
                 for _, line in ipairs(inspector_collection_lines(field.value, key, i18n)) do
@@ -3905,6 +3919,7 @@ local HELP_SECTIONS = {
             { "← →", "help.cycle_tabs", "previous / next tab" },
             { "Tab ⇧Tab", "help.focus_widget", "move focus between visible widgets" },
             { "?  F1", "help.toggle", "show or hide this help" },
+            { "!", "nvme.warning.title", "NVMe health warnings" },
             { "q", "help.quit", "close overlay, or quit from the main view" },
             { "Ctrl-C", "help.force_quit", "always quit" },
         },
@@ -4666,7 +4681,38 @@ local function alert_count(snapshot)
             end
         end
     end
-    return count
+    return count + #require("wtop.model.nvme_warnings").summary(snapshot).signals
+end
+
+local function nvme_warning_lines(snapshot, i18n)
+    local summary = require("wtop.model.nvme_warnings").summary(snapshot)
+    local lines = { translated(i18n, "nvme.warning.title", "NVMe health warnings"), "" }
+    if #summary.observations == 0 then
+        lines[#lines + 1] = translated(i18n, "reason.nvme_health_unavailable", "Native NVMe health data is unavailable")
+        local state = snapshot.quality and snapshot.quality.disk_health
+        if state then lines[#lines + 1] = Technical.state(i18n, state.quality or state.status) end
+    elseif #summary.signals == 0 then
+        lines[#lines + 1] = translated(i18n, "nvme.warning.none", "No warning flags in current observations")
+    else
+        for _, row in ipairs(summary.observations) do
+            if row.mask ~= 0 then
+                lines[#lines + 1] = inspector_text(tostring(row.name or row.id)
+                    .. " · " .. string.format("0x%02x", row.mask), INSPECTOR_ROW_WIDTH)
+                for _, reason in ipairs(row.reasons) do
+                    lines[#lines + 1] = "  " .. translated(i18n, "nvme.warning." .. reason, reason)
+                end
+                if row.unknown_mask ~= 0 then
+                    lines[#lines + 1] = "  " .. translated(i18n, "nvme.warning.unknown_bits", "Unrecognized warning bits")
+                        .. ": " .. string.format("0x%02x", row.unknown_mask)
+                end
+                lines[#lines + 1] = ""
+            end
+        end
+    end
+    if summary.partial then lines[#lines + 1] = Technical.state(i18n, "partial") end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = translated(i18n, "inspector.close_hint", "Esc/Enter closes")
+    return lines
 end
 
 -- Detail reads follow an open overlay, not the table cursor. The queued
@@ -8619,6 +8665,11 @@ local function run_loop(options, backend, renderer, engine, translator)
         elseif key == "?" or key == "f1" then
             show_overlay(help_lines(translator, columns, linux_host))
             dirty = true
+        elseif key == "!" then
+            show_overlay(function()
+                return nvme_warning_lines(engine.snapshot, translator)
+            end, { disk = true, disk_health = true })
+            dirty = true
         elseif key == "p" and (workspace:content_page() == "overview"
             or workspace:content_page() == "compute" or workspace:content_page() == "gpu") then
             show_overlay(function()
@@ -8920,6 +8971,7 @@ end
 
 M.draw_overlay = draw_overlay
 M.alert_count = alert_count
+M.nvme_warning_lines = nvme_warning_lines
 M.process_sampling_plan = process_sampling_plan
 M.thread_detail_request = thread_detail_request
 M.inspector_lines = inspector_lines

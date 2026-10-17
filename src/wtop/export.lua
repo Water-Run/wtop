@@ -8,6 +8,7 @@ local Power = require("wtop.model.power")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
+local NVMeWarnings = require("wtop.model.nvme_warnings")
 local NVMe = require("wtop.linux.nvme_diagnostics")
 
 local M = {}
@@ -2154,6 +2155,9 @@ function M.agent(snapshot, options)
             message = message,
         })
         if severity_rank[severity] > severity_rank[highest] then highest = severity end
+    end
+    for _, signal in ipairs(NVMeWarnings.summary(snapshot).signals) do
+        add_signal(signal.resource, signal.code, signal.severity, nil, nil, signal.message)
     end
     -- A failed collector leaves its last usable numbers in the snapshot for
     -- context.  Those numbers must not create a new current-condition alarm.
