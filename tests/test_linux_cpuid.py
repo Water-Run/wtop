@@ -5,8 +5,18 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 def birth(pid):
  try:return Path('/proc/'+str(pid)+'/stat').read_text().rsplit(')',1)[1].split()[19]
- except FileNotFoundError:return None
+ except (FileNotFoundError,ProcessLookupError):return None
+def check_birth_race():
+ from unittest.mock import patch
+ import errno
+ for error in [FileNotFoundError(errno.ENOENT,'gone'),ProcessLookupError(errno.ESRCH,'exited during procfs read')]:
+  with patch.object(Path,'read_text',side_effect=error):assert birth(123) is None
+ with patch.object(Path,'read_text',side_effect=PermissionError(errno.EACCES,'denied')):
+  try:birth(123)
+  except PermissionError:pass
+  else:raise AssertionError('birth probe hid a permission error')
 def main():
+ check_birth_race()
  p=argparse.ArgumentParser(description=__doc__)
  p.add_argument('--cc',default=os.environ.get('CC','cc'));p.add_argument('--cflags',default='-std=c17 -O2 -Wall -Wextra -Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2')
  p.add_argument('--lua-prefix',type=Path,default=ROOT/'.tools/lua-5.5.1');p.add_argument('--module',type=Path,default=ROOT/'build/native/wtop_native.so')
