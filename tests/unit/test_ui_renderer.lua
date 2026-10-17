@@ -326,4 +326,37 @@ right_style.bg.index = 4
 equal(#Diff.runs(left_grid, right_grid), 0, "restored colour components")
 assert(Diff.cell_equal(left_grid:get(1, 1), right_grid:get(1, 1)))
 
+-- Repainting and clearing must remove wide-cell metadata while snapshots
+-- continue to own their values, even when live cells reuse their tables.
+local repaint = Grid.new(12, 2)
+local first_style, second_style = { bold = true }, { dim = true }
+repaint:write(1, 1, "中文ABC", first_style)
+local saved = repaint:clone()
+repaint:fill({ x = 2, y = 1, width = 5, height = 1 }, " ", second_style)
+repaint:write(1, 1, "status", second_style)
+repaint:assert_valid()
+equal(saved:get(1, 1).char, "中", "snapshot survives repaint")
+assert(saved:get(2, 1).continuation and saved:get(2, 1).lead_x == 1)
+for x = 1, 6 do
+  local cell = repaint:get(x, 1)
+  equal(cell.width, 1)
+  assert(cell.continuation == nil and cell.lead_x == nil)
+  equal(cell.style, second_style)
+end
+repaint:clear(first_style)
+repaint:assert_valid()
+for _, cell in ipairs(repaint.cells) do
+  equal(cell.char, " "); equal(cell.width, 1); equal(cell.style, first_style)
+  assert(cell.continuation == nil and cell.lead_x == nil)
+end
+-- A caller's cleared continuation marker must not survive a narrow write.
+for _, write in ipairs({
+  function() repaint:set(1, 1, "s", second_style, 1) end,
+  function() repaint:write(1, 1, "status", second_style) end,
+}) do
+  repaint:get(1, 1).continuation, repaint:get(1, 1).lead_x = false, 9
+  write()
+  assert(repaint:get(1, 1).continuation == nil and repaint:get(1, 1).lead_x == nil)
+end
+
 print("test_ui_renderer: ok")

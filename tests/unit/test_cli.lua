@@ -230,4 +230,52 @@ assert(not pcall(Application.stream, stream_options) and stream_stopped,
 io.write, io.flush, Engine.new, Native.sleep_ms =
     original_write, original_flush, original_engine_new, original_sleep
 
+-- Directory and onefile launchers start with an incremental Lua state. The
+-- application must use the same mode as standalone Lua before either entry.
+do
+    local function entry_mode(initial_mode, reader)
+        local previous_mode = collectgarbage(initial_mode)
+        local previous_arg, previous_exit = arg, os.exit
+        local previous_path, previous_cpath = package.path, package.cpath
+        local names = { "wtop.native", "wtop.cli", "wtop.core.hardware_worker" }
+        local previous = {}
+        for _, name in ipairs(names) do previous[name] = package.loaded[name] end
+        local stopped, exit_code, observed_mode = {}, nil, nil
+        local called_cli, called_reader = false, false
+        arg = { [0] = "src/wtop.lua", reader and "--wtop-hardware-reader" or "--version", "fixture" }
+        local function capture() observed_mode = collectgarbage("generational") end
+        package.loaded["wtop.native"] = {
+            hardware_worker_run = function(value)
+                assert(value == "fixture")
+                called_reader = true; capture(); return 0
+            end,
+            hardware_worker_configure = function(value) assert(value == nil); return {} end,
+        }
+        package.loaded["wtop.cli"] = { run = function(arguments)
+            assert(arguments == arg)
+            called_cli = true; capture(); return 0
+        end }
+        package.loaded["wtop.core.hardware_worker"] = {}
+        os.exit = function(code, close)
+            assert(close == true); exit_code = code; error(stopped, 0)
+        end
+        local ok, result = pcall(function() assert(loadfile("src/wtop.lua"))() end)
+        arg, os.exit = previous_arg, previous_exit
+        package.path, package.cpath = previous_path, previous_cpath
+        for _, name in ipairs(names) do package.loaded[name] = previous[name] end
+        collectgarbage(previous_mode)
+        assert(not ok and result == stopped, tostring(result))
+        assert(exit_code == 0)
+        assert((reader and called_reader and not called_cli)
+            or (not reader and called_cli and not called_reader))
+        return observed_mode
+    end
+    for _, reader in ipairs({ false, true }) do
+        assert(entry_mode("incremental", reader) == "generational",
+            "embedded CLI and reader must match standalone Lua's collector")
+        assert(entry_mode("generational", reader) == "generational",
+            "standalone execution must keep its collector mode")
+    end
+end
+
 return true

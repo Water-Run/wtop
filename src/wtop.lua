@@ -1,5 +1,8 @@
 #!/usr/bin/env lua
 
+-- Match the standalone Lua runtime in embedded directory and onefile builds.
+collectgarbage("generational")
+
 local entry_path = tostring(arg and arg[0] or "")
 local entry_dir = entry_path:match("^(.*)[/\\][^/\\]+$")
 if entry_dir and entry_dir ~= "" then

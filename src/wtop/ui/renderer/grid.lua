@@ -97,8 +97,11 @@ function Grid:_mark_dirty(x, y)
   row[x] = true
 end
 
+-- Each grid owns its cells; clone() copies them for the previous frame.
 function Grid:_raw_blank(x, y, style)
-  self.cells[self:_index(x, y)] = blank(style or self.default_style)
+  local cell = self.cells[self:_index(x, y)]
+  cell.char, cell.width, cell.style = " ", 1, style or self.default_style
+  cell.continuation, cell.lead_x = nil, nil
   self:_mark_dirty(x, y)
 end
 
@@ -150,7 +153,8 @@ function Grid:set(x, y, grapheme, style, cell_width)
     local index = self:_index(x, y)
     local previous = self.cells[index]
     if previous and not previous.continuation and previous.width == 1 then
-      self.cells[index] = {char = grapheme, width = 1, style = style}
+      previous.char, previous.style = grapheme, style
+      previous.continuation, previous.lead_x = nil, nil
       self:_mark_dirty(x, y)
       return true
     end
@@ -208,7 +212,8 @@ function Grid:write(x, y, text, style, max_width)
         local character = text:sub(index, index)
         -- A wide-cell overlap still needs the full clearing path.
         if previous and not previous.continuation and previous.width == 1 then
-          cells[cell_index] = {char = character, width = 1, style = style}
+          previous.char, previous.style = character, style
+          previous.continuation, previous.lead_x = nil, nil
           dirty_row[column] = true
         else
           self:set(column, y, character, style, 1)
@@ -281,7 +286,9 @@ function Grid:fill(rect, character, style)
     self:_clear_occupant(left, y)
     if right ~= left then self:_clear_occupant(right, y) end
     for x = left, right do
-      self.cells[self:_index(x, y)] = {char = character, width = 1, style = style}
+      local cell = self.cells[self:_index(x, y)]
+      cell.char, cell.width, cell.style = character, 1, style
+      cell.continuation, cell.lead_x = nil, nil
       self:_mark_dirty(x, y)
     end
   end
@@ -292,7 +299,9 @@ function Grid:clear(style)
   self.default_style = style or self.default_style
   for y = 1, self.height do
     for x = 1, self.width do
-      self.cells[self:_index(x, y)] = blank(self.default_style)
+      local cell = self.cells[self:_index(x, y)]
+      cell.char, cell.width, cell.style = " ", 1, self.default_style
+      cell.continuation, cell.lead_x = nil, nil
     end
   end
   self.dirty_all = true
