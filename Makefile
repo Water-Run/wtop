@@ -140,6 +140,9 @@ RELEASE_LICENCE := LICENSE
 RELEASE_NOTICE_FILES := \( -name '$(RELEASE_LICENCE)' -o -name '*NOTICE*' -o -path '*/licenses/*' \)
 
 FUZZ_SEEDS ?= 20
+ROOTLESS_EXECUTABLE ?= $(CURDIR)/dist/wtop-onefile
+ROOTLESS_IMAGE ?=
+ROOTLESS_OUTPUT ?=
 
 CFLAGS_NATIVE ?= -O2 -g0
 CFLAGS_NATIVE += -std=c17 -fPIC -Wall -Wextra -Werror
@@ -147,7 +150,7 @@ CFLAGS_NATIVE += -std=c17 -fPIC -Wall -Wextra -Werror
 .NOTPARALLEL: all native locales check test test-all test-fast test-54 test-55 test-pty test-pty-quick test-luarocks \
 	benchmark-check \
 	toolchain luainstaller luarocks-bootstrap luarocks-install bundle-dir bundle-file \
-	test-bundle-dir test-bundle-file test-release-notices check-native-warnings \
+	test-bundle-dir test-bundle-file test-rootless-onefile test-release-notices check-native-warnings \
 	release-archive test-release-archive test-downloaded-archive sanitize-native test-sanitized
 
 .PHONY: all resource-check resource-check-full resource-check-benchmark toolchain luainstaller native locales check test test-all test-fast \
@@ -156,7 +159,7 @@ CFLAGS_NATIVE += -std=c17 -fPIC -Wall -Wextra -Werror
 	diagnose snapshot bundle-dir bundle-file test-bundle-dir test-bundle-file checksums build-id sbom baseline \
 	cross-libc release-baseline rock-build rock-install rockspec-check luarocks-bootstrap luarocks-install test-luarocks
 
-.PHONY: release-archive test-release-archive test-downloaded-archive version-rockspec source-rock test-source-rock rock-index test-rock-index
+.PHONY: release-archive test-release-archive test-downloaded-archive version-rockspec source-rock test-source-rock rock-index test-rock-index test-rootless-onefile
 
 all: native locales
 
@@ -618,6 +621,14 @@ luarocks-install: resource-check-full $(LUA_STAMP) $(LUAROCKS_STAMP)
 test-luarocks: luarocks-install
 	@python3 tests/installed_smoke.py --executable "$(WTOP_ROCK_TREE)/bin/wtop" \
 		--version "$(WTOP_VERSION)" --platform Linux
+
+# Optional host acceptance: needs rootless Podman and an existing local image.
+# It measures the supplied executable and does not rebuild either bundle.
+test-rootless-onefile: resource-check-full
+	@test -n '$(ROOTLESS_IMAGE)' || { echo 'test-rootless-onefile requires ROOTLESS_IMAGE (an existing local Linux image)' >&2; exit 1; }
+	@python3 tests/test_rootless_onefile.py --executable '$(ROOTLESS_EXECUTABLE)' \
+		--image '$(ROOTLESS_IMAGE)' --version '$(WTOP_VERSION)' --pty \
+		$(if $(ROOTLESS_OUTPUT),--output '$(ROOTLESS_OUTPUT)',)
 
 build-id: $(NATIVE_REVISION_HEADER)
 	@./tools/write_build_id.sh

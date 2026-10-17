@@ -210,12 +210,21 @@ CI/评审还可以额外验证生成输出是否为最新：
 | `make bundle-file` | 生成 onefile |
 | `make test-bundle-dir` | 重建 onedir，并对其运行 PTY 冒烟测试 |
 | `make test-bundle-file` | 原子替换 onefile，并对其运行 PTY 冒烟测试 |
+| `make test-rootless-onefile ROOTLESS_IMAGE=...` | 使用现有本地 Linux 镜像，在 rootless Podman 中验证指定单文件包的五个 CLI 和两种尺寸界面；不会重建程序或拉取镜像 |
 | `make checksums` | 要求两个包都已构建，并针对 onedir 携带的每个文件加上 onefile 生成 `dist/SHA256SUMS` |
 | `make test-release-notices` | 询问包是否携带其许可证文本，以及清单是否覆盖它们 |
 | `make release-archive` / `make test-release-archive` | 将完整载荷和发布证据归档；解包后检查所有摘要、权限、CLI/JSON 和快速 PTY |
 | `make test-downloaded-archive DOWNLOAD_DIR=...` | 检查真实下载的归档与外层摘要，并运行两种程序的完整 PTY；不会重建程序 |
 | `make check-native-warnings` | 在更严格的警告集（`-Wshadow -Wconversion -Wsign-conversion -Wpointer-arith -Werror`）下编译每个原生源文件 |
 | `make sanitize-native` / `make test-sanitized` | 用全部原生源文件构建一个 ASan+UBSan 模块，并对它运行采集路径和单元套件 |
+
+`test-rootless-onefile` 是单独的主机验收入口，需要 rootless Podman 和已有的
+Linux 镜像，不包含在 `test-all` 中。默认检查 `dist/wtop-onefile`，可用
+`ROOTLESS_EXECUTABLE` 指定下载后解包的单文件程序。每次运行在 `build/` 下创建
+新的证据目录，也可用 `ROOTLESS_OUTPUT` 指定一个尚不存在的目录。
+检查覆盖容器 UID 0 和保留当前用户 UID 的两种模式；容器退出后回收，原始输出
+与摘要保留。它验证容器拥有自身根文件系统的情况，不证明共享宿主根目录且
+所有者未映射时可以运行。
 
 源包只收录 Git 跟踪的文件及生成的版本 spec，附带 `SOURCE.json` 的源码摘要
 和修订信息；未跟踪的本机文件不会进入源包。正式构建使用
