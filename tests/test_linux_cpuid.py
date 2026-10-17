@@ -8,7 +8,7 @@ def birth(pid):
  except FileNotFoundError:return None
 def main():
  p=argparse.ArgumentParser(description=__doc__)
- p.add_argument('--cc',default=os.environ.get('CC','cc'));p.add_argument('--cflags',default='-std=c17 -O2 -Wall -Wextra -Werror')
+ p.add_argument('--cc',default=os.environ.get('CC','cc'));p.add_argument('--cflags',default='-std=c17 -O2 -Wall -Wextra -Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2')
  p.add_argument('--lua-prefix',type=Path,default=ROOT/'.tools/lua-5.5.1');p.add_argument('--module',type=Path,default=ROOT/'build/native/wtop_native.so')
  p.add_argument('--output',type=Path,default=ROOT/'build/native-cpuid');p.add_argument('--native-only',action='store_true')
  a=p.parse_args();w=a.output.resolve();w.mkdir(parents=True,exist_ok=True);lua=a.lua_prefix.resolve();flags=shlex.split(a.cflags);cc=shlex.split(a.cc)

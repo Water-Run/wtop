@@ -19,7 +19,7 @@ __attribute__((constructor))static void setup(void){
 int sched_getcpu(void){
  const char *control=getenv("WTOP_CPUID_BLOCK_CONTROL"),*marker=getenv("WTOP_CPUID_BLOCK_MARKER");
  if(is_reader&&control&&marker){
-  FILE *f=fopen(control,"r");int mode=0;if(f){(void)fscanf(f,"%d",&mode);fclose(f);}
+  FILE *f=fopen(control,"r");int mode=0;if(f){if(fscanf(f,"%d",&mode)!=1)mode=0;fclose(f);}
   if(mode){
    f=fopen(marker,"w");if(f){fprintf(f,"%ld\n",(long)getpid());fclose(f);}
    struct timespec wait={10,0};nanosleep(&wait,NULL);
