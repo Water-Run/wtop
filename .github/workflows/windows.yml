@@ -165,6 +165,8 @@ jobs:
         shell: pwsh
         run: |
           $cc = Join-Path $PWD '.tools/windows-compiler/w64devkit/bin/gcc.exe'
+          python tests/test_windows_payload.py --lua dist/windows-x86/lua.exe --compiler $cc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:PATH = "$(Split-Path $cc);$env:PATH"
           & $cc --version
           python tools/package_windows.py dir --compiler $cc --verbose

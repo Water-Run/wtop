@@ -482,6 +482,7 @@ check: resource-check native locales test-native-terminal-signals test-native-cp
 		$(LUA) tools/check_agent_schema.lua
 	@python3 tests/test_luainstaller_bootstrap.py
 	@python3 tests/test_windows_x86_artifact.py
+	@python3 tests/test_windows_payload.py --lua '$(LUA)'
 	@python3 tests/test_macos_artifact.py
 	@python3 tests/test_release_archive.py
 

@@ -19,6 +19,7 @@ from check_windows_x86 import check_packaged
 INSTALLER = "luainstaller-1.5.0-1.src.rock"
 INSTALLER_SHA256 = "5d57d07e539107cc13e171e2b0a5919be692898c2627acfda4bcd12694055545"
 INSTALLER_URL = "https://github.com/Water-Run/luainstaller/releases/download/v1.5.0/" + INSTALLER
+ONEFILE_SOURCE_SHA256 = "67edbb961affcc496ad99a1bcdd342f07e0a2c488bed6de3442b8ac23e989a68"
 
 
 def installer_archive(root: Path) -> Path:
@@ -49,6 +50,20 @@ def copy_vendor_notices(root: Path, output_root: Path) -> None:
             licenses = directory / ".luai" / "licenses"
             licenses.mkdir(parents=True, exist_ok=True)
             shutil.copy2(notice, licenses / name)
+
+
+def prepare_onefile_payload(root: Path, source: Path) -> None:
+    """Keep the pinned extractor, using compact C literals for its payload."""
+    module = source / "luainstaller" / "src" / "onefile.lua"
+    original = module.read_bytes()
+    if hashlib.sha256(original).hexdigest() != ONEFILE_SOURCE_SHA256:
+        raise ValueError("unexpected luainstaller onefile source")
+    text = original.decode("utf-8")
+    start = text.index("local function emitFileArrays(files)\n")
+    end = text.index("\nlocal EXTRACTOR_TEMPLATE", start)
+    emitter = (root / "tools" / "windows_payload.lua").read_text(encoding="utf-8")
+    replacement = "local emitFileArrays = (function()\n" + emitter + "\nend)()\n"
+    module.write_text(text[:start] + replacement + text[end:], encoding="utf-8", newline="\n")
 
 
 def build(root: Path, kind: str, compiler: str | None = None, verbose: bool = False) -> Path:
@@ -93,6 +108,8 @@ def build(root: Path, kind: str, compiler: str | None = None, verbose: bool = Fa
         source = Path(directory)
         with zipfile.ZipFile(archive) as rock:
             rock.extractall(source)
+        if kind == "file":
+            prepare_onefile_payload(root, source)
         if kind == "dir" and output.exists():
             # The project licence is added after luainstaller's ownership list,
             # so a repeat build must start with an empty output directory.
