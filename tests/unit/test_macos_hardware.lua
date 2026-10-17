@@ -43,7 +43,8 @@ local hub = { id = "00000000", product = "Hub", _registry_entry_id = "ioreg:9002
     _registry_parent_id = "ioreg:9001", _registry_parent_bus = "pci" }
 local child = { id = "ioreg:1003", product = "Device", _registry_entry_id = "ioreg:9003",
     _registry_parent_id = "ioreg:9002", _registry_parent_bus = "usb" }
-local state = { inventory = { pci = { devices = { controller } },
+-- A public timestamp may contain the same digits as a private registry ID.
+local state = { timestamp_ns = 19001000000, inventory = { pci = { devices = { controller } },
     usb = { devices = { child, hub } } } }
 local graph = Hardware.build(state)
 assert(not graph.partial and graph.by_id["usb:ioreg:1003"].parent_id == "usb:00000000")
@@ -54,7 +55,10 @@ local exported = Export.snapshot(state)
 assert(exported.inventory.pci.devices[1].device_id == 0
     and exported.inventory.pci.devices[1].revision == 0)
 local text = JSON.encode(exported)
-assert(not text:find("_registry", 1, true) and not text:find("9001", 1, true))
+assert(not text:find("_registry", 1, true))
+for _, private_id in ipairs({ "ioreg:9001", "ioreg:9002", "ioreg:9003" }) do
+    assert(not text:find(private_id, 1, true), "private registry identity exported")
+end
 
 state.quality = { inventory = { status = "ok", quality = "stale" } }
 graph = Hardware.build(state)

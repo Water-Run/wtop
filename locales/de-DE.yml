@@ -600,6 +600,9 @@ messages:
   gpu.count:
     one: "{count} GPU"
     other: "{count} GPUs"
+  gpu.hotspot_temperature: "Hotspot-Temperatur"
+  gpu.graphics_voltage: "GPU-Spannung"
+  power.measurement.driver_snapshot: "Treiberaufnahme; Hardware-Messzeit unbekannt"
   gpu.device_clocks_title: "Geräte-Takt"
   gpu.device_clocks: "Takt"
   gpu.device_clocks_truncated: "Es gibt weitere Takt-Domains, als gelesen wurden"

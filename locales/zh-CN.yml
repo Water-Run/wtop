@@ -594,6 +594,9 @@ messages:
   gpu.client_title: "GPU 客户端"
   gpu.count:
     other: "{count} 个 GPU"
+  gpu.hotspot_temperature: "热点温度"
+  gpu.graphics_voltage: "GPU 电压"
+  power.measurement.driver_snapshot: "驱动快照；硬件采样时间未知"
   gpu.device_clocks_title: "设备频率域"
   gpu.device_clocks: "频率域"
   gpu.device_clocks_truncated: "还有更多频率域未读取"

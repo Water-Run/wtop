@@ -68,3 +68,15 @@ _Static_assert(offsetof(wtop_ADLOD6FanSpeedInfo,iFanSpeedPercent)==offsetof(ADLO
 _Static_assert(offsetof(wtop_ADLOD6FanSpeedInfo,iFanSpeedRPM)==offsetof(ADLOD6FanSpeedInfo,iFanSpeedRPM),"ADLOD6FanSpeedInfo.iFanSpeedRPM");
 _Static_assert(offsetof(wtop_ADLOD6FanSpeedInfo,iExtValue)==offsetof(ADLOD6FanSpeedInfo,iExtValue),"ADLOD6FanSpeedInfo.iExtValue");
 _Static_assert(offsetof(wtop_ADLOD6FanSpeedInfo,iExtMask)==offsetof(ADLOD6FanSpeedInfo,iExtMask),"ADLOD6FanSpeedInfo.iExtMask");
+
+_Static_assert(sizeof(wtop_ADL_D3DKMT_HANDLE)==sizeof(ADL_D3DKMT_HANDLE),"PMLog handle ABI");
+_Static_assert(sizeof(ADL_D3DKMT_HANDLE)==4,"PMLog handle is 32-bit on both architectures");
+_Static_assert(sizeof(wtop_ADLSingleSensorData)==sizeof(ADLSingleSensorData),"PMLog sensor ABI");
+_Static_assert(_Alignof(wtop_ADLPMLogDataOutput)==_Alignof(ADLPMLogDataOutput),"PMLog output alignment");
+_Static_assert(sizeof(wtop_ADLPMLogDataOutput)==sizeof(ADLPMLogDataOutput),"PMLog output ABI");
+_Static_assert(sizeof(ADLPMLogDataOutput)==2052,"PMLog full fixed output");
+_Static_assert(offsetof(wtop_ADLPMLogDataOutput,sensors)==offsetof(ADLPMLogDataOutput,sensors),"PMLog sensors offset");
+_Static_assert(offsetof(wtop_ADLSingleSensorData,value)==offsetof(ADLSingleSensorData,value),"PMLog value offset");
+_Static_assert(PMLOG_CLK_GFXCLK==1&&PMLOG_CLK_MEMCLK==2&&PMLOG_TEMPERATURE_EDGE==8,"PMLog clock/edge IDs");
+_Static_assert(PMLOG_FAN_RPM==14&&PMLOG_FAN_PERCENTAGE==15&&PMLOG_INFO_ACTIVITY_GFX==19,"PMLog fan/activity IDs");
+_Static_assert(PMLOG_GFX_VOLTAGE==21&&PMLOG_ASIC_POWER==23&&PMLOG_TEMPERATURE_HOTSPOT==27,"PMLog voltage/power/hotspot IDs");

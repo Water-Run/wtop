@@ -157,3 +157,11 @@ typedef struct ADLOD6FanSpeedInfo
     int     iExtMask;
 } ADLOD6FanSpeedInfo;
 #endif
+
+/* Public PMLog ABI and documented-unit sensor IDs from the same pinned SDK. */
+typedef unsigned int ADL_D3DKMT_HANDLE;
+typedef struct ADLSingleSensorData {int supported;int value;} ADLSingleSensorData;
+typedef struct ADLPMLogDataOutput {int size;ADLSingleSensorData sensors[256];} ADLPMLogDataOutput;
+enum {PMLOG_CLK_GFXCLK=1,PMLOG_CLK_MEMCLK=2,PMLOG_TEMPERATURE_EDGE=8,
+ PMLOG_FAN_RPM=14,PMLOG_FAN_PERCENTAGE=15,PMLOG_INFO_ACTIVITY_GFX=19,
+ PMLOG_GFX_VOLTAGE=21,PMLOG_ASIC_POWER=23,PMLOG_TEMPERATURE_HOTSPOT=27};

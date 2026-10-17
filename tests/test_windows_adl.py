@@ -32,10 +32,10 @@ def build(runtime: Path, output: Path, sdk_root: Path | None) -> None:
                         f'-Wl,--no-insert-timestamp,--major-os-version,5,--minor-os-version,{version},--major-subsystem-version,5,--minor-subsystem-version,{version}',
                         str(ROOT / 'native/wtop_windows_nvml_helper.c'), str(obj),
                         '-o', str(output / ('reader-' + arch + '.exe'))], check=True)
-        for tag in ['adl1', 'adl2']:
+        for tag in ['adl1', 'adl2', 'adl2old']:
             folder = output / ('sdk-' + arch + '-' + tag) / 'system'
             folder.mkdir(parents=True)
-            definitions = ['-DWTOP_ADL_LEGACY'] if tag == 'adl1' else []
+            definitions = ['-DWTOP_ADL_LEGACY'] if tag == 'adl1' else ['-DWTOP_ADL_NO_PMLOG'] if tag == 'adl2old' else []
             if sdk_root:
                 definitions += ['-DWTOP_ADL_SDK_HEADER="' + str((sdk_root / 'adl_sdk.h').resolve()) + '"']
             subprocess.run([compiler, *flags, '-shared', '-Wl,--export-all-symbols', *definitions,
@@ -80,12 +80,16 @@ def run(folder: Path) -> None:
     for bits, arch in [(32, 'x86'), (64, 'x64')]:
         profile = folder / 'profiles' / str(bits)
         profile.mkdir(parents=True)
-        for tag in ['adl2', 'adl1']:
-            for mode in modes:
+        for tag in ['adl2', 'adl1', 'adl2old']:
+            for mode in modes + (list(range(60, 89)) + [90, 91, 92, 93, 94, 97, 98] if tag == 'adl2' else []):
                 env = {**os.environ, 'LUA_PATH': str(folder / 'src/?.lua') + ';' + str(folder / 'src/?/init.lua') + ';;',
                        'LUA_CPATH': str(folder / 'fixture/?.dll') + ';;', 'APPDATA': str(profile),
                        'WTOP_ADL_TEST_ROOT': str(folder / ('sdk-' + arch + '-' + tag)),
+                       'WTOP_ADL_PMLOG_TRACE': str(profile / f'pmlog-{tag}-{mode}.json'),
+                       'WTOP_ADL_FIXTURE_CONTROL': str(profile / f'control-{tag}-{mode}.txt'),
                        'WTOP_NVML_TEST_BITS': str(bits), 'WTOP_ADL_TEST_LEGACY': str(int(tag == 'adl1')), 'WTOP_ADL_FIXTURE_MODE': str(mode)}
+                control = Path(env['WTOP_ADL_FIXTURE_CONTROL']); assert not control.exists()
+                control.write_text(str(mode))
                 result = subprocess.run([str(folder / 'lua.exe'), str(folder / 'cases.lua')], env=env,
                                         capture_output=True, timeout=12)
                 log = folder / f'case-{bits}-{tag}-{mode}.log'
@@ -105,15 +109,20 @@ def run(folder: Path) -> None:
                    WTOP_ADL_FIXTURE_MODE='0', WTOP_ADL_TEST_LEGACY='0',
                    WTOP_ADL_CACHE_IMAGE=str(profile / 'wtop/readers' / f'adl-x{bits}-{checksum:08x}.exe'),
                    WTOP_ADL_EXPECT_IMAGE=str(folder / ('reader-' + arch + '.exe')))
+        env.update(WTOP_ADL_FIXTURE_CONTROL=str(profile / 'cache-control.txt'),
+                   WTOP_ADL_PMLOG_TRACE=str(profile / 'cache-pmlog.json'))
+        Path(env['WTOP_ADL_FIXTURE_CONTROL']).write_text('0')
         result = subprocess.run([str(folder / 'lua.exe'), str(folder / 'cache.lua')], env=env,
                                 capture_output=True, timeout=15)
         log = folder / ('cache-' + str(bits) + '.log'); log.write_bytes(result.stdout + result.stderr)
         assert result.returncode == 0, log
         print('Windows AMD ADL', bits, 'cache/quota/corruption/recovery passed', flush=True)
-        for mode in ['warm', 'quit']:
-            case = folder / ('lifecycle-' + str(bits) + '-' + mode)
+        for scenario, mode, pmlog in [('warm', 'warm', False), ('quit', 'quit', False),
+                                       ('pmlog-warm', 'warm', True), ('pmlog-quit', 'quit', True)]:
+            case = folder / ('lifecycle-' + str(bits) + '-' + scenario)
             case.mkdir(); (case / 'profile').mkdir()
             env.update(APPDATA=str(case / 'profile'),
+                       WTOP_ADL_LIFECYCLE_PMLOG='1' if pmlog else '0',
                        WTOP_ADL_LIFECYCLE_MARKER=str(case / 'reader'),
                        WTOP_ADL_FIXTURE_CONTROL=str(case / 'control'))
             started = time.monotonic()
@@ -128,7 +137,7 @@ def run(folder: Path) -> None:
                 (case / 'reap.log').write_bytes(checked.stdout + checked.stderr)
                 checked.check_returncode()
                 assert time.monotonic() - started < 9, "parent exit exceeded blocked API lease"
-            print('Windows AMD ADL', bits, mode, 'API lifecycle passed', flush=True)
+            print('Windows AMD ADL', bits, scenario, 'API lifecycle passed', flush=True)
     (folder / 'results.json').write_text(json.dumps(rows, indent=2) + '\n')
 
 

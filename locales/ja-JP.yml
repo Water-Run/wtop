@@ -594,6 +594,9 @@ messages:
   gpu.client_title: "GPU クライアント"
   gpu.count:
     other: "GPU {count} 基"
+  gpu.hotspot_temperature: "ホットスポット温度"
+  gpu.graphics_voltage: "GPU 電圧"
+  power.measurement.driver_snapshot: "ドライバースナップショット；ハードウェア採取時刻は不明"
   gpu.device_clocks_title: "デバイスのクロック"
   gpu.device_clocks: "クロック"
   gpu.device_clocks_truncated: "読み取られたより多くのクロックドメインがあります"

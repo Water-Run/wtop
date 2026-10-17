@@ -68,4 +68,10 @@ typedef struct {
     int     iExtValue;
     int     iExtMask;
 } wtop_ADLOD6FanSpeedInfo;
+typedef uint32_t wtop_ADL_D3DKMT_HANDLE;
+typedef struct { int supported, value; } wtop_ADLSingleSensorData;
+typedef struct {
+    int size;
+    wtop_ADLSingleSensorData sensors[256];
+} wtop_ADLPMLogDataOutput;
 #endif

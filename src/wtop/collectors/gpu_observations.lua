@@ -11,6 +11,7 @@ local groups = {
   utilization_percent = "utilization", memory_used_bytes = "memory",
   memory_total_bytes = "memory", frequency_current_hz = "frequency",
   temperature_celsius = "temperature", power_watts = "power",
+  hotspot_temperature_celsius = "temperature", graphics_voltage_volts = "voltage",
   fan_speed_percent = "fan", fan_speed_rpm = "fan",
 }
 local function finite(value)
@@ -49,6 +50,15 @@ local function metadata(source,data,now,retained,reason)
     sample_started_ns=data.sample_started_ns,sample_finished_ns=data.sample_finished_ns,
     received_at_ns=now,quality=retained and "stale" or "fresh",
     retained=retained or false,reason=reason}
+end
+local function metric_method(observation,source,device,key)
+  if source=="adl"and device.adl then
+    observation.method=device.adl.metric_methods and device.adl.metric_methods[key]
+    if observation.method=="shared_memory"or observation.method=="query"then
+      observation.hardware_timestamp_available=false
+      observation.measurement="driver_snapshot"
+    end
+  end
 end
 
 function M.copy(value, budget) return clone(value, budget) end
@@ -104,6 +114,7 @@ function M.mark(devices,before,source,data,now)
       for key in pairs(device.metrics or {}) do
         if not (before[device] and before[device][key]) then
           local observation=metadata(source,data,now)
+          metric_method(observation,source,device,key)
           local group=groups[key]
           if group then
             if group=="power" then observation.quality=device.quality.power or "fresh"
@@ -214,6 +225,7 @@ function M:apply(source,devices,lookup,used,anchors,now,reason)
             if target==value or target.metrics[key]==nil then
               target.metrics[key]=item
               local observation=metadata(source,record.data,record.received_at_ns,true,reason)
+              metric_method(observation,source,value,key)
               observation.observed_at_ns=record.observed_at_ns
               target.metric_observations[key]=observation
               if groups[key] then target.quality[groups[key]]="stale" end

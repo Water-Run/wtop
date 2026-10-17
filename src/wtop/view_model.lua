@@ -1204,6 +1204,12 @@ local function gpu_rows(snapshot, format, i18n)
             temperature = qualified(temperature_celsius
                 and formatted(function() return assert(format:temperature(temperature_celsius)) end)
                 or "—", metrics.temperature_celsius, "temperature_celsius", "temperature"),
+            hotspot_temperature = type(metrics.hotspot_temperature_celsius)=="number"
+                and qualified(temperature(format,metrics.hotspot_temperature_celsius),
+                    metrics.hotspot_temperature_celsius,"hotspot_temperature_celsius","temperature") or nil,
+            graphics_voltage = type(metrics.graphics_voltage_volts)=="number"
+                and qualified(number(format,metrics.graphics_voltage_volts,3).." V",
+                    metrics.graphics_voltage_volts,"graphics_voltage_volts","voltage") or nil,
             power = qualified_power(power_watts and string.format("%.1f W", power_watts) or "—",
                 power_watts, "power_watts"),
             power_limit = qualified_power(power_budget.limit and string.format("%.1f W",power_budget.limit) or "—",
@@ -1213,7 +1219,7 @@ local function gpu_rows(snapshot, format, i18n)
             power_budget_source = power_budget.source or power_budget.limit_source,
             power_scope = metrics.power_scope=="asic" and translated(i18n,"power.scope.asic","ASIC chip") or nil,
             power_measurement = not power_from_sensor and (metrics.power_measurement == "current" or metrics.power_measurement == "average"
-                or metrics.power_measurement == "device_sample") and translated(i18n,
+                or metrics.power_measurement == "device_sample" or metrics.power_measurement == "driver_snapshot") and translated(i18n,
                     "power.measurement." .. metrics.power_measurement, metrics.power_measurement) or nil,
             power_interval_ns = not power_from_sensor and metrics.power_interval_ns or nil,
             power_age_ns = power_age_ns,

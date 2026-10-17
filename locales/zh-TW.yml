@@ -594,6 +594,9 @@ messages:
   gpu.client_title: "GPU 用戶端"
   gpu.count:
     other: "{count} 張 GPU"
+  gpu.hotspot_temperature: "熱點溫度"
+  gpu.graphics_voltage: "GPU 電壓"
+  power.measurement.driver_snapshot: "驅動快照；硬體取樣時間未知"
   gpu.device_clocks_title: "裝置頻率網域"
   gpu.device_clocks: "頻率網域"
   gpu.device_clocks_truncated: "還有更多頻率網域未讀取"

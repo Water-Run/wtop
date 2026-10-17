@@ -599,6 +599,9 @@ messages:
   gpu.count:
     one: "{count} GPU"
     other: "{count} GPUs"
+  gpu.hotspot_temperature: "Hotspot temperature"
+  gpu.graphics_voltage: "GPU voltage"
+  power.measurement.driver_snapshot: "Driver snapshot; hardware sample time unknown"
   gpu.device_clocks_title: "Device clocks"
   gpu.device_clocks: "Clocks"
   gpu.device_clocks_truncated: "more clock domains exist than were read"

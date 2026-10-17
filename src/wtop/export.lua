@@ -844,6 +844,7 @@ local function export_gpu_observations(observations)
             result[name] = copy_fields(observation, {
                 "source", "quality", "retained", "reason", "observed_at_ns",
                 "sample_started_ns", "sample_finished_ns", "received_at_ns", "attempted_at_ns",
+                "method", "measurement", "hardware_timestamp_available",
             })
         end
     end
@@ -2376,7 +2377,7 @@ function M.agent(snapshot, options)
             -- different quantities, and a summary carrying one of them
             -- unnamed reads as "the" frequency of the device.
             "frequency_current_hz", "frequency_domain", "frequency_source_kind",
-            "temperature_celsius", "power_watts", "power_source", "power_scope", "power_measurement", "power_limit_watts", "power_limit_source",
+            "temperature_celsius", "hotspot_temperature_celsius", "graphics_voltage_volts", "power_watts", "power_source", "power_scope", "power_measurement", "power_limit_watts", "power_limit_source",
             "power_limit_percent", "power_headroom_watts", "power_instant_watts", "power_average_watts",
             "power_interval_ns", "power_average_interval_ns", "power_instant_timestamp_us", "power_average_timestamp_us",
             "power_instant_quality", "power_average_quality",

@@ -594,6 +594,9 @@ messages:
   gpu.client_title: "GPU 클라이언트"
   gpu.count:
     other: "GPU {count}개"
+  gpu.hotspot_temperature: "핫스팟 온도"
+  gpu.graphics_voltage: "GPU 전압"
+  power.measurement.driver_snapshot: "드라이버 스냅샷; 하드웨어 측정 시각 알 수 없음"
   gpu.device_clocks_title: "장치 클럭"
   gpu.device_clocks: "클럭"
   gpu.device_clocks_truncated: "읽은 것보다 더 많은 클럭 도메인이 있습니다"

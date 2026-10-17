@@ -29,6 +29,18 @@ typedef int (__cdecl *adl_sensor1_fn)(int,int,void *);
 typedef int (__cdecl *adl_caps2_fn)(void *,int,int *,int *,int *);
 typedef int (__cdecl *adl_caps1_fn)(int,int *,int *,int *);
 typedef int (__cdecl *adl_power2_fn)(void *,int,int,int *);
+typedef int (__cdecl *adl_pmlog_support_fn)(void *,int,int *,int);
+typedef int (__cdecl *adl_pmlog_start_fn)(void *,int,int,int,int *,wtop_ADL_D3DKMT_HANDLE *,void **,int);
+typedef int (__cdecl *adl_pmlog_read_fn)(void *,int,int,int *,void **,wtop_ADLPMLogDataOutput *);
+typedef int (__cdecl *adl_pmlog_stop_fn)(void *,int,wtop_ADL_D3DKMT_HANDLE *);
+typedef int (__cdecl *adl_pmlog_create_fn)(void *,int,wtop_ADL_D3DKMT_HANDLE *);
+typedef int (__cdecl *adl_pmlog_destroy_fn)(void *,wtop_ADL_D3DKMT_HANDLE);
+struct adl_pmlog_session {
+    wtop_AdapterInfo identity;
+    wtop_ADL_D3DKMT_HANDLE handle;
+    void *shared;
+    int occupied,seen,start_attempted;
+};
 struct adl_output {adl_output2_fn two;adl_output1_fn one;};
 struct adl_sensor {adl_sensor2_fn two;adl_sensor1_fn one;};
 static struct {
@@ -40,11 +52,31 @@ static struct {
     struct adl_output active,activity5,status6,temp6,fan6;
     struct adl_sensor thermal5,temp5,fan5;
     adl_power2_fn power6;
+    adl_pmlog_support_fn pmlog_support;
+    adl_pmlog_start_fn pmlog_start;
+    adl_pmlog_read_fn pmlog_read;
+    adl_pmlog_stop_fn pmlog_stop;
+    adl_pmlog_create_fn pmlog_create;
+    adl_pmlog_destroy_fn pmlog_destroy;
+    adl_output2_fn pmlog_query;
+    struct adl_pmlog_session pmlog[ADL_MAX_ADAPTERS];
+    int pmlog_cleanup_failed;
 } api;
 static void *__stdcall adl_allocate(int size) {
     return size>0&&size<=4*1024*1024?malloc((size_t)size):NULL;
 }
+static void adl_pmlog_close(struct adl_pmlog_session *s) {
+    if(s->handle){
+        wtop_ADL_D3DKMT_HANDLE owned=s->handle;
+        if(s->start_attempted&&api.pmlog_stop){
+            if(api.pmlog_stop(api.context,s->identity.iAdapterIndex,&owned))api.pmlog_cleanup_failed=1;
+        }
+        if(api.pmlog_destroy&&api.pmlog_destroy(api.context,s->handle))api.pmlog_cleanup_failed=1;
+    }
+    memset(s,0,sizeof(*s));
+}
 void wtop_adl_finish(void) {
+    for(unsigned i=0;i<ADL_MAX_ADAPTERS;++i)adl_pmlog_close(&api.pmlog[i]);
     if(api.ready){if(api.two)api.destroy2(api.context);else api.destroy1();}
     HMODULE module=api.library;memset(&api,0,sizeof(api));if(module)FreeLibrary(module);
 }
@@ -90,6 +122,13 @@ static const char *adl_open(void) {
 #undef SENSOR
     api.caps2=RESOLVE(adl_caps2_fn,"ADL2_Overdrive_Caps");api.caps1=RESOLVE(adl_caps1_fn,"ADL_Overdrive_Caps");
     api.power6=RESOLVE(adl_power2_fn,"ADL2_Overdrive6_CurrentPower_Get");
+    api.pmlog_support=RESOLVE(adl_pmlog_support_fn,"ADL2_Overdrive8_PMLog_ShareMemory_Support");
+    api.pmlog_start=RESOLVE(adl_pmlog_start_fn,"ADL2_Overdrive8_PMLog_ShareMemory_Start");
+    api.pmlog_read=RESOLVE(adl_pmlog_read_fn,"ADL2_Overdrive8_PMLog_ShareMemory_Read");
+    api.pmlog_stop=RESOLVE(adl_pmlog_stop_fn,"ADL2_Overdrive8_PMLog_ShareMemory_Stop");
+    api.pmlog_create=RESOLVE(adl_pmlog_create_fn,"ADL2_Device_PMLog_Device_Create");
+    api.pmlog_destroy=RESOLVE(adl_pmlog_destroy_fn,"ADL2_Device_PMLog_Device_Destroy");
+    api.pmlog_query=RESOLVE(adl_output2_fn,"ADL2_New_QueryPMLogData_Get");
     return NULL;
 }
 static int adl_output(struct adl_output fn,int index,void *data) {
@@ -125,6 +164,9 @@ struct adl_reading {
     int bus,slot,function,aliases,partial;
     double temperature,power;
     int engine,memory,utilization,fan_percent,fan_rpm;
+    int pmlog_status,pmlog_method,pmlog_valid,pmlog_invalid,has_hotspot,has_voltage;
+    double hotspot,voltage;
+    unsigned pmlog_fields;
     char name[256],key[256];
 };
 static int adl_same_identity(const wtop_AdapterInfo *a,const wtop_AdapterInfo *b) {
@@ -136,6 +178,86 @@ static int adl_same_identity(const wtop_AdapterInfo *a,const wtop_AdapterInfo *b
         &&!strcmp(a->strPNPString,b->strPNPString)&&!strcmp(a->strUDID,b->strUDID);
 }
 static int adl_clock(int value) {return value>=0&&value<=1000000;}
+/* Public ADLSensorType units, not undocumented board-power or SmartShift limits.
+ * The shared buffer is opaque; only the SDK's Read function may interpret it. */
+static const struct {int id,minimum,maximum;double scale;} pmlog_specs[]={
+    {1,0,10000,1e6},{2,0,10000,1e6},{8,-199,999,1},
+    {27,-199,999,1},{14,0,100000,1},{15,0,100,1},
+    {19,0,100,1},{21,0,10000,.001},{23,0,99999,1}
+};
+static void adl_pmlog(const wtop_AdapterInfo *info,struct adl_reading *r) {
+    r->pmlog_status=ADL_UNSUPPORTED;
+    if(!api.two||!r->strong||api.pmlog_cleanup_failed)return;
+    struct adl_pmlog_session *slot=NULL,*empty=NULL;
+    for(unsigned i=0;i<ADL_MAX_ADAPTERS;++i){
+        struct adl_pmlog_session *s=&api.pmlog[i];
+        if(!s->occupied){if(!empty)empty=s;continue;}
+        if(s->identity.iAdapterIndex==info->iAdapterIndex){
+            if(!adl_same_identity(&s->identity,info)){adl_pmlog_close(s);empty=s;}
+            else slot=s;
+        }
+    }
+    if(api.pmlog_cleanup_failed)return;
+    int requested[9];for(unsigned i=0;i<9;++i)requested[i]=pmlog_specs[i].id;
+    if(!slot&&empty&&api.pmlog_support&&api.pmlog_start&&api.pmlog_read
+            &&api.pmlog_stop&&api.pmlog_create&&api.pmlog_destroy){
+        int supported=0;r->pmlog_status=api.pmlog_support(api.context,info->iAdapterIndex,&supported,0);
+        if(!r->pmlog_status&&supported==1){
+            slot=empty;slot->identity=*info;slot->occupied=1;
+            r->pmlog_status=api.pmlog_create(api.context,info->iAdapterIndex,&slot->handle);
+            if(!r->pmlog_status&&slot->handle){
+                wtop_ADL_D3DKMT_HANDLE owned=slot->handle;slot->start_attempted=1;
+                r->pmlog_status=api.pmlog_start(api.context,info->iAdapterIndex,1000,9,requested,&owned,&slot->shared,0);
+                if(!r->pmlog_status&&(owned!=slot->handle||!slot->shared))r->pmlog_status=-3;
+            }else if(!r->pmlog_status)r->pmlog_status=-3;
+            if(r->pmlog_status){adl_pmlog_close(slot);slot=NULL;}
+        }else if(!r->pmlog_status)r->pmlog_status=supported==0?ADL_UNSUPPORTED:-3;
+    }
+    wtop_ADLPMLogDataOutput data;memset(&data,0,sizeof(data));
+    for(unsigned i=0;i<256;++i)data.sensors[i].value=INT_MIN;
+    if(slot){
+        slot->seen=1;r->pmlog_method=1;
+        r->pmlog_status=api.pmlog_read(api.context,info->iAdapterIndex,9,requested,&slot->shared,&data);
+        if(!slot->shared){r->pmlog_status=-3;adl_pmlog_close(slot);}
+    }else if(api.pmlog_query&&!api.pmlog_cleanup_failed){
+        /* Retained for older drivers; current drivers use the shared API. */
+        data.size=sizeof(data);
+        r->pmlog_method=2;r->pmlog_status=api.pmlog_query(api.context,info->iAdapterIndex,&data);
+    }
+    if(r->pmlog_status)return;
+    if(data.size!=0&&data.size!=(int)sizeof(data)){r->pmlog_status=-3;r->pmlog_invalid=9;return;}
+    for(unsigned i=0;i<9;++i){
+        int supported=data.sensors[pmlog_specs[i].id].supported;
+        int value=data.sensors[pmlog_specs[i].id].value;
+        if(supported==0)continue;
+        if(supported!=1||value<pmlog_specs[i].minimum||value>pmlog_specs[i].maximum){++r->pmlog_invalid;continue;}
+        double v=(double)value*pmlog_specs[i].scale;
+        ++r->pmlog_valid;r->pmlog_fields|=1u<<i;
+        switch(i){
+            case 0:r->engine=value*100;r->activity_status=0;break;
+            case 1:r->memory=value*100;r->activity_status=0;break;
+            case 2:r->temperature=v;r->has_temperature=1;r->temperature_status=0;break;
+            case 3:r->hotspot=v;r->has_hotspot=1;break;
+            case 4:r->fan_rpm=value;r->has_fan_rpm=1;r->fan_status=0;break;
+            case 5:r->fan_percent=value;r->has_fan_percent=1;r->fan_status=0;break;
+            case 6:r->utilization=value;r->activity_status=0;break;
+            case 7:r->voltage=v;r->has_voltage=1;break;
+            case 8:r->power=v;r->has_power=1;r->power_status=0;break;
+        }
+    }
+    if(r->pmlog_invalid)r->pmlog_status=-3;
+}
+static void adl_restore_pmlog(struct adl_reading *r,const struct adl_reading *modern) {
+    unsigned fields=modern->pmlog_fields;
+    if(fields&1u)r->engine=modern->engine;
+    if(fields&2u)r->memory=modern->memory;
+    if(fields&64u)r->utilization=modern->utilization;
+    if(fields&(1u|2u|64u))r->activity_status=0;
+    if(fields&4u){r->temperature=modern->temperature;r->has_temperature=1;r->temperature_status=0;}
+    if(fields&16u){r->fan_rpm=modern->fan_rpm;r->has_fan_rpm=1;r->fan_status=0;}
+    if(fields&32u){r->fan_percent=modern->fan_percent;r->has_fan_percent=1;r->fan_status=0;}
+    if(fields&256u){r->power=modern->power;r->has_power=1;r->power_status=0;}
+}
 static void adl_read(const wtop_AdapterInfo *info,struct adl_reading *r) {
     memset(r,0,sizeof(*r));r->adapter_index=info->iAdapterIndex;r->active=-1;r->present=info->iPresent;
     r->bus=info->iBusNumber;r->slot=info->iDeviceNumber;r->function=info->iFunctionNumber;
@@ -155,6 +277,14 @@ static void adl_read(const wtop_AdapterInfo *info,struct adl_reading *r) {
     r->active_status=adl_output(api.active,r->adapter_index,&r->active);
     r->supported=r->enabled=r->version=-1;
     r->caps_status=adl_caps(r->adapter_index,&r->supported,&r->enabled,&r->version);
+    r->activity_status=r->temperature_status=r->fan_status=r->power_status=ADL_UNSUPPORTED;
+    adl_pmlog(info,r);
+    struct adl_reading modern=*r;
+    /* Modern boards need not implement the legacy queries. Avoid calling them
+     * when PMLog supplied every common metric, including legitimate zeros. */
+    if((r->pmlog_fields&0x177u)==0x177u)goto read_finished;
+    r->engine=r->memory=r->utilization=-1;
+    r->has_temperature=r->has_fan_rpm=r->has_fan_percent=r->has_power=0;
     wtop_ADLPMActivity a;memset(&a,0xff,sizeof(a));a.iSize=sizeof(a);
     r->activity_status=adl_output(api.activity5,r->adapter_index,&a);
     if(!r->activity_status){
@@ -207,9 +337,12 @@ static void adl_read(const wtop_AdapterInfo *info,struct adl_reading *r) {
     int power=INT_MIN;r->power_status=api.two&&api.power6?api.power6(api.context,r->adapter_index,0,&power):ADL_UNSUPPORTED;
     if(!r->power_status&&power>=0&&(double)power/256.0<100000){r->power=(double)power/256.0;r->has_power=1;}
     else if(!r->power_status)r->power_status=-3;
+    adl_restore_pmlog(r,&modern);
+read_finished:
+    r->has_activity=r->engine>=0||r->memory>=0||r->utilization>=0;
     if(!r->strong){r->has_activity=r->has_temperature=r->has_power=r->has_fan_percent=r->has_fan_rpm=0;
-        r->engine=r->memory=r->utilization=-1;}
-    r->partial=!r->strong||r->engine<0||r->memory<0||r->utilization<0||r->activity_status!=0||r->temperature_status!=0||r->fan_status!=0||r->power_status!=0;
+        r->engine=r->memory=r->utilization=-1;r->has_hotspot=r->has_voltage=0;r->pmlog_fields=0;}
+    r->partial=!r->strong||r->engine<0||r->memory<0||r->utilization<0||r->activity_status!=0||r->temperature_status!=0||r->fan_status!=0||r->power_status!=0||r->pmlog_invalid>0;
 }
 static void adl_emit(gpu_output *out,const struct adl_reading *r,int index) {
     gpu_table(out,0,24);integer_field(out,"index",r->adapter_index);integer_field(out,"aliases",r->aliases);
@@ -225,23 +358,36 @@ static void adl_emit(gpu_output *out,const struct adl_reading *r,int index) {
     if(r->memory>=0)number_field(out,"memory_clock_hz",(double)r->memory*10000.0);
     if(r->utilization>=0)integer_field(out,"utilization_percent",r->utilization);
     if(r->has_temperature)number_field(out,"temperature_celsius",r->temperature);
+    if(r->has_hotspot)number_field(out,"hotspot_temperature_celsius",r->hotspot);
+    if(r->has_voltage)number_field(out,"graphics_voltage_volts",r->voltage);
     if(r->has_fan_percent)integer_field(out,"fan_speed_percent",r->fan_percent);
     if(r->has_fan_rpm)integer_field(out,"fan_speed_rpm",r->fan_rpm);
-    if(r->has_power){number_field(out,"power_watts",r->power);string_field(out,"power_scope","asic");string_field(out,"power_measurement","device_sample");}
+    if(r->has_power){number_field(out,"power_watts",r->power);string_field(out,"power_scope","asic");
+        string_field(out,"power_measurement",(r->pmlog_fields&256u)?"driver_snapshot":"device_sample");}
     integer_field(out,"active_status",r->active_status);integer_field(out,"caps_status",r->caps_status);
     integer_field(out,"activity_status",r->activity_status);integer_field(out,"temperature_status",r->temperature_status);
     integer_field(out,"fan_status",r->fan_status);integer_field(out,"power_status",r->power_status);
+    integer_field(out,"pmlog_status",r->pmlog_status);
+    if(r->pmlog_method){
+        string_field(out,"pmlog_method",r->pmlog_method==1?"shared_memory":"query");
+        integer_field(out,"pmlog_valid_sensors",r->pmlog_valid);integer_field(out,"pmlog_invalid_sensors",r->pmlog_invalid);
+        integer_field(out,"pmlog_fields",r->pmlog_fields);
+        boolean_field(out,"hardware_timestamp_available",0);
+        if(r->pmlog_method==1)integer_field(out,"pmlog_requested_period_ms",1000);
+    }
     boolean_field(out,"partial",r->partial);gpu_index(out,index);
 }
 const char *wtop_adl_collect(gpu_output *out,int processes) {
-    (void)processes;const char *reason=adl_open();if(reason)return reason;
+    (void)processes;if(api.pmlog_cleanup_failed)wtop_adl_finish();
+    const char *reason=adl_open();if(reason)return reason;
+    for(unsigned i=0;i<ADL_MAX_ADAPTERS;++i)api.pmlog[i].seen=0;
     int total=-1,status=api.two?api.count2(api.context,&total):api.count1(&total);
-    if(status||total<0)return "adl_device_count_failed";
-    if(total>ADL_MAX_ADAPTERS)return "adl_output_too_large";
+    if(status||total<0){wtop_adl_finish();return "adl_device_count_failed";}
+    if(total>ADL_MAX_ADAPTERS){wtop_adl_finish();return "adl_output_too_large";}
     int count=total<ADL_MAX_ADAPTERS?total:ADL_MAX_ADAPTERS;
     wtop_AdapterInfo info[ADL_MAX_ADAPTERS];memset(info,0,sizeof(info));
     for(int i=0;i<count;++i)info[i].iSize=sizeof(info[i]);
-    if(count&&(api.two?api.info2(api.context,info,count*(int)sizeof(info[0])):api.info1(info,count*(int)sizeof(info[0]))))return "adl_device_list_failed";
+    if(count&&(api.two?api.info2(api.context,info,count*(int)sizeof(info[0])):api.info1(info,count*(int)sizeof(info[0])))){wtop_adl_finish();return "adl_device_list_failed";}
     struct adl_reading readings[ADL_MAX_ADAPTERS];unsigned used=0;int partial=total>ADL_MAX_ADAPTERS;
     for(int i=0;i<count;++i){
         if(info[i].iAdapterIndex<0||info[i].iExist!=1){partial=1;continue;}
@@ -251,7 +397,7 @@ const char *wtop_adl_collect(gpu_output *out,int processes) {
         for(unsigned j=0;j<used;++j)if(r.bus==readings[j].bus&&r.slot==readings[j].slot&&r.function==readings[j].function)duplicate=(int)j;
         if(duplicate>=0){struct adl_reading *old=&readings[duplicate];
             if(!r.strong||!old->strong||r.device!=old->device||strcmp(r.key,old->key)){++old->aliases;old->strong=0;old->partial=1;old->has_activity=old->has_temperature=old->has_power=0;
-                old->has_fan_percent=old->has_fan_rpm=0;old->engine=old->memory=old->utilization=-1;partial=1;continue;}
+                old->has_fan_percent=old->has_fan_rpm=old->has_hotspot=old->has_voltage=0;old->pmlog_fields=0;old->engine=old->memory=old->utilization=-1;partial=1;continue;}
             int aliases=old->aliases+1;
             if((!old->has_activity&&!old->has_temperature&&!old->has_power)&&(r.has_activity||r.has_temperature||r.has_power))*old=r;
             old->aliases=aliases;continue;
@@ -261,15 +407,16 @@ const char *wtop_adl_collect(gpu_output *out,int processes) {
     /* Logical adapter indices can be reused during a hotplug. Re-enumerate
      * after all reads so numeric telemetry cannot cross an index change. */
     int after=-1;status=api.two?api.count2(api.context,&after):api.count1(&after);
-    if(status||after!=total)return "adl_identity_changed";
+    if(status||after!=total){wtop_adl_finish();return "adl_identity_changed";}
     wtop_AdapterInfo confirmed[ADL_MAX_ADAPTERS];memset(confirmed,0,sizeof(confirmed));
     for(int i=0;i<count;++i)confirmed[i].iSize=sizeof(confirmed[i]);
     if(count&&(api.two?api.info2(api.context,confirmed,count*(int)sizeof(confirmed[0]))
-        :api.info1(confirmed,count*(int)sizeof(confirmed[0]))))return "adl_device_list_failed";
+        :api.info1(confirmed,count*(int)sizeof(confirmed[0])))){wtop_adl_finish();return "adl_device_list_failed";}
     for(int i=0;i<count;++i){int matched=0;
         for(int j=0;j<count;++j)if(adl_same_identity(&info[i],&confirmed[j]))++matched;
-        if(matched!=1)return "adl_identity_changed";
+        if(matched!=1){wtop_adl_finish();return "adl_identity_changed";}
     }
+    for(unsigned i=0;i<ADL_MAX_ADAPTERS;++i)if(api.pmlog[i].occupied&&!api.pmlog[i].seen)adl_pmlog_close(&api.pmlog[i]);
     gpu_table(out,0,6);string_field(out,"source","adl");string_field(out,"initialization",api.two?"adl2":"adl1");
     boolean_field(out,"truncated",total>ADL_MAX_ADAPTERS);string_field(out,"status",partial?"partial":"ok");
     if(partial)string_field(out,"reason","adl_data_incomplete");
