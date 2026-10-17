@@ -67,6 +67,7 @@ messages:
   power.window: "Cap window"
   power.interval: "Sample window"
   power.controls: "Controls"
+  power.headroom_short: "Left"
   power.headroom: "To cap"
   power.comparison_note: "Sample / configured cap; this does not indicate throttling."
   power.denied_note: "Power readings need root (--sudo)."

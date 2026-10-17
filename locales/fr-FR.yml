@@ -68,6 +68,7 @@ messages:
   power.window: "Fenêtre limite"
   power.interval: "Fenêtre mesure"
   power.controls: "Contrôles"
+  power.headroom_short: "Reste"
   power.headroom: "Marge W"
   power.comparison_note: "Mesure / limite configurée ; ce rapport ne signale pas un bridage."
   power.denied_note: "La lecture de puissance nécessite root (--sudo)."

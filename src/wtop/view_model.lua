@@ -1774,13 +1774,48 @@ local function power_rows(snapshot, format, i18n)
                 source = zone.power_source or zone.power_quality or "—",
                 state = Power.unusable(power_state) and (power_state.quality or power_state.status)
                     or zone.power_quality or zone.quality or "—",
-                controls = (zone.enabled == false or zone.control_enabled == false) and "disabled"
+                controls = (zone.enabled == false or zone.control_enabled == false
+                    or zone.controls_enabled == false) and "disabled"
                     or zone.controls_enabled == true and "enabled" or "unknown",
                 aggregate = zone.aggregate == true,
             }
         end
     end
     return rows, total
+end
+
+local function overview_power_budgets(snapshot, format, i18n)
+    local rows, total = Power.cpu_budgets(snapshot.power, snapshot.quality and snapshot.quality.power,
+        TABLE_ROW_LIMIT)
+    local names = {
+        long_term = translated(i18n, "power.long_term", "Sustained"),
+        short_term = translated(i18n, "power.short_term", "Short"),
+        peak_power = translated(i18n, "power.peak_power", "Peak"),
+    }
+    for index, row in ipairs(rows) do
+        local state = Power.unusable(row.quality) and Technical.state(i18n, row.quality)
+            or row.disabled and Technical.state(i18n, "disabled") or nil
+        row.identity = tostring(index) .. " " .. tostring(row.zone_id)
+        row.constraint = names[row.constraint_name] or row.constraint_name or "#" .. tostring(row.constraint_id)
+        row.heading = row.identity .. " · " .. row.constraint
+        local compact_id = tostring(row.zone_id):gsub("^intel%-rapl%-mmio:(%d+)$", "MMIO %1")
+            :gsub("^intel%-rapl:(%d+)$", "RAPL %1")
+        row.compact_identity = tostring(index) .. " " .. compact_id
+        row.reading = (state and state .. " · " or "")
+            .. (row.watts and number(format, row.watts, 2) .. " W" or "—")
+            .. " / " .. number(format, row.limit_watts, 2) .. " W"
+        row.usage = power_usage(format, row.comparison)
+        row.state = state
+        row.reading_compact = (row.watts and number(format, row.watts, 2) or "—")
+            .. "/" .. number(format, row.limit_watts, 2) .. "W"
+        row.percent_text = row.comparison and percent(format, row.comparison.percent) or "—"
+        row.headroom_compact = translated(i18n, "power.headroom_short", "Left") .. ":"
+            .. (row.comparison and number(format, row.comparison.headroom_watts, 2) .. "W" or "—")
+        row.headroom = translated(i18n, "power.headroom", "To cap") .. ": "
+            .. (row.comparison and number(format, row.comparison.headroom_watts, 2) .. " W" or "—")
+        row.combined = row.usage .. " · " .. row.headroom
+    end
+    return { rows = rows, total = total }
 end
 
 function M.power_detail_rows(snapshot, i18n)
@@ -2984,6 +3019,8 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
     local average_frequency = Engine.average_cpu_frequency(snapshot.cpu_frequency)
     local maximum_temperature = Engine.maximum_temperature(snapshot.sensors)
     local cpu_power = snapshot.power and snapshot.power.total_power_watts
+    local power_budgets = on("overview", "power_overview")
+        and overview_power_budgets(snapshot, format, i18n) or nil
     local workload_root = snapshot.workloads and snapshot.workloads.summary
         and snapshot.workloads.summary.root
     local battery_summary = snapshot.power_supplies and snapshot.power_supplies.summary
@@ -3069,6 +3106,9 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             value = cpu_power,
             display_value = type(cpu_power) == "number" and string.format("%.1f W", cpu_power) or "—",
             history = history("cpu_power"), quality = quality(snapshot, "power"),
+            budgets = power_budgets,
+            unavailable_text = (snapshot.power and (snapshot.power.denied_zones or 0) > 0)
+                and ("--sudo · " .. Technical.state(i18n, "denied")) or nil,
             axis_format = function(value) return string.format("%.0fW", value) end,
         },
 

@@ -68,6 +68,7 @@ messages:
   power.window: "限制窗口"
   power.interval: "采样窗口"
   power.controls: "功耗控制"
+  power.headroom_short: "余量"
   power.headroom: "距上限"
   power.comparison_note: "采样功耗 / 配置上限；此比例不代表已发生节流。"
   power.denied_note: "功耗读数需要 root 权限（--sudo）。"

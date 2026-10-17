@@ -68,6 +68,7 @@ messages:
   power.window: "制限期間"
   power.interval: "測定期間"
   power.controls: "電力制御"
+  power.headroom_short: "余裕"
   power.headroom: "上限まで"
   power.comparison_note: "測定電力 / 設定上限。この比率はスロットリングの判定ではありません。"
   power.denied_note: "電力の読み取りには root 権限が必要です（--sudo）。"

@@ -68,6 +68,7 @@ messages:
   power.window: "제한 시간"
   power.interval: "측정 시간"
   power.controls: "전력 제어"
+  power.headroom_short: "여유"
   power.headroom: "남은 전력"
   power.comparison_note: "측정 전력 / 설정 한도. 이 비율은 스로틀링 여부를 나타내지 않습니다."
   power.denied_note: "전력을 읽으려면 root 권한이 필요합니다 (--sudo)."

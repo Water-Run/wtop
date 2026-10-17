@@ -2,6 +2,7 @@ local Chart = require("wtop.ui.widgets.chart")
 local Sparkline = require("wtop.ui.widgets.sparkline")
 local Util = require("wtop.ui.widgets.util")
 local Width = require("wtop.ui.renderer.width")
+local PowerBudget = require("wtop.ui.widgets.power_budget")
 
 local M = {}
 
@@ -228,7 +229,14 @@ function M.render(grid, area, model, context, variant)
   if variant == "value" or area.height == 1 then
     local text = show_label and string.format("%s %s %s%s", symbol, label, value, unit)
       or string.format("%s %s%s", symbol, value, unit)
-    grid:write(area.x, row, Util.truncate(grid, text, area.width), value_style, area.width)
+    if model.budgets and model.budgets.total > 0 then
+      local hint = PowerBudget.indicator(model.budgets.total, area.width, grid)
+      local combined = text .. "  " .. hint
+      text = Width.display_width(combined, grid.width_options) <= area.width and combined or hint
+    else
+      text = Util.truncate(grid, text, area.width)
+    end
+    grid:write(area.x, row, text, value_style, area.width)
     return
   end
 
@@ -238,7 +246,18 @@ function M.render(grid, area, model, context, variant)
   end
   if row <= bottom then
     local text = string.format("%s %s%s", symbol, value, unit)
-    local written = grid:write(area.x, row, Util.truncate(grid, text, area.width),
+    if model.budgets and model.budgets.total > 0 then
+      if row == bottom then
+        local hint = PowerBudget.indicator(model.budgets.total, area.width, grid)
+        local combined = text .. "  " .. hint
+        text = Width.display_width(combined, grid.width_options) <= area.width and combined or hint
+      elseif Width.display_width(text, grid.width_options) > area.width then
+        text = "—"
+      end
+    else
+      text = Util.truncate(grid, text, area.width)
+    end
+    local written = grid:write(area.x, row, text,
       value_style, area.width)
     -- A short secondary reading (peak, total, capacity) rides on the value row
     -- when there is room, instead of spending another line on it.
@@ -259,6 +278,24 @@ function M.render(grid, area, model, context, variant)
         model.min, model.max, context, token, surface) then
       row = row + 1
     end
+  end
+
+  if model.budgets and model.budgets.total > 0 and row <= bottom then
+    local reserve = 0
+    if variant ~= "compact" then
+      for index = 1, (model.history and model.history.n or 0) do
+        if finite(model.history[index]) then reserve = 1; break end
+      end
+    end
+    if reserve > 0 and bottom - row + 1
+        >= PowerBudget.preview_height(model.budgets, area.width, grid) + 3 then reserve = 3 end
+    -- Keep a trend row when the panel has room for both it and the omitted
+    -- count. Tiny panels spend their last row on the count first.
+    if bottom - row < 1 then reserve = 0 end
+    local result = PowerBudget.render(grid,
+      { x = area.x, y = row, width = area.width, height = bottom - reserve - row + 1 },
+      model.budgets, context)
+    row = result.next_row
   end
 
   if variant == "compact" or not model.history or row > bottom then

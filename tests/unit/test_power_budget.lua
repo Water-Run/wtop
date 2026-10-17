@@ -28,7 +28,7 @@ assert(Power.compare(math.huge, 20) == nil and Power.compare(0/0, 20) == nil)
 assert(Power.compare(1e308, 1e-308) == nil)
 
 local function zone(id, source, cap)
-    return { id = id, name = "package-0", source_kind = source,
+    return { id = id, name = "package-0", source_kind = source, aggregate_domain = "cpu_package",
         enabled = true, control_enabled = true, controls_enabled = true,
         power_watts = 19.52, power_quality = "measured", quality = "fresh",
         power_interval_ns = 1000000000,
@@ -265,3 +265,83 @@ assert(compact.metrics.power.zones_truncated)
 assert(Report.render(Export.snapshot(many)):find("The source list was truncated.", 1, true))
 
 print("ok: power caps, source pairing, averaging windows, percentages and monochrome bars")
+
+-- Overview shows each controller's own numerator, not the aggregate headline.
+local Metric=require("wtop.ui.widgets.metric")
+local Budget=require("wtop.ui.widgets.power_budget")
+local function overview(value,translator)
+ return ViewModel.build(engine,value,translator or en,{},"overview").power_overview
+end
+local budgets,total=Power.cpu_budgets(snap.power,nil)
+assert(#budgets==6 and total==6)
+assert(budgets[1].constraint_name=="long_term"and budgets[2].constraint_name=="long_term")
+for _,b in ipairs(budgets)do
+ if b.zone_id==mmio.id and b.constraint_name=="long_term"then near(b.comparison.percent,97.6)end
+end
+local small,count=Power.cpu_budgets(snap.power,nil,1);assert(#small==1 and count==6)
+local child=zone("intel-rapl:0:0","intel-rapl",1);child.parent_id=msr.id
+local platform=zone("intel-rapl:1","intel-rapl",100);platform.aggregate_domain="platform"
+snap.power.zones={mmio,msr,child,platform};assert(#Power.cpu_budgets(snap.power,nil)==6)
+snap.power.zones={mmio,msr}
+local function frame(model,width,height,variant,context)
+ local grid=Grid.new(width,height)
+ context=context or{panel_title=true,capabilities={unicode=false}}
+ Metric.render(grid,{x=1,y=1,width=width,height=height},model,context,variant)
+ local lines={};for row=1,height do lines[row]=grid:row_text(row)end
+ return table.concat(lines,"\n")
+end
+local m=overview(snap);m.history={n=3,18,19,19.52}
+local screen=frame(m,80,24,"full")
+assert(screen:find("97.6%",1,true)and screen:find("75.1%",1,true))
+assert(screen:find("19.52 W / 20 W",1,true)and screen:find("0.48 W",1,true))
+assert(screen:find("intel-rapl:0",1,true)and screen:find("intel-rapl-mmio:0",1,true))
+local dense=frame(m,36,9,"full");assert(dense:find("97.6%",1,true)and dense:find("+",1,true))
+for _,variant in ipairs({"value","compact","spark","full"})do
+ for _,width in ipairs({8,12,20,24,36,40,60,80,120})do
+  for _,height in ipairs({1,2,3,4,6,8,12,20,28})do
+   local text=frame(m,width,height,variant)
+   assert(text:find("+",1,true)or text:find("97.6%",1,true),variant.." omitted budgets without notice")
+  end
+ end
+end
+mmio.power_watts=30;m=overview(snap);screen=frame(m,80,24,"full")
+assert(screen:find("150%",1,true)and screen:find("-10 W",1,true))
+mmio.power_watts=0;m=overview(snap);screen=frame(m,80,24,"full");assert(screen:find("[--------] 0%",1,true))
+mmio.power_watts=19.52
+for _,state in ipairs({"stale","denied","reset","gap","error","unavailable"})do
+ snap.quality={power={status="error",quality=state}}
+ m=overview(snap);assert(m.budgets.total==6)
+ for _,b in ipairs(m.budgets.rows)do assert(b.comparison==nil)end
+ screen=frame(m,80,24,"full");assert(not screen:find("%",1,true),state)
+end
+snap.quality=nil
+mmio.controls_enabled=false
+assert(model(snap).rows[4].controls=="disabled"and model(snap).rows[4].usage=="—")
+m=overview(snap);screen=frame(m,80,24,"full");assert(screen:find("Disabled",1,true))
+for _,b in ipairs(m.budgets.rows)do if b.zone_id==mmio.id then assert(not b.comparison)end end
+mmio.controls_enabled=true
+for _,locale in ipairs({"en-US","zh-CN","zh-TW","fr-FR","de-DE","es-ES","pt-BR","ja-JP","ko-KR","ru-RU"})do
+ local translator=assert(I18n.new({locale=locale}));local value=overview(snap,translator)
+ for _,width in ipairs({8,12,20,24,36,40,60,80,120})do
+  for _,height in ipairs({1,2,3,4,6,8,12,20,28})do
+   local grid=Grid.new(width,height);local report=Budget.render(grid,{x=1,y=1,width=width,height=height},value.budgets,{i18n=translator,capabilities={unicode=false}})
+   local lines={};for y=1,height do lines[y]=grid:row_text(y)end;local text=table.concat(lines,"\n")
+   assert(report.visible+report.hidden==6)
+   if report.hidden>0 then assert(text:find("+"..report.hidden,1,true),locale)end
+   for i=1,report.visible do
+    local b=value.budgets.rows[i]
+    assert(text:find(b.reading,1,true)or text:find(b.reading_compact,1,true),locale.." cut numeric row")
+   end
+  end
+ end
+end
+-- Hidden and process-only views do not build the overview budget model.
+assert(ViewModel.build(engine,snap,en,{},"overview",nil,{power_overview=false}).power_overview.budgets==nil)
+assert(ViewModel.build(engine,snap,en,{},"processes").power_overview==nil)
+print("ok: overview independent CPU cap bars,quality,disabled controls,history,variants,whole values and omitted counts")
+
+local narrow=overview(snap);narrow.history={n=3,18,19,19.52}
+local narrow_screen=frame(narrow,15,8,"full")
+assert(narrow_screen:find("MMIO 0",1,true)and narrow_screen:find("Sustained",1,true))
+assert(narrow_screen:find("19.52/20W",1,true)and narrow_screen:find("97.6%",1,true))
+assert(narrow_screen:find("Left:0.48W",1,true)and narrow_screen:find("+5",1,true))

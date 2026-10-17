@@ -38,6 +38,40 @@ function M.zone(zone, constraint, quality)
     return M.compare(zone.power_watts, constraint and constraint.power_limit_watts, enabled)
 end
 
+-- Keep controller aliases and packages separate. The headline total cannot be
+-- used as the numerator of an individual controller's cap.
+function M.cpu_budgets(power, quality, maximum)
+    maximum = maximum or 512
+    local rows, rank = {}, { long_term = 1, short_term = 2, peak_power = 3 }
+    for _, zone in ipairs(power and power.zones or {}) do
+        if not zone.parent_id and zone.aggregate_domain == "cpu_package" then
+            for _, cap in ipairs(zone.constraints or {}) do
+                local limit = M.limit(cap.power_limit_watts)
+                if limit then
+                    local state = type(quality) == "table" and (quality.quality or quality.status) or quality
+                    state = M.unusable(state) and state or zone.power_quality or zone.quality
+                    rows[#rows + 1] = {
+                        zone_id = zone.id, constraint_id = cap.id, constraint_name = cap.name,
+                        watts = M.reading(zone.power_watts), limit_watts = limit,
+                        comparison = M.zone(zone, cap, quality), quality = state,
+                        disabled = zone.enabled == false or zone.control_enabled == false
+                            or zone.controls_enabled == false,
+                    }
+                end
+            end
+        end
+    end
+    table.sort(rows, function(a, b)
+        local left, right = rank[a.constraint_name] or 4, rank[b.constraint_name] or 4
+        if left ~= right then return left < right end
+        if a.zone_id ~= b.zone_id then return tostring(a.zone_id) < tostring(b.zone_id) end
+        return tostring(a.constraint_id) < tostring(b.constraint_id)
+    end)
+    local total = #rows
+    for index = #rows, maximum + 1, -1 do rows[index] = nil end
+    return rows, total
+end
+
 function M.gpu(metrics, channel, quality)
     metrics = metrics or {}
     local watts, cap, source, cap_source

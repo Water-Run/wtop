@@ -68,6 +68,7 @@ messages:
   power.window: "Окно лимита"
   power.interval: "Окно замера"
   power.controls: "Управление"
+  power.headroom_short: "Ост."
   power.headroom: "Запас, Вт"
   power.comparison_note: "Замер / заданный лимит; это отношение не означает троттлинг."
   power.denied_note: "Для чтения мощности нужны права root (--sudo)."
