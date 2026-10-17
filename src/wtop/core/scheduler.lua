@@ -31,6 +31,11 @@ local function valid_interval(value)
     and value >= 1 and value <= MAX_INTERVAL_MS and value % 1 == 0
 end
 
+local function pending(task)
+  return task.probe_pending == true
+    or (task.last_result and task.last_result.sampling_pending == true)
+end
+
 local function call_now(clock)
   local value
   if type(clock) == "function" then
@@ -189,7 +194,7 @@ function Scheduler:set_visible(id, visible)
   -- the next tick instead of waiting for a possibly long background period.
   if task.visible and not was_visible then
     task.next_due_ns = now
-  elseif not task.visible and was_visible and task.background_interval_ms then
+  elseif not task.visible and was_visible and task.background_interval_ms and not pending(task) then
     -- Apply the background cadence at the visibility edge, including startup,
     -- rather than paying one more foreground-period run after leaving a page.
     -- Never shorten a later failure/backoff deadline.
@@ -208,7 +213,8 @@ function Scheduler:set_interval(id, interval_ms)
     return nil, "interval_must_be_positive"
   end
   task.interval_ms = interval_ms
-  task.next_due_ns = deadline_ns(call_now(self.clock), interval_ms)
+  local due = deadline_ns(call_now(self.clock), interval_ms)
+  task.next_due_ns = pending(task) and math.min(task.next_due_ns, due) or due
   return true
 end
 
@@ -222,7 +228,8 @@ function Scheduler:set_background_interval(id, interval_ms)
   end
   task.background_interval_ms = interval_ms
   if not task.visible then
-    task.next_due_ns = deadline_ns(call_now(self.clock), interval_ms or task.interval_ms)
+    local due = deadline_ns(call_now(self.clock), interval_ms or task.interval_ms)
+    task.next_due_ns = pending(task) and math.min(task.next_due_ns, due) or due
   end
   return true
 end
@@ -233,7 +240,8 @@ function Scheduler:probe_all(context)
   local previous_batch = context._collector_batch
   context._collector_batch = {}
   for _, id in ipairs(self.order) do
-    local collector = self.tasks[id].collector
+    local task = self.tasks[id]
+    local collector = task.collector
     if type(collector.probe) == "function" then
       local ok, result
       if collector._method_style then
@@ -254,6 +262,12 @@ function Scheduler:probe_all(context)
       end
     else
       capabilities[id] = { state = "available", available = true }
+    end
+    task.probe_pending = capabilities[id].sampling_pending == true
+    if task.probe_pending then
+      local retry = capabilities[id].retry_after_ms
+      if not valid_interval(retry) then retry = 25 end
+      task.next_due_ns = math.min(task.next_due_ns, deadline_ns(call_now(self.clock), retry))
     end
   end
   context._collector_batch = previous_batch
@@ -291,6 +305,7 @@ function Scheduler:tick(context)
       end
       local result = normalize_result(raw, started, finished)
       task.last_result = result
+      task.probe_pending = nil
       task.runs = task.runs + 1
 
       local interval_ms = task.interval_ms

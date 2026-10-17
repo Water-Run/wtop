@@ -584,4 +584,41 @@ local decode_seconds = os.clock() - decode_started
 equal(#many_numbers, number_count)
 assert(decode_seconds < 5, string.format("large numeric JSON decode took %.3fs", decode_seconds))
 
+do
+local function check_probe(retry,wanted)
+ local now,calls,complete=0,0,false
+ local scheduler=Scheduler.new({clock=function()return now end})
+ local collector={id='slow',probe=function()return{state='unavailable',available=false,sampling_pending=true,retry_after_ms=retry}end,sample=function()
+  calls=calls+1
+  if not complete then return{status='error',quality='stale',sampling_pending=true,retry_after_ms=25,reason='hardware_query_pending'}end
+  return{status='ok',quality='fresh',data={value=42}}
+ end}
+ assert(scheduler:add(collector,{interval_ms=60000,background_interval_ms=300000}))
+ scheduler:set_visible('slow',false);assert(scheduler:next_delay_ms()==300000)
+ scheduler:probe_all();assert(scheduler:next_delay_ms()==wanted)
+ local due=scheduler:task('slow').next_due_ns
+ assert(scheduler:set_interval('slow',120000));assert(scheduler:set_background_interval('slow',600000))
+ assert(scheduler:task('slow').next_due_ns==due,'cadence change delayed pending probe')
+ now=1000000;scheduler:set_visible('slow',true);scheduler:set_visible('slow',false)
+ assert(scheduler:task('slow').next_due_ns==now,'hide delayed pending probe')
+ scheduler:tick();assert(calls==1 and scheduler:next_delay_ms()==25)
+ due=scheduler:task('slow').next_due_ns
+ scheduler:set_interval('slow',60000);scheduler:set_background_interval('slow',300000)
+ assert(scheduler:task('slow').next_due_ns==due,'cadence change delayed pending sample')
+ now=2000000;scheduler:set_visible('slow',true);scheduler:set_visible('slow',false)
+ assert(scheduler:task('slow').next_due_ns==now,'hide delayed pending sample')
+ scheduler:tick();assert(calls==2 and scheduler:next_delay_ms()==25)
+ now=now+25000000;complete=true;scheduler:tick()
+ assert(calls==3 and scheduler:next_delay_ms()==300000,'completed probe kept foreground polling')
+ now=now+1000000000;scheduler:tick();assert(calls==3,'hidden completed source was sampled early')
+ scheduler:set_interval('slow',1000);scheduler:set_background_interval('slow',5000)
+ assert(scheduler:next_delay_ms()==5000,'ordinary cadence update lost its deadline')
+ scheduler:stop()
+end
+check_probe(25,25);check_probe(nil,25);check_probe(0,25);check_probe(math.huge,25);check_probe('bad',25);check_probe(0/0,25);check_probe(50,50)
+local now=0;local normal=Scheduler.new({clock=function()return now end})
+normal:add({id='normal',probe=function()return{state='available',available=true}end,sample=function()error('not due')end},{interval_ms=60000,background_interval_ms=300000})
+normal:set_visible('normal',false);normal:probe_all();assert(normal:next_delay_ms()==300000,'ordinary probe forced hidden I/O')
+end
+
 return true

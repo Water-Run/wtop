@@ -368,6 +368,9 @@ do
     assert(opens == 1 and closes == 1, "first public observation repeated the completed probe")
     local snapshot = Snapshot.merge(Snapshot.new(0, 0), { spd = first }, 1, clock)
     clock, available_reply = 300000000, false
+    local capability = collector:probe(context)
+    assert(capability.sampling_pending == true and capability.retry_after_ms == 25,
+        "pending probe did not advertise its completion poll")
     local pending = collector:sample(context)
     assert(pending.sampling_pending and opens == 2 and closes == 1)
     clock = clock + 150000000

@@ -86,7 +86,8 @@ function Proxy:probe(context)
     if result then self.ready = result; return result.capability end
     local pending = reason == "hardware_query_pending"
     return { state = pending and "unavailable" or "error",
-        available = false, reason = reason }
+        available = false, reason = reason,
+        sampling_pending = pending, retry_after_ms = pending and 25 or nil }
 end
 
 function Proxy:sample(context)

@@ -73,6 +73,9 @@ def main() -> None:
         subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/spd_worker_smoke.lua'),
                         str(ROOT),str(spd_control),str(spd_entered),str(spd_reads)],
                        cwd=ROOT,env=spd_env,check=True,timeout=20)
+        subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/spd_hidden_worker_smoke.lua'),
+                        str(ROOT),str(spd_control),str(spd_entered),str(spd_reads)],
+                       cwd=ROOT,env=spd_env,check=True,timeout=20)
         for _ in range(args.shutdown_rounds):
             subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/hardware_worker_shutdown.lua'),
                             str(ROOT)],cwd=ROOT,env=env,check=True,timeout=5)
@@ -112,6 +115,32 @@ def main() -> None:
                 capture=work/'hardware-last-screen.txt';capture.write_text(screens.get('last',''));capture.chmod(0o600)
                 pty._markers_visible=original;os.environ.clear();os.environ.update(saved)
             print('ok: warmed blocked hardware reader: stale value, power/process/system pages and quit responsive',flush=True)
+        if not args.native_only:
+            prior_pids={int(value)for value in spd_reads.read_text().splitlines()}
+            saved=os.environ.copy();os.environ.update(spd_env)
+            os.environ.update(WTOP_ROOT=str(ROOT),WTOP_LUA=str(args.lua_prefix.resolve()/'bin/lua'))
+            original=pty._markers_visible;screens={}
+            started=time.monotonic()
+            def hidden_ready(markers,data,columns,rows):
+                if not markers:return True
+                screen=pty.VirtualScreen(columns,rows);screen.feed(bytes(data));text=screen.text();screens['last']=text
+                if markers==('hidden-spd-reaped',):
+                    pids={int(value)for value in spd_reads.read_text().splitlines()}-prior_pids
+                    ready=time.monotonic()-started>=1 and '[Overview]'in text and bool(pids) and not any(Path('/proc',str(pid)).exists()for pid in pids)
+                    if ready:screens['overview']=text
+                    return ready
+                return all(marker in text for marker in markers)
+            pty._markers_visible=hidden_ready
+            try:
+                data=pty.run_session(200,50,exercise=False,cli_options=('--lang','en-US','--no-color','--interval','100'),
+                    script=[(b'4',('hidden-spd-reaped',)),(b'2',('Memory devices',)),
+                            (b'1',('PID','Command')),(b'q',('CPU','Memory'))])
+                assert 'overview'in screens
+                (work/'hidden-spd.pty').write_bytes(data)
+                print('ok: cold Overview completes hidden SPD and reaps it before Memory/Processes/Overview/quit',flush=True)
+            finally:
+                (work/'hidden-spd-overview.txt').write_text(screens.get('overview',''))
+                pty._markers_visible=original;os.environ.clear();os.environ.update(saved)
         if not args.native_only:
             spd_control.write_text('1\n');spd_entered.unlink(missing_ok=True)
             saved=os.environ.copy();os.environ.update(spd_env)
