@@ -72,14 +72,23 @@ function M:inspect(context, entity)
         return Model.result("unavailable", nil, {}, { timestamp_ns = now,
             reason = "storage_identity_changed", provider = "Windows storage" })
     end
+    local observation = { timestamp_ns = now, quality = { disk_health = {
+        status = self.result.status, quality = self.result.quality, value_timestamp_ns = self.at_ns,
+    } } }
+    local observed = Matching.observed_at(observation, health)
+    local current = Matching.current(observation, health)
     local function field(value, unit, source)
-        return Model.field(value, unit, { timestamp_ns = self.at_ns, source = source,
+        return Model.field(value, unit, { timestamp_ns = observed, source = source,
+            quality = value ~= nil and not current and "stale" or nil,
             provider = "Windows storage" })
+    end
+    local function section(id, fields)
+        return Model.section(id, fields, { quality = current and "fresh" or "stale" })
     end
     local sections, usable = {}, health.nvme ~= nil or health.ata ~= nil
     for _, channel in ipairs(health.temperature and health.temperature.channels or {}) do
         if type(channel.input) == "number" then usable = true end
-        sections[#sections + 1] = Model.section(channel.label or channel.id, {
+        sections[#sections + 1] = section(channel.label or channel.id, {
             temperature = field(channel.input, "celsius", channel.source),
             critical = field(channel.thresholds and channel.thresholds.crit, "celsius", channel.source),
         })
@@ -90,11 +99,11 @@ function M:inspect(context, entity)
             if key ~= "source" then fields[key] = field(value,
                 key == "temperature_celsius" and "celsius" or nil, health.nvme.source) end
         end
-        sections[#sections + 1] = Model.section("nvme_health", fields)
+        sections[#sections + 1] = section("nvme_health", fields)
     end
     if health.ata then
         for _, attribute in ipairs(health.ata.attributes or {}) do
-            sections[#sections + 1] = Model.section("ATA " .. attribute.id, {
+            sections[#sections + 1] = section("ATA " .. attribute.id, {
                 current = field(attribute.current, nil, health.ata.source),
                 worst = field(attribute.worst, nil, health.ata.source),
                 raw_hex = field(attribute.raw_hex, nil, health.ata.source),
@@ -105,12 +114,12 @@ function M:inspect(context, entity)
     for name, code in pairs(health.query_errors or {}) do
         query_fields[name] = field(code, nil, "DeviceIoControl")
     end
-    if next(query_fields) then sections[#sections + 1] = Model.section("Query status", query_fields) end
+    if next(query_fields) then sections[#sections + 1] = section("Query status", query_fields) end
     local denied = false
     for _, code in pairs(health.query_errors or {}) do if code == 5 then denied = true end end
     local status = usable and "ok" or denied and "denied" or "unavailable"
     return Model.result(status, nil, sections,
-        { timestamp_ns = self.at_ns, quality = usable and health.quality or status,
+        { timestamp_ns = observed, quality = usable and (current and health.quality or "stale") or status,
             provider = "Windows storage", cache_ttl_ms = 60000, cached = cached })
 end
 

@@ -1495,12 +1495,8 @@ local function export_disk_health(snapshot)
         local health = StorageHealth.match(snapshot, disk)
         if health then
             local item = copy_fields(health, { "id", "name", "bus_type", "quality", "deep", "skipped", "source", "scope" })
-            local state = snapshot.quality and snapshot.quality.disk_health
-            item.observed_at_ns = state and state.value_timestamp_ns
-            if not Quality.current_source(snapshot.quality, "disk_health")
-                or item.observed_at_ns and snapshot.timestamp_ns
-                and (snapshot.timestamp_ns < item.observed_at_ns
-                    or snapshot.timestamp_ns - item.observed_at_ns > Thermal.STALE_AFTER_NS) then
+            item.observed_at_ns = StorageHealth.observed_at(snapshot, health)
+            if not StorageHealth.current(snapshot, health) then
                 item.quality = "stale"
             end
             item.query_errors = copy_object(health.query_errors)

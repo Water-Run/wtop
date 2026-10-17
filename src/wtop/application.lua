@@ -21,7 +21,7 @@ local REPORT_COLLECTORS = {
     rfkill = true,
     thermal_zones = true,
     host_interfaces = true,
-    processor_firmware = true, edac = true, spd = true, disk = true,
+    processor_firmware = true, edac = true, spd = true, disk = true, disk_health = true,
     network = true, gpu = true, cpufreq = true, hwmon = true,
     powercap = true, power_supply = true, inventory = true,
 }

@@ -87,6 +87,17 @@ local entities=inspector:enumerate(ctx);assert(#entities==1 and entities[1].key=
 local inspected=inspector:inspect(ctx,entities[1]);assert(inspected.status=="ok"and #inspected.sections>0 and not inspected.cached)
 assert(opens==1 and closes==0)
 assert(inspector:inspect(ctx,entities[1]).cached);assert(opens==1)
+ctx.now_ns=function()return 21000000000 end
+local aged=inspector:inspect(ctx,entities[1])
+assert(aged.cached and aged.quality=="stale"and aged.timestamp_ns==1000000000)
+assert(opens==1 and closes==0,"aging cached health must not start extra device I/O")
+for _,section in ipairs(aged.sections)do
+    assert(section.quality=="stale")
+    for _,field in pairs(section.fields)do
+        if field.value~=nil then assert(field.quality=="stale"and field.timestamp_ns==1000000000)end
+    end
+end
+ctx.now_ns=function()return 1000000000 end
 disk._health_key="REPLACED"
 assert(inspector:inspect(ctx,entities[1]).reason=="storage_identity_changed"and closes==1)
 disk._health_key=health._health_key

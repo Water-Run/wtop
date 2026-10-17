@@ -3,7 +3,6 @@
 local Capability = require("wtop.core.capability")
 local Common = require("wtop.collectors.common")
 local Matching = require("wtop.model.storage_health")
-local Thermal = require("wtop.model.thermal")
 local Model = require("wtop.inspectors.model")
 local Native = require("wtop.native")
 local M = {}
@@ -72,7 +71,7 @@ function M:inspect(context, entity, depth)
         return Model.result("unavailable", nil, {}, { timestamp_ns = state.value_timestamp_ns or now,
             reason = state.reason or "nvme_health_unavailable", provider = "Linux NVMe" })
     end
-    local sections, observed = {}, state.value_timestamp_ns or health.observed_at_ns
+    local sections, observed = {}, Matching.observed_at(snapshot, health)
     if not health.nvme then
         if health.quality == "unavailable" and self.fallback:probe(context).available then
             return self.fallback:inspect(context, entity, depth)
@@ -86,8 +85,7 @@ function M:inspect(context, entity, depth)
         return Model.result(status, nil, sections, { timestamp_ns = observed,
             reason = "nvme_health_unavailable", quality = health.quality or status, provider = "Linux NVMe" })
     end
-    local current = state.status == "ok" and type(state.value_timestamp_ns) == "number"
-        and Thermal.current({ timestamp_ns = now, sensors = {}, quality = { sensors = state } })
+    local current = Matching.current(snapshot, health, now)
     local quality = current and health.quality or "stale"
     local fields = {}
     for key, value in pairs(health.nvme) do
