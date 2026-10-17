@@ -1,0 +1,29 @@
+{
+  "edk2_commit": "2c8ab5c4cfd11320b7447ee19358453e4e26e9ed",
+  "files": [
+    {
+      "name": "edk2-amd-cpuid.h",
+      "url": "https://github.com/tianocore/edk2/blob/2c8ab5c4cfd11320b7447ee19358453e4e26e9ed/MdePkg/Include/Register/Amd/Cpuid.h",
+      "sha256": "d46ac511ed9c5af8c0a1497e4c9e4c8753d2002fa7392132921182356649283a",
+      "bytes": 22387
+    },
+    {
+      "name": "kernel-topology-ext.c",
+      "url": "https://github.com/torvalds/linux/blob/9d586910e3d858fb25d061b7bf3f9642eca89213/arch/x86/kernel/cpu/topology_ext.c",
+      "sha256": "577c605459f2433af2b92e72607e9aaa78957d94b35bec3b6c2dac683bdb7f0d",
+      "bytes": 4333
+    },
+    {
+      "name": "kernel-topology.h",
+      "url": "https://github.com/torvalds/linux/blob/9d586910e3d858fb25d061b7bf3f9642eca89213/arch/x86/include/asm/topology.h",
+      "sha256": "161876ad3b9900c65393f789c2929772127780610327630597eb4c86e8ec4b06",
+      "bytes": 9373
+    },
+    {
+      "name": "kernel-cpu.h",
+      "url": "https://github.com/torvalds/linux/blob/9d586910e3d858fb25d061b7bf3f9642eca89213/arch/x86/include/asm/cpu.h",
+      "sha256": "c3a5087faf4e16ee23b25685e0bf67d676ed7ae24142e45e79a030c5cfe8b055",
+      "bytes": 2028
+    }
+  ]
+}

@@ -537,6 +537,10 @@ messages:
   compute.thread_count:
     other: "{count} スレッド"
   compute.threads: "論理 CPU"
+  cpuid.type.performance: "高性能"
+  cpuid.type.efficiency: "高効率"
+  cpuid.type.low_power: "低消費電力"
+  cpuid.efficiency_ranking: "電力効率順位"
   cpuid.core_type: "ハードウェアコア種別"
   cpuid.native_model: "ネイティブコアモデル"
   cpuid.topology_matches: "トポロジーがOSと一致"
@@ -1244,6 +1248,7 @@ messages:
   reason.cpuid_affinity_restore_failed: "CPUアフィニティを復元できません"
   reason.cpuid_affinity_unavailable: "CPUアフィニティを読み取れません"
   reason.cpuid_allocation_failed: "CPU 読み取り器のメモリ不足"
+  reason.cpuid_core_type_views_disagree: "同じコアのスレッドが異なるハードウェア種類を報告しています"
   reason.cpuid_disabled: "この読み取りプロセスではCPUIDが無効です"
   reason.cpuid_helper_failed: "CPU 読み取り器を起動できません"
   reason.cpuid_invalid_response: "CPU 読み取りデータが不正です"

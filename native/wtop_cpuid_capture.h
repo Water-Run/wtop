@@ -56,8 +56,9 @@ static void wtop_cpuid_snapshot(struct wtop_cpuid_cpu *cpu,struct wtop_cpuid_lea
     if(!strcmp(name,"AuthenticAMD")&&(ext_features&(1u<<22))) {
         if(cpu->max_extended>=0x8000001du)enumerate(cpu,leaves,0x8000001d,1);
         if(cpu->max_extended>=0x8000001eu)add(cpu,leaves,0x8000001e,0);
-        if(cpu->max_extended>=0x80000026u)enumerate(cpu,leaves,0x80000026,0);
     }
+    /* Fn80000026 support is independent of the older TopologyExtensions bit. */
+    if(!strcmp(name,"AuthenticAMD")&&cpu->max_extended>=0x80000026u)enumerate(cpu,leaves,0x80000026,0);
     if((first.ecx&((1u<<26)|(1u<<27)))==((1u<<26)|(1u<<27))) {
         uint32_t low,high;__asm__ volatile(".byte 0x0f,0x01,0xd0":"=a"(low),"=d"(high):"c"(0));
         cpu->xcr0_low=low;cpu->xcr0_high=high;cpu->flags|=WTOP_CPUID_FLAG_XCR0;

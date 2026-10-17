@@ -1844,7 +1844,7 @@ local function cpu_identity_entries(snapshot, format, i18n)
             entries[#entries+1]=entry("cpuid.cache_matches","Caches match OS",cpuid.os_comparison.cache_matches==nil and "—" or (cpuid.os_comparison.cache_matches and translated(i18n,"ui.yes","yes")or translated(i18n,"ui.no","no")))
         end
         for _,kind in ipairs(cpuid.core_types or{})do
-            entries[#entries+1]={label=(kind.model_name or "CPU")..string.format(" (0x%02x)",kind.core_type),value=tostring(kind.logical_cpu_count).."T · "..kind.source}
+            entries[#entries+1]={label=Technical.cpu_core_type(i18n,kind)..string.format(" (0x%02x)",kind.core_type),value=tostring(kind.logical_cpu_count).."T · "..kind.source}
         end
         for _, feature in ipairs(cpuid.features or {}) do
             if feature.name == "AVX" or feature.name == "AVX2" or feature.name == "AVX512F" then

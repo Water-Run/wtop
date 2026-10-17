@@ -629,6 +629,32 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
+### 2026-10-17：现代 AMD CPUID 拓扑与核心类型（验证中）
+
+开发源码已解码 AMD 的 `80000026` 扩展层级、`0B` 和 `80000008`/`8000001E`
+回退。按 APIC 地址域分组已观察的线程、核心和封装；诊断容量不作为在线人口。
+确定性缓存按共享地址域归并并检查几何与成员关系，原有 AMD15h CMT 语义保留。
+`80000026` 的原生枚举与 TopologyExtensions 标志分开，旧缓存和 `1E` 仍检查该标志。
+
+拓扑依据 [Linux 的 AMD 拓扑说明](https://www.kernel.org/doc/html/latest/arch/x86/topology.html)，
+字段依据 [EDK2 的 AMD CPUID 寄存器定义](https://github.com/tianocore/edk2/blob/2c8ab5c4cfd11320b7447ee19358453e4e26e9ed/MdePkg/Include/Register/Amd/Cpuid.h)。
+核心类型与功耗效率排序值分开，后者只在有效标志为真时保留；零值有效，
+不按排序值推算瓦数或即时性能。Snapshot、Agent、报告、Compute 与线程详情
+保留类型、原生模型、来源和适用的排序值；同核线程类型冲突会标记部分结果。
+
+[hwloc 的四组上游硬件记录](https://github.com/open-mpi/hwloc/tree/1bc29f95a41330d5e2e1a623920365480ce9897e/tests/hwloc/x86)
+经有界重封装后，与独立 XML 的每个封装、核心、缓存成员及容量、缓存行逐项
+比较：Zen/Zen3/Zen4/StrixPoint 分别为 96/128/384/24 个逻辑 CPU、48/128/192/12
+个核心、2/2/2/1 个封装及 160/400/600/38 个缓存实例。StrixPoint 两类核心为
+4 核 8 线程和 8 核 16 线程。来源、原文件与派生文件哈希及 BSD 许可位于
+`tests/fixtures/cpuid/amd/`；回放中的传输和亲和性标志为合成包装，未采得 XCR0，
+不作为 wtop 的真实 AMD 亲和性、OS 指令可用性或主机验收证据。
+
+原生捕获回归、APIC/层级矛盾、诊断数量、排名有效性、不完整名册及 384 CPU
+的 Windows 协议坐标已有定向检查。完整源码、最终归档与现有主机回归继续进行；
+本轮未取得现代 AMD 主机的原生实测。任务记录位于
+`build/hardware-amd-cpuid-20261017/`。
+
 ### 2026-10-17：Linux x86 芯片级 CPUID
 
 Linux x86 开发构建通过独立硬件读取进程取得逐逻辑 CPU 的 CPUID、XCR0、
@@ -3477,7 +3503,7 @@ Windows/macOS 的 NUMA 原生提供方仍待实现，本轮没有新增这些平
   Lua 5.5.1 与系统 Lua 5.4.8 下通过。本次沙箱的实时网络命名空间
   只暴露 `lo`；源码 Snapshot 的 `lo` 队列为 RX 1、TX 1，与 sysfs
   对应目录一致。多队列网卡仍缺少本机实测。
-- 当前源码套件包含 147 个 Lua 测试文件；此前矩阵和按日期记载的
+- 当前源码套件包含 148 个 Lua 测试文件；此前矩阵和按日期记载的
   120 文件运行是当时的验证结果，不计作本轮新增测试的覆盖证据。
 - `make check test-55 test-pty-quick` 通过，121 个 Lua 文件均通过；
   源码和 onedir 的硬件详情 PTY 场景也通过。onedir Snapshot 导出

@@ -537,6 +537,10 @@ messages:
   compute.thread_count:
     other: "{count} 个线程"
   compute.threads: "逻辑 CPU"
+  cpuid.type.performance: "性能"
+  cpuid.type.efficiency: "能效"
+  cpuid.type.low_power: "低功耗"
+  cpuid.efficiency_ranking: "功耗效率排序值"
   cpuid.core_type: "硬件核心类型"
   cpuid.native_model: "原生核心型号"
   cpuid.topology_matches: "拓扑与系统一致"
@@ -1244,6 +1248,7 @@ messages:
   reason.cpuid_affinity_restore_failed: "无法恢复 CPU 亲和性"
   reason.cpuid_affinity_unavailable: "无法读取 CPU 亲和性"
   reason.cpuid_allocation_failed: "CPU 读取器内存不足"
+  reason.cpuid_core_type_views_disagree: "同一核心的线程报告了不同的硬件类型"
   reason.cpuid_disabled: "此读取进程已禁用 CPUID"
   reason.cpuid_helper_failed: "CPU 读取器无法启动"
   reason.cpuid_invalid_response: "CPU 读取器返回的数据无效"

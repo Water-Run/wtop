@@ -132,6 +132,7 @@ local interface_reasons = {
   "cpuid_probe_busy",
   "cpuid_roster_changed",
   "cpuid_probe_pending",
+  "cpuid_core_type_views_disagree",
   "cpuidle_data_incomplete",
   "cpufreq_data_incomplete",
   "cpufreq_value_derived",

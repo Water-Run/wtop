@@ -15,6 +15,10 @@ def main():
  binary=w/'native-cpuid'
  subprocess.run(cc+flags+['-no-pie','-I'+str(lua/'include'),str(ROOT/'tests/native/linux_cpuid.c'),str(lua/'lib/liblua.a'),'-lm','-ldl','-pthread','-o',str(binary)],check=True)
  subprocess.run([str(binary)],check=True,timeout=15)
+ if platform.machine()in ['x86_64','i386','i486','i586','i686']:
+  capture=w/'shared-cpuid-capture'
+  subprocess.run(cc+flags+['-I'+str(ROOT/'tests/native/cpuid_fixture'),'-I'+str(ROOT/'native'),str(ROOT/'tests/native/cpuid_capture.c'),'-o',str(capture)],check=True)
+  subprocess.run([str(capture)],check=True,timeout=10)
  if a.native_only:return
  library=w/'cpuid-block.so'
  subprocess.run(cc+flags+['-shared','-fPIC',str(ROOT/'tests/native/linux_cpuid_block.c'),'-ldl','-o',str(library)],check=True)

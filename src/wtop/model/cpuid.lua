@@ -100,6 +100,18 @@ local function identity(cpu)
     result.native_model_id=hex(hybrid.eax&0xffffff)
     result.core_type_source="CPUID.1A"
   end
+  local amd_hybrid = leaf(cpu, 0x80000026)
+  if result.vendor == "AuthenticAMD" and result.family and result.family >= 0x17
+      and tonumber(cpu.max_extended) >= 0x80000026 and amd_hybrid
+      and ((amd_hybrid.ecx >> 8) & 255) == 1 and (amd_hybrid.ebx & 65535) > 0 then
+    result.core_type = (amd_hybrid.ebx >> 28) & 15
+    result.native_model_id = hex((amd_hybrid.ebx >> 24) & 15)
+    result.core_type_source = "CPUID.80000026"
+    result.core_type_class = ({[0]="performance", [1]="efficiency", [2]="low_power"})[result.core_type]
+    result.heterogeneous_core_topology = bit(amd_hybrid.eax, 30)
+    result.asymmetric_core_topology = bit(amd_hybrid.eax, 31)
+    if bit(amd_hybrid.eax, 29) then result.efficiency_ranking = (amd_hybrid.ebx >> 16) & 255 end
+  end
   local address = leaf(cpu, 0x80000008)
   if address then
     local physical, linear = address.eax & 255, (address.eax >> 8) & 255
@@ -202,6 +214,67 @@ local function amd15_topology(cpu, id)
     compute_unit_key = "cpuid:amd15:p" .. package .. ":n" .. node .. ":cu" .. unit }
 end
 
+local function amd_modern_topology(cpu, id)
+  if not id.family or id.family < 0x17 then return nil end
+  -- AMD64 APM extended topology: shifts describe APIC address domains;
+  -- advertised logical counts describe capacity, not observed population.
+  local function domains(number)
+    local values, apic, smt, shift, previous, previous_kind = {}, nil, nil, nil, -1, 0
+    local terminated = false
+    local maximum_kind = number == 0xb and 2 or 4
+    for sub = 0, 15 do
+      local value = leaf(cpu, number, sub)
+      if not value then return nil end
+      local kind, count, bits = (value.ecx >> 8) & 255, value.ebx & 65535, value.eax & 31
+      if kind == 0 or count == 0 then terminated = true; break end
+      if kind > maximum_kind or kind <= previous_kind or (sub == 0 and kind ~= 1)
+          or bits < previous or (apic and apic ~= value.edx) or (value.ecx & 255) ~= sub then return nil end
+      if kind == 1 then smt = bits end
+      values[#values + 1] = { level = sub, type = kind, shift = bits, diagnostic_logical_count = count,
+        domain = number == 0xb and ({"core", "socket"})[kind]
+          or ({"core", "complex", "die", "socket"})[kind] }
+      apic, shift, previous, previous_kind = value.edx, bits, bits, kind
+    end
+    if not terminated or previous_kind ~= maximum_kind or not smt or not shift then return nil end
+    return { method = number == 0xb and "CPUID.0B AMD" or "CPUID.80000026", apic_id = apic,
+      package_id = apic >> shift, core_id = (apic & ((1 << shift) - 1)) >> smt,
+      core_key = "cpuid:amd:" .. tostring(apic >> smt), levels = values }
+  end
+  local extended_max, basic_max = tonumber(cpu.max_extended), tonumber(cpu.max_basic)
+  local first26 = extended_max >= 0x80000026 and leaf(cpu, 0x80000026)
+  local first0b = basic_max >= 0xb and leaf(cpu, 0xb)
+  local active26 = first26 and (first26.ebx & 65535) > 0 and ((first26.ecx >> 8) & 255) > 0
+  local active0b = first0b and (first0b.ebx & 65535) > 0 and ((first0b.ecx >> 8) & 255) > 0
+  local top
+  if active26 then top = domains(0x80000026); if not top then return nil end
+  elseif active0b then top = domains(0xb); if not top then return nil end end
+  if active26 and active0b then
+    local older = domains(0xb)
+    if older and (older.apic_id ~= top.apic_id or older.package_id ~= top.package_id
+        or older.core_key ~= top.core_key) then return nil end
+  end
+  local address, extended, features = leaf(cpu, 0x80000008), leaf(cpu, 0x8000001e), leaf(cpu, 0x80000001)
+  local has_extended = extended_max >= 0x8000001e and features and bit(features.ecx, 22) and extended
+  if not top and address and has_extended then
+    local package = (address.ecx >> 12) & 15
+    if package == 0 then package = width((address.ecx & 255) + 1) end
+    local smt = width(((extended.ebx >> 8) & 255) + 1)
+    if package < smt then return nil end
+    top = { method = "CPUID.80000008/8000001E", apic_id = extended.eax,
+      package_id = extended.eax >> package, core_id = (extended.eax & ((1 << package) - 1)) >> smt,
+      core_key = "cpuid:amd:" .. tostring(extended.eax >> smt),
+      levels = { {level=0, type=1, shift=smt, domain="core"}, {level=1, type=2, shift=package, domain="socket"} } }
+  end
+  if top and has_extended then
+    if extended.eax ~= top.apic_id then return nil end
+    top.node_id = extended.ecx & 255
+    top.diagnostic_nodes_per_socket = ((extended.ecx >> 8) & 7) + 1
+    top.diagnostic_core_id = extended.ebx & 255
+  end
+  if top and id.initial_apic_id ~= (top.apic_id & 255) then return nil end
+  return top
+end
+
 local function topology(result)
   local packages, cores, units, ids = {}, {}, {}, {}
   local complete, vendor = true, nil
@@ -210,7 +283,7 @@ local function topology(result)
     if vendor and vendor ~= id.vendor then complete = false end
     vendor = id.vendor
     local decoded = cpu.status == 0 and (id.vendor == "GenuineIntel" and intel_topology(cpu)
-      or id.vendor == "AuthenticAMD" and amd15_topology(cpu, id)) or nil
+      or id.vendor == "AuthenticAMD" and (amd15_topology(cpu, id) or amd_modern_topology(cpu, id))) or nil
     if decoded and id.vendor == "GenuineIntel" and id.initial_apic_id ~= (decoded.apic_id & 255) then
       decoded = nil; issue(result, "cpuid_apic_views_disagree", cpu.id)
     end
@@ -298,8 +371,8 @@ local function caches(result)
         leaf = hex(number), subleaf = sub, source = "CPUID" }
       cpu.cache_views[#cpu.cache_views + 1] = row
       local top, key = cpu.topology
-      if top and number == 4 then
-        key = "intel:a" .. tostring(top.apic_id >> width(sharing))
+      if top and (number == 4 or cpu.identity.family and cpu.identity.family>=0x17) then
+        key = (number==4 and "intel:a"or"amd:a") .. tostring(top.apic_id >> width(sharing))
       elseif top and number == 0x8000001d then
         if sharing == 1 then key = top.core_key
         elseif level <= 2 and sharing == top.cores_per_compute_unit then key = top.compute_unit_key
@@ -311,7 +384,7 @@ local function caches(result)
         if not group then
           group = {}; for field, v in pairs(row) do group[field] = v end
           group.id, group.shared_cpu_list, group._seen = key, {}, {}; groups[key] = group
-          if number == 4 then group._shift, group._prefix = width(sharing), top.apic_id >> width(sharing) end
+          if number == 4 or cpu.identity.family and cpu.identity.family>=0x17 then group._shift, group._prefix = width(sharing), top.apic_id >> width(sharing) end
         elseif group.size_bytes ~= size or group.coherency_line_size_bytes ~= line
             or group.physical_line_partition ~= partitions or group.ways_of_associativity ~= ways
             or group.number_of_sets ~= sets or group.maximum_sharing ~= sharing then
@@ -363,30 +436,47 @@ local function caches(result)
 end
 
 local function core_types(result)
-  local groups={}
-  for _,cpu in ipairs(result.logical_cpus)do
-    local i=cpu.identity
-    if cpu.status==0 and i.core_type then
-      local key=string.format("CPUID.1A:%02x:%s",i.core_type,i.native_model_id)
-      local row=groups[key]
+  local groups, core_kinds = {}, {}
+  for _, cpu in ipairs(result.logical_cpus) do
+    local i = cpu.identity
+    if cpu.status == 0 and i.core_type ~= nil then
+      local key = string.format("%s:%02x:%s", i.core_type_source, i.core_type, i.native_model_id)
+      local row = groups[key]
       if not row then
-        row={id=key,core_type=i.core_type,native_model_id=i.native_model_id,source="CPUID.1A",
-          model_name=({[0x20]="Intel Atom",[0x40]="Intel Core"})[i.core_type],logical_cpu_ids={},_cores={}}
-        groups[key]=row
+        local name = i.vendor == "GenuineIntel" and ({[0x20]="Intel Atom", [0x40]="Intel Core"})[i.core_type]
+          or i.vendor == "AuthenticAMD" and ({[0]="AMD Performance", [1]="AMD Efficiency", [2]="AMD Low power"})[i.core_type]
+        row = { id=key, core_type=i.core_type, native_model_id=i.native_model_id, source=i.core_type_source,
+          vendor=i.vendor, core_type_class=i.core_type_class, model_name=name,
+          logical_cpu_ids={}, _cores={}, quality="fresh" }
+        groups[key] = row
       end
-      row.logical_cpu_ids[#row.logical_cpu_ids+1]=cpu.id
-      if cpu.topology then row._cores[cpu.topology.core_key]=true end
+      row.logical_cpu_ids[#row.logical_cpu_ids + 1] = cpu.id
+      if i.efficiency_ranking ~= nil then
+        row.efficiency_ranking_minimum = math.min(row.efficiency_ranking_minimum or i.efficiency_ranking, i.efficiency_ranking)
+        row.efficiency_ranking_maximum = math.max(row.efficiency_ranking_maximum or i.efficiency_ranking, i.efficiency_ranking)
+        row.efficiency_ranking_cpu_count = (row.efficiency_ranking_cpu_count or 0) + 1
+      end
+      if cpu.topology then
+        local core = cpu.topology.core_key
+        row._cores[core] = true
+        if core_kinds[core] and core_kinds[core] ~= key then
+          row.quality, groups[core_kinds[core]].quality = "partial", "partial"
+          issue(result, "cpuid_core_type_views_disagree", cpu.id)
+          result.reason = result.reason or "cpuid_core_type_views_disagree"
+        else core_kinds[core] = key end
+      end
     end
   end
-  result.core_types={}
-  for _,row in pairs(groups)do
-    row.logical_cpu_count=#row.logical_cpu_ids
-    if result.topology.complete then
-      row.physical_core_count=0;for _ in pairs(row._cores)do row.physical_core_count=row.physical_core_count+1 end
+  result.core_types = {}
+  for _, row in pairs(groups) do
+    row.logical_cpu_count = #row.logical_cpu_ids
+    if result.topology.complete and row.quality == "fresh" then
+      row.physical_core_count = 0
+      for _ in pairs(row._cores) do row.physical_core_count = row.physical_core_count + 1 end
     end
-    row._cores=nil;result.core_types[#result.core_types+1]=row
+    row._cores = nil; result.core_types[#result.core_types + 1] = row
   end
-  table.sort(result.core_types,function(a,b)return a.id<b.id end)
+  table.sort(result.core_types, function(a,b) return a.id < b.id end)
 end
 
 local function compare_linux(data,result,all_targets)
@@ -483,7 +573,10 @@ function M.enrich(data, observation)
   result = result or { schema = "wtop.cpuid.v1", status = reason and "error" or observation.status,
     reason = reason or observation.reason, architecture_bits = observation.architecture_bits, platform=observation.platform }
   result.source, result.age_ms = observation.source, observation.age_ms
-  if observation.quality=="stale"then result.quality="stale";result.reason=observation.reason end
+  if observation.quality=="stale"then
+    result.quality="stale";result.reason=observation.reason
+    for _,kind in ipairs(result.core_types or{})do kind.quality="stale"end
+  end
   result.retained=observation.retained;result.refresh_status=observation.refresh_status
   result.error_code = observation.error_code
   result.observed_at_ns = observation.observed_at_ns

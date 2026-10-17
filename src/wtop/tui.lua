@@ -2460,6 +2460,7 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
                 add("cpuid.signature", "CPU signature", identity.signature)
                 if identity.core_type then add("cpuid.core_type","Hardware core type",string.format("0x%02x · %s",identity.core_type,identity.core_type_source))end
                 if identity.native_model_id then add("cpuid.native_model","Native core model",identity.native_model_id)end
+                if identity.efficiency_ranking~=nil then add("cpuid.efficiency_ranking","Power efficiency rank",identity.efficiency_ranking)end
                 add("cpuid.physical_bits", "Physical address bits", identity.physical_address_bits)
                 add("cpuid.linear_bits", "Linear address bits", identity.linear_address_bits)
                 add("cpuid.hypervisor", "Hypervisor interface present", identity.hypervisor_present)

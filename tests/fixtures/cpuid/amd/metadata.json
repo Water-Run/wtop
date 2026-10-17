@@ -1,0 +1,45 @@
+{
+  "scope": "Re-enveloped upstream CPUID register dumps for deterministic topology/cache/type tests. Transport, affinity and restore flags are synthetic. XCR0/OS SIMD usability and wtop native AMD host operation are not measured.",
+  "upstream_fixture_license": "HWLOC-COPYING (BSD-3-Clause)",
+  "upstream_sources": "sources.json records pinned original archives/XML SHA-256 and URLs; additional-primary-sources.json records register references, which are not redistributed as implementation code.",
+  "transformation": "Input mask1: leaf only; mask5: leaf+ECX. Retain bounded native-capture register families, little-endian v2 framing and FNV-1a. Expected CPU memberships, sizes and line widths independently extracted from upstream XML, including L1iCache.",
+  "files": [
+    {
+      "path": "replay/AMD-17h-Zen-2xEpyc-7451.bin",
+      "sha256": "addbafbc28741ccbf210a73e2e32dd467663fc5bc5f192204d095c601b62f420"
+    },
+    {
+      "path": "replay/AMD-17h-Zen-2xEpyc-7451.expected.json",
+      "sha256": "e53955b7635d2ac7e98087cd8684a0e0ec441fde8c52239620dc7675294c4f85"
+    },
+    {
+      "path": "replay/AMD-19h-Zen3-2xEpyc-7763.bin",
+      "sha256": "f7f571e79263c9064baa4a3690bb665af5cc19c36bf184abcea65aa3175806f8"
+    },
+    {
+      "path": "replay/AMD-19h-Zen3-2xEpyc-7763.expected.json",
+      "sha256": "7de8c3d5b91fbab4c93f079d2ae79602fd0ae212cbcb8ee70521bf2e52c7ad0a"
+    },
+    {
+      "path": "replay/AMD-19h-Zen4-2xEpyc-9654.bin",
+      "sha256": "913f86d3e5650353a015d7844ca1fcaa41dbada866a683bdb5c2600f42cac9ad"
+    },
+    {
+      "path": "replay/AMD-19h-Zen4-2xEpyc-9654.expected.json",
+      "sha256": "c15fd7c2af38c29ad20af0f7bcf78b79438fb4eb53dcfd9591533e9ba07bc800"
+    },
+    {
+      "path": "replay/AMD-1Ah-Zen5StrixPoint-RyzenAI9HX370.bin",
+      "sha256": "a65b6bac8185eb7769555ffc6fc516ba39fbb25f83393df30171045c69ce4a43"
+    },
+    {
+      "path": "replay/AMD-1Ah-Zen5StrixPoint-RyzenAI9HX370.expected.json",
+      "sha256": "3afab06b6d34114e0883c9ba20f05fc229d2e431f064fa6fcb82b9191bec9b06"
+    },
+    {
+      "path": "replay/manifest.json",
+      "sha256": "32e74ed94b1d158e9ccbc65d99c8bf9b42c41bb417129f7d0ba980f94dc39b20"
+    }
+  ],
+  "regeneration": "python3 tests/fixtures/cpuid/amd/generate.py --source-dir PATH (pinned original tar.bz2 and XML files from sources.json)"
+}

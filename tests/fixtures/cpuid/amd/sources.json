@@ -1,0 +1,96 @@
+{
+  "hwloc_commit": "1bc29f95a41330d5e2e1a623920365480ce9897e",
+  "kernel_commit": "9d586910e3d858fb25d061b7bf3f9642eca89213",
+  "files": [
+    {
+      "name": "AMD-17h-Zen-2xEpyc-7451.tar.bz2",
+      "url": "https://raw.githubusercontent.com/open-mpi/hwloc/1bc29f95a41330d5e2e1a623920365480ce9897e/tests/hwloc/x86/AMD-17h-Zen-2xEpyc-7451.tar.bz2",
+      "bytes": 2253,
+      "sha256": "e57a7a7ebc2044a18bd2d0420f22d945a5468b49141ac8c462624dfa8131a757"
+    },
+    {
+      "name": "AMD-17h-Zen-2xEpyc-7451.xml",
+      "url": "https://raw.githubusercontent.com/open-mpi/hwloc/1bc29f95a41330d5e2e1a623920365480ce9897e/tests/hwloc/x86/AMD-17h-Zen-2xEpyc-7451.xml",
+      "bytes": 70888,
+      "sha256": "3cc4f1adffd7cd0a8afca8ccb9a83d1640eb240bdc426367dd9adc78272f9785"
+    },
+    {
+      "name": "AMD-17h-Zen-2xEpyc-7451.test",
+      "url": "https://raw.githubusercontent.com/open-mpi/hwloc/1bc29f95a41330d5e2e1a623920365480ce9897e/tests/hwloc/x86/AMD-17h-Zen-2xEpyc-7451.test",
+      "bytes": 78,
+      "sha256": "cd45f2c0a0460a8cb0e7a283eff92eb1adac6f6f354b97ff3e83b1d3583b43df"
+    },
+    {
+      "name": "AMD-19h-Zen3-2xEpyc-7763.tar.bz2",
+      "url": "https://raw.githubusercontent.com/open-mpi/hwloc/1bc29f95a41330d5e2e1a623920365480ce9897e/tests/hwloc/x86/AMD-19h-Zen3-2xEpyc-7763.tar.bz2",
+      "bytes": 2834,
+      "sha256": "287551eb4cce295dacd141c6ca98a7173746f8771b8e8bf79e2d412f5692e65c"
+    },
+    {
+      "name": "AMD-19h-Zen3-2xEpyc-7763.xml",
+      "url": "https://raw.githubusercontent.com/open-mpi/hwloc/1bc29f95a41330d5e2e1a623920365480ce9897e/tests/hwloc/x86/AMD-19h-Zen3-2xEpyc-7763.xml",
+      "bytes": 148823,
+      "sha256": "7775241e15ba636468fd5f93466fd5a44c62802000023cc411e591ed35b6a4ff"
+    },
+    {
+      "name": "AMD-19h-Zen3-2xEpyc-7763.test",
+      "url": "https://raw.githubusercontent.com/open-mpi/hwloc/1bc29f95a41330d5e2e1a623920365480ce9897e/tests/hwloc/x86/AMD-19h-Zen3-2xEpyc-7763.test",
+      "bytes": 80,
+      "sha256": "d97814801e6faeec59d1b2450b8ac4c008eae43d8ad1eab5ac06b141cfe91721"
+    },
+    {
+      "name": "AMD-19h-Zen4-2xEpyc-9654.tar.bz2",
+      "url": "https://raw.githubusercontent.com/open-mpi/hwloc/1bc29f95a41330d5e2e1a623920365480ce9897e/tests/hwloc/x86/AMD-19h-Zen4-2xEpyc-9654.tar.bz2",
+      "bytes": 9962,
+      "sha256": "1aba147e9b7385fa1f4d9be7535d92b436afa016c10baed97e4db7c915e61bf3"
+    },
+    {
+      "name": "AMD-19h-Zen4-2xEpyc-9654.xml",
+      "url": "https://raw.githubusercontent.com/open-mpi/hwloc/1bc29f95a41330d5e2e1a623920365480ce9897e/tests/hwloc/x86/AMD-19h-Zen4-2xEpyc-9654.xml",
+      "bytes": 295571,
+      "sha256": "cf559f8a0a9cebd53e1f71afd356b02137f917377e5d3edd1dd12ad11691ca46"
+    },
+    {
+      "name": "AMD-19h-Zen4-2xEpyc-9654.test",
+      "url": "https://raw.githubusercontent.com/open-mpi/hwloc/1bc29f95a41330d5e2e1a623920365480ce9897e/tests/hwloc/x86/AMD-19h-Zen4-2xEpyc-9654.test",
+      "bytes": 80,
+      "sha256": "a65c5371cb7ce5f7d17420e471e10c5ad97fa672695d2a2f071d6883f10be7d1"
+    },
+    {
+      "name": "AMD-1Ah-Zen5StrixPoint-RyzenAI9HX370.tar.bz2",
+      "url": "https://raw.githubusercontent.com/open-mpi/hwloc/1bc29f95a41330d5e2e1a623920365480ce9897e/tests/hwloc/x86/AMD-1Ah-Zen5StrixPoint-RyzenAI9HX370.tar.bz2",
+      "bytes": 2094,
+      "sha256": "fa6c42e18a1bfc860380b6323ab0d8ba3b048fa6e70860eb72c7d4753e8d15d9"
+    },
+    {
+      "name": "AMD-1Ah-Zen5StrixPoint-RyzenAI9HX370.xml",
+      "url": "https://raw.githubusercontent.com/open-mpi/hwloc/1bc29f95a41330d5e2e1a623920365480ce9897e/tests/hwloc/x86/AMD-1Ah-Zen5StrixPoint-RyzenAI9HX370.xml",
+      "bytes": 16575,
+      "sha256": "98122a8bd9647f653d33e4c0e4e40d8677804f192bf14a62f5e7fac30310b02c"
+    },
+    {
+      "name": "AMD-1Ah-Zen5StrixPoint-RyzenAI9HX370.test",
+      "url": "https://raw.githubusercontent.com/open-mpi/hwloc/1bc29f95a41330d5e2e1a623920365480ce9897e/tests/hwloc/x86/AMD-1Ah-Zen5StrixPoint-RyzenAI9HX370.test",
+      "bytes": 104,
+      "sha256": "719e7e514cd2039490a222cf93ed0d39b429881ef2b771fbd666a72d71bbe3cb"
+    },
+    {
+      "name": "HWLOC-COPYING",
+      "url": "https://raw.githubusercontent.com/open-mpi/hwloc/1bc29f95a41330d5e2e1a623920365480ce9897e/COPYING",
+      "bytes": 2724,
+      "sha256": "a7e03d1ccef79f9a6369f7b7385231e1656339e3292bbac1b7113782d0d384f4"
+    },
+    {
+      "name": "kernel-topology-amd.c",
+      "url": "https://raw.githubusercontent.com/torvalds/linux/9d586910e3d858fb25d061b7bf3f9642eca89213/arch/x86/kernel/cpu/topology_amd.c",
+      "bytes": 6596,
+      "sha256": "10e17117d090737a04daf06910eaa1d1a3d00d79e6b23f7c4733c812bc65873a"
+    },
+    {
+      "name": "kernel-topology.rst",
+      "url": "https://raw.githubusercontent.com/torvalds/linux/9d586910e3d858fb25d061b7bf3f9642eca89213/Documentation/arch/x86/topology.rst",
+      "bytes": 15377,
+      "sha256": "88f0493409eb86fee39a63eb99f01bcab8bc4c73f6356bdf3012bb9a62b813f3"
+    }
+  ]
+}

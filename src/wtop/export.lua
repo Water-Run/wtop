@@ -90,7 +90,7 @@ local function export_cpuid(cpuid)
     result.os_comparison=copy_fields(cpuid.os_comparison,{"topology_matches","cache_matches","cache_geometry_complete"})
     result.core_types=json.array({})
     for index,row in ipairs(cpuid.core_types or{})do
-        result.core_types[index]=copy_fields(row,{"id","core_type","native_model_id","source","model_name","logical_cpu_count","physical_core_count"})
+        result.core_types[index]=copy_fields(row,{"id","core_type","native_model_id","source","model_name","vendor","core_type_class","quality","logical_cpu_count","physical_core_count","efficiency_ranking_minimum","efficiency_ranking_maximum","efficiency_ranking_cpu_count"})
         result.core_types[index].logical_cpu_ids=copy_array(row.logical_cpu_ids)
     end
     result.cache_summary=json.array({})
@@ -106,12 +106,13 @@ local function export_cpuid(cpuid)
             "flags", "max_basic", "max_extended", "xcr0", "affinity_restored", "os_processor_verified", "truncated" })
         output.identity = copy_fields(cpu.identity, { "source", "vendor", "model_name", "signature", "family", "model", "stepping",
             "initial_apic_id", "physical_address_bits", "linear_address_bits", "hypervisor_present", "hypervisor_vendor",
-            "core_type", "core_type_source", "native_model_id" })
+            "core_type", "core_type_source", "native_model_id", "core_type_class", "efficiency_ranking",
+            "heterogeneous_core_topology", "asymmetric_core_topology" })
         output.topology = copy_fields(cpu.topology, { "method", "apic_id", "package_id", "core_id", "core_key",
-            "node_id", "compute_unit_id", "compute_unit_key", "cores_per_compute_unit" })
+            "node_id", "compute_unit_id", "compute_unit_key", "cores_per_compute_unit", "diagnostic_nodes_per_socket", "diagnostic_core_id" })
         output.topology.levels = json.array({})
         for level, value in ipairs(cpu.topology and cpu.topology.levels or {}) do
-            output.topology.levels[level] = copy_fields(value, { "level", "type", "shift", "diagnostic_logical_count" })
+            output.topology.levels[level] = copy_fields(value, { "level", "type", "shift", "diagnostic_logical_count", "domain" })
         end
         output.topology.thread_siblings = copy_array(cpu.topology and cpu.topology.thread_siblings)
         output.features, output.leaves, output.cache_views = json.array({}), json.array({}), json.array({})
@@ -2179,7 +2180,7 @@ function M.agent(snapshot, options)
     local cpuid_core_types=json.array({})
     local cpuid_types=full.cpu_info and full.cpu_info.cpuid and full.cpu_info.cpuid.core_types or{}
     for index=1,math.min(#cpuid_types,device_limit)do
-        cpuid_core_types[index]=copy_fields(cpuid_types[index],{"id","core_type","native_model_id","source","model_name","logical_cpu_count","physical_core_count"})
+        cpuid_core_types[index]=copy_fields(cpuid_types[index],{"id","core_type","native_model_id","source","model_name","vendor","core_type_class","quality","logical_cpu_count","physical_core_count","efficiency_ranking_minimum","efficiency_ranking_maximum","efficiency_ranking_cpu_count"})
     end
     local cpu_core_types = json.array({})
     for index = 1, math.min(#(full.cpu_info and full.cpu_info.core_types or {}), device_limit) do

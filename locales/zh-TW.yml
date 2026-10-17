@@ -537,6 +537,10 @@ messages:
   compute.thread_count:
     other: "{count} 個執行緒"
   compute.threads: "邏輯 CPU"
+  cpuid.type.performance: "效能"
+  cpuid.type.efficiency: "能效"
+  cpuid.type.low_power: "低功耗"
+  cpuid.efficiency_ranking: "功耗效率排序值"
   cpuid.core_type: "硬體核心類型"
   cpuid.native_model: "原生核心型號"
   cpuid.topology_matches: "拓撲與系統一致"
@@ -1244,6 +1248,7 @@ messages:
   reason.cpuid_affinity_restore_failed: "無法還原 CPU 親和性"
   reason.cpuid_affinity_unavailable: "無法讀取 CPU 親和性"
   reason.cpuid_allocation_failed: "CPU 讀取器記憶體不足"
+  reason.cpuid_core_type_views_disagree: "同一核心的執行緒回報了不同的硬體類型"
   reason.cpuid_disabled: "此讀取程序已停用 CPUID"
   reason.cpuid_helper_failed: "CPU 讀取器無法啟動"
   reason.cpuid_invalid_response: "CPU 讀取器傳回的資料無效"

@@ -154,9 +154,21 @@ function M.render(snapshot)
             {"Topology matches OS",comparison.topology_matches},{"Caches match OS",comparison.cache_matches},
         },function(row)return row end)
         if #list(cpuid.core_types)>0 then
-            table_section(lines,"CPU hardware core types (CPUID.1A)",
-                {"Type","Native model","Logical CPUs","Physical cores","Source"},cpuid.core_types,function(kind)
-                    return{(kind.model_name or "CPU").." "..string.format("0x%02x",kind.core_type),kind.native_model_id,kind.logical_cpu_count,kind.physical_core_count,kind.source}
+            local type_source=cpuid.core_types[1].source
+            for _,kind in ipairs(cpuid.core_types)do if kind.source~=type_source then type_source="CPUID";break end end
+            local columns={"Type","Native model","Logical CPUs","Physical cores","Source"}
+            local ranking=false
+            for _,kind in ipairs(cpuid.core_types)do if kind.efficiency_ranking_minimum~=nil then ranking=true;break end end
+            if ranking then columns[#columns+1]="Power efficiency rank"end
+            table_section(lines,"CPU hardware core types ("..(type_source or "CPUID")..")",
+                columns,cpuid.core_types,function(kind)
+                    local row={(kind.model_name or "CPU").." "..string.format("0x%02x",kind.core_type),kind.native_model_id,kind.logical_cpu_count,kind.physical_core_count,kind.source}
+                    if ranking and kind.efficiency_ranking_minimum~=nil then
+                        local minimum,maximum=kind.efficiency_ranking_minimum,kind.efficiency_ranking_maximum
+                        row[6]=tostring(minimum)..(maximum~=minimum and "-"..maximum or "")
+                            .." · "..kind.efficiency_ranking_cpu_count.."/"..kind.logical_cpu_count.." CPUs"
+                    end
+                    return row
                 end,cpuid)
         end
         table_section(lines, "CPU instruction capabilities (observed logical CPUs)",

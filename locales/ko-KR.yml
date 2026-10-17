@@ -537,6 +537,10 @@ messages:
   compute.thread_count:
     other: "스레드 {count}개"
   compute.threads: "논리 CPU"
+  cpuid.type.performance: "성능"
+  cpuid.type.efficiency: "효율"
+  cpuid.type.low_power: "저전력"
+  cpuid.efficiency_ranking: "전력 효율 순위"
   cpuid.core_type: "하드웨어 코어 유형"
   cpuid.native_model: "기본 코어 모델"
   cpuid.topology_matches: "토폴로지가 OS와 일치"
@@ -1244,6 +1248,7 @@ messages:
   reason.cpuid_affinity_restore_failed: "CPU 선호도를 복원할 수 없습니다"
   reason.cpuid_affinity_unavailable: "CPU 선호도를 읽을 수 없습니다"
   reason.cpuid_allocation_failed: "CPU 읽기 도구 메모리 부족"
+  reason.cpuid_core_type_views_disagree: "같은 코어의 스레드가 서로 다른 하드웨어 유형을 보고합니다"
   reason.cpuid_disabled: "이 읽기 프로세스에서 CPUID가 비활성화되었습니다"
   reason.cpuid_helper_failed: "CPU 읽기 도구를 시작할 수 없음"
   reason.cpuid_invalid_response: "수신한 CPU 데이터가 유효하지 않음"

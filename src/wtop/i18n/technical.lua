@@ -23,4 +23,11 @@ function M.reason(i18n, value)
     return localized(i18n, "reason", value)
 end
 
+function M.cpu_core_type(i18n, value)
+    if value.vendor == "AuthenticAMD" and value.core_type_class then
+        return "AMD " .. localized(i18n, "cpuid.type", value.core_type_class)
+    end
+    return value.model_name or "CPU"
+end
+
 return M

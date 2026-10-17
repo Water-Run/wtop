@@ -1,0 +1,2428 @@
+[
+  {
+    "type": "Package",
+    "cpu_ids": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      0,
+      1,
+      2,
+      48,
+      49,
+      50
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      0,
+      48
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      0,
+      48
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      0,
+      48
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      0,
+      48
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      1,
+      49
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      1,
+      49
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      1,
+      49
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      1,
+      49
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      2,
+      50
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      2,
+      50
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      2,
+      50
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      2,
+      50
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      3,
+      4,
+      5,
+      51,
+      52,
+      53
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      3,
+      51
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      3,
+      51
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      3,
+      51
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      3,
+      51
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      4,
+      52
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      4,
+      52
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      4,
+      52
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      4,
+      52
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      5,
+      53
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      5,
+      53
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      5,
+      53
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      5,
+      53
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      6,
+      7,
+      8,
+      54,
+      55,
+      56
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      6,
+      54
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      6,
+      54
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      6,
+      54
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      6,
+      54
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      7,
+      55
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      7,
+      55
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      7,
+      55
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      7,
+      55
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      8,
+      56
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      8,
+      56
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      8,
+      56
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      8,
+      56
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      9,
+      10,
+      11,
+      57,
+      58,
+      59
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      9,
+      57
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      9,
+      57
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      9,
+      57
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      9,
+      57
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      10,
+      58
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      10,
+      58
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      10,
+      58
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      10,
+      58
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      11,
+      59
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      11,
+      59
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      11,
+      59
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      11,
+      59
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      12,
+      13,
+      14,
+      60,
+      61,
+      62
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      12,
+      60
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      12,
+      60
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      12,
+      60
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      12,
+      60
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      13,
+      61
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      13,
+      61
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      13,
+      61
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      13,
+      61
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      14,
+      62
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      14,
+      62
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      14,
+      62
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      14,
+      62
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      15,
+      16,
+      17,
+      63,
+      64,
+      65
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      15,
+      63
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      15,
+      63
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      15,
+      63
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      15,
+      63
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      16,
+      64
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      16,
+      64
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      16,
+      64
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      16,
+      64
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      17,
+      65
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      17,
+      65
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      17,
+      65
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      17,
+      65
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      18,
+      19,
+      20,
+      66,
+      67,
+      68
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      18,
+      66
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      18,
+      66
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      18,
+      66
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      18,
+      66
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      19,
+      67
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      19,
+      67
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      19,
+      67
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      19,
+      67
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      20,
+      68
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      20,
+      68
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      20,
+      68
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      20,
+      68
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      21,
+      22,
+      23,
+      69,
+      70,
+      71
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      21,
+      69
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      21,
+      69
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      21,
+      69
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      21,
+      69
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      22,
+      70
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      22,
+      70
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      22,
+      70
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      22,
+      70
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      23,
+      71
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      23,
+      71
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      23,
+      71
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      23,
+      71
+    ]
+  },
+  {
+    "type": "Package",
+    "cpu_ids": [
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89,
+      90,
+      91,
+      92,
+      93,
+      94,
+      95
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      24,
+      25,
+      26,
+      72,
+      73,
+      74
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      24,
+      72
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      24,
+      72
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      24,
+      72
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      24,
+      72
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      25,
+      73
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      25,
+      73
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      25,
+      73
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      25,
+      73
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      26,
+      74
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      26,
+      74
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      26,
+      74
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      26,
+      74
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      27,
+      28,
+      29,
+      75,
+      76,
+      77
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      27,
+      75
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      27,
+      75
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      27,
+      75
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      27,
+      75
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      28,
+      76
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      28,
+      76
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      28,
+      76
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      28,
+      76
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      29,
+      77
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      29,
+      77
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      29,
+      77
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      29,
+      77
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      30,
+      31,
+      32,
+      78,
+      79,
+      80
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      30,
+      78
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      30,
+      78
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      30,
+      78
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      30,
+      78
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      31,
+      79
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      31,
+      79
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      31,
+      79
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      31,
+      79
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      32,
+      80
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      32,
+      80
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      32,
+      80
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      32,
+      80
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      33,
+      34,
+      35,
+      81,
+      82,
+      83
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      33,
+      81
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      33,
+      81
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      33,
+      81
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      33,
+      81
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      34,
+      82
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      34,
+      82
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      34,
+      82
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      34,
+      82
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      35,
+      83
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      35,
+      83
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      35,
+      83
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      35,
+      83
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      36,
+      37,
+      38,
+      84,
+      85,
+      86
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      36,
+      84
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      36,
+      84
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      36,
+      84
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      36,
+      84
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      37,
+      85
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      37,
+      85
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      37,
+      85
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      37,
+      85
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      38,
+      86
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      38,
+      86
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      38,
+      86
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      38,
+      86
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      39,
+      40,
+      41,
+      87,
+      88,
+      89
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      39,
+      87
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      39,
+      87
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      39,
+      87
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      39,
+      87
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      40,
+      88
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      40,
+      88
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      40,
+      88
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      40,
+      88
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      41,
+      89
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      41,
+      89
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      41,
+      89
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      41,
+      89
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      42,
+      43,
+      44,
+      90,
+      91,
+      92
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      42,
+      90
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      42,
+      90
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      42,
+      90
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      42,
+      90
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      43,
+      91
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      43,
+      91
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      43,
+      91
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      43,
+      91
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      44,
+      92
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      44,
+      92
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      44,
+      92
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      44,
+      92
+    ]
+  },
+  {
+    "type": "L3Cache",
+    "cpu_ids": [
+      45,
+      46,
+      47,
+      93,
+      94,
+      95
+    ],
+    "cache_size": "8388608",
+    "depth": "3",
+    "cache_linesize": "64",
+    "cache_associativity": "16",
+    "cache_type": "0"
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      45,
+      93
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      45,
+      93
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      45,
+      93
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      45,
+      93
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      46,
+      94
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      46,
+      94
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      46,
+      94
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      46,
+      94
+    ]
+  },
+  {
+    "type": "L2Cache",
+    "cpu_ids": [
+      47,
+      95
+    ],
+    "cache_size": "524288",
+    "depth": "2",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "0"
+  },
+  {
+    "type": "L1Cache",
+    "cpu_ids": [
+      47,
+      95
+    ],
+    "cache_size": "32768",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "8",
+    "cache_type": "1"
+  },
+  {
+    "type": "L1iCache",
+    "cpu_ids": [
+      47,
+      95
+    ],
+    "cache_size": "65536",
+    "depth": "1",
+    "cache_linesize": "64",
+    "cache_associativity": "4",
+    "cache_type": "2"
+  },
+  {
+    "type": "Core",
+    "cpu_ids": [
+      47,
+      95
+    ]
+  }
+]
