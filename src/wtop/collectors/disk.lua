@@ -4,6 +4,7 @@ local FS = require("wtop.linux.fs")
 local Common = require("wtop.collectors.common")
 local Sysfs = require("wtop.linux.sysfs")
 local NVMe = require("wtop.linux.nvme_diagnostics")
+local NVMeIdentity = require("wtop.linux.nvme_identity")
 local StackedBlock = require("wtop.linux.stacked_block")
 
 local Disk = {}
@@ -231,6 +232,7 @@ function Disk:sample(context, previous)
         major = current.major,
         minor = current.minor,
         diskseq = topology.diskseq,
+        _health_key = NVMeIdentity.key(current.name, current.major, current.minor, topology.diskseq),
         identity_quality = topology.diskseq and "stable" or "major_minor",
         source = "/sys/dev/block/" .. current.id,
         device_path = topology.device_path,

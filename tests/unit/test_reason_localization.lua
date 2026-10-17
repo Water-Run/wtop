@@ -190,6 +190,7 @@ local interface_reasons = {
   "memory_events_not_counted",
   "memory_events_not_supported",
   "native_collection_failed",
+  "nvme_health_unavailable",
   "native_statvfs_unavailable",
   "no_cpufreq_policies",
   "no_cpuidle_states",

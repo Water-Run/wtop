@@ -80,6 +80,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <wchar.h>
+#include "wtop_linux_nvme.h"
 
 #ifndef NS_PER_SECOND
 #define NS_PER_SECOND 1000000000LL
@@ -1471,6 +1472,43 @@ static int l_readfile_at(lua_State *L) {
     return 1;
 }
 
+static int l_read_nvme_health(lua_State *L) {
+    const char *name = check_path(L, 1, NULL);
+    lua_Integer device_major = luaL_checkinteger(L, 2), device_minor = luaL_checkinteger(L, 3);
+    lua_Integer sequence = luaL_checkinteger(L, 4);
+    unsigned long long controller, namespace_id;
+    char canonical[64], path[80], *end;
+    unsigned char bytes[512];
+    luaL_argcheck(L, strlen(name) <= 32 && strncmp(name, "nvme", 4) == 0
+        && name[4] >= '0' && name[4] <= '9', 1, "expected a whole NVMe namespace name");
+    errno = 0;
+    controller = strtoull(name + 4, &end, 10);
+    luaL_argcheck(L, !errno && controller <= UINT32_MAX && *end == 'n'
+        && end[1] >= '0' && end[1] <= '9', 1, "invalid NVMe controller name");
+    namespace_id = strtoull(end + 1, &end, 10);
+    luaL_argcheck(L, !errno && namespace_id <= UINT32_MAX && *end == '\0', 1,
+        "invalid NVMe namespace name");
+    (void)snprintf(canonical, sizeof(canonical), "nvme%llun%llu", controller, namespace_id);
+    luaL_argcheck(L, strcmp(name, canonical) == 0 && namespace_id > 0, 1,
+        "expected a canonical NVMe namespace name");
+    luaL_argcheck(L, device_major >= 0 && device_major <= 1048575, 2, "invalid device major");
+    luaL_argcheck(L, device_minor >= 0 && device_minor <= 1048575, 3, "invalid device minor");
+    luaL_argcheck(L, sequence > 0, 4, "disk sequence must be positive");
+    (void)snprintf(path, sizeof(path), "/dev/%s", canonical);
+    io_guard *guard = push_io_guard(L);
+    guard->descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW);
+    if (guard->descriptor < 0) return push_errno(L, "open NVMe namespace");
+    int status = wtop_nvme_health_read(guard->descriptor, (unsigned int)device_major,
+        (unsigned int)device_minor, (uint64_t)sequence, bytes);
+    if (status < 0) return push_errno(L, "read NVMe health");
+    if (status > 0) {
+        lua_pushnil(L); lua_pushliteral(L, "NVMe health command status");
+        lua_pushinteger(L, 0); lua_pushinteger(L, status); return 4;
+    }
+    lua_pushlstring(L, (const char *)bytes, sizeof(bytes));
+    return 1;
+}
+
 /* One fixed, read-only Intel performance-status register. Model support is
  * checked by the collector; the generic regular-file readers stay unchanged. */
 static int l_read_cpu_perf_limits(lua_State *L) {
@@ -2222,6 +2260,7 @@ static const luaL_Reg functions[] = {
     {"readfile", l_readfile},
     {"readfile_at", l_readfile_at},
     {"read_cpu_perf_limits", l_read_cpu_perf_limits},
+    {"read_nvme_health", l_read_nvme_health},
     {"read_cpu_clock_counters", l_read_cpu_clock_counters},
     {"proc_batch", l_proc_batch},
     {"process_stat_fields", l_process_stat_fields},

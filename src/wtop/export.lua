@@ -1494,7 +1494,7 @@ local function export_disk_health(snapshot)
     for _, disk in ipairs(snapshot.disks and snapshot.disks.devices or {}) do
         local health = StorageHealth.match(snapshot, disk)
         if health then
-            local item = copy_fields(health, { "id", "name", "bus_type", "quality", "deep", "skipped", "source" })
+            local item = copy_fields(health, { "id", "name", "bus_type", "quality", "deep", "skipped", "source", "scope" })
             local state = snapshot.quality and snapshot.quality.disk_health
             item.observed_at_ns = state and state.value_timestamp_ns
             if not Quality.current_source(snapshot.quality, "disk_health")
@@ -1520,7 +1520,7 @@ local function export_disk_health(snapshot)
                 "percentage_used", "temperature_celsius", "data_units_read", "data_units_written",
                 "data_unit_bytes", "data_units_rounded_up", "percentage_used_lower_bound",
                 "host_read_commands", "host_write_commands", "controller_busy_minutes", "power_cycles",
-                "power_on_hours", "unsafe_shutdowns", "media_errors", "error_log_entries", "source",
+                "power_on_hours", "unsafe_shutdowns", "media_errors", "error_log_entries", "source", "scope",
             }) end
             if health.ata then
                 item.ata = json.object({ version = health.ata.version, source = health.ata.source,
@@ -2230,6 +2230,11 @@ function M.agent(snapshot, options)
         return read + write
     end)
     local top_disks = json.array({})
+    local health_by_id = {}
+    for _, health in ipairs(full.disk_health and full.disk_health.devices or {}) do
+        if health_by_id[health.id] == nil then health_by_id[health.id] = health
+        else health_by_id[health.id] = false end
+    end
     for index, device in ipairs(ranked_disks) do
         top_disks[index] = copy_fields(device, {
             "id", "name", "read_bytes_per_second", "write_bytes_per_second",
@@ -2237,6 +2242,17 @@ function M.agent(snapshot, options)
             "average_write_latency_ms", "in_flight", "quality",
         })
         if device.temperature then top_disks[index].temperature = copy_object(device.temperature) end
+        local health = health_by_id[device.id]
+        if health and health.nvme then
+            top_disks[index].nvme_health = copy_fields(health.nvme, {
+                "critical_warning", "percentage_used", "percentage_used_lower_bound",
+                "available_spare_percent", "available_spare_threshold_percent", "data_units_read",
+                "data_units_written", "data_unit_bytes", "data_units_rounded_up", "media_errors",
+                "error_log_entries", "unsafe_shutdowns", "power_on_hours", "source", "scope",
+            })
+            top_disks[index].nvme_health.quality = health.quality
+            top_disks[index].nvme_health.observed_at_ns = health.observed_at_ns
+        end
     end
     local busiest_current_disk
     for _, device in ipairs(disk_devices) do

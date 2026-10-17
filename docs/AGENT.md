@@ -64,6 +64,13 @@ Agent `top.disks[].temperature` 携带当前温度、临界值、余量、来源
 I/O 与健康有独立的数据质量；不要用 I/O 停滞推断盘温也已停止，或把缓存值当作新样本。
 私有身份比较字段不导出，身份不足或不匹配时不建立关联。
 
+Linux 的 NVMe 健康数据也可由隔离的原生读取器提供，无需 smartctl。它只读取
+标准 SMART/Health 页，并以设备号和 diskseq 核对同一设备。Snapshot 的
+`disk_health` 与 Agent 的 `top.disks[].nvme_health` 保留寿命使用量、备用空间、
+累计读写与介质错误；Linux 的 `scope=controller` 表示控制器健康，不能作为
+某个分区或命名空间独占的计数。权限不足、旧内核无法核对 diskseq 或设备
+变化时不发布新的健康值；陈旧记录保留质量和原观测时间。
+
 NVMe 的 128 位计数使用十进制字符串，避免浮点或有符号整数截断。
 `data_unit_bytes=512000` 和 `data_units_rounded_up` 说明累计读写的单位与取整；
 `percentage_used_lower_bound` 在 255 时表示下界，不把使用率超过 100 当作接口错误。

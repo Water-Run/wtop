@@ -30,6 +30,7 @@ local constructors = {
   spd = require("wtop.collectors.spd"),
   pressure = require("wtop.collectors.pressure"),
   disk = require("wtop.collectors.disk"),
+  disk_health = require("wtop.collectors.linux_nvme"),
   network = require("wtop.collectors.network"),
   connections = require("wtop.collectors.connections"),
   process = require("wtop.collectors.process"),

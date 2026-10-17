@@ -304,17 +304,34 @@ local function inspector_lines(title, result, i18n)
     end
     for _, section in ipairs(result.sections or {}) do
         lines[#lines + 1] = ""
-        lines[#lines + 1] = tostring(section.id or section.title_key
-            or translated(i18n, "inspector.details", "Details"))
+        local nvme = section.id == "nvme_health"
+        lines[#lines + 1] = nvme and translated(i18n, "nvme.health_title", "NVMe health")
+            or tostring(section.id or section.title_key
+                or translated(i18n, "inspector.details", "Details"))
         local keys = {}
         for key in pairs(section.fields or {}) do keys[#keys + 1] = key end
-        table.sort(keys)
+        local priority = nvme and { critical_warning = 1, percentage_used = 2,
+            available_spare_percent = 3, temperature_celsius = 4, scope = 5,
+            media_errors = 6, power_on_hours = 7, data_units_read = 8, data_units_written = 9 }
+        table.sort(keys, function(a, b)
+            if priority then
+                local left, right = priority[a] or 100, priority[b] or 100
+                if left ~= right then return left < right end
+            end
+            return a < b
+        end)
         local rows = {}
         for _, key in ipairs(keys) do
             local field = section.fields[key]
-            rows[#rows + 1] = { key, format_value(field and field.value, i18n,
+            local label = nvme and translated(i18n, "nvme.health_" .. key, key) or key
+            local value = field and field.value
+            if nvme and key == "scope" and value == "controller" then
+                value = translated(i18n, "nvme.health_controller", "Controller")
+            end
+            rows[#rows + 1] = { label, format_value(value, i18n,
                 field and field.unit)
-                .. "  [" .. tostring(field and field.quality or "unknown") .. "]" }
+                .. "  [" .. tostring(nvme and Technical.state(i18n, field and field.quality or "unknown")
+                    or field and field.quality or "unknown") .. "]" }
         end
         local field_lines = aligned_pairs(rows)
         for index, key in ipairs(keys) do
@@ -4591,7 +4608,7 @@ local function make_inspectors(engine)
         executable = system.find_executable("perf") or "/usr/bin/perf",
         sleep_executable = system.find_executable("sleep") or "/usr/bin/sleep",
     })
-    return Inspectors.new_default({
+    local registry = Inspectors.new_default({
         smart = { runner = engine.context.runner, clock = engine.clock, executable = smartctl },
         ram_bandwidth = {
             clock = engine.clock,
@@ -4603,6 +4620,13 @@ local function make_inspectors(engine)
         systemd = { runner = engine.context.runner, clock = engine.clock, systemctl = systemctl },
         logind = { runner = engine.context.runner, clock = engine.clock, loginctl = loginctl },
     })
+    local storage = require("wtop.inspectors.linux_storage").new({
+        native = native, fallback = registry:get("storage.smart"),
+    })
+    assert(registry:unregister("storage.smart"))
+    assert(registry:register(storage))
+    engine._storage_inspector = storage
+    return registry
 end
 
 local function inspector_context(engine)

@@ -272,11 +272,11 @@ function M.render(snapshot)
         if type(object(device).nvme) == "table" then nvme_health[#nvme_health + 1] = device end
     end
     if #nvme_health > 0 then
-        table_section(lines, "NVMe health", { "Device", "Warning bits", "Life used %", "Spare %", "Power-on hours", "Media errors", "Quality" },
+        table_section(lines, "NVMe health", { "Device", "Warning bits", "Life used %", "Spare %", "Power-on hours", "Media errors", "Quality", "Scope" },
             nvme_health, function(device)
                 local n = device.nvme
                 return { device.name, n.critical_warning, n.percentage_used,
-                    n.available_spare_percent, n.power_on_hours, n.media_errors, device.quality }
+                    n.available_spare_percent, n.power_on_hours, n.media_errors, device.quality, n.scope }
             end, health)
     end
     local stacked_volumes = {}
