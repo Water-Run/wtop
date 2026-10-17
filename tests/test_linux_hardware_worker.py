@@ -62,7 +62,7 @@ def main() -> None:
         for _ in range(args.shutdown_rounds):
             subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/hardware_worker_shutdown.lua'),
                             str(ROOT)],cwd=ROOT,env=env,check=True,timeout=5)
-        print('ok: '+str(args.shutdown_rounds)+' standalone Lua VM exits with ten asynchronous readers being reaped',flush=True)
+        print('ok: '+str(args.shutdown_rounds)+' standalone Lua VM exits with all declared asynchronous readers being reaped',flush=True)
         if not args.native_only:
             control.write_text('0\n'); entered.unlink(missing_ok=True)
             saved=os.environ.copy(); os.environ.update(env)

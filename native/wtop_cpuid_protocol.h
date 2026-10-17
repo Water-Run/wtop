@@ -1,4 +1,4 @@
-/* Fixed-width, little-endian protocol for the isolated Windows CPU reader. */
+/* Fixed-width, little-endian protocol for the isolated x86 CPU readers. */
 #ifndef WTOP_CPUID_PROTOCOL_H
 #define WTOP_CPUID_PROTOCOL_H
 #include <stdint.h>
@@ -7,6 +7,8 @@
 #define WTOP_CPUID_BYTES (2u * 1024u * 1024u)
 #define WTOP_CPUID_MAGIC UINT32_C(0x50435457)
 #define WTOP_CPUID_VERSION 1u
+/* v2 uses a Linux CPU id directly, without Windows processor groups. */
+#define WTOP_CPUID_LINUX_VERSION 2u
 struct wtop_cpuid_target { uint32_t id; uint16_t group, index; };
 struct wtop_cpuid_leaf { uint32_t leaf, subleaf, eax, ebx, ecx, edx; };
 struct wtop_cpuid_header {

@@ -2212,7 +2212,13 @@ static int l_wcwidth(lua_State *L) {
     return 1;
 }
 
+#ifdef WTOP_HARDWARE_WORKER
+int wtop_linux_read_cpuid(lua_State *L);
+#endif
 static const luaL_Reg functions[] = {
+#ifdef WTOP_HARDWARE_WORKER
+    {"read_cpuid", wtop_linux_read_cpuid},
+#endif
     {"terminal_start", l_terminal_start},
     {"terminal_stop", l_terminal_stop},
     {"terminal_size", l_terminal_size},
@@ -2287,5 +2293,9 @@ int luaopen_wtop_native(lua_State *L) {
     luaL_newlib(L, functions);
     lua_pushliteral(L, WTOP_VERSION);
     lua_setfield(L, -2, "VERSION");
+    static const char *const hardware_sources[]={WTOP_HARDWARE_NAMES};
+    lua_createtable(L,0,WTOP_HARDWARE_COUNT);
+    for(unsigned i=0;i<WTOP_HARDWARE_COUNT;++i){lua_pushboolean(L,1);lua_setfield(L,-2,hardware_sources[i]);}
+    lua_setfield(L,-2,"hardware_worker_sources");
     return 1;
 }

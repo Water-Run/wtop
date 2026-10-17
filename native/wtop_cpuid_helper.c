@@ -20,24 +20,8 @@ typedef DWORD (WINAPI *current_fn)(void);
 static HANDLE parent_guard;
 static DWORD started;
 static int alive(void) { return WaitForSingleObject(parent_guard,0)==WAIT_TIMEOUT && (DWORD)(GetTickCount()-started)<2500; }
-static void cpuid(uint32_t leaf,uint32_t sub,struct wtop_cpuid_leaf *out) {
-    out->leaf=leaf;out->subleaf=sub;
-    __cpuid_count(leaf,sub,out->eax,out->ebx,out->ecx,out->edx);
-}
-static int add(struct wtop_cpuid_cpu *cpu,struct wtop_cpuid_leaf *leaves,uint32_t leaf,uint32_t sub) {
-    if(cpu->count==WTOP_CPUID_LEAVES){cpu->flags|=WTOP_CPUID_FLAG_TRUNCATED;return 0;}
-    if(!alive())return 0;
-    cpuid(leaf,sub,&leaves[cpu->count++]);return 1;
-}
-static void enumerate(struct wtop_cpuid_cpu *cpu,struct wtop_cpuid_leaf *leaves,uint32_t leaf,int cache) {
-    unsigned bound=cache?32:16;int terminated=0;
-    for(unsigned sub=0;sub<bound;++sub) {
-        if(!add(cpu,leaves,leaf,sub))break;
-        const struct wtop_cpuid_leaf *value=&leaves[cpu->count-1];
-        if(cache?!(value->eax&31):(!(value->ebx&0xffff)||!((value->ecx>>8)&255))){terminated=1;break;}
-    }
-    if(!terminated)cpu->flags|=WTOP_CPUID_FLAG_TRUNCATED;
-}
+#define cpuid_alive alive
+#include "wtop_cpuid_capture.h"
 static int on_target(const struct wtop_cpuid_target *target,current_ex_fn ex,current_fn old) {
     if(ex){struct processor_number current;memset(&current,0,sizeof(current));ex(&current);return current.group==target->group&&current.number==target->index;}
     return !old||(target->group==0&&old()==target->index);
@@ -55,49 +39,10 @@ static void capture(const struct wtop_cpuid_target *target,struct wtop_cpuid_cpu
     } else {old_mask=SetThreadAffinityMask(GetCurrentThread(),(ULONG_PTR)1<<target->index);if(!old_mask)return;}
     if(current_ex||current)cpu->flags|=WTOP_CPUID_FLAG_OS_ID;
     if(!on_target(target,current_ex,current)){cpu->status=WTOP_CPUID_STATUS_WRONG_CPU;goto restore;}
-    unsigned vendor=0;cpu->max_basic=__get_cpuid_max(0,&vendor);
-    if(!cpu->max_basic&&!vendor){cpu->status=WTOP_CPUID_STATUS_UNSUPPORTED;goto restore;}
-    cpu->flags|=WTOP_CPUID_FLAG_CPUID;
-    if(!add(cpu,leaves,0,0)||!add(cpu,leaves,0x80000000,0)){cpu->status=WTOP_CPUID_STATUS_UNSTABLE;goto restore;}
-    cpu->max_extended=leaves[cpu->count-1].eax;
-    /* Older Intel CPUs may echo a basic leaf for an unsupported extended
-     * range. That means no extended leaves, not an invalid CPUID instruction. */
-    if(cpu->max_extended<0x80000000u)cpu->max_extended=0;
-    if(cpu->max_basic>0xffff||cpu->max_extended>0x8000ffffu){cpu->status=WTOP_CPUID_STATUS_BAD_RANGE;goto restore;}
-    struct wtop_cpuid_leaf first;memset(&first,0,sizeof(first));
-    if(cpu->max_basic>=1){if(!add(cpu,leaves,1,0)){cpu->status=WTOP_CPUID_STATUS_UNSTABLE;goto restore;}first=leaves[cpu->count-1];}
-    const uint32_t basic[]={2,5,6,7,0x15,0x16,0x1a};
-    for(unsigned i=0;i<sizeof(basic)/sizeof(basic[0]);++i)if(cpu->max_basic>=basic[i]) {
-        if(!add(cpu,leaves,basic[i],0))break;
-        if(basic[i]==2&&(leaves[cpu->count-1].eax&255)>1)cpu->flags|=WTOP_CPUID_FLAG_TRUNCATED;
-        if(basic[i]==7) {uint32_t maximum=leaves[cpu->count-1].eax;for(uint32_t sub=1;sub<=2&&sub<=maximum;++sub)add(cpu,leaves,7,sub);}
-    }
-    if(cpu->max_basic>=0xd&&(first.ecx&(1u<<26))){add(cpu,leaves,0xd,0);add(cpu,leaves,0xd,1);}
-    uint32_t ext_features=0;
-    for(uint32_t leaf=0x80000001u;leaf<=0x80000008u&&leaf<=cpu->max_extended;++leaf) {
-        if(!add(cpu,leaves,leaf,0))break;
-        if(leaf==0x80000001u)ext_features=leaves[cpu->count-1].ecx;
-    }
-    if(first.ecx&(1u<<31))add(cpu,leaves,0x40000000,0);
-    char name[13];memcpy(name,&leaves[0].ebx,4);memcpy(name+4,&leaves[0].edx,4);memcpy(name+8,&leaves[0].ecx,4);name[12]=0;
-    if(!strcmp(name,"GenuineIntel")&&cpu->max_basic>=4)enumerate(cpu,leaves,4,1);
-    if(cpu->max_basic>=0xb)enumerate(cpu,leaves,0xb,0);
-    if(cpu->max_basic>=0x1f)enumerate(cpu,leaves,0x1f,0);
-    if(!strcmp(name,"AuthenticAMD")&&(ext_features&(1u<<22))) {
-        if(cpu->max_extended>=0x8000001du)enumerate(cpu,leaves,0x8000001d,1);
-        if(cpu->max_extended>=0x8000001eu)add(cpu,leaves,0x8000001e,0);
-        if(cpu->max_extended>=0x80000026u)enumerate(cpu,leaves,0x80000026,0);
-    }
-    if((first.ecx&((1u<<26)|(1u<<27)))==((1u<<26)|(1u<<27))) {
-        uint32_t low,high;__asm__ volatile(".byte 0x0f,0x01,0xd0":"=a"(low),"=d"(high):"c"(0));
-        cpu->xcr0_low=low;cpu->xcr0_high=high;cpu->flags|=WTOP_CPUID_FLAG_XCR0;
-    }
+    wtop_cpuid_snapshot(cpu,leaves);
     if(IsProcessorFeaturePresent(PF_XMMI_INSTRUCTIONS_AVAILABLE))cpu->flags|=WTOP_CPUID_FLAG_XMM;
     if(IsProcessorFeaturePresent(PF_XMMI64_INSTRUCTIONS_AVAILABLE))cpu->flags|=WTOP_CPUID_FLAG_SSE2;
-    struct wtop_cpuid_leaf last;memset(&last,0,sizeof(last));if(cpu->max_basic>=1)cpuid(1,0,&last);
-    cpu->signature_after=last.eax;cpu->initial_apic_after=last.ebx>>24;
-    cpu->status=WTOP_CPUID_STATUS_OK;
-    if(!on_target(target,current_ex,current)||(cpu->max_basic>=1&&(last.eax!=first.eax||(last.ebx>>24)!=(first.ebx>>24))))cpu->status=WTOP_CPUID_STATUS_UNSTABLE;
+    if(cpu->status==WTOP_CPUID_STATUS_OK&&!on_target(target,current_ex,current))cpu->status=WTOP_CPUID_STATUS_UNSTABLE;
 restore:
     if(set_group?set_group(GetCurrentThread(),&previous,NULL)!=0:SetThreadAffinityMask(GetCurrentThread(),old_mask)!=0)cpu->flags|=WTOP_CPUID_FLAG_RESTORED;
     else cpu->status=WTOP_CPUID_STATUS_RESTORE;

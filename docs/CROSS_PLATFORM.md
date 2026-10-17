@@ -629,6 +629,41 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
+### 2026-10-17：Linux x86 芯片级 CPUID（验证中）
+
+Linux x86 开发构建通过独立硬件读取进程取得逐逻辑 CPU 的 CPUID、XCR0、
+APIC、拓扑、确定性缓存和指令能力。与 Windows 共享有界的指令枚举层；
+Windows 原有 v1 数据协议保留，Linux v2 使用真实 Linux CPU 编号，不生成
+Windows 处理器组。读取器只绑定自身线程，读取前后核对实际 CPU 与签名，
+恢复后再次核对完整亲和性；主程序不执行原始 CPUID 或修改自身亲和性。
+
+[Linux 的亲和性接口](https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html)
+以线程为单位且受 cpuset 限制；不能读取的 CPU 保留失败状态，不借用另一
+CPU 的叶数据。支持范围、稀疏编号和输出有界，超时/分配失败/恢复失败给出
+独立原因。只查询 [CPUID 故障策略](https://man7.org/linux/man-pages/man2/arch_prctl.2.html)，
+不会重新启用读取线程已禁用的 CPUID。32 位 Linux 的 SSE OS 状态未独立证实
+时保留未知；扩展状态按 [XCR0](https://www.kernel.org/doc/html/v6.0/x86/xstate.html)
+核对，不把硬件位等同于系统可用性。
+
+CPUID 作为独立硬件视图保留，Linux 内核的拓扑、缓存和核心分组不被覆盖；
+静态结果在父进程缓存，成功后回收读进程。按 CPU 成员关系和缓存几何逐项比较。只有名册齐全、身份/几何完整时才给出
+一致或不同，缺少证据保留未知。失败保留同一名册的旧能力与原始时间、标为
+过期，旧结果不生成当前一致性判断；CPU 名册、身份或时钟纪元变化则重建。
+
+本机 i7-13620H 普通权限下采得 16 个逻辑 CPU、10 个物理核心、28 个缓存实例，
+拓扑和缓存均与内核报告一致。逐 CPU 的 CPUID.1A 为 12 个 Intel Core 逻辑 CPU
+（6 个物理核心）及 4 个 Intel Atom 逻辑 CPU（4 个物理核心）；类型解释依照
+[Intel 的 CPUID.1A 说明](https://www.intel.com/content/www/us/en/developer/articles/guide/12th-gen-intel-core-processor-gamedev-guide.html)，
+不按类型编号大小推断性能。原始记录位于 `build/hardware-linux-cpuid-20261017/`。
+
+独立原生夹具已检查稀疏编号到 1048575、掩码扩展、亲和性/身份/恢复失败、
+超时、分配失败和 Lua OOM；实际禁用指令的线程仍能返回禁用原因。真实读取
+API 等待十秒时，旧时间保留且独立传感器继续刷新，读取器在解除阻塞前回收，
+恢复后重取新样本；父退出场景约 0.14 秒完成。传感器独立性使用可控文件夹具，
+不据此声称取得额外物理温度。Windows 共享模型和 32/64 位帮助程序编译通过，
+完整回归与精确产物验证继续进行；AMD 更新拓扑、非 x86、32 位 Linux 和大规模
+CPU 真机覆盖保留各自的未验证边界。
+
 ### 2026-10-17：Windows AMD ADL 只读采集
 
 Windows 开发构建增加 AMD ADL1/ADL2 独立读取器，主程序仍为 32 位，读取器随
@@ -3416,7 +3451,7 @@ Windows/macOS 的 NUMA 原生提供方仍待实现，本轮没有新增这些平
   Lua 5.5.1 与系统 Lua 5.4.8 下通过。本次沙箱的实时网络命名空间
   只暴露 `lo`；源码 Snapshot 的 `lo` 队列为 RX 1、TX 1，与 sysfs
   对应目录一致。多队列网卡仍缺少本机实测。
-- 当前源码套件包含 146 个 Lua 测试文件；此前矩阵和按日期记载的
+- 当前源码套件包含 147 个 Lua 测试文件；此前矩阵和按日期记载的
   120 文件运行是当时的验证结果，不计作本轮新增测试的覆盖证据。
 - `make check test-55 test-pty-quick` 通过，121 个 Lua 文件均通过；
   源码和 onedir 的硬件详情 PTY 场景也通过。onedir Snapshot 导出

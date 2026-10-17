@@ -1,4 +1,4 @@
--- Decode the bounded packet from the isolated Windows CPU reader. CPUID is
+-- Decode the bounded packet from the isolated x86 CPU readers. CPUID is
 -- an independent hardware view: OS records and diagnostic leaf counts are
 -- retained, rather than added to observed populations or cache capacities.
 local M = {}
@@ -25,7 +25,7 @@ local function packet(raw, targets)
   if type(raw) ~= "string" or #raw < 32 or #raw > 2097152 then return nil end
   local magic, version, bytes, count, bits, flags, checksum, reserved, offset =
     string.unpack("<I4I4I4I4I4I4I4I4", raw)
-  if magic ~= 0x50435457 or version ~= 1 or bytes ~= #raw or count < 1 or count > 512
+  if magic ~= 0x50435457 or (version ~= 1 and version ~= 2) or bytes ~= #raw or count < 1 or count > 512
       or (bits ~= 32 and bits ~= 64) or flags > 1 or reserved ~= 0
       or type(targets) ~= "table" or #targets ~= count then return nil end
   local hash = 2166136261
@@ -38,17 +38,23 @@ local function packet(raw, targets)
     id, group, number, status, n, basic, extended, cpu_flags, low, high, after, apic, offset =
       string.unpack("<I4I4I4I4I4I4I4I4I4I4I4I4", raw, offset)
     local target = targets[index]
-    if type(target) ~= "table" or id ~= target.id or group ~= target.processor_group
-        or number ~= target.logical_processor_index or group >= 64 or number >= 64
-        or id ~= group * 64 + number or seen[id] or status > 6 or n > 96
+    local identity_valid = type(target)=="table" and id==target.id
+      and (version==1 and group==target.processor_group and number==target.logical_processor_index
+        and group<64 and number<64 and id==group*64+number
+        or version==2 and target.processor_group==nil and target.logical_processor_index==nil
+        and group==0 and number==id and id<1048576)
+    if not identity_valid or seen[id] or status > 6 or n > 96
         or cpu_flags > 255 or offset + n * 24 - 1 > #raw then return nil end
     seen[id] = true
-    local cpu = { id = id, processor_group = group, logical_processor_index = number,
+    local cpu = { id = id, processor_group = version==1 and group or nil,
+      logical_processor_index = version==1 and number or nil,
+      os_logical_cpu_id = version==2 and id or nil,
+      _xmm_unknown = version==2 and bits==32,
       status = status, flags = cpu_flags, max_basic = hex(basic), max_extended = hex(extended),
       xcr0 = bit(cpu_flags, 0) and string.format("0x%08x%08x", high, low) or nil,
       affinity_restored = bit(cpu_flags, 4), os_processor_verified = bit(cpu_flags, 3),
       truncated = bit(cpu_flags, 5), leaves = {}, _leaves = {}, _xcr0 = low }
-    if status == 0 and (not bit(cpu_flags, 4) or not bit(cpu_flags, 7)) then return nil end
+    if status == 0 and (not bit(cpu_flags, 4) or not bit(cpu_flags, 7) or version==2 and not bit(cpu_flags,3)) then return nil end
     partial = partial or status ~= 0 or cpu.truncated
     for _ = 1, n do
       local a, s, eax, ebx, ecx, edx
@@ -64,7 +70,8 @@ local function packet(raw, targets)
     cpus[#cpus + 1] = cpu
   end
   if offset ~= #raw + 1 or (partial and 1 or 0) ~= flags then return nil end
-  return { schema = "wtop.cpuid.v1", architecture_bits = bits, logical_cpus = cpus,
+  return { schema = "wtop.cpuid.v1", platform = version==2 and "linux" or "windows",
+    architecture_bits = bits, logical_cpus = cpus,
     quality = partial and "partial" or "fresh", status = "ok", issues = {} }
 end
 
@@ -87,6 +94,12 @@ local function identity(cpu)
     brand[#brand + 1] = word(value.eax) .. word(value.ebx) .. word(value.ecx) .. word(value.edx)
   end
   if #brand > 0 then result.model_name = text(table.concat(brand)) end
+  local hybrid=leaf(cpu,0x1a)
+  if result.vendor=="GenuineIntel" and hybrid and (hybrid.eax>>24)~=0 then
+    result.core_type=(hybrid.eax>>24)&255
+    result.native_model_id=hex(hybrid.eax&0xffffff)
+    result.core_type_source="CPUID.1A"
+  end
   local address = leaf(cpu, 0x80000008)
   if address then
     local physical, linear = address.eax & 255, (address.eax >> 8) & 255
@@ -134,7 +147,9 @@ local function decode_features(cpu)
         row.os_enabled = state == "scalar" or state == "xmm" and bit(cpu.flags, 1)
           or state == "sse2" and bit(cpu.flags, 2) or state == "avx" and avx
           or state == "avx512" and avx512 or false
-        row.usable = supported and row.os_enabled
+        if cpu._xmm_unknown and (state=="xmm" or state=="sse2") then row.os_enabled=nil end
+        if row.os_enabled~=nil then row.usable=supported and row.os_enabled
+        elseif not supported then row.usable=false end
         if state == "avx" then row.usable = row.usable and avx_hardware end
         if state == "avx512" then row.usable = row.usable and avx_hardware and avx512_hardware end
       elseif not supported then row.usable = false end
@@ -347,6 +362,81 @@ local function caches(result)
   end
 end
 
+local function core_types(result)
+  local groups={}
+  for _,cpu in ipairs(result.logical_cpus)do
+    local i=cpu.identity
+    if cpu.status==0 and i.core_type then
+      local key=string.format("CPUID.1A:%02x:%s",i.core_type,i.native_model_id)
+      local row=groups[key]
+      if not row then
+        row={id=key,core_type=i.core_type,native_model_id=i.native_model_id,source="CPUID.1A",
+          model_name=({[0x20]="Intel Atom",[0x40]="Intel Core"})[i.core_type],logical_cpu_ids={},_cores={}}
+        groups[key]=row
+      end
+      row.logical_cpu_ids[#row.logical_cpu_ids+1]=cpu.id
+      if cpu.topology then row._cores[cpu.topology.core_key]=true end
+    end
+  end
+  result.core_types={}
+  for _,row in pairs(groups)do
+    row.logical_cpu_count=#row.logical_cpu_ids
+    if result.topology.complete then
+      row.physical_core_count=0;for _ in pairs(row._cores)do row.physical_core_count=row.physical_core_count+1 end
+    end
+    row._cores=nil;result.core_types[#result.core_types+1]=row
+  end
+  table.sort(result.core_types,function(a,b)return a.id<b.id end)
+end
+
+local function compare_linux(data,result,all_targets)
+  local comparison={}
+  local os=data.topology or{}
+  if result.roster_complete and result.topology.complete and os.quality=="fresh" then
+    local seen,complete={},true
+    for _,cpu in ipairs(all_targets)do
+      if seen[cpu.id]or cpu.package_id==nil or cpu.core_key==nil then complete=false end
+      seen[cpu.id]=cpu
+    end
+    local agrees=complete
+    if complete then
+      for _,a in ipairs(result.logical_cpus)do
+        for _,b in ipairs(result.logical_cpus)do
+          local x,y=seen[a.id],seen[b.id]
+          if not x or not y or ((x.package_id==y.package_id)~=(a.topology.package_id==b.topology.package_id))
+            or ((x.core_key==y.core_key)~=(a.topology.core_key==b.topology.core_key))then agrees=false end
+        end
+      end
+      comparison.topology_matches=agrees
+    end
+  end
+  if result.roster_complete and result.caches_complete and not data.truncated and #(data.caches or{})>0 then
+    local function key(cache)
+      local ids={};for _,id in ipairs(cache.shared_cpu_list or{})do ids[#ids+1]=id end;table.sort(ids)
+      return tostring(cache.level)..":"..tostring(cache.type)..":"..table.concat(ids,",")
+    end
+    local known,agrees,geometry={},#(data.caches or{})==#result.caches,true
+    for _,cache in ipairs(data.caches or{})do
+      local k=key(cache);if known[k]then agrees=false end;known[k]=cache
+    end
+    for _,cache in ipairs(result.caches)do
+      local other=known[key(cache)]
+      if not other then agrees=false
+      else
+        for _,field in ipairs({"size_bytes","coherency_line_size_bytes","ways_of_associativity","number_of_sets","physical_line_partition"})do
+          local expected=cache[field]
+          if field=="ways_of_associativity"then expected=cache.ways_of_associativity end
+          if type(other[field])~="number"or other[field]<=0 then geometry=false
+          elseif other[field]~=expected then agrees=false end
+        end
+      end
+    end
+    if not agrees then comparison.cache_matches=false elseif geometry then comparison.cache_matches=true end
+    comparison.cache_geometry_complete=geometry
+  end
+  result.os_comparison=comparison
+end
+
 function M.decode(raw, targets)
   local ok, result = pcall(packet, raw, targets)
   if not ok or not result then return nil, "cpuid_invalid_response" end
@@ -369,27 +459,50 @@ function M.decode(raw, targets)
   table.sort(result.features, function(a,b) return a.name < b.name end)
   topology(result)
   caches(result)
-  for _, cpu in ipairs(result.logical_cpus) do cpu._leaves, cpu._xcr0 = nil, nil end
+  core_types(result)
+  for _, cpu in ipairs(result.logical_cpus) do cpu._leaves, cpu._xcr0, cpu._xmm_unknown = nil, nil, nil end
   return result
 end
 
 function M.enrich(data, observation)
   if type(observation) ~= "table" then return end
-  local targets = data.topology and data.topology.logical_cpus or {}
+  local all_targets = type(data.topology)=="table"and type(data.topology.logical_cpus)=="table"and data.topology.logical_cpus or{}
+  local targets = observation.targets or all_targets
   local result, reason
-  if observation.status == "ok" then result, reason = M.decode(observation.raw, targets) end
+  if observation.status=="ok"then
+    local members,valid={},type(targets)=="table"
+    for _,target in ipairs(all_targets)do
+      if type(target)~="table"or type(target.id)~="number"or members[target.id]then valid=false;break end
+      members[target.id]=true
+    end
+    if valid then
+      for _,target in ipairs(targets)do if type(target)~="table"or not members[target.id]then valid=false;break end end
+    end
+    if valid then result,reason=M.decode(observation.raw,targets)else reason="cpuid_invalid_response"end
+  end
   result = result or { schema = "wtop.cpuid.v1", status = reason and "error" or observation.status,
-    reason = reason or observation.reason, architecture_bits = observation.architecture_bits }
+    reason = reason or observation.reason, architecture_bits = observation.architecture_bits, platform=observation.platform }
   result.source, result.age_ms = observation.source, observation.age_ms
+  if observation.quality=="stale"then result.quality="stale";result.reason=observation.reason end
+  result.retained=observation.retained;result.refresh_status=observation.refresh_status
   result.error_code = observation.error_code
+  result.observed_at_ns = observation.observed_at_ns
+  result.sample_started_ns, result.sample_finished_ns = observation.sample_started_ns, observation.sample_finished_ns
+  result.transport = observation.transport
   data.cpuid = result
   if result.status ~= "ok" then
     return (result.status == "pending" or result.status == "gap") and 250 or 5000
   end
   local roster_complete = data.topology and data.topology.truncated ~= true
+    and #targets==#all_targets
     and (not data.topology.threads or data.topology.threads == #targets)
   result.scope = "observed_os_logical_cpus"
   result.roster_complete = roster_complete
+  if not roster_complete then result.truncated=true;if result.quality~="stale"then result.quality="partial"end end
+  if result.platform=="linux"then
+    if result.quality~="stale"then compare_linux(data,result,all_targets)end
+    return
+  end
   if result.topology.complete and roster_complete then
     data.os_topology = data.topology
     local top = {}; for key, value in pairs(data.topology) do top[key] = value end

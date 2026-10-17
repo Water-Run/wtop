@@ -8,7 +8,8 @@ if type(native.hardware_worker_sources)=="table" then
     names={};for name in pairs(native.hardware_worker_sources)do names[#names+1]=name end;table.sort(names)
 end
 for _, name in ipairs(names) do
-    local session=native.hardware_worker_open(name,wire.encode({}))
+    local configuration=name=="cpuid"and{targets={{id=0}}}or{}
+    local session=native.hardware_worker_open(name,wire.encode(configuration))
     native.hardware_worker_query(session,false)
     sessions[#sessions+1]=session
 end

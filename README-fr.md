@@ -59,6 +59,7 @@ vraie machine XP.
   Réseau, GPU, Charges de travail, Système et Analyses.
 - Une liste de processus avec recherche, tri, navigation dans l'arbre, accès aux
   charges de travail et menu de signaux avec confirmation.
+- Sur Linux x86, les versions en développement affichent les capacités CPUID aux côtés de la topologie CPU et des caches rapportés par le noyau.
 - Les versions Windows en développement peuvent utiliser Intel Sysman pour la puissance GPU, les plafonds annoncés, les fréquences et les causes de limitation.
 - Les pilotes AMD Windows compatibles peuvent fournir la puissance de la puce, la température, les fréquences et la vitesse du ventilateur via ADL.
 - Les versions Windows en développement affichent la température NVMe et les limites indiquées par le disque. Appuyez sur `s` pour consulter son état en lecture seule ; les données SMART ATA sont lues après sélection du disque.

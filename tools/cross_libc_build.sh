@@ -239,7 +239,7 @@ gcc $native_flags -s -DWTOP_GPU_WORKER $worker_sources -ldl -lm -o /b/native-bui
 sh /b/tools/embed_gpu_worker.sh /b/native-build/wtop_gpu_worker /b/native-build/wtop_gpu_worker_image.h
 /opt/lua/bin/lua /b/tools/embed_hardware_lua.lua /b/native-build/wtop_hardware_lua.h
 gcc $native_flags -s -DWTOP_HARDWARE_WORKER -I/b/native-build -I/b/build/native -I/opt/lua/include \
-    native/wtop_hardware_worker.c native/wtop_native.c /opt/lua/lib/liblua.a -ldl -lm -pthread -o /b/native-build/wtop_hardware_worker
+    native/wtop_hardware_worker.c native/wtop_native.c native/wtop_linux_cpuid.c /opt/lua/lib/liblua.a -ldl -lm -pthread -o /b/native-build/wtop_hardware_worker
 sh /b/tools/embed_gpu_worker.sh /b/native-build/wtop_hardware_worker /b/native-build/wtop_hardware_worker_image.h wtop_hardware_worker_image
 gcc $native_flags -shared -I/b/native-build -I/b/build/native -I/opt/lua/include \
     -o /b/native-build/wtop_native.so \

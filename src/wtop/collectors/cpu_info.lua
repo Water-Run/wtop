@@ -2,6 +2,8 @@ local Capability = require("wtop.core.capability")
 local FS = require("wtop.linux.fs")
 local Common = require("wtop.collectors.common")
 
+local LinuxCPUID = require("wtop.collectors.linux_cpuid")
+
 local CPUInfo = {}
 CPUInfo.__index = CPUInfo
 
@@ -561,6 +563,8 @@ function CPUInfo.new(options)
   if type(options) ~= "table" then error("CPUInfo options must be a table", 2) end
   return setmetatable({
     id = "cpu_info",
+    cpuid_enabled = options.cpuid, cpuid_native=options.native, cpuid_provider=options.cpuid_provider,
+    cpuid_cache_ns=bounded_integer("cpuid_cache_ms",options.cpuid_cache_ms,30000,100,3600000)*1000000,
     default_interval_ms = Common.positive_integer("interval_ms", options.interval_ms, 30000),
     fs = options.fs or FS.default,
     proc_cpuinfo_path = Common.absolute_path(
@@ -622,8 +626,7 @@ function CPUInfo:sample(context)
     or core_types_truncated or identity.flags_truncated
   local partial = truncated or #issues > 0
   local estimated = topology.quality == "estimated" or not identity.model_name or not identity.vendor
-  local finished = Common.now_ns(context)
-  return Common.result("ok", finished, {
+  local data = {
     schema = "dev.waterrun.wtop.cpu-info/v1",
     identity = identity,
     topology = topology,
@@ -632,7 +635,13 @@ function CPUInfo:sample(context)
     cache_summary = cache_summary,
     issues = issues,
     truncated = truncated,
-  }, {
+
+  }
+  local retry,pending=LinuxCPUID.enrich(self,data,context,fs)
+  partial=partial or (data.cpuid and (data.cpuid.quality=="partial"or data.cpuid.quality=="stale"))
+  local finished=Common.now_ns(context)
+  local result=Common.result("ok",finished,data,{
+    retry_after_ms=retry,
     quality = partial and "partial" or (estimated and "estimated" or "fresh"),
     -- Two categories.  `partial` is set by a list that stopped at one of five
     -- different caps, or by an entry in `issues` -- a read that failed, a list
@@ -663,7 +672,11 @@ function CPUInfo:sample(context)
     duration_ns = Common.elapsed_ns(finished, started) or 0,
     source = { self.proc_cpuinfo_path, self.sys_cpu_path },
   })
+  result.sampling_pending=pending
+  return result
 end
+
+function CPUInfo:close()LinuxCPUID.close(self)end
 
 CPUInfo.parse_cpuinfo = parse_cpuinfo
 CPUInfo.parse_cpu_list = parse_cpu_list

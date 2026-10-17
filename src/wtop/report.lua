@@ -147,6 +147,18 @@ function M.render(snapshot)
         function(row) return row end)
     local cpuid = object(cpu_info.cpuid)
     if cpuid.status then
+        local comparison=object(cpuid.os_comparison)
+        table_section(lines,"CPU hardware observation",{"Field","Value"},{
+            {"Source",cpuid.source},{"Status",cpuid.status},{"Quality",cpuid.quality},
+            {"Sample age",quantity(cpuid.age_ms,1000," s",3)},
+            {"Topology matches OS",comparison.topology_matches},{"Caches match OS",comparison.cache_matches},
+        },function(row)return row end)
+        if #list(cpuid.core_types)>0 then
+            table_section(lines,"CPU hardware core types (CPUID.1A)",
+                {"Type","Native model","Logical CPUs","Physical cores","Source"},cpuid.core_types,function(kind)
+                    return{(kind.model_name or "CPU").." "..string.format("0x%02x",kind.core_type),kind.native_model_id,kind.logical_cpu_count,kind.physical_core_count,kind.source}
+                end,cpuid)
+        end
         table_section(lines, "CPU instruction capabilities (observed logical CPUs)",
             { "Feature", "Reported CPUs", "Hardware support", "OS usable", "Usability unknown" },
             cpuid.features, function(feature)

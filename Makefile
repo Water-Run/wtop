@@ -92,12 +92,12 @@ GPU_WORKER_SOURCES := native/wtop_gpu_worker.c native/wtop_nvml.c native/wtop_am
 GPU_WORKER := $(NATIVE_DIR)/wtop_gpu_worker
 GPU_WORKER_HEADER := $(NATIVE_DIR)/wtop_gpu_worker_image.h
 GPU_WORKER_INPUTS := $(GPU_WORKER_SOURCES) $(NATIVE_HEADERS)
-HARDWARE_WORKER_SOURCES := native/wtop_hardware_worker.c native/wtop_native.c
+HARDWARE_WORKER_SOURCES := native/wtop_hardware_worker.c native/wtop_native.c native/wtop_linux_cpuid.c
 HARDWARE_WORKER := $(NATIVE_DIR)/wtop_hardware_worker
 HARDWARE_WORKER_HEADER := $(NATIVE_DIR)/wtop_hardware_worker_image.h
 HARDWARE_LUA_HEADER := $(NATIVE_DIR)/wtop_hardware_lua.h
 HARDWARE_LUA_INPUTS := $(shell find src/wtop -name '*.lua')
-NATIVE_HEADERS += native/wtop_hardware_worker.h
+NATIVE_HEADERS += native/wtop_hardware_worker.h native/wtop_cpuid_protocol.h native/wtop_cpuid_capture.h
 NATIVE_REVISION_HEADER := $(NATIVE_DIR)/build_revision.h
 NATIVE_VERSION_HEADER := $(NATIVE_DIR)/build_version.h
 LUA_PATH_DEV := $(CURDIR)/src/?.lua;$(CURDIR)/src/?/init.lua;;
@@ -370,7 +370,7 @@ SAN_RUN_ENV = ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
 SANITIZER_EXCLUDED := tests/unit/test_benchmark_record.lua
 
 test-sanitized: resource-check $(LUA_STAMP) $(NATIVE_REVISION_HEADER) \
-		$(NATIVE_VERSION_HEADER) sanitize-native test-native-amdsmi-sanitized test-native-levelzero-sanitized test-native-nvml-sanitized test-native-nvml-worker-sanitized test-native-gpu-worker-sanitized test-native-hardware-worker-sanitized test-native-drm-worker-sanitized test-native-cpu-clocks-sanitized
+		$(NATIVE_VERSION_HEADER) sanitize-native test-native-amdsmi-sanitized test-native-levelzero-sanitized test-native-nvml-sanitized test-native-nvml-worker-sanitized test-native-gpu-worker-sanitized test-native-hardware-worker-sanitized test-native-drm-worker-sanitized test-native-cpu-clocks-sanitized test-native-cpuid-sanitized
 	@if [ -z '$(SAN_ASAN_RUNTIME)' ]; then echo "wtop: the sanitized module names no ASan runtime to preload, so the suite cannot run on the uninstrumented interpreter"; exit 1; fi
 	@for mode in --snapshot --agent --diagnose; do \
 		echo "wtop: sanitized $$mode"; \
@@ -434,6 +434,14 @@ test-native-drm-worker-sanitized: sanitize-native $(LUA_STAMP)
 	@$(SAN_RUN_ENV) python3 tests/test_linux_drm_worker.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)' \
 		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' --output build/native-drm-worker-san --native-only
 
+.PHONY: test-native-cpuid test-native-cpuid-sanitized
+test-native-cpuid: native $(LUA_STAMP)
+	@python3 tests/test_linux_cpuid.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)'
+
+test-native-cpuid-sanitized: sanitize-native $(LUA_STAMP)
+	@$(SAN_RUN_ENV) python3 tests/test_linux_cpuid.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)' \
+		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' --output build/native-cpuid-san --native-only
+
 test-native-hardware-worker: native $(LUA_STAMP)
 	@python3 tests/test_linux_hardware_worker.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)'
 
@@ -450,7 +458,7 @@ test-native-gpu-worker-sanitized: sanitize-native $(LUA_STAMP)
 		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' \
 		--output build/native-gpu-worker-san --native-only
 
-check: resource-check native locales test-native-cpu-limits test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks
+check: resource-check native locales test-native-cpu-limits test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAC) -p $$(find src tools tests -type f -name '*.lua' -print)
 	@sh -n tools/*.sh
 	@python3 -c 'import pathlib; [compile(path.read_bytes(), str(path), "exec") for path in pathlib.Path("tests").rglob("*.py")]'

@@ -14,6 +14,7 @@ local constructors = {
     thermal_zones = function(o) return require("wtop.collectors.thermal_zones").new(o) end,
     smbios_input = function(o) return require("wtop.collectors.smbios_input").new(o) end,
     gpu_drm = function(o) return require("wtop.collectors.gpu_drm").new(o) end,
+    cpuid = function(o) return require("wtop.collectors.cpuid").new(o) end,
     cpu_clocks = function(o) return require("wtop.collectors.cpu_clocks").new(o) end,
 }
 

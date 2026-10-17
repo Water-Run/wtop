@@ -83,9 +83,18 @@ end
 
 local function export_cpuid(cpuid)
     local result = copy_fields(cpuid, { "schema", "source", "status", "reason", "quality",
-        "architecture_bits", "age_ms", "caches_complete", "scope", "roster_complete", "error_code" })
+        "architecture_bits", "age_ms", "caches_complete", "scope", "roster_complete", "error_code",
+        "platform", "observed_at_ns", "sample_started_ns", "sample_finished_ns", "transport", "retained", "refresh_status", "truncated" })
     result.topology = copy_fields(cpuid.topology, { "complete", "observed_logical_cpus",
         "sockets", "physical_cores", "compute_units", "threads_per_core_minimum", "threads_per_core_maximum" })
+    result.os_comparison=copy_fields(cpuid.os_comparison,{"topology_matches","cache_matches","cache_geometry_complete"})
+    result.core_types=json.array({})
+    for index,row in ipairs(cpuid.core_types or{})do
+        result.core_types[index]=copy_fields(row,{"id","core_type","native_model_id","source","model_name","logical_cpu_count","physical_core_count"})
+        result.core_types[index].logical_cpu_ids=copy_array(row.logical_cpu_ids)
+    end
+    result.cache_summary=json.array({})
+    for index,row in ipairs(cpuid.cache_summary or{})do result.cache_summary[index]=copy_fields(row,{"id","level","type","instances","total_size_bytes","minimum_size_bytes","maximum_size_bytes"})end
     result.features, result.logical_cpus, result.issues = json.array({}), json.array({}), json.array({})
     for index = 1, math.min(#(cpuid.features or {}), 32) do
         result.features[index] = copy_fields(cpuid.features[index], { "name", "reported_cpus",
@@ -93,10 +102,11 @@ local function export_cpuid(cpuid)
     end
     for index = 1, math.min(#(cpuid.logical_cpus or {}), 512) do
         local cpu = cpuid.logical_cpus[index]
-        local output = copy_fields(cpu, { "id", "processor_group", "logical_processor_index", "status",
+        local output = copy_fields(cpu, { "id", "processor_group", "logical_processor_index", "os_logical_cpu_id", "status",
             "flags", "max_basic", "max_extended", "xcr0", "affinity_restored", "os_processor_verified", "truncated" })
         output.identity = copy_fields(cpu.identity, { "source", "vendor", "model_name", "signature", "family", "model", "stepping",
-            "initial_apic_id", "physical_address_bits", "linear_address_bits", "hypervisor_present", "hypervisor_vendor" })
+            "initial_apic_id", "physical_address_bits", "linear_address_bits", "hypervisor_present", "hypervisor_vendor",
+            "core_type", "core_type_source", "native_model_id" })
         output.topology = copy_fields(cpu.topology, { "method", "apic_id", "package_id", "core_id", "core_key",
             "node_id", "compute_unit_id", "compute_unit_key", "cores_per_compute_unit" })
         output.topology.levels = json.array({})
@@ -2166,6 +2176,11 @@ function M.agent(snapshot, options)
     local cpu_identity = full.cpu_info and full.cpu_info.identity or {}
     local cpu_topology = full.cpu_info and full.cpu_info.topology or {}
     local logical_cpus = cpu_topology.threads or #(full.cpu and full.cpu.cores or {})
+    local cpuid_core_types=json.array({})
+    local cpuid_types=full.cpu_info and full.cpu_info.cpuid and full.cpu_info.cpuid.core_types or{}
+    for index=1,math.min(#cpuid_types,device_limit)do
+        cpuid_core_types[index]=copy_fields(cpuid_types[index],{"id","core_type","native_model_id","source","model_name","logical_cpu_count","physical_core_count"})
+    end
     local cpu_core_types = json.array({})
     for index = 1, math.min(#(full.cpu_info and full.cpu_info.core_types or {}), device_limit) do
         cpu_core_types[index] = copy_fields(full.cpu_info.core_types[index], {
@@ -2594,7 +2609,10 @@ function M.agent(snapshot, options)
                     status = full.cpu_info.cpuid.status, quality = full.cpu_info.cpuid.quality,
                     reason = full.cpu_info.cpuid.reason, source = full.cpu_info.cpuid.source,
                     architecture_bits = full.cpu_info.cpuid.architecture_bits,
-                    scope = full.cpu_info.cpuid.scope,
+                    scope = full.cpu_info.cpuid.scope, platform=full.cpu_info.cpuid.platform, truncated=full.cpu_info.cpuid.truncated,
+                    core_types=cpuid_core_types, core_type_count=#cpuid_types, core_types_truncated=#cpuid_types>#cpuid_core_types,
+                    os_comparison=full.cpu_info.cpuid.os_comparison,
+                    cache_summary=full.cpu_info.cpuid.cache_summary,
                     roster_complete = full.cpu_info.cpuid.roster_complete,
                     topology = full.cpu_info.cpuid.topology, features = full.cpu_info.cpuid.features,
                     caches_complete = full.cpu_info.cpuid.caches_complete,

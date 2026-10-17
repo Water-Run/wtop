@@ -2455,7 +2455,11 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
             if cpu.id == device.id then
                 local identity = cpu.identity or {}
                 add("cpuid.title", "CPU capabilities", info.source)
+                add("inspector.quality","Quality",Technical.state(i18n,info.quality))
+                if info.age_ms then add("systemd.sample_age","Sample age",format_value(info.age_ms*1000000,i18n,"nanoseconds"))end
                 add("cpuid.signature", "CPU signature", identity.signature)
+                if identity.core_type then add("cpuid.core_type","Hardware core type",string.format("0x%02x · %s",identity.core_type,identity.core_type_source))end
+                if identity.native_model_id then add("cpuid.native_model","Native core model",identity.native_model_id)end
                 add("cpuid.physical_bits", "Physical address bits", identity.physical_address_bits)
                 add("cpuid.linear_bits", "Linear address bits", identity.linear_address_bits)
                 add("cpuid.hypervisor", "Hypervisor interface present", identity.hypervisor_present)
