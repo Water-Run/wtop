@@ -16,12 +16,15 @@
 static int (*real_open)(const char *,int,...);
 static ssize_t (*real_read)(int,void *,size_t);
 static ssize_t (*real_pread)(int,void *,size_t,off_t);
+static ssize_t (*real_pread_chk)(int,void *,size_t,off_t,size_t);
+static ssize_t (*real_pread64_chk)(int,void *,size_t,off64_t,size_t);
 static int (*real_close)(int);
 static DIR *(*real_opendir)(const char *);
 static ssize_t (*real_readlink)(const char *,char *,size_t);
 static int (*real_lstat)(const char *,struct stat *);
 static int enabled,target_fd=-1,target_kind;
 __attribute__((constructor)) static void setup(void) {
+    real_pread_chk=dlsym(RTLD_NEXT,"__pread_chk");real_pread64_chk=dlsym(RTLD_NEXT,"__pread64_chk");
     real_pread=dlsym(RTLD_NEXT,"pread");real_open=dlsym(RTLD_NEXT,"open");real_read=dlsym(RTLD_NEXT,"read");real_close=dlsym(RTLD_NEXT,"close");
     real_opendir=dlsym(RTLD_NEXT,"opendir");real_readlink=dlsym(RTLD_NEXT,"readlink");real_lstat=dlsym(RTLD_NEXT,"lstat");
     char command[64]={0};int fd=real_open("/proc/self/cmdline",O_RDONLY|O_CLOEXEC);
@@ -94,10 +97,24 @@ ssize_t read(int fd,void *buffer,size_t size) {
     return real_read(fd,buffer,size);
 }
 
-ssize_t pread(int fd,void *buffer,size_t size,off_t offset) {
+
+/* Fortified builds call the checked entry points directly. Keep the original
+ * object-size check while applying the same fixture barrier as pread. */
+static void block_spd_read(int fd) {
     if(enabled&&fd==target_fd&&target_kind==4&&blocked()){
         write_pid(getenv("WTOP_SPD_FIXTURE_ENTERED"),0);
         while(blocked()){struct timespec delay={0,10000000};(void)nanosleep(&delay,NULL);}
     }
+}
+ssize_t __pread_chk(int fd,void *buffer,size_t size,off_t offset,size_t buffer_size) {
+    block_spd_read(fd);
+    return real_pread_chk(fd,buffer,size,offset,buffer_size);
+}
+ssize_t __pread64_chk(int fd,void *buffer,size_t size,off64_t offset,size_t buffer_size) {
+    block_spd_read(fd);
+    return real_pread64_chk(fd,buffer,size,offset,buffer_size);
+}
+ssize_t pread(int fd,void *buffer,size_t size,off_t offset) {
+    block_spd_read(fd);
     return real_pread(fd,buffer,size,offset);
 }
