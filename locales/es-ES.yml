@@ -1069,7 +1069,7 @@ messages:
   process.details_io_write_rate: "Velocidad de escritura"
   process.details_io_rate_status: "Estado de tasa E/S"
   process.details_name: "Nombre"
-  process.details_namespace_chain: "Interno → host"
+  process.details_namespace_chain: "procfs → interno"
   process.details_namespaces: "Espacios de nombres PID"
   process.details_priority: "Prioridad"
   process.details_open_fds: "Descriptores abiertos del hilo principal"

@@ -1055,7 +1055,7 @@ messages:
   process.details_io_write_rate: "写入速率"
   process.details_io_rate_status: "I/O 速率状态"
   process.details_name: "名称"
-  process.details_namespace_chain: "内部 → 宿主"
+  process.details_namespace_chain: "procfs → 内部"
   process.details_namespaces: "PID 命名空间"
   process.details_priority: "优先级"
   process.details_open_fds: "首线程打开的文件描述符"

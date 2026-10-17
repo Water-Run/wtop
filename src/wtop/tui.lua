@@ -1738,9 +1738,8 @@ local function process_detail_lines(process, i18n, linux_host)
             end
         end
     end
-    -- The id chain reads innermost first, so a container's init shows its own
-    -- pid of 1 and the host pid behind it.  A single value is the ordinary case
-    -- and is not worth a section.
+    -- Keep the kernel's procfs-to-inner order. A mount inside a container
+    -- cannot report IDs from the initial host namespace.
     local namespaces = type(process.namespaces) == "table" and process.namespaces or nil
     if namespaces and namespaces.namespaced and type(namespaces.nspid) == "table" then
         local chain = {}
@@ -1748,7 +1747,7 @@ local function process_detail_lines(process, i18n, linux_host)
         lines[#lines + 1] = ""
         lines[#lines + 1] = translated(i18n, "process.details_namespaces", "PID namespaces")
         lines[#lines + 1] = "  " .. translated(i18n, "process.details_namespace_chain",
-            "Inside → host") .. "  " .. table.concat(chain, " → ")
+            "procfs → inside") .. "  " .. table.concat(chain, " → ")
     end
     lines[#lines + 1] = ""
     lines[#lines + 1] = translated(i18n, "process.details_actions",
@@ -2268,7 +2267,7 @@ local function thread_detail_lines(thread, detail, process, i18n)
     lines[#lines + 1] = ""
     lines[#lines + 1] = translated(i18n, "process.details_namespaces", "PID namespaces")
     lines[#lines + 1] = "  " .. translated(i18n, "process.details_namespace_chain",
-        "Inside → host") .. "  " .. table.concat(chain, " → ")
+        "procfs → inside") .. "  " .. table.concat(chain, " → ")
   end
 
   if type(detail) == "table" then

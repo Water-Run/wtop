@@ -1055,7 +1055,7 @@ messages:
   process.details_io_write_rate: "書き込み速度"
   process.details_io_rate_status: "I/O 速度の状態"
   process.details_name: "名前"
-  process.details_namespace_chain: "内部 → ホスト"
+  process.details_namespace_chain: "procfs → 内部"
   process.details_namespaces: "PID 名前空間"
   process.details_priority: "優先度"
   process.details_open_fds: "先頭スレッドの開いている FD"

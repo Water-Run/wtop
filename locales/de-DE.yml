@@ -1062,7 +1062,7 @@ messages:
   process.details_io_write_rate: "Schreibrate"
   process.details_io_rate_status: "I/O-Ratenstatus"
   process.details_name: "Name"
-  process.details_namespace_chain: "Innen → Host"
+  process.details_namespace_chain: "procfs → innen"
   process.details_namespaces: "PID-Namensräume"
   process.details_priority: "Priorität"
   process.details_open_fds: "Offene Dateideskriptoren des Hauptthreads"

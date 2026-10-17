@@ -716,16 +716,14 @@ local function export_processes(processes, limit)
             })
         end
         result.top[index].affinity = export_process_affinity(candidates[index].affinity)
-        -- Namespace nesting comes from the status file the base scan already
-        -- reads, so it is identity rather than detail, and a consumer needs it
-        -- to tell a container's init from a host process.  The chain is
-        -- reduced to the two ids a consumer acts on; the raw list stays out.
+        -- The outer ID is relative to this procfs mount, which may already
+        -- be inside a container. Do not claim an initial-host PID.
         local namespaces = candidates[index].namespaces
         if type(namespaces) == "table" then
             result.top[index].namespaces = json.object({
                 namespaced = namespaces.namespaced == true,
                 inner_pid = namespaces.inner_pid,
-                host_pid = namespaces.host_pid,
+                procfs_pid = namespaces.procfs_pid,
                 depth = #namespaces.nspid,
             })
         end

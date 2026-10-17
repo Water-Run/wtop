@@ -161,10 +161,12 @@ local function fake_fs(overrides)
   }
 end
 
+-- Repeated scheduler samples read one logical procfs provider.
+local process_fs = fake_fs()
 local now = 1000000000
 local function context(tid, overrides)
   return {
-    fs = fake_fs(overrides),
+    fs = overrides and fake_fs(overrides) or process_fs,
     now_ns = function() return now end,
     selected_process_ids = { ["700:7"] = true },
     selected_thread_ids = tid and { [700] = tid } or nil,

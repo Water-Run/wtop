@@ -1069,7 +1069,7 @@ messages:
   process.details_io_write_rate: "Taxa de gravação"
   process.details_io_rate_status: "Estado da taxa E/S"
   process.details_name: "Nome"
-  process.details_namespace_chain: "Interno → host"
+  process.details_namespace_chain: "procfs → interno"
   process.details_namespaces: "Espaços de nomes PID"
   process.details_priority: "Prioridade"
   process.details_open_fds: "Descritores abertos da thread principal"

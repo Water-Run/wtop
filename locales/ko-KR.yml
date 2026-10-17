@@ -1055,7 +1055,7 @@ messages:
   process.details_io_write_rate: "쓰기 속도"
   process.details_io_rate_status: "I/O 속도 상태"
   process.details_name: "이름"
-  process.details_namespace_chain: "내부 → 호스트"
+  process.details_namespace_chain: "procfs → 내부"
   process.details_namespaces: "PID 네임스페이스"
   process.details_priority: "우선순위"
   process.details_open_fds: "주 스레드의 열린 파일 설명자"

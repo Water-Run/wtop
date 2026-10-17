@@ -519,25 +519,19 @@ function Parsers.process_status(content)
   if result.nonvoluntary_ctxt_switches and involuntary == nil then
     return nil, "invalid_nonvoluntary_context_switches"
   end
-  -- NSpid and NStgid list the id as seen from the innermost namespace outwards,
-  -- so a process inside a container reports its own pid first.  A single value
-  -- means the process shares the namespace of whoever read it; more than one
-  -- means it is nested, and the first value is the id an operator sees from
-  -- inside.  The list is capped because a deeply nested chain is not something
-  -- a table should be sized by.
+  -- procfs lists IDs from its mount's PID namespace towards the innermost
+  -- namespace. Linux permits level 0 through MAX_PID_NS_LEVEL (32), hence
+  -- at most 33 IDs. The first value need not belong to the initial host.
   local function id_chain(key)
     local line = result[key]
     if not line then return nil end
-    local chain, count = {}, 0
-    for token in line:gmatch("%d+") do
+    local chain = {}
+    for token in line:gmatch("%S+") do
       local value = unsigned_number(token)
-      if value == nil then return nil, "invalid_" .. key:lower() end
-      count = count + 1
-      if count > 4 then
-        -- A chain longer than any real nesting is malformed input, not a
-        -- deeper container, and must not be silently truncated into a lie.
-        return nil, "process_namespace_chain_too_long"
+      if value == nil or value < 1 or value > 2147483647 then
+        return nil, "invalid_" .. key:lower()
       end
+      if #chain >= 33 then return nil, "process_namespace_chain_too_long" end
       chain[#chain + 1] = value
     end
     if #chain == 0 then return nil, "invalid_" .. key:lower() end

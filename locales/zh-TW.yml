@@ -1055,7 +1055,7 @@ messages:
   process.details_io_write_rate: "寫入速率"
   process.details_io_rate_status: "I/O 速率狀態"
   process.details_name: "名稱"
-  process.details_namespace_chain: "內部 → 主機"
+  process.details_namespace_chain: "procfs → 內部"
   process.details_namespaces: "PID 命名空間"
   process.details_priority: "優先順序"
   process.details_open_fds: "首執行緒開啟的檔案描述符"

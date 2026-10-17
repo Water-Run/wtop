@@ -96,7 +96,8 @@ local collector = Process.new({})
 -- the table is complete -- which is exactly why this is a reason of its own
 -- rather than the partial one.
 local gap_files = whole(10, 5)
-local gap = scan(collector, gap_files, { ["/proc"] = { "10" } })
+local gap_fs = fake_fs(gap_files, { ["/proc"] = { "10" } })
+local gap = collector:sample(context(gap_fs))
 assert(gap.status == "ok" and gap.quality == "gap")
 assert(#gap.data.list == 1 and gap.data.denied == 0 and gap.data.parse_errors == 0)
 assert(gap.data.list[1].quality == "gap" and gap.data.list[1].cpu_percent == nil)
@@ -109,8 +110,8 @@ reason_is(gap, "a process table with nothing to difference against")
 -- that can contradict the other two, and a reason published here would tell a
 -- user their process data is incomplete when it is not.
 now = now + 1000000000
-local fresh_files = whole(10, 5, 120)
-local fresh = scan(collector, fresh_files, { ["/proc"] = { "10" } }, nil, gap)
+gap_files["/proc/10/stat"] = stat_line(10, 5, 120)
+local fresh = collector:sample(context(gap_fs), gap)
 assert(fresh.status == "ok" and fresh.quality == "fresh")
 assert(#fresh.data.list == 1 and fresh.data.list[1].quality == "fresh")
 assert(type(fresh.data.list[1].cpu_percent) == "number")
@@ -178,13 +179,14 @@ reason_is(malformed, "a process table with an unparseable stat line")
 -- identical from the outside -- no rate -- and the reason has to cover both,
 -- because a user who was told only about "no second sample yet" would be sent
 -- away waiting for something that has already happened twice.
-local reset_first = scan(collector, { ["/proc/30/stat"] = stat_line(30, 9, 500),
-  ["/proc/30/status"] = "Name:\tproc30\nUid:\t0\t0\t0\t0\n" }, { ["/proc"] = { "30" } })
+local reset_files = { ["/proc/30/stat"] = stat_line(30, 9, 500),
+  ["/proc/30/status"] = "Name:\tproc30\nUid:\t0\t0\t0\t0\n" }
+local reset_fs = fake_fs(reset_files, { ["/proc"] = { "30" } })
+local reset_first = collector:sample(context(reset_fs))
 assert(reset_first.quality == "gap")
 now = now + 1000000000
-local reset_second = scan(collector, { ["/proc/30/stat"] = stat_line(30, 9, 10),
-  ["/proc/30/status"] = "Name:\tproc30\nUid:\t0\t0\t0\t0\n" }, { ["/proc"] = { "30" } },
-  nil, reset_first)
+reset_files["/proc/30/stat"] = stat_line(30, 9, 10)
+local reset_second = collector:sample(context(reset_fs), reset_first)
 assert(reset_second.quality == "gap",
   "a counter that went backwards leaves no rate to publish")
 assert(reset_second.data.list[1].quality == "gap"

@@ -89,11 +89,11 @@ assert(partial_allowed.affinity.status == "partial"
   and partial_allowed.affinity.mems_allowed_list == "0"
   and partial_allowed.affinity.issues[1].field == "Cpus_allowed_list",
   "one malformed optional mask must not discard other status fields")
--- The fixture process is a container init: one entry would mean it shares the
--- namespace of whoever read it.
-assert(#status.nspid == 2 and status.nspid[1] == 1 and status.nspid[2] == 100,
-  "the pid chain is read innermost first")
-assert(#status.nstgid == 2 and status.nstgid[1] == 1)
+-- The first ID is relative to the procfs mount; the last belongs to the
+-- innermost namespace. A one-entry chain does not prove initial-host scope.
+assert(#status.nspid == 2 and status.nspid[1] == 100 and status.nspid[2] == 1,
+  "the pid chain follows the kernel procfs-to-inner order")
+assert(#status.nstgid == 2 and status.nstgid[1] == 100)
 
 -- A single-value chain is an ordinary host process, not an error.
 local host = assert(Parsers.process_status("Name:\tx\nNSpid:\t569150\nNStgid:\t569150\n"))
@@ -106,8 +106,24 @@ assert(without.affinity == nil, "a kernel without affinity lists leaves them abs
 assert(Parsers.process_status("Name:\tx\nNSpid:\t\n") == nil, "an empty chain is rejected")
 assert(Parsers.process_status("Name:\tx\nNSpid:\tabc\n") == nil,
   "a non-numeric chain is rejected")
-assert(Parsers.process_status("Name:\tx\nNSpid:\t1\t2\t3\t4\t5\t6\n") == nil,
-  "a chain deeper than any real nesting is rejected, not truncated")
+local ids = {}
+for index = 1, 33 do ids[index] = tostring(34 - index) end
+for _, key in ipairs({ "NSpid", "NStgid" }) do
+  for _, count in ipairs({ 1, 5, 32, 33 }) do
+    local parsed = assert(Parsers.process_status(key .. ":\t"
+      .. table.concat(ids, "\t", 1, count) .. "\n"))
+    local chain = key == "NSpid" and parsed.nspid or parsed.nstgid
+    assert(#chain == count and chain[1] == 33 and chain[count] == 34 - count,
+      "all valid namespace levels remain in kernel order")
+  end
+  assert(Parsers.process_status(key .. ": " .. table.concat(ids, " ") .. " 1\n") == nil,
+    "a chain beyond Linux's 33-entry bound is rejected")
+  for _, bad in ipairs({ "", "-1", "0", "+1", "1.2", "1x2", "1,2", "1 2x", "2147483648",
+      "9223372036854775808", "1\0002" }) do
+    assert(Parsers.process_status(key .. ": " .. bad .. "\n") == nil,
+      "namespace IDs must be complete positive pid_t tokens: " .. bad)
+  end
+end
 assert(Parsers.process_status("Name:\tx\nNStgid:\tzz\n") == nil,
   "the thread group chain is validated the same way")
 local io = assert(Parsers.process_io(fixture("proc/100.io")))

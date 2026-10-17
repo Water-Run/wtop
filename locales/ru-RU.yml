@@ -1076,7 +1076,7 @@ messages:
   process.details_io_write_rate: "Скорость записи"
   process.details_io_rate_status: "Состояние скорости I/O"
   process.details_name: "Имя"
-  process.details_namespace_chain: "Внутри → хост"
+  process.details_namespace_chain: "procfs → внутри"
   process.details_namespaces: "Пространства имён PID"
   process.details_priority: "Приоритет"
   process.details_open_fds: "Открытые дескрипторы главного потока"

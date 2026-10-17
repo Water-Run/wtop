@@ -143,10 +143,12 @@ local function fake_fs()
   }
 end
 
+-- Repeated samples of this fixture use the same procfs provider.
+local process_fs = fake_fs()
 local now = 1000000000
 local function context(thread_tid)
   return {
-    fs = fake_fs(),
+    fs = process_fs,
     now_ns = function() return now end,
     selected_process_ids = { ["42:3"] = true },
     selected_thread_ids = thread_tid and { [42] = thread_tid } or nil,

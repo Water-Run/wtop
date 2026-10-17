@@ -1069,7 +1069,7 @@ messages:
   process.details_io_write_rate: "Débit d’écriture"
   process.details_io_rate_status: "État du débit E/S"
   process.details_name: "Nom"
-  process.details_namespace_chain: "Interne → hôte"
+  process.details_namespace_chain: "procfs → interne"
   process.details_namespaces: "Espaces de noms PID"
   process.details_priority: "Priorité"
   process.details_open_fds: "Descripteurs ouverts du thread principal"

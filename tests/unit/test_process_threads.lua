@@ -74,6 +74,7 @@ local dirs = {
   ["/proc/20/task"] = { "20" },
 }
 
+local process_fs = fake_fs(files, dirs)
 local now = 1000000000
 local function context(fs, selected)
   return {
@@ -84,7 +85,7 @@ local function context(fs, selected)
 end
 local collector = Process.new({ read_status = false })
 
-local first = collector:sample(context(fake_fs(files, dirs), { ["10:5"] = true }))
+local first = collector:sample(context(process_fs, { ["10:5"] = true }))
 assert(first.status == "ok", "fixture sample failed")
 local first_processes = first.data.by_id
 assert(first_processes["10:5"].thread_rows and #first_processes["10:5"].thread_rows == 3,
@@ -172,7 +173,7 @@ files["/proc/10/stat"] = stat_line({ pid = 10, comm = "multi", state = "S",
 files["/proc/10/task/10/stat"] = thread_stat(10, 130, 5, "multi")
 files["/proc/10/task/11/stat"] = thread_stat(11, 60, 5, "worker", "R")
 now = now + 1000000000
-local second = collector:sample(context(fake_fs(files, dirs), { ["10:5"] = true }),
+local second = collector:sample(context(process_fs, { ["10:5"] = true }),
   first)
 local second_threads = {}
 for _, thread in ipairs(second.data.by_id["10:5"].thread_rows) do
@@ -192,7 +193,7 @@ assert(second_threads[11].quality == "fresh", "a differenced thread is fresh")
 -- two different threads must not be differenced.
 files["/proc/10/task/11/stat"] = thread_stat(11, 500, 9, "replacement", "R")
 now = now + 1000000000
-local reused = collector:sample(context(fake_fs(files, dirs), { ["10:5"] = true }),
+local reused = collector:sample(context(process_fs, { ["10:5"] = true }),
   second)
 local reused_threads = {}
 for _, thread in ipairs(reused.data.by_id["10:5"].thread_rows) do
@@ -208,7 +209,7 @@ assert(reused_threads[11].name == "replacement",
 -- failed sample.
 files["/proc/10/task/12/stat"] = nil
 now = now + 1000000000
-local raced = collector:sample(context(fake_fs(files, dirs), { ["10:5"] = true }),
+local raced = collector:sample(context(process_fs, { ["10:5"] = true }),
   reused)
 local raced_process = raced.data.by_id["10:5"]
 assert(#raced_process.thread_rows == 2 and raced_process.thread_scan.races == 1,
@@ -216,7 +217,7 @@ assert(#raced_process.thread_rows == 2 and raced_process.thread_scan.races == 1,
 
 -- The task enumeration bound marks the scan truncated instead of hiding it.
 local capped = Process.new({ read_status = false, max_detail_threads = 2 })
-local capped_result = capped:sample(context(fake_fs(files, dirs), { ["10:5"] = true }))
+local capped_result = capped:sample(context(process_fs, { ["10:5"] = true }))
 local capped_process = capped_result.data.by_id["10:5"]
 assert(#capped_process.thread_rows == 2 and capped_process.thread_scan.truncated == true,
   "hitting the thread limit reports truncation")

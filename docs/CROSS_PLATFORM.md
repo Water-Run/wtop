@@ -629,6 +629,29 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
+### 2026-10-17：PID 命名空间顺序、深度与缓存（验证中）
+
+Linux 进程与线程的 PID 链按内核顺序从当前 procfs 挂载视图指向最内层。
+`ns:` 搜索使用末项，导出以 `procfs_pid` 标明首项所在视图，不再将它称为
+已证实的初始宿主机 PID。单项链只表示当前 procfs 看不到更深层级。
+解析保留最多 33 项，拒绝负数、零、溢出和夹杂字符的 PID。
+普通刷新缓存同一数据源、同一 PID/启动时间的命名空间；详情重读失败会撤下
+旧信息。切换数据源时清除身份及速率基线，进程操作仍使用原 PID 与启动时间。
+
+语义依据为 [proc_pid_status 手册](https://man7.org/linux/man-pages/man5/proc_pid_status.5.html)
+与 [Linux 的 status 输出循环](https://github.com/torvalds/linux/blob/master/fs/proc/array.c)。
+结合 [命名空间层级上限](https://github.com/torvalds/linux/blob/master/include/linux/pid_namespace.h)
+和初始层级 0，最多输出 33 项是对源码边界的推导。
+
+候选在本地隔离五层真实 PID 命名空间，外层 procfs 六项、内层重新挂载 procfs
+一项；同一进程两次真实采集均保留正确内层 ID，每处只读一次 status，全部
+辅助进程已回收。回归覆盖合法边界、坏 token、PID 复用、数据源切换、重读
+失败、线程链、搜索与导出。12 个进程测试文件、Lua 5.4 共享完整 148 文件及
+Windows 11、Server 2008、M4 各六组共享测试通过。正式源码的原生检查、Lua 5.5
+完整 148 文件与终端矩阵通过；真实程序的连续采样、精确 PID 搜索和详情链通过。
+精确提交的构建、下载包终端矩阵及两种实际 Linux 包仍在验证。
+完整硬件、资源预算、现代 AMD 真机、可信 DDR5 槽位及 XP 运行目标继续开放。
+
 ### 2026-10-17：概览功耗墙与余量
 
 概览功耗卡直接显示各 CPU 封装控制器的配置上限、自己的瓦数、ASCII 条、

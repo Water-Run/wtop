@@ -580,6 +580,13 @@ function Process:sample(context, previous)
   end
 
   local now = Common.now_ns(context)
+  if self.identity_cache_fs ~= fs then
+    -- A different procfs provider can reuse both PID and start time. Its
+    -- identities and rate baselines must begin with a fresh observation.
+    previous = nil
+    self.io_bulk_last_ns = nil
+    self.sched_memo = {}
+  end
   local previous_data = Common.previous_data(previous)
   local elapsed_ns = previous_data and Common.elapsed_ns(now, previous.timestamp_ns) or nil
   local previous_by_id = previous_data and previous_data.by_id or {}
@@ -587,7 +594,7 @@ function Process:sample(context, previous)
   -- This sample's cache; assigned over self.identity_cache at the end so
   -- identities that disappeared are dropped in the same pass.
   local live_cache = {}
-  local prior_cache = self.identity_cache
+  local prior_cache = self.identity_cache_fs == fs and self.identity_cache or {}
   -- One read per sample gives every process an age in wall-clock seconds.
   -- The first frame also uses that age for its lifetime CPU average. If
   -- uptime is unreadable, age remains unknown and rates still work.
@@ -778,8 +785,10 @@ function Process:sample(context, previous)
             process.user = cached.user
             if cached.command then process.command = cached.command end
             process.affinity = cached.affinity
+            process.namespaces = cached.namespaces
           end
           if self.read_status and (detail or not cached) then
+            process.namespaces = nil
             local status_content, status_error = fs:read(base .. "/status", 256 * 1024)
             if status_content then
               local status = Parsers.process_status(status_content)
@@ -792,18 +801,16 @@ function Process:sample(context, previous)
                   voluntary = status.voluntary_context_switches,
                   involuntary = status.nonvoluntary_context_switches,
                 }
-                -- NSpid/NStgid arrive with the status file the base scan reads
-                -- anyway, so namespace nesting costs no extra procfs read.  A
-                -- chain longer than one entry means the process is namespaced,
-                -- and the first entry is the id it knows itself by -- 1 for a
-                -- container's init, which is what makes it worth surfacing.
+                -- IDs run from this procfs mount towards the innermost
+                -- namespace. The mount may itself be inside a container,
+                -- so its first ID does not establish an initial-host PID.
                 if status.nspid and #status.nspid > 0 then
                   process.namespaces = {
                     nspid = status.nspid,
                     nstgid = status.nstgid,
                     namespaced = #status.nspid > 1,
-                    inner_pid = status.nspid[1],
-                    host_pid = status.nspid[#status.nspid],
+                    inner_pid = status.nspid[#status.nspid],
+                    procfs_pid = status.nspid[1],
                   }
                 end
               else
@@ -1215,6 +1222,7 @@ function Process:sample(context, previous)
             entry.uid = process.uid
             entry.user = process.user
             entry.affinity = process.affinity
+            entry.namespaces = process.namespaces
             if io_attempted then
               entry.io = process.io
               entry.io_observed_ns = process.io_observed_ns
@@ -1246,6 +1254,7 @@ function Process:sample(context, previous)
     any_process_partial = any_process_partial or process.partial == true
   end
   self.identity_cache = live_cache
+  self.identity_cache_fs = fs
   local finished = Common.now_ns(context)
   return Common.result("ok", finished, {
     list = processes,

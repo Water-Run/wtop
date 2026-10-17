@@ -77,10 +77,12 @@ local function fake_fs(overrides)
   }
 end
 
+-- All ordinary samples below read the same procfs fixture.
+local process_fs = fake_fs()
 local now = 1000000000
 local function context(visible, overrides)
   return {
-    fs = fake_fs(overrides),
+    fs = overrides and fake_fs(overrides) or process_fs,
     now_ns = function() return now end,
     visible_process_ids = visible,
   }
@@ -92,7 +94,7 @@ local bulk_now = 1000000000
 local bulk_collector = Process.new({ read_status = false })
 local function bulk_context()
   return {
-    fs = fake_fs(), now_ns = function() return bulk_now end,
+    fs = process_fs, now_ns = function() return bulk_now end,
     scan_process_io = true,
   }
 end
@@ -191,7 +193,7 @@ assert(reset_rate.quality == "reset"
   "one counter reset invalidates the pair instead of inventing a negative rate")
 files["/proc/200/io"] = reset_source
 local frozen_collector = Process.new({ read_status = false, read_io = true })
-local frozen_context = { fs = fake_fs(), now_ns = function() return 1000000000 end }
+local frozen_context = { fs = process_fs, now_ns = function() return 1000000000 end }
 local frozen_first = frozen_collector:sample(frozen_context)
 local frozen_second = frozen_collector:sample(frozen_context, frozen_first)
 assert(frozen_second.data.by_id["200:12"].io_rate.quality == "gap"
@@ -201,7 +203,7 @@ assert(frozen_second.data.by_id["200:12"].io_rate.quality == "gap"
 local rate_now = 1000000000
 local rate_collector = Process.new({ read_status = false })
 local function rate_context()
-  return { fs = fake_fs(), now_ns = function() return rate_now end,
+  return { fs = process_fs, now_ns = function() return rate_now end,
     scan_process_io_rate = true }
 end
 local rate_first = rate_collector:sample(rate_context())
@@ -225,7 +227,7 @@ files["/proc/200/io"] = rate_source
 local oneshot_now = 1000000000
 local oneshot_collector = Process.new({ read_status = false })
 local function oneshot_context(force)
-  return { fs = fake_fs(), now_ns = function() return oneshot_now end,
+  return { fs = process_fs, now_ns = function() return oneshot_now end,
     scan_process_io_rate = true, force_process_io_refresh = force }
 end
 local oneshot_first = oneshot_collector:sample(oneshot_context(false))

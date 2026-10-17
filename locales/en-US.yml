@@ -1061,7 +1061,7 @@ messages:
   process.details_io_write_rate: "Write rate"
   process.details_io_rate_status: "I/O rate status"
   process.details_name: "Name"
-  process.details_namespace_chain: "Inside → host"
+  process.details_namespace_chain: "procfs → inside"
   process.details_namespaces: "PID namespaces"
   process.details_priority: "Priority"
   process.details_open_fds: "Leader open FDs"
