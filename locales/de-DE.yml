@@ -28,6 +28,8 @@ messages:
   power.measurement.current: "Momentanwert"
   power.measurement.average: "Mittelwert"
   power.measurement.device_sample: "Gerätestichprobe"
+  limits.flag_count: "Aktive Flags: {count}"
+  limits.coverage: "CPU-Limitbereiche: {observed}/{discovered} gemessen · {supported} unterstützt"
   limits.current: "Aktuelle Grenzen"
   limits.recorded: "Gespeicherte Flags"
   limits.history_note: "Gespeicherte Flags bleiben bis zum Löschen gesetzt; der Löschzeitpunkt ist unbekannt."

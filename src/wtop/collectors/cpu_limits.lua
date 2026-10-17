@@ -137,7 +137,13 @@ function CPU:sample(context)
         return Common.result("unavailable", Common.now_ns(context), nil, {
             quality = "unavailable", reason = "cpu_limits_not_supported", source = data.source })
     end
-    local partial = before.partial
+    local discovered = 0
+    for _ in pairs(before.groups) do discovered = discovered + 1 end
+    data.domains_discovered, data.domains_supported = discovered, #keys
+    data.roster_complete = not before.partial and not before.truncated
+    data.domains_observed = 0
+    data.coverage_complete = data.roster_complete and #keys == discovered
+    local partial = before.partial or #keys < discovered
     for _, key in ipairs(keys) do
         local group = before.groups[key]
         local domain, message, denied, reader_cpu = nil, nil, false, group.cpu_id
@@ -147,6 +153,12 @@ function CPU:sample(context)
             if domain then reader_cpu = id; break end
             denied = denied or errno == 1 or errno == 13
             message = called and tostring(read_error or "invalid_cpu_msr_read") or "cpu_msr_read_failed"
+        end
+        local observed = domain ~= nil
+        if observed then data.domains_observed = data.domains_observed + 1 end
+        if not observed or type(domain.active) ~= "boolean"
+            or (domain.unknown_status_mask or 0) ~= 0 or (domain.reserved_high or 0) ~= 0 then
+            data.coverage_complete = false
         end
         if not domain then
             domain = { quality = denied and "denied" or "unavailable", reasons = {},
@@ -165,6 +177,8 @@ function CPU:sample(context)
     local after = roster(self, fs)
     if not after or after.signature ~= before.signature then
         partial = true
+        data.coverage_complete = false
+        data.roster_complete = false
         for _, domain in ipairs(data.domains) do
             domain.active, domain.quality, domain.reason = nil, "gap", "cpu_roster_changed"
             for _, reason in ipairs(domain.reasons) do reason.active, reason.logged = nil, nil end

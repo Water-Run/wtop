@@ -7,6 +7,7 @@ local WorkloadFilter = require("wtop.model.workload_filter")
 local MountFilter = require("wtop.model.mount_filter")
 local Quality = require("wtop.model.quality")
 local Power = require("wtop.model.power")
+local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
 local Hardware = require("wtop.model.hardware")
@@ -1023,6 +1024,63 @@ local function limit_status(domain, state, i18n)
             or translated(i18n, "limits.unknown_reason", "Asserted; reason unavailable")
     end
     return translated(i18n, "status.unknown", "Unknown")
+end
+
+local function cpu_limit_overview_text(snapshot, i18n)
+    local summary = CPULimits.reduce(snapshot.cpu_limits,
+        snapshot.quality and snapshot.quality.cpu_limits)
+    if summary.quality == "unavailable" and #summary.packages == 0 then return nil end
+    local text
+    if summary.active == true then
+        local names = {}
+        for _, id in ipairs(summary.reasons) do
+            names[#names + 1] = translated(i18n, "limits.reason." .. id, id)
+        end
+        text = #names > 0 and table.concat(names, ", ")
+            or translated(i18n, "limits.unknown_reason", "Asserted; reason unavailable")
+    elseif summary.active == false then
+        text = translated(i18n, "limits.inactive", "Not asserted")
+    else
+        local failure
+        if summary.known_active + summary.known_inactive == 0 then
+            for _, row in ipairs(summary.packages) do
+                local state = row.quality or "unknown"
+                if failure and failure ~= state then failure = "partial"; break end
+                failure = state
+            end
+        end
+        text = Technical.state(i18n, failure or summary.quality or "unknown")
+    end
+    if summary.active ~= nil and summary.quality == "partial" then
+        text = text .. " (" .. Technical.state(i18n, "partial") .. ")"
+    end
+    local count = "?"
+    if summary.active == true then
+        local known = #summary.reasons
+        count = known == 0 and ">=1"
+            or (summary.complete and tostring(known) or ">=" .. known)
+    elseif summary.active == false then
+        count = "0"
+    end
+    return translated(i18n, "limits.current", "Current limits") .. ": " .. text,
+        translated(i18n, "limits.flag_count", "Active flags: {count}", { count = count })
+end
+
+function M.cpu_limit_coverage_text(snapshot, i18n)
+    local limits = snapshot.cpu_limits
+    if type(limits) ~= "table" then return nil end
+    local discovered, supported, observed = limits.domains_discovered,
+        limits.domains_supported, limits.domains_observed
+    for _, value in ipairs({ discovered, supported, observed }) do
+        if type(value) ~= "number" or value % 1 ~= 0 or value < 0 or value > 8192 then return nil end
+    end
+    if discovered == nil or supported == nil or observed == nil
+        or observed > supported or supported > discovered then return nil end
+    local summary = CPULimits.reduce(limits, snapshot.quality and snapshot.quality.cpu_limits)
+    return translated(i18n, "limits.coverage",
+        "CPU limit domains: {observed}/{discovered} sampled · {supported} supported", {
+            observed = observed, discovered = discovered, supported = supported,
+        }) .. " · " .. Technical.state(i18n, summary.quality)
 end
 
 function M.performance_limit_rows(snapshot, i18n)
@@ -3030,9 +3088,14 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
 
     local function history(key) return engine:history_values(key) end
 
+    local limit_text, limit_compact
+    if on("overview", "cpu_overview") then limit_text, limit_compact = cpu_limit_overview_text(snapshot, i18n) end
+
     local models = {
         -- Overview -------------------------------------------------------
         cpu_overview = {
+            secondary_value = limit_text,
+            secondary_values = limit_compact and { limit_compact } or nil,
             label = translated(i18n, "metrics.cpu", "CPU"),
             value = cpu_value,
             display_value = percent(format, cpu_value),

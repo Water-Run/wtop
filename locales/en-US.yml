@@ -27,6 +27,8 @@ messages:
   power.measurement.current: "Instantaneous"
   power.measurement.average: "Average"
   power.measurement.device_sample: "Device sample"
+  limits.flag_count: "Active flags: {count}"
+  limits.coverage: "CPU limit domains: {observed}/{discovered} sampled · {supported} supported"
   limits.current: "Current limits"
   limits.recorded: "Recorded flags"
   limits.history_note: "Recorded flags remain until cleared; the clear time is unknown."

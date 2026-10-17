@@ -265,7 +265,18 @@ function M.render(grid, area, model, context, variant)
       local secondary = tostring(model.secondary_value)
       local used = written - area.x
       local space = area.width - used - 2
-      if space >= Width.display_width(secondary, grid.width_options) then
+      if space < Width.display_width(secondary, grid.width_options) then
+        secondary = nil
+        for index, alternative in ipairs(model.secondary_values or {}) do
+          if index > 8 then break end
+          alternative = tostring(alternative)
+          if space >= Width.display_width(alternative, grid.width_options) then
+            secondary = alternative
+            break
+          end
+        end
+      end
+      if secondary then
         grid:write(area.x + area.width - Width.display_width(secondary, grid.width_options),
           row, secondary, Util.style(context, "text.muted", surface), space)
       end

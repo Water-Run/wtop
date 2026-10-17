@@ -5,6 +5,7 @@ local Privacy = require("wtop.privacy")
 local Hardware = require("wtop.model.hardware")
 local Quality = require("wtop.model.quality")
 local Power = require("wtop.model.power")
+local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
 local NVMe = require("wtop.linux.nvme_diagnostics")
@@ -216,9 +217,13 @@ end
 local function export_performance_limits(limits, maximum, summary, quality)
     limits = limits or {}
     local domains = limits.domains or {}
-    local result = copy_fields(limits, { "schema", "source", "source_kind", "denied_domains" })
+    local result = copy_fields(limits, { "schema", "source", "source_kind", "denied_domains",
+        "domains_discovered", "domains_supported", "domains_observed", "roster_complete" })
     result.domains, result.domains_total = json.array({}), #domains
     result.truncated = limits.truncated == true or #domains > (maximum or #domains)
+    if limits.coverage_complete ~= nil then
+        result.coverage_complete = CPULimits.reduce(limits, quality).complete and not result.truncated
+    end
     for index = 1, math.min(#domains, maximum or #domains) do
         local domain = domains[index]
         local output = copy_fields(domain, { "id", "scope", "cpu_id", "package_id", "family", "model",

@@ -28,6 +28,8 @@ messages:
   power.measurement.current: "Instantánea"
   power.measurement.average: "Promedio"
   power.measurement.device_sample: "Muestra del dispositivo"
+  limits.flag_count: "Indicadores activos: {count}"
+  limits.coverage: "Dominios de límite CPU: {observed}/{discovered} medidos · {supported} compatibles"
   limits.current: "Límites actuales"
   limits.recorded: "Indicadores registrados"
   limits.history_note: "Los indicadores se conservan hasta borrarse; se desconoce cuándo se borraron."

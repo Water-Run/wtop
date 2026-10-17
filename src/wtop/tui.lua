@@ -600,6 +600,8 @@ local function power_detail_lines(snapshot, i18n)
         lines[#lines + 1] = inspector_text("  " .. translated(i18n, id, label)
             .. ": " .. tostring(value or "—"), INSPECTOR_ROW_WIDTH)
     end
+    local coverage = ViewModel.cpu_limit_coverage_text(snapshot, i18n)
+    if coverage then lines[#lines + 1] = inspector_text(coverage, INSPECTOR_ROW_WIDTH) end
     local limit_rows, limits_total = ViewModel.performance_limit_rows(snapshot, i18n)
     for index = 1, math.min(#limit_rows, 4) do
         local row = limit_rows[index]

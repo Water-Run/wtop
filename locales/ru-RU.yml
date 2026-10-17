@@ -28,6 +28,8 @@ messages:
   power.measurement.current: "Мгновенное"
   power.measurement.average: "Среднее"
   power.measurement.device_sample: "Отсчёт устройства"
+  limits.flag_count: "Акт. флаги: {count}"
+  limits.coverage: "Домены ограничений CPU: {observed}/{discovered} измерено · {supported} поддерживается"
   limits.current: "Текущие ограничения"
   limits.recorded: "Сохранённые флаги"
   limits.history_note: "Флаги сохраняются до сброса; время сброса неизвестно."

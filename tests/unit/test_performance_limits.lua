@@ -251,3 +251,102 @@ for _,locale in ipairs({"en-US","zh-CN","zh-TW","ja-JP","ko-KR","fr-FR","de-DE",
     local i=assert(I18n.new({locale=locale}))
     for _,reason in ipairs(sysman.reasons) do assert(i:has("limits.reason."..reason.id)) end
 end
+
+-- A global current-state synopsis needs complete package observations. A
+-- supported subset, historical latch or denied package cannot establish zero.
+do
+    local Summary = require("wtop.model.cpu_limits")
+    local Metric = require("wtop.ui.widgets.metric")
+    local function domain(raw, quality, id)
+        local value = assert(CPU.decode(string.pack("<I4I4", raw, 0)))
+        value.id, value.scope, value.package_id = id or "package:0", "cpu_package", 0
+        if quality then value.quality = quality end
+        return value
+    end
+    local function data(domains, complete)
+        return { schema = "dev.waterrun.wtop.cpu-limits/v1", domains = domains,
+            roster_complete = true, coverage_complete = complete ~= false,
+            domains_discovered = #domains, domains_supported = #domains,
+            domains_observed = #domains }
+    end
+    local fresh = { status = "ok", quality = "fresh" }
+    local active = data({ domain(1 << 10) })
+    local result = Summary.reduce(active, fresh)
+    assert(result.active == true and result.reasons[1] == "pl1" and result.complete)
+    result = Summary.reduce(data({ domain((1 << 1) << 16) }), fresh)
+    assert(result.active == false and #result.reasons == 0, "latched thermal is not current")
+    for _, state in ipairs({ "stale", "denied", "error", "gap", "reset", "unavailable", "held", "estimated" }) do
+        result = Summary.reduce(active, { status = "ok", quality = state })
+        assert(result.active == nil and #result.reasons == 0, state)
+    end
+    result = Summary.reduce(data({ domain(1 << 10), domain(0) }), fresh)
+    assert(result.active == nil and result.known_active == 0, "duplicate identities are ambiguous")
+    result = Summary.reduce(data({ domain(0), domain(0, "denied", "package:1") }), fresh)
+    assert(result.active == nil and not result.complete)
+    result = Summary.reduce(data({ domain(0) }, false), fresh)
+    assert(result.active == nil, "missing packages prevent a global inactive result")
+    result = Summary.reduce(data({ domain(4) }), fresh)
+    assert(result.active == nil, "unknown status bits do not imply inactivity")
+    local snapshot = { cpu = { total = { utilization = 100 } }, cpu_limits = active,
+        quality = { cpu_limits = fresh } }
+    local engine = { history_values = function() return {} end }
+    local en = assert(I18n.new({ locale = "en-US" }))
+    local model = View.build(engine, snapshot, en, {}, "overview", nil, { cpu_overview = true })
+    assert(model.cpu_overview.secondary_value == "Current limits: PL1")
+    assert(Export.snapshot(snapshot).cpu_limits.coverage_complete)
+    assert(Export.agent(snapshot).metrics.power.cpu_limits.coverage_complete)
+    snapshot.quality.cpu_limits = { status = "ok", quality = "stale" }
+    assert(Export.snapshot(snapshot).cpu_limits.coverage_complete == false)
+    assert(Export.agent(snapshot).metrics.power.cpu_limits.coverage_complete == false)
+    snapshot.quality.cpu_limits = fresh
+    for id = 1, 12 do active.domains[#active.domains + 1] = domain(0, nil, "package:" .. id) end
+    assert(Export.agent(snapshot).metrics.power.cpu_limits.truncated)
+    assert(Export.agent(snapshot).metrics.power.cpu_limits.coverage_complete == false)
+    local old_reduce = Summary.reduce
+    Summary.reduce = function() error("hidden or process-only CPU synopsis ran") end
+    View.build(engine, snapshot, en, {}, "processes")
+    View.build(engine, snapshot, en, {}, "overview", nil, { memory_overview = true })
+    Summary.reduce = old_reduce
+
+    local scenarios = { data({ domain(0) }), data({ domain((1 << 1) << 16) }),
+        data({ domain(1 << 10) }), data({ domain((1 << 10) | (1 << 12) | (1 << 1) | (1 << 6)) }),
+        data({ domain(1 << 10) }, false), data({ domain(0, "denied") }), data({ domain(4) }) }
+    for _, locale in ipairs({ "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "fr-FR", "de-DE", "es-ES", "pt-BR", "ru-RU" }) do
+        local translator = assert(I18n.new({ locale = locale }))
+        for _, current in ipairs(scenarios) do
+            snapshot.cpu_limits = current
+            local models = View.build(engine, snapshot, translator, {}, "overview", nil, { cpu_overview = true })
+            local cpu = models.cpu_overview
+            cpu.display_value = "100.0%"
+            for _, width in ipairs({ 12, 16, 28, 38, 58, 98 }) do
+                local grid = Grid.new(width, 8)
+                Metric.render(grid, { x = 1, y = 1, width = width, height = 8 }, cpu,
+                    { panel_title = true }, "full")
+                local line = grid:row_text(1)
+                assert(line:find("100.0%", 1, true), "CPU value truncated")
+                if width >= 38 then
+                    local full = cpu.secondary_value
+                    local short = cpu.secondary_values[1]
+                    assert(line:find(full, 1, true) or line:find(short, 1, true),
+                        "default80 CPU tile lost all limit-state context: " .. locale)
+                end
+            end
+        end
+    end
+    local more = {}
+    for name, value in pairs(files) do more[name] = value end
+    more[root .. "/cpu1/topology/physical_package_id"] = "1\n"
+    more["/proc/cpuinfo"] = "processor : 0\nvendor_id : GenuineIntel\ncpu family : 6\nmodel : 186\n\n"
+        .. "processor : 1\nvendor_id : GenuineIntel\ncpu family : 6\nmodel : 92\n\n"
+    local probe = CPU.new({ fs = fixture(more), reader = function(id)
+        assert(id == 0, "unsupported package register was read")
+        return bytes(0, 0)
+    end })
+    local mixed = probe:sample({ now_ns = function() return 8000 end })
+    assert(mixed.quality == "partial" and mixed.data.roster_complete)
+    assert(mixed.data.domains_discovered == 2 and mixed.data.domains_supported == 1
+        and mixed.data.domains_observed == 1 and not mixed.data.coverage_complete)
+    assert(Summary.reduce(mixed.data, { status = "ok", quality = "partial" }).active == nil)
+    local coverage = View.cpu_limit_coverage_text({ cpu_limits = mixed.data }, en)
+    assert(coverage:find("1/2", 1, true) and coverage:find("1 supported", 1, true))
+end

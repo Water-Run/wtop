@@ -28,6 +28,8 @@ messages:
   power.measurement.current: "瞬時値"
   power.measurement.average: "平均値"
   power.measurement.device_sample: "デバイスのサンプル"
+  limits.flag_count: "有効フラグ: {count}"
+  limits.coverage: "CPU 制限ドメイン: {observed}/{discovered} 測定済み · {supported} 対応"
   limits.current: "現在の制限"
   limits.recorded: "記録済みフラグ"
   limits.history_note: "記録済みフラグはクリアされるまで残ります。クリア時刻は不明です。"

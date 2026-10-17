@@ -28,6 +28,8 @@ messages:
   power.measurement.current: "Instantanée"
   power.measurement.average: "Moyenne"
   power.measurement.device_sample: "Échantillon du périphérique"
+  limits.flag_count: "Indicateurs actifs : {count}"
+  limits.coverage: "Domaines de limite CPU : {observed}/{discovered} mesurés · {supported} pris en charge"
   limits.current: "Limites actuelles"
   limits.recorded: "Indicateurs mémorisés"
   limits.history_note: "Les indicateurs restent mémorisés jusqu’à leur effacement, dont la date est inconnue."

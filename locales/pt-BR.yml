@@ -28,6 +28,8 @@ messages:
   power.measurement.current: "Instantânea"
   power.measurement.average: "Média"
   power.measurement.device_sample: "Amostra do dispositivo"
+  limits.flag_count: "Sinais ativos: {count}"
+  limits.coverage: "Domínios de limite da CPU: {observed}/{discovered} medidos · {supported} compatíveis"
   limits.current: "Limites atuais"
   limits.recorded: "Sinais registrados"
   limits.history_note: "Os sinais permanecem registrados até serem apagados; o momento da limpeza é desconhecido."

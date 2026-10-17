@@ -28,6 +28,8 @@ messages:
   power.measurement.current: "瞬时值"
   power.measurement.average: "平均值"
   power.measurement.device_sample: "设备采样值"
+  limits.flag_count: "当前标志：{count}"
+  limits.coverage: "CPU 限制域：已采样 {observed}/{discovered}，支持 {supported}"
   limits.current: "当前限制"
   limits.recorded: "历史记录位"
   limits.history_note: "历史记录位保留至被清除；清除时间未知。"
