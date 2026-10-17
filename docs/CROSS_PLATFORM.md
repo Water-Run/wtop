@@ -629,6 +629,37 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
+### 2026-10-17：进程族性能测量与启动开销（验证中）
+
+性能工具升级为 `measurement_version = 4`。旧版本只读取主 PID 的 CPU 和
+RSS，无法代表隔离读取器的总成本。受控的忙碌子进程占满约一个核心并持有
+32 MiB 内存时，旧方法仍报主进程约 0% CPU、约 13 MiB RSS；回收后的
+1.22 秒子进程 CPU 也未计入。新工具按 PID/启动时间、线程子进程关系及已等待
+子进程计数取样，检查前后名册和回收变化；旧内核可回退到有界 PPID 扫描。
+
+内存分别记录采样 PSS、私有驻留量和 RSS 总和，主进程 VmHWM 单独保留。
+32 MiB 共享映射的回归确认，子进程回收会令 RSS 总和下降，但 PSS 总量基本
+不变。缺失、拒绝和采样竞争不补零；HugeTLB 不可确认或不为零时，PSS 预算
+不会通过。这里只覆盖已观察的后代及完整等待链的 CPU，不宣称捕获未观察到的
+守护进程逃逸或两次采样之间的绝对内存峰值。
+
+读取器保持 `PR_SET_DUMPABLE=0`，普通权限可能无法读取其 `smaps`。CPU 和
+内存状态分开；需要完整内存观测时可由有权限的观测脚本配合 `--target-uid`
+启动普通用户的被测程序。启动文件也按目标用户权限检查，观测脚本随后恢复
+自身权限。记录包含程序指纹、观测脚本哈希、运行 UID、原始窗口/取样、采样
+周期和观测 CPU 开销。预算拒绝旧协议、口径/UID 不符、数据缺失以及观测间隔、
+窗口或自身开销超限的结果；它仍需由目标硬件给出实际预算。
+
+程序本身也减少了固定文本格式化和目录校验的开销：无插值文本在保留输入
+检查后走快速路径，字符串键使用原生排序，异常键保留原比较方式。
+17,577 个内置文本及边界样例在 Lua 5.4/5.5 下与原实现逐项一致。
+本机 120×34、普通用户、同一源码/原生模块的 ABBA 短时观测中，组合修改
+首帧均值约由 254.1 ms 到 170.5 ms；Overview/Processes 的进程族 CPU 约为
+5.61%/5.58% 与 5.64%/5.40%，翻页 p95 结果有波动，不据此声称稳态 CPU 或
+所有输入延迟改善。完整方法、源码哈希与原始样本位于
+`build/performance-process-family-20261017/`。这不是最终包、1000 进程、旧硬件
+或跨平台性能预算证明；完整回归和最终产物验证仍在进行。
+
 ### 2026-10-17：现代 AMD CPUID 拓扑与核心类型
 
 开发源码已解码 AMD 的 `80000026` 扩展层级、`0B` 和 `80000008`/`8000001E`
@@ -4079,7 +4110,7 @@ Processes CPU 为 1.40% / 1.20%，翻页 p95 为 16.8 / 27.2 ms。
 
 ### 2026-10-11：预算检查增加阶段进程数
 
-当前 `tools/perf_benchmark.py` 的 `measurement_version = 3` 记录首帧、每个
+当时 `tools/perf_benchmark.py` 的 `measurement_version = 3` 记录首帧、每个
 稳态窗口起止、每次切页前及结束时的可见进程数；`benchmark-check` 要求
 这些观测全部落在目标机器的进程数范围内。此前只在首帧后数一次，工作负载
 即使在稳态窗口边界或切页前已经变化，也可能拿到一份“合格”的预算结果。
@@ -4109,7 +4140,7 @@ RSS 相差约 2.5 MiB，大于初次看见的改善，因此撤回该改动。
 在已经构建好的 Linux 目录包上运行 `make benchmark-check` 时，
 `BENCH_EXECUTABLE` 指向可执行文件，`BENCH_PROFILE` 和 `BENCH_BUDGET`
 选择目标机器的预算。预算文件需写明同一内核/架构/CPU 数、进程数范围、
-页面、窗口时长与延迟样本数，并为首帧、峰值 RSS、各页稳态 CPU 和
+页面、窗口时长与延迟样本数，并为首帧、采样进程族 PSS、各页稳态 CPU 和
 各目标页 p95 翻页时间给出上限。缺项、主体不符、负载不符或超限都会失败。
 预构建产物只运行轻量资源预检，不要求构建机的 2–4 GiB 可用内存。
 
@@ -4126,7 +4157,9 @@ make benchmark-check BENCH_EXECUTABLE=dist/wtop/wtop \
 当前预算 JSON 的 `subject_path` 写被测包入口，`host` 包含 `kernel`、
 `machine`、`cpus`，`host_processes` 包含
 `min`/`max`，`settings` 与命令的页面、窗口时长、样本数和终端尺寸一致。
-`maximum` 用 `first_frame_ms`、`rss_peak_kib`、
+`subject_uid` 指定被测程序用户，`resource_observer` 给出采样间隔、窗口和观测
+CPU 的限制；`settings.resource_sample_ms` 与实际采样周期一致。
+`maximum` 用 `first_frame_ms`、`family_sampled_pss_peak_kib`、
 `steady_cpu_percent.page_1` 等键，以及 `input_latency_ms.p95` 和各页
 `page_N_p95` 键给出上限。精确的可运行格式由
 [`tests/test_perf_budget.py`](../tests/test_perf_budget.py) 的夹具覆盖。

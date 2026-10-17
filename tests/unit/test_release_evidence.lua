@@ -291,7 +291,7 @@ local NOT_RELEASE_EVIDENCE = {
     "check_macos.py",
     "check_resources.sh",
     "compile_locales.lua", "cross_libc_build.sh", "elf_floors.py",
-    "perf_benchmark.py", "write_build_id.sh",
+    "perf_benchmark.py", "perf_process_family.py", "write_build_id.sh",
     "release_archive.py", "make_source_rock.py",
     "bootstrap_portable_luainstaller.sh", "package_macos.sh", "package_windows.py",
 }

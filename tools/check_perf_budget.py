@@ -14,8 +14,12 @@ import pathlib
 import typing
 
 
-SETTINGS = ("pages", "window_seconds", "latency_samples", "columns", "rows", "interval_ms")
+SETTINGS = ("pages", "window_seconds", "latency_samples", "columns", "rows", "interval_ms", "resource_sample_ms")
 HOST = ("kernel", "machine", "cpus")
+
+
+def _sha256(value):
+    return isinstance(value, str) and len(value) == 64 and all(ch in "0123456789abcdef" for ch in value)
 
 
 def _number(value: object) -> bool:
@@ -38,14 +42,78 @@ def _metric(result: typing.Dict[str, object], name: str) -> object:
 
 def evaluate(result: typing.Dict[str, object], budget: typing.Dict[str, object]) -> typing.List[str]:
     failures: typing.List[str] = []
-    if result.get("measurement_version") != 3:
-        failures.append("result lacks complete-frame and workload sampling (version 3)")
+    hashes = result.get("measurement_tools_sha256")
+    if not isinstance(hashes, dict) or any(not _sha256(hashes.get(name)) for name in ("perf_benchmark.py", "perf_process_family.py")):
+        failures.append("measurement tool fingerprints are missing or invalid")
+    if type(result.get("observer_uid")) is not int or result["observer_uid"] < 0:
+        failures.append("observer UID is missing or invalid")
+    if result.get("measurement_version") != 4:
+        failures.append("result lacks process-family, complete-frame and workload sampling (version 4)")
+    resources = result.get("resource_accounting")
+    if not isinstance(resources, dict):
+        failures.append("process-family resource accounting is missing")
+        resources = {}
+    if resources.get("cpu_scope") != "observed_descendants_and_waited_children":
+        failures.append("CPU scope is not the observed process family with waited children")
+    if resources.get("memory_scope") != "sampled_family_pss":
+        failures.append("memory scope is not sampled process-family PSS")
+    for key in ("cpu_status", "memory_status"):
+        if resources.get(key) != "observed":
+            failures.append("process-family %s is incomplete" % key)
+    if resources.get("hugetlb_status") != "known_zero":
+        failures.append("hugetlb memory is unknown or outside the PSS budget")
+    if resources.get("sample_bound_exceeded") is not False:
+        failures.append("resource observer bound exceeded or missing")
+    if type(budget.get("subject_uid")) is not int or budget["subject_uid"] < 0:
+        failures.append("budget requires the subject UID")
+    elif type(result.get("subject_uid")) is not int or result["subject_uid"] != budget["subject_uid"]:
+        failures.append("subject UID differs from budget")
+    resource_samples = resources.get("samples")
+    if not isinstance(resource_samples, list) or not resource_samples:
+        failures.append("resource samples are missing")
+        resource_samples = []
+    for sample in resource_samples:
+        if not isinstance(sample, dict) or any(sample.get(key) != "observed" for key in ("cpu_status", "memory_status")):
+            failures.append("resource sample is incomplete")
+            continue
+        if any(not _number(sample.get(key)) for key in ("family_ticks", "own_ticks", "pss_kib", "sample_started", "sample_finished")):
+            failures.append("resource sample lacks valid counters or observation bounds")
+        elif sample["sample_finished"] < sample["sample_started"]:
+            failures.append("resource sample observation bounds are reversed")
+    valid_pss = [sample["pss_kib"] for sample in resource_samples
+                 if isinstance(sample, dict) and _number(sample.get("pss_kib"))]
+    if valid_pss and result.get("family_sampled_pss_peak_kib") != max(valid_pss):
+        failures.append("family PSS peak disagrees with sampled observations")
+    settings = result.get("settings")
+    if isinstance(settings, dict) and resources.get("sample_period_ms") != settings.get("resource_sample_ms"):
+        failures.append("resource sample period differs from benchmark settings")
+    limits = budget.get("resource_observer")
+    required_limits = ("maximum_gap_ms", "maximum_bracket_ms", "maximum_cpu_percent")
+    if not isinstance(limits, dict) or any(not _number(limits.get(key)) for key in required_limits):
+        failures.append("budget requires resource observer gap/bracket/CPU limits")
+    elif resource_samples:
+        bounded = [sample for sample in resource_samples if isinstance(sample, dict)
+                   and _number(sample.get("sample_started")) and _number(sample.get("sample_finished"))]
+        if len(bounded) == len(resource_samples):
+            for previous, current in zip(bounded, bounded[1:]):
+                gap = current["sample_started"] - previous["sample_started"]
+                if gap < 0 or gap*1000 > limits["maximum_gap_ms"]:
+                    failures.append("resource sampling gap exceeds budget or reverses time")
+            if any((sample["sample_finished"]-sample["sample_started"])*1000 > limits["maximum_bracket_ms"] for sample in bounded):
+                failures.append("resource observer bracket exceeds budget")
+            elapsed = bounded[-1]["sample_finished"] - bounded[0]["sample_started"]
+            cpu = resources.get("observer_cpu_seconds")
+            if not _number(cpu) or elapsed <= 0 or cpu/elapsed*100 > limits["maximum_cpu_percent"]:
+                failures.append("resource observer CPU exceeds budget or is unavailable")
     profile = budget.get("profile")
     if not isinstance(profile, str) or not profile or profile == "unprofiled":
         failures.append("budget requires a named host/workload profile")
     elif result.get("profile") != profile:
         failures.append("profile differs: result %r, budget %r" % (result.get("profile"), profile))
     subject = result.get("subject")
+    fingerprint = subject.get("runtime_sha256") if isinstance(subject, dict) else None
+    if not _sha256(fingerprint):
+        failures.append("subject runtime fingerprint is missing or invalid")
     if budget.get("subject_kind") != "bundle" or not isinstance(subject, dict) \
             or subject.get("kind") != "bundle" or subject.get("present") is not True:
         failures.append("release budget requires a present bundle subject")
@@ -138,11 +206,33 @@ def evaluate(result: typing.Dict[str, object], budget: typing.Dict[str, object])
     if not isinstance(maximum, dict):
         failures.append("budget maximum must be a metric-to-limit object")
         maximum = {}
-    required = {"first_frame_ms", "rss_peak_kib", "input_latency_ms.p95"}
+    required = {"first_frame_ms", "family_sampled_pss_peak_kib", "input_latency_ms.p95"}
     required.update("steady_cpu_percent.page_%d" % page for page in pages)
     latency_pages = pages if len(pages) > 1 else \
         [2 if pages[0] == 1 else 1, pages[0]] if pages else []
     required.update("input_latency_ms.page_%d_p95" % page for page in latency_pages)
+    # A claimed family rate must agree with its raw endpoint counters; a quiet
+    # parent rate cannot be substituted while retaining family metadata.
+    windows = result.get("cpu_windows")
+    ticks_per_second = resources.get("clock_ticks_per_second")
+    for page in pages:
+        key = "page_%d" % page
+        window = windows.get(key) if isinstance(windows, dict) else None
+        if not isinstance(window, dict) or not _number(window.get("seconds")) or window["seconds"] <= 0 \
+                or not _number(ticks_per_second) or ticks_per_second <= 0:
+            failures.append("missing valid family CPU window %s" % key)
+            continue
+        before, after = window.get("before"), window.get("after")
+        if not isinstance(before, dict) or not isinstance(after, dict) \
+                or any(row.get("cpu_status") != "observed" or not _number(row.get("family_ticks")) for row in (before, after)) \
+                or after["family_ticks"] < before["family_ticks"]:
+            failures.append("invalid family CPU counters for %s" % key)
+            continue
+        rate = (after["family_ticks"]-before["family_ticks"])/ticks_per_second/window["seconds"]*100
+        rates = result.get("steady_cpu_percent")
+        value = rates.get(key) if isinstance(rates, dict) else None
+        if not _number(value) or abs(value-rate) > 0.02:
+            failures.append("family CPU rate disagrees with observed counters for %s" % key)
     for key in sorted(required - set(maximum)):
         failures.append("budget lacks required metric %s" % key)
     for name, limit in sorted(maximum.items()):

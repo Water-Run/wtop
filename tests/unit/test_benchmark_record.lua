@@ -199,7 +199,7 @@ assert(document:find('"subject"', 1, true) ~= nil,
         .. "file:\n" .. document)
 assert(document:find('"kind": "source%-tree"') ~= nil,
     "the record does not say which subject it measured:\n" .. document)
-assert(document:find('"measurement_version": 3', 1, true) ~= nil
+assert(document:find('"measurement_version": 4', 1, true) ~= nil
     and document:find('"settings"', 1, true) ~= nil,
     "the record does not identify complete-frame/workload timing and its benchmark settings:\n"
     .. document)
@@ -223,9 +223,16 @@ assert(document:find('"kernel"', 1, true) ~= nil
     and document:find('"cpus"', 1, true) ~= nil,
     "the host record is missing one of the three fields that identify a "
         .. "machine; a process count is not a host:\n" .. document)
-assert(document:find('"unavailable"', 1, true) == nil,
-    "the host record says a field could not be read, so the record is "
-        .. "describing a host it could not identify:\n" .. document)
+for _,value in pairs(decoded.host)do
+    assert(value~="unavailable","host identity field unavailable")
+end
+assert(decoded.resource_accounting.cpu_scope=="observed_descendants_and_waited_children")
+assert(decoded.resource_accounting.memory_scope=="sampled_family_pss")
+assert(#decoded.resource_accounting.samples>0)
+-- Protected readers may deny smaps. A denial is a reported state, not zero.
+if decoded.resource_accounting.memory_status~="observed"then
+    assert(decoded.family_sampled_pss_peak_kib==require("wtop.core.json").null)
+end
 assert(document:find('"page_1_p95"', 1, true) ~= nil
     and document:find('"page_2_p95"', 1, true) ~= nil,
     "the input-latency record must identify which page each switch entered; "

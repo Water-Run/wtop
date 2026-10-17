@@ -29,12 +29,18 @@ local ROOT_FIELDS = {
 
 local function sorted_keys(value)
   local keys = {}
+  local strings = true
   for key in pairs(value) do
     keys[#keys + 1] = key
+    if type(key) ~= "string" then strings = false end
   end
-  table.sort(keys, function(a, b)
-    return tostring(a) < tostring(b)
-  end)
+  if strings then
+    table.sort(keys)
+  else
+    table.sort(keys, function(a, b)
+      return tostring(a) < tostring(b)
+    end)
+  end
   return keys
 end
 
@@ -136,6 +142,7 @@ function M.placeholders(text)
   if not safe_text(text, MAX_MESSAGE_BYTES, true) then
     return nil, "message must be valid UTF-8 without terminal control characters and within the size limit"
   end
+  if not text:find("[{}]") then return {} end
   local result = {}
   local count = 0
   local index = 1

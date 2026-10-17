@@ -33,24 +33,30 @@ Usage: tools/perf_benchmark.py [--profile NAME] [--json PATH]
 # takes a test with it.
 
 import argparse
+import contextlib
+import hashlib
 import fcntl
 import json
 import math
 import os
 import pathlib
 import pty
+import pwd
 import select
 import signal
 import struct
 import termios
 import time
 import typing
+from perf_process_family import Sampler
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 LUA = os.environ.get("WTOP_LUA") or str(ROOT / ".tools/lua-5.5.1/bin/lua")
 EXECUTABLE = os.environ.get("WTOP_BENCH_EXECUTABLE", "")
 COLUMNS, ROWS = 120, 34
 FRAME_END = b"\x1b[0m"
+TARGET_UID = None
+SAMPLE_PERIOD_MS = 200
 
 # These are page content, not tab names. Every frame's tab bar spells all tabs,
 # so waiting for "Processes" after pressing 2 could time an unrelated repaint
@@ -62,6 +68,68 @@ PAGE_MARKERS = {
 }
 
 
+def runtime_fingerprint(files):
+    """Hash the entry/runtime payload before launching the measured process."""
+    digest, total = hashlib.sha256(), 0
+    if len(files) > 4096:
+        raise ValueError("runtime file bound exceeded")
+    for name, path in sorted(files):
+        if path.is_symlink():
+            raise ValueError("runtime fingerprint refuses symbolic links")
+        file_hash, size = hashlib.sha256(), 0
+        with path.open("rb") as stream:
+            while True:
+                data = stream.read(1048576)
+                if not data:
+                    break
+                size += len(data); total += len(data)
+                if size > 67108864 or total > 536870912:
+                    raise ValueError("runtime byte bound exceeded")
+                file_hash.update(data)
+        digest.update(name.encode("utf-8") + b"\0" + file_hash.digest())
+    return {"runtime_sha256":digest.hexdigest(), "runtime_files":len(files), "runtime_bytes":total}
+
+
+def runtime_tree(directory, label, lua_only=False):
+    files, pending, entries = [], [directory], 0
+    while pending:
+        current = pending.pop()
+        if current.is_symlink():
+            raise ValueError("runtime fingerprint refuses directory symbolic links")
+        with os.scandir(str(current)) as stream:
+            for entry in stream:
+                entries += 1
+                if entries > 4096:
+                    raise ValueError("runtime tree entry bound exceeded")
+                path = pathlib.Path(entry.path)
+                if entry.is_symlink():
+                    raise ValueError("runtime fingerprint refuses symbolic links")
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(path)
+                elif entry.is_file(follow_symlinks=False) and (not lua_only or path.suffix == ".lua"):
+                    files.append((label+"/"+str(path.relative_to(directory)),path))
+    return files
+
+
+@contextlib.contextmanager
+def target_file_permissions():
+    """Inspect launch files as the target, before starting any measurement."""
+    if TARGET_UID is None or TARGET_UID == os.geteuid():
+        yield
+        return
+    account = pwd.getpwuid(TARGET_UID)
+    previous_uid, previous_gid, previous_groups = os.geteuid(), os.getegid(), os.getgroups()
+    try:
+        os.initgroups(account.pw_name, account.pw_gid)
+        os.setegid(account.pw_gid)
+        os.seteuid(TARGET_UID)
+        yield
+    finally:
+        os.seteuid(previous_uid)
+        os.setegid(previous_gid)
+        os.setgroups(previous_groups)
+
+
 def completed_frame_offset(output: bytearray, marker: bytes, start: int = 0) -> typing.Optional[int]:
     """End offset of the first encoded frame containing destination content."""
     position = output.find(marker, start)
@@ -71,7 +139,37 @@ def completed_frame_offset(output: bytearray, marker: bytes, start: int = 0) -> 
     return ending + len(FRAME_END) if ending >= 0 else None
 
 
+def file_present(path):
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
+def executable_file(path):
+    if not file_present(path):
+        return False
+    try:
+        if os.access in os.supports_effective_ids:
+            return os.access(str(path), os.X_OK, effective_ids=True)
+        return os.getuid() == os.geteuid() and os.access(str(path), os.X_OK)
+    except OSError:
+        return False
+
+
+def resolved_path(path):
+    try:
+        return str(path.resolve()) if path.exists() else ""
+    except OSError:
+        return ""
+
+
 def describe_subject() -> typing.Dict[str, object]:
+    with target_file_permissions():
+        return _describe_subject()
+
+
+def _describe_subject() -> typing.Dict[str, object]:
     """What this run actually measured.
 
     Two subjects are supported and they are not interchangeable.  A bundle is
@@ -83,23 +181,33 @@ def describe_subject() -> typing.Dict[str, object]:
     """
     if EXECUTABLE:
         path = pathlib.Path(EXECUTABLE)
-        return {
+        result = {
             "kind": "bundle",
             "path": str(path),
-            "resolved": str(path.resolve()) if path.exists() else "",
-            "present": path.is_file() and os.access(str(path), os.X_OK),
+            "resolved": resolved_path(path),
+            "present": executable_file(path),
         }
+        if result["present"]:
+            files=[("entry",path)]
+            payload=path.parent/".luai"
+            try:
+                if payload.is_dir():
+                    files.extend(runtime_tree(payload,".luai"))
+                result.update(runtime_fingerprint(files))
+            except (OSError,ValueError) as error:
+                result["fingerprint_error"]=str(error)
+        return result
     source = ROOT / "src/wtop.lua"
     interpreter = pathlib.Path(LUA)
     module = ROOT / "build/native/wtop_native.so"
     missing = []
-    if not source.is_file():
+    if not file_present(source):
         missing.append(str(source))
-    if not interpreter.is_file() or not os.access(str(interpreter), os.X_OK):
+    if not executable_file(interpreter):
         missing.append(str(interpreter))
-    if not module.is_file():
+    if not file_present(module):
         missing.append(str(module))
-    return {
+    result = {
         "kind": "source-tree",
         "path": str(source),
         "interpreter": str(interpreter),
@@ -108,6 +216,14 @@ def describe_subject() -> typing.Dict[str, object]:
         "present": not missing,
         "missing": missing,
     }
+    if not missing:
+        files=[("interpreter",interpreter),("native_module",module)]
+        try:
+            files.extend(runtime_tree(ROOT/"src","src",lua_only=True))
+            result.update(runtime_fingerprint(files))
+        except (OSError,ValueError) as error:
+            result["fingerprint_error"]=str(error)
+    return result
 
 
 def describe_host() -> typing.Dict[str, object]:
@@ -169,6 +285,7 @@ def _rss_kib(pid: int) -> typing.Tuple[int, int]:
 
 class Session:
     def __init__(self, interval_ms: int) -> None:
+        self.started = time.monotonic()
         self.pid, self.master = pty.fork()
         if self.pid == 0:
             environment = os.environ.copy()
@@ -182,6 +299,14 @@ class Session:
             environment["COLORTERM"] = "truecolor"
             environment.pop("NO_COLOR", None)
             environment["XDG_CONFIG_HOME"] = "/nonexistent-wtop-bench"
+            if TARGET_UID is not None and TARGET_UID != os.geteuid():
+                account = pwd.getpwuid(TARGET_UID)
+                os.initgroups(account.pw_name, account.pw_gid)
+                os.setgid(account.pw_gid)
+                os.setuid(TARGET_UID)
+                environment.update(HOME=account.pw_dir, USER=account.pw_name, LOGNAME=account.pw_name)
+                for name in ("SUDO_UID", "SUDO_GID", "SUDO_USER", "SUDO_COMMAND"):
+                    environment.pop(name, None)
             arguments = ["--interval", str(interval_ms), "--lang", "en-US"]
             if EXECUTABLE:
                 os.execve(EXECUTABLE, [EXECUTABLE, *arguments], environment)
@@ -191,12 +316,13 @@ class Session:
         )
         os.set_blocking(self.master, False)
         self.output = bytearray()
-        self.started = time.monotonic()
         self.first_frame = None
+        self.resources = Sampler(self.pid, SAMPLE_PERIOD_MS)
 
     def pump(self, duration: float) -> None:
         deadline = time.monotonic() + duration
         while time.monotonic() < deadline:
+            self.resources.sample()
             ready, _, _ = select.select([self.master], [], [], 0.05)
             if ready:
                 try:
@@ -218,6 +344,7 @@ class Session:
         offset = len(self.output)
         deadline = started + timeout
         while time.monotonic() < deadline:
+            self.resources.sample()
             ready, _, _ = select.select([self.master], [], [], 0.005)
             if ready:
                 try:
@@ -232,6 +359,8 @@ class Session:
 
     def exit(self) -> typing.Tuple[int, int, int]:
         # /proc disappears once the child is reaped, so sample memory first.
+        if self.resources.active:
+            self.resources.finish()
         peak, current = _rss_kib(self.pid)
         try:
             self.send(b"q")
@@ -260,6 +389,7 @@ def _percentile(values: typing.List[float], fraction: float) -> float:
 
 
 def main() -> None:
+    global TARGET_UID, SAMPLE_PERIOD_MS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", type=pathlib.Path, default=None,
                         help="also write the results as JSON")
@@ -275,7 +405,21 @@ def main() -> None:
                         help="seconds allowed for the first complete frame")
     parser.add_argument("--switch-timeout", type=float, default=2.0,
                         help="seconds allowed for a complete page-switch frame")
+    parser.add_argument("--resource-sample-ms", type=int, default=200,
+                        help="period for process-family samples (50..2000 ms)")
+    parser.add_argument("--target-uid", type=int, default=None,
+                        help="run the subject as this UID while the observer retains its own permissions")
     arguments = parser.parse_args()
+    if not 50 <= arguments.resource_sample_ms <= 2000:
+        parser.error("--resource-sample-ms must be in 50..2000")
+    if arguments.target_uid is not None:
+        if not 0 <= arguments.target_uid < 0xffffffff or (os.geteuid() != 0 and arguments.target_uid != os.geteuid()):
+            parser.error("--target-uid requires the observer's UID or a root observer")
+        try:
+            pwd.getpwuid(arguments.target_uid)
+        except (KeyError, OverflowError):
+            parser.error("--target-uid has no local account")
+    TARGET_UID, SAMPLE_PERIOD_MS = arguments.target_uid, arguments.resource_sample_ms
 
     if not arguments.profile or len(arguments.profile) > 128:
         parser.error("--profile must be a non-empty name of at most 128 characters")
@@ -313,7 +457,7 @@ def main() -> None:
                          "(subject exit %s)" % (arguments.startup_timeout, exit_code))
 
     results: typing.Dict[str, object] = {
-        "measurement_version": 3,
+        "measurement_version": 4,
         "profile": arguments.profile,
         "subject": subject,
         "host": describe_host(),
@@ -328,9 +472,16 @@ def main() -> None:
             "interval_ms": 1000,
             "startup_timeout": arguments.startup_timeout,
             "switch_timeout": arguments.switch_timeout,
+            "resource_sample_ms": SAMPLE_PERIOD_MS,
         },
         "first_frame_ms": round(session.first_frame * 1000, 1),
         "steady_cpu_percent": {},
+        "parent_cpu_percent": {},
+        "cpu_windows": {},
+        "observer_uid": os.geteuid(),
+        "subject_uid": TARGET_UID if TARGET_UID is not None else os.geteuid(),
+        "measurement_tools_sha256": {name: hashlib.sha256((ROOT/"tools"/name).read_bytes()).hexdigest()
+                                     for name in ("perf_benchmark.py", "perf_process_family.py")},
     }
     def record_process_count(phase: str) -> None:
         count = host_process_count()
@@ -344,15 +495,24 @@ def main() -> None:
         session.send(page_keys[page])
         session.pump(2.0)
         record_process_count("page_%d_start" % page)
-        before = _cpu_seconds(session.pid)
+        before = session.resources.sample(force=True)
         started = time.monotonic()
         session.pump(arguments.window_seconds)
         elapsed = time.monotonic() - started
-        after = _cpu_seconds(session.pid)
+        after = session.resources.sample(force=True)
         record_process_count("page_%d_end" % page)
-        results["steady_cpu_percent"]["page_%d" % page] = round(
-            (after - before) / elapsed * 100.0, 2
-        )
+        key = "page_%d" % page
+        before_mid = (before["sample_started"] + before["sample_finished"])/2
+        after_mid = (after["sample_started"] + after["sample_finished"])/2
+        cpu_elapsed = after_mid - before_mid
+        results["cpu_windows"][key] = {"before":before, "after":after, "seconds":cpu_elapsed,
+                                       "requested_pump_seconds":elapsed}
+        valid = before.get("cpu_status") == after.get("cpu_status") == "observed"
+        ticks = after.get("family_ticks", 0) - before.get("family_ticks", 0)
+        own_ticks = after.get("own_ticks", 0) - before.get("own_ticks", 0)
+        own_valid = "own_ticks" in before and "own_ticks" in after
+        results["steady_cpu_percent"][key] = round(ticks/_clock_ticks()/cpu_elapsed*100.0, 2) if valid and ticks>=0 and cpu_elapsed>0 else None
+        results["parent_cpu_percent"][key] = round(own_ticks/_clock_ticks()/cpu_elapsed*100.0, 2) if own_valid and own_ticks>=0 and cpu_elapsed>0 else None
 
     latencies = []
     latencies_by_target: typing.Dict[int, typing.List[float]] = {}
@@ -405,6 +565,9 @@ def main() -> None:
     results["exit_code"] = exit_code
     results["rss_peak_kib"] = rss_peak
     results["rss_steady_kib"] = rss_current
+    results["parent_rss_scope"] = "root process only; not process-family memory"
+    results["resource_accounting"] = session.resources.record()
+    results["family_sampled_pss_peak_kib"] = results["resource_accounting"].get("sampled_peak_pss_kib")
 
     print("wtop performance benchmark (fixed script; compare same host only)")
     print(f"  subject.kind: {subject['kind']}")
@@ -420,6 +583,13 @@ def main() -> None:
             print("  host_processes_samples: %d observations, %s..%s" %
                   (len(value), min(counts) if counts else "unavailable",
                    max(counts) if counts else "unavailable"))
+            continue
+        if key in ("cpu_windows", "measurement_tools_sha256"):
+            continue
+        if key == "resource_accounting":
+            for name in ("cpu_status", "memory_status", "cpu_scope", "memory_scope", "observer_cpu_seconds"):
+                print("  resource_accounting.%s: %s" % (name, value.get(name)))
+            print("  resource_accounting.samples: %d" % len(value["samples"]))
             continue
         if isinstance(value, dict):
             for nested_key, nested in value.items():

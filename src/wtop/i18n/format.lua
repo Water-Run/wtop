@@ -289,6 +289,12 @@ function M.interpolate(template, variables)
   elseif type(variables) ~= "table" then
     return nil, "placeholder values must be provided in a table"
   end
+  if not template:find("[{}]") then
+    if #template > MAX_INTERPOLATED_BYTES then
+      return nil, "interpolated message exceeds configured size limit"
+    end
+    return template
+  end
   local output = {}
   local index = 1
   while index <= #template do

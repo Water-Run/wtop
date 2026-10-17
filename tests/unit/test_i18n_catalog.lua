@@ -122,4 +122,23 @@ equal(Format.bytes(1, {system = "invalid"}), nil, "invalid byte system")
 equal(Format.interpolate("{value}", {value = "\27[2J"}), nil,
   "terminal controls rejected from interpolation")
 
+-- Fixed labels retain the complete validation contract and no mutable shared
+-- placeholder set. Escaped braces still pass through interpolation.
+do
+  local literal = "CPU 温度 °C\nNext line"
+  local first, second = assert(Catalog.placeholders(literal)), assert(Catalog.placeholders(literal))
+  first.changed = true
+  assert(not second.changed and next(second) == nil)
+  equal(Format.interpolate(literal, {unused=function()end}), literal, "unused values in fixed label")
+  equal(Format.interpolate(literal, false), nil, "fixed label still validates variables")
+  equal(Format.interpolate("unsafe\27"), nil, "fixed label still rejects controls")
+  equal(Catalog.placeholders("bad\255"), nil, "fixed label still rejects invalid UTF-8")
+  equal(Format.interpolate("{{CPU}}"), "{CPU}", "escaped literal is interpolated")
+  equal(Format.interpolate("CPU}"), nil, "unmatched brace is refused")
+  local _, errors = Catalog.validate({_meta=reference._meta,messages=reference.messages,z=1,a=2})
+  assert(#errors==2)
+  contains(errors[1],"unknown catalog root field a","deterministic string-key order")
+  contains(errors[2],"unknown catalog root field z","deterministic string-key order")
+end
+
 return true

@@ -18,8 +18,8 @@ import perf_benchmark as benchmark  # noqa: E402
 
 def fixture():
     result = {
-        "measurement_version": 3, "profile": "old-test-machine", "exit_code": 0,
-        "subject": {"kind": "bundle", "present": True, "path": "dist/wtop/wtop"},
+        "measurement_version": 4, "profile": "old-test-machine", "exit_code": 0, "subject_uid": 1000,
+        "subject": {"kind": "bundle", "present": True, "path": "dist/wtop/wtop", "runtime_sha256": "a"*64},
         "host": {"kernel": "test-kernel", "machine": "x86_64", "cpus": 2},
         "host_processes": 1000,
         "host_processes_samples": [
@@ -30,20 +30,36 @@ def fixture():
         ],
         "settings": {"pages": [1, 2], "window_seconds": 5.0,
                      "latency_samples": 20, "columns": 120, "rows": 34,
-                     "interval_ms": 1000},
-        "first_frame_ms": 300.0, "rss_peak_kib": 45000,
+                     "interval_ms": 1000, "resource_sample_ms": 200},
+        "first_frame_ms": 300.0, "rss_peak_kib": 12000, "family_sampled_pss_peak_kib": 45000,
         "steady_cpu_percent": {"page_1": 3.0, "page_2": 4.0},
         "input_latency_ms": {"p95": 30.0, "samples": 20,
                              "page_1_p95": 25.0, "page_1_samples": 10,
                              "page_2_p95": 30.0, "page_2_samples": 10},
     }
+    samples=[]
+    for index in range(61):
+        t=index/5.0
+        family_ticks=1000+int(3*min(t,6)+4*max(t-6,0))
+        samples.append({"cpu_status":"observed","memory_status":"observed",
+                        "family_ticks":family_ticks,"own_ticks":100+index,
+                        "pss_kib":45000,"sample_started":t,"sample_finished":t+.001})
+    result["observer_uid"]=1000
+    result["measurement_tools_sha256"]={"perf_benchmark.py":"a"*64,"perf_process_family.py":"b"*64}
+    result["resource_accounting"]={"cpu_scope":"observed_descendants_and_waited_children",
+        "memory_scope":"sampled_family_pss","cpu_status":"observed","memory_status":"observed",
+        "hugetlb_status":"known_zero","sample_bound_exceeded":False,
+        "sample_period_ms":200,"clock_ticks_per_second":100,"observer_cpu_seconds":.01,"samples":samples}
+    result["cpu_windows"]={"page_1":{"before":samples[0],"after":samples[25],"seconds":5},
+                           "page_2":{"before":samples[30],"after":samples[55],"seconds":5}}
     budget = {
-        "profile": "old-test-machine", "subject_kind": "bundle",
+        "profile": "old-test-machine", "subject_kind": "bundle", "subject_uid": 1000,
+        "resource_observer": {"maximum_gap_ms": 400, "maximum_bracket_ms": 50, "maximum_cpu_percent": 5},
         "subject_path": "dist/wtop/wtop",
         "host": copy.deepcopy(result["host"]),
         "host_processes": {"min": 900, "max": 1100},
         "settings": {key: result["settings"][key] for key in gate.SETTINGS},
-        "maximum": {"first_frame_ms": 500, "rss_peak_kib": 60000,
+        "maximum": {"first_frame_ms": 500, "family_sampled_pss_peak_kib": 60000,
                     "steady_cpu_percent.page_1": 5,
                     "steady_cpu_percent.page_2": 6,
                     "input_latency_ms.p95": 50,
@@ -59,6 +75,8 @@ def rejects(result, budget, fragment):
 
 
 def main():
+    from test_perf_process_family import main as check_family
+    check_family()
     # A visible tab label is not a completed page. The encoder emits its
     # standalone reset only after all changed rows have been written.
     stream = bytearray(b"wtop Overview Processes \x1b[0;37m")
@@ -80,6 +98,18 @@ def main():
     bad = copy.deepcopy(result)
     bad["measurement_version"] = 1
     rejects(bad, budget, "workload sampling")
+    bad = copy.deepcopy(result)
+    bad["measurement_version"] = 3
+    rejects(bad, budget, "process-family")
+    bad = copy.deepcopy(result)
+    bad["steady_cpu_percent"]["page_1"] = 0
+    rejects(bad, budget, "disagrees with observed counters")
+    bad = copy.deepcopy(result)
+    bad["resource_accounting"]["memory_status"] = "denied"
+    rejects(bad, budget, "memory_status is incomplete")
+    bad = copy.deepcopy(result)
+    bad["family_sampled_pss_peak_kib"] = bad["rss_peak_kib"]
+    rejects(bad, budget, "PSS peak disagrees")
     bad = copy.deepcopy(result)
     bad["subject"]["kind"] = "source-tree"
     rejects(bad, budget, "bundle subject")
@@ -127,6 +157,18 @@ def main():
     bad["input_latency_ms"]["page_1_p95"] = math.nan
     rejects(bad, budget, "not a finite")
     assert not gate._number(10 ** 1000)
+    bad = copy.deepcopy(result)
+    bad["subject_uid"] = 0
+    rejects(bad,budget,"subject UID differs")
+    bad = copy.deepcopy(result)
+    del bad["subject"]["runtime_sha256"]
+    rejects(bad,budget,"fingerprint")
+    bad = copy.deepcopy(result)
+    bad["resource_accounting"]["observer_cpu_seconds"] = 100
+    rejects(bad,budget,"observer CPU")
+    bad = copy.deepcopy(result)
+    bad["resource_accounting"]["samples"][1]["sample_finished"] += 1
+    rejects(bad,budget,"observer bracket")
 
     with tempfile.TemporaryDirectory(prefix="wtop-perf-budget-") as temporary:
         directory = pathlib.Path(temporary)
