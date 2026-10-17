@@ -47,13 +47,15 @@ if mode~="quit"then
  local fields=Export.snapshot(snapshot).gpus.devices
  local seen=false;for _,value in ipairs(fields)do if value.id=="fixture-intel"then assert(math.abs(value.metrics.power_limit_percent-75)<0.3);seen=true end end;assert(seen)
 end
-local original=find(snapshot or{})
-local observed=original and original.metric_observations.power_watts.observed_at_ns
-local cpu_before=snapshot and snapshot.quality.cpu_frequency.value_timestamp_ns
+local original,observed,cpu_before
 set(44);local blocked;began=N.monotonic_ns()
 repeat sample();blocked=read("blocked");N.sleep_ms(10)until blocked or N.monotonic_ns()-began>5e9
 assert(blocked and type(blocked.birth)=="string")
 if mode=="quit"then print("exiting while Sysman energy API blocked",blocked.pid,blocked.birth);os.exit(19,false)end
+-- A successful reply already in flight can complete after arming the hang.
+-- Freeze the last observed value only after the blocking API is confirmed.
+original=assert(find(snapshot));observed=original.metric_observations.power_watts.observed_at_ns
+cpu_before=snapshot.quality.cpu_frequency.value_timestamp_ns
 while N.monotonic_ns()-began<2700000000 do sample();N.sleep_ms(30)end
 local retained=assert(find(snapshot))
 assert(retained.metrics.power_watts==original.metrics.power_watts and retained.quality.power=="stale")
