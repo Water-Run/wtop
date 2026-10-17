@@ -149,6 +149,16 @@ local widget_items = { { kind = "metric", title = "CPU usage" },
 local function build(i18n, name)
   if name == "inspector_lines" then
     return TUI.inspector_lines("SMART / NVMe health", inspector_result, i18n)
+  elseif name == "wifi_link_lines" then
+    local links = {}
+    for index = 0, 15 do links[#links + 1] = { link_id = index, frequency_mhz = 5955 + index * 20 } end
+    return TUI.wifi_link_lines({ timestamp_ns = 1000000000,
+      quality = { wifi = { status = "ok", quality = "fresh" } }, wifi = { devices = {
+        { name = "wlan0", ifindex = 3, wiphy_id = 0, multi_link = true, quality = "fresh", observed_at_ns = 1000000000,
+          links = links, station = { signal_dbm = -53, average_signal_dbm = -55, inactive_ms = 1234,
+            receive_phy = { bits_per_second = 11529000000, standard = "EHT", mcs = 13, spatial_streams = 8, bandwidth_mhz = 320 },
+            transmit_phy = { bits_per_second = 864800000, standard = "HE", mcs = 8, spatial_streams = 2, bandwidth_mhz = 80 } } },
+      } } }, i18n)
   elseif name == "nvme_warning_lines" then
     return TUI.nvme_warning_lines({ timestamp_ns = 1000000000,
       quality = { disk_health = { status = "ok", quality = "fresh", value_timestamp_ns = 1000000000 } },
@@ -288,6 +298,7 @@ local FIXTURED = {
   "thread_detail_lines", "thread_picker_lines",
   "widget_picker_lines", "workspace_lines", "power_detail_lines",
   "nvme_warning_lines",
+  "wifi_link_lines",
 }
 table.sort(FIXTURED)
 local only_exported, only_fixtured = {}, {}

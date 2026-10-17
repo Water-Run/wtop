@@ -32,6 +32,7 @@ local constructors = {
   disk = require("wtop.collectors.disk"),
   disk_health = require("wtop.collectors.linux_nvme"),
   network = require("wtop.collectors.network"),
+  wifi = require("wtop.collectors.wifi"),
   connections = require("wtop.collectors.connections"),
   process = require("wtop.collectors.process"),
   gpu = require("wtop.collectors.gpu"),

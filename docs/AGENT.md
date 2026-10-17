@@ -32,6 +32,17 @@ wtop --agent
 
 数值保留机器单位:容量和速率使用字节与字节每秒,延迟使用毫秒,功耗使用瓦特,利用率和 PSI 使用百分比。Linux 主机的 `metrics.cpu.thermal_throttle` 给出相邻样本中单个逻辑 CPU 报告的最大核心及封装热节流新增次数；封装次数不会跨 CPU 求和。`metrics.network` 还给出每 CPU 接收栈聚合后的积压包数、丢弃与处理预算耗尽次数的每秒速率，并携带独立的 `softnet_status`/`softnet_quality`；这些数值不归属到单个接口。Linux 的 `top.interfaces[]` 另带接口自身的 `link_changes_total`，有可比的前后样本时才带 `new_link_changes`；它与 softnet 计数不相加。`metrics.power.total_watts` 仅在选定的 CPU 封装/socket 后端完整时才输出;单独选定的平台/`psys` 代表值报告为 `platform_watts`。未知的根来源和存在歧义的 CPU 后端保持不聚合。缺失数据用字段缺省或 JSON `null` 表示;绝不能当作零处理。无效的硬件哨兵读数在导出前会被过滤,而不会作为极端物理量发出。
 
+Linux 的 `top.wifi` 是独立的无线接口报告，遵循设备列表上限；
+`metrics.network.wifi_interfaces_total` 与 `wifi_truncated` 说明可见范围。
+它不与 `top.interfaces` 的流量按名称或 ifindex 推断同一个采样。PHY 速率
+使用 `bits_per_second`（bit/s），信号使用 dBm，关联频率使用 MHz。信号为
+驱动最后接收 PPDU 的值，PHY 速率为驱动报告的单播物理层速率；
+`radio_sample_time_known=false` 表示硬件采样时间未知，`observed_at_ns` 只表示
+查询捕获时间。MLO 顶层报告使用 `mld_station` 范围，不分摊到各物理链路。
+没有 PHY 速率时不计算占比，也不据此判断连接拥塞。完整 Snapshot 的
+`wifi.devices` 保留相同的字段、逐设备质量与关联频率列表；原始协议帧、
+SSID 和 BSSID 不输出。
+
 `metrics.cpu.frequency` 按各策略已知的在线 CPU 数加权给出平均 Hz；缺少成员列表的策略按一个读数计。它携带来源与 measured/estimated/partial 质量，混用来源时标为 `mixed`。CPUFreq 采集失败或数据过期时不把保留值作为当前频率输出。
 
 `data_quality.value_timestamp_ns` 是该资源当前所持值的单调时钟时间；

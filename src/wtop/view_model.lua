@@ -2423,7 +2423,7 @@ local COLLECTOR_RESOURCE = {
     cpu_clocks = "cpu_clocks",
     cpuidle = "cpuidle",
     pressure = "pressure",
-    disk = "disks", disk_health = "disk_health", network = "network", connections = "connections",
+    disk = "disks", disk_health = "disk_health", network = "network", wifi = "wifi", connections = "connections",
     process = "processes", gpu = "gpus", cpufreq = "cpu_frequency", hwmon = "sensors",
     powercap = "power", mounts = "mounts", cgroup = "workloads",
     system_info = "system", power_supply = "power_supplies", inventory = "inventory",

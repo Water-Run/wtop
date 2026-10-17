@@ -9,6 +9,7 @@ local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
 local NVMeWarnings = require("wtop.model.nvme_warnings")
+local WiFi = require("wtop.model.wifi")
 local NVMe = require("wtop.linux.nvme_diagnostics")
 
 local M = {}
@@ -599,6 +600,35 @@ local function export_network(network)
         result.interfaces[index] = exported
     end
     result.addresses_status = network and network.addresses_status or nil
+    return result
+end
+
+local function export_wifi(snapshot)
+    local data = snapshot.wifi or {}
+    local result = json.object({ devices = json.array({}), source = data.source,
+        truncated = data.truncated == true or #(data.devices or {}) > 16 })
+    for index, device in ipairs(data.devices or {}) do
+        if index > 16 then break end
+        local row = copy_fields(device, { "id", "name", "ifindex", "wiphy_id", "wdev_id", "mode",
+            "source", "observed_at_ns", "association", "multi_link", "query_errno", "station_errno" })
+        row.quality, row.links = WiFi.quality(snapshot, device), json.array({})
+        for position, link in ipairs(device.links or {}) do
+            if position > 16 then break end
+            row.links[position] = copy_fields(link, { "frequency_mhz", "frequency_offset_khz", "link_id" })
+        end
+        if type(device.station) == "table" then
+            row.station = copy_fields(device.station, { "signal_dbm", "average_signal_dbm", "inactive_ms",
+                "signal_sample_kind", "radio_sample_time_known", "scope", "source" })
+            for _, direction in ipairs({ "receive_phy", "transmit_phy" }) do
+                if type(device.station[direction]) == "table" then
+                    row.station[direction] = copy_fields(device.station[direction], { "bits_per_second",
+                        "standard", "mcs", "spatial_streams", "guard_interval_code", "guard_interval_microseconds",
+                        "bandwidth_mhz", "noncontiguous", "short_guard_interval", "source", "scope", "sample_kind" })
+                end
+            end
+        end
+        result.devices[#result.devices + 1] = row
+    end
     return result
 end
 
@@ -1987,6 +2017,7 @@ function M.snapshot(snapshot, options)
         disks = export_disks(snapshot.disks, snapshot),
         disk_health = export_disk_health(snapshot),
         network = export_network(snapshot.network),
+        wifi = export_wifi(snapshot),
         connections = export_connections(snapshot.connections, options.connection_limit,
             options.include_remote_addresses == true),
         processes = export_processes(snapshot.processes, options.process_limit),
@@ -2333,6 +2364,12 @@ function M.agent(snapshot, options)
         top_interfaces[index] = exported
     end
 
+    local top_wifi = json.array({})
+    for index, device in ipairs(full.wifi and full.wifi.devices or {}) do
+        if index > device_limit then break end
+        top_wifi[index] = device
+    end
+
     local top_processes = json.array({})
     for index, process in ipairs(full.processes and full.processes.top or {}) do
         top_processes[index] = copy_fields(process, {
@@ -2663,6 +2700,9 @@ function M.agent(snapshot, options)
                 device_count = #disk_devices,
             }),
             network = json.object({
+                wifi_interfaces_total = #(full.wifi and full.wifi.devices or {}),
+                wifi_truncated = (full.wifi and full.wifi.truncated == true)
+                    or #(full.wifi and full.wifi.devices or {}) > #top_wifi,
                 receive_bytes_per_second = sum_field(interfaces, "rx_bytes_per_second", "rates"),
                 transmit_bytes_per_second = sum_field(interfaces, "tx_bytes_per_second", "rates"),
                 interface_count = #interfaces,
@@ -2714,6 +2754,7 @@ function M.agent(snapshot, options)
             processes = top_processes,
             disks = top_disks,
             interfaces = top_interfaces,
+            wifi = top_wifi,
             workloads = top_workloads,
             gpus = gpu_summaries,
             sensors = top_temperatures,

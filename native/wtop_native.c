@@ -81,6 +81,7 @@
 #include <unistd.h>
 #include <wchar.h>
 #include "wtop_linux_nvme.h"
+#include "wtop_linux_wifi.h"
 
 #ifndef NS_PER_SECOND
 #define NS_PER_SECOND 1000000000LL
@@ -1472,6 +1473,40 @@ static int l_readfile_at(lua_State *L) {
     return 1;
 }
 
+static int l_read_wifi_link(lua_State *L) {
+    const char *name = check_path(L, 1, NULL);
+    lua_Integer index = luaL_checkinteger(L, 2);
+    luaL_argcheck(L, strlen(name) > 0 && strlen(name) < IFNAMSIZ
+        && !strchr(name, '/'), 1, "expected a network interface name");
+    luaL_argcheck(L, index > 0 && index <= INT32_MAX, 2, "invalid interface index");
+    io_guard *guard = push_io_guard(L);
+    wtop_wifi_result *result = (wtop_wifi_result *)lua_newuserdatauv(L, sizeof(*result), 0);
+    int status = wtop_wifi_read(&guard->descriptor, name, (uint32_t)index, result);
+    int saved_errno = errno;
+    if (guard->descriptor >= 0) (void)close(guard->descriptor);
+    guard->descriptor = -1;
+    if (status != 0) { errno = saved_errno; return push_errno(L, "read Wi-Fi link"); }
+    lua_createtable(L, 0, 5);
+    lua_pushlstring(L, (const char *)result->before, result->before_size);
+    lua_setfield(L, -2, "interface");
+    lua_createtable(L, (int)result->link_count, 0);
+    for (unsigned int link = 0; link < result->link_count; ++link) {
+        lua_pushlstring(L, (const char *)result->links[link].raw, result->links[link].size);
+        lua_rawseti(L, -2, (lua_Integer)link + 1);
+    }
+    lua_setfield(L, -2, "associations");
+    if (result->station_size) {
+        lua_pushlstring(L, (const char *)result->station, result->station_size);
+        lua_setfield(L, -2, "station");
+    }
+    if (result->station_errno) {
+        lua_pushinteger(L, result->station_errno);
+        lua_setfield(L, -2, "station_errno");
+    }
+    lua_pushliteral(L, "nl80211"); lua_setfield(L, -2, "source");
+    return 1;
+}
+
 static int l_read_nvme_health(lua_State *L) {
     const char *name = check_path(L, 1, NULL);
     lua_Integer device_major = luaL_checkinteger(L, 2), device_minor = luaL_checkinteger(L, 3);
@@ -2261,6 +2296,7 @@ static const luaL_Reg functions[] = {
     {"readfile_at", l_readfile_at},
     {"read_cpu_perf_limits", l_read_cpu_perf_limits},
     {"read_nvme_health", l_read_nvme_health},
+    {"read_wifi_link", l_read_wifi_link},
     {"read_cpu_clock_counters", l_read_cpu_clock_counters},
     {"proc_batch", l_proc_batch},
     {"process_stat_fields", l_process_stat_fields},

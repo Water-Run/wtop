@@ -402,6 +402,29 @@ function M.render(snapshot)
                 interface.quality }
         end, network)
 
+    local wifi = object(snapshot.wifi)
+    if #list(wifi.devices) > 0 then
+        table_section(lines, "Wi-Fi link reports",
+            { "Interface", "Association", "Frequency", "Last RX signal", "RX PHY", "TX PHY", "Rate scope", "Quality" },
+            wifi.devices, function(device)
+                local station = object(device.station)
+                local frequencies = {}
+                for _, link in ipairs(list(device.links)) do
+                    if type(link.frequency_mhz) == "number" then
+                        frequencies[#frequencies + 1] = quantity(link.frequency_mhz
+                            + (tonumber(link.frequency_offset_khz) or 0) / 1000, 1, " MHz", 3)
+                    end
+                end
+                return { device.name, device.association, table.concat(frequencies, ", "),
+                    quantity(station.signal_dbm, 1, " dBm", 0),
+                    quantity(object(station.receive_phy).bits_per_second, 1000000, " Mbit/s", 1),
+                    quantity(object(station.transmit_phy).bits_per_second, 1000000, " Mbit/s", 1),
+                    station.scope, device.quality }
+            end, wifi)
+        lines[#lines + 1] = "Driver PHY rates are not throughput or guaranteed capacity; the radio sample time is unknown."
+        lines[#lines + 1] = ""
+    end
+
     local gpus = object(snapshot.gpus)
     table_section(lines, "Graphics devices", { "Device", "Model", "Driver", "PCI address", "Identity" },
         gpus.devices, function(device)

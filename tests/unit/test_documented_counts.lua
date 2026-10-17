@@ -30,7 +30,7 @@ local function count_test_files()
         "ls tests/unit/test_*.lua tests/integration/test_*.lua 2>/dev/null | wc -l", "r"))
     local body = pipe:read("*a")
     pipe:close()
-    return tonumber(body:match("^(%d+)"))
+    return tonumber(body:match("^%s*(%d+)%s*$"))
 end
 
 local total = assert(count_test_files(), "could not count the test files")

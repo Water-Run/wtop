@@ -4024,6 +4024,7 @@ local HELP_SECTIONS = {
             { "h", "widgets.sensors", "Sensors" },
             { "j k Enter", "help.hardware_detail", "in System or memory hardware tables: select a device and open details" },
             { "s", "help.inspect_smart", "choose a SMART/NVMe device", "linux" },
+            { "w", "wifi.help", "Wi-Fi link reports on Network", "linux" },
             { "b", "help.inspect_bandwidth", "measure RAM bandwidth with perf", "linux" },
             { "d", "help.inspect_systemd", "inspect systemd units or the selected workload's unit", "linux" },
             { "D", "help.inspect_sshd", "inspect the sshd service and listeners", "linux" },
@@ -4682,6 +4683,69 @@ local function alert_count(snapshot)
         end
     end
     return count + #require("wtop.model.nvme_warnings").summary(snapshot).signals
+end
+
+local function wifi_link_lines(snapshot, i18n)
+    local lines = { translated(i18n, "wifi.title", "Wi-Fi link"), "" }
+    local devices = snapshot.wifi and snapshot.wifi.devices or {}
+    local function quantity(value, suffix)
+        if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then return "—" end
+        return (i18n.format:number(value, { precision = value % 1 == 0 and 0 or 3 }) or tostring(value)) .. (suffix or "")
+    end
+    local function add(id, fallback, value)
+        lines[#lines + 1] = "  " .. translated(i18n, id, fallback) .. ": " .. value
+    end
+    if #devices == 0 then
+        lines[#lines + 1] = translated(i18n, "reason.wifi_link_unavailable", "Wi-Fi link information is unavailable")
+    end
+    for index, device in ipairs(devices) do
+        if index > 16 then break end
+        lines[#lines + 1] = inspector_text(tostring(device.name or "?")
+            .. " · #" .. tostring(device.ifindex or "?") .. " · PHY " .. tostring(device.wiphy_id or "?")
+            .. " [" .. Technical.state(i18n, require("wtop.model.wifi").quality(snapshot, device)) .. "]", INSPECTOR_ROW_WIDTH)
+        if device.association == "not_reported" then
+            lines[#lines + 1] = "  " .. translated(i18n, "wifi.no_association", "No associated BSS reported")
+        end
+        for position, link in ipairs(device.links or {}) do
+            if position > 16 then break end
+            local label = link.link_id ~= nil and " · " .. translated(i18n, "wifi.link_id", "Link ID")
+                .. " " .. tostring(link.link_id) or ""
+            local frequency = link.frequency_mhz
+            if type(frequency) == "number" and type(link.frequency_offset_khz) == "number" then
+                frequency = frequency + link.frequency_offset_khz / 1000
+            end
+            add("wifi.frequency", "Associated frequency", quantity(frequency, " MHz") .. label)
+        end
+        local station = device.station
+        if type(station) == "table" then
+            add("wifi.signal", "Last RX signal", quantity(station.signal_dbm, " dBm"))
+            add("wifi.average_signal", "Average RX signal", quantity(station.average_signal_dbm, " dBm"))
+            for _, spec in ipairs({ { "receive_phy", "wifi.receive_phy", "RX PHY rate" },
+                { "transmit_phy", "wifi.transmit_phy", "TX PHY rate" } }) do
+                local data = station[spec[1]] or {}
+                local value = data.bits_per_second and i18n.format:bits_per_second(data.bits_per_second) or "—"
+                if data.standard then value = value .. " · " .. data.standard end
+                if data.mcs ~= nil then value = value .. " · MCS " .. tostring(data.mcs) end
+                if data.spatial_streams ~= nil then value = value .. " · NSS " .. tostring(data.spatial_streams) end
+                if data.bandwidth_mhz then value = value .. " · " .. quantity(data.bandwidth_mhz, " MHz") end
+                add(spec[2], spec[3], value)
+            end
+            add("wifi.inactive", "Station inactivity", quantity(station.inactive_ms, " ms"))
+        end
+        if device.multi_link then
+            lines[#lines + 1] = translated(i18n, "wifi.multi_link", "MLD station report; rates are not assigned to one link.")
+        end
+        if device.station_errno then
+            lines[#lines + 1] = Technical.state(i18n,
+                (device.station_errno == 1 or device.station_errno == 13) and "denied" or "unavailable")
+        end
+        lines[#lines + 1] = ""
+    end
+    lines[#lines + 1] = translated(i18n, "wifi.note",
+        "Driver link reports: PHY rates are not throughput or guaranteed capacity. Radio sample time is unknown.")
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = translated(i18n, "inspector.close_hint", "Esc/Enter closes")
+    return lines
 end
 
 local function nvme_warning_lines(snapshot, i18n)
@@ -6440,6 +6504,8 @@ local function run_loop(options, backend, renderer, engine, translator)
                 table.insert(status.hints, 5,
                     { key = "g", id = "network.routes_title", fallback = "Routes",
                       command = "routes" })
+                table.insert(status.hints, 6,
+                    { key = "w", id = "wifi.title", fallback = "Wi-Fi link", command = "wifi" })
             end
         elseif workspace:content_page() == "gpu" then
             status.hints = {
@@ -8613,6 +8679,11 @@ local function run_loop(options, backend, renderer, engine, translator)
                 mask_remote and "Remote addresses are masked"
                 or "Remote addresses are shown in full")
             dirty = true
+        elseif key == "w" and workspace:content_page() == "network" and linux_host then
+            show_overlay(function()
+                return wifi_link_lines(engine.snapshot, translator)
+            end, { wifi = true })
+            dirty = true
         elseif key == "g" and workspace:content_page() == "network" and linux_host then
             show_overlay(function()
                 return route_detail_lines(engine.snapshot, translator)
@@ -8769,6 +8840,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             tree = "t", collapse = "c", paths = "p", details = "enter", signal = "k",
             connection_select = "down", connection_owner = "enter",
             routes = "g",
+            wifi = "w",
             workload = "g",
             sockets = "n",
             virtual = "v", mask = "m", smart = "s", bandwidth = "b", sshd = "D", systemd = "d", sessions = "u",
@@ -8972,6 +9044,7 @@ end
 M.draw_overlay = draw_overlay
 M.alert_count = alert_count
 M.nvme_warning_lines = nvme_warning_lines
+M.wifi_link_lines = wifi_link_lines
 M.process_sampling_plan = process_sampling_plan
 M.thread_detail_request = thread_detail_request
 M.inspector_lines = inspector_lines
