@@ -631,6 +631,12 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 
 ### 2026-10-18：单文件包的 rootless 容器验证
 
+验收入口提交 `087107d` 的 [主 CI](https://github.com/Water-Run/wtop/actions/runs/39048535447) 16 个作业与
+[Windows CI](https://github.com/Water-Run/wtop/actions/runs/39048535428) 两个作业通过。实际下载的该提交 Linux
+单文件包完成相同的十次 CLI 检查和四次终端检查；外层归档、内层程序归档、
+二进制及输出摘要均核对。应用的 277 个源码、语言与版本文件和原构建配方
+均与前一已验收版本一致，本轮未重新校准硬件或性能预算。
+
 使用同一个精确提交 `91e9a3a` 的 Linux 单文件包，在 rootless Podman 5.8.7
 与已有 Fedora 44 镜像中验证。容器根目录和临时目录均由容器 UID 0 拥有，
 分别以容器 UID 0 和保留宿主 UID 1000 运行，版本、诊断、Snapshot、Agent
