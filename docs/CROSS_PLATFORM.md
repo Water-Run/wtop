@@ -629,6 +629,29 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
+### 2026-10-17：DDR5 容量、组织与新型模组（验证中）
+
+DDR5 SPD 增加 CRC 有效时的容量、Rank 和总数据/含纠错位宽。DDR5 的
+公共总线字段按子通道给出位宽，容量计算区分 DDP、3DS 和非对称奇偶 Rank；
+未知版本、保留编码、坏 CRC、短页及未建模的混合模组保持未知。
+模组名称补齐 CUDIMM、CSODIMM、MRDIMM、CAMM2、SOCAMM2 与 DDIMM；
+完整读取标记按 EEPROM 声明长度判断，当前读取上限仍是 1024 字节。
+
+字段和两份公开 EEPROM 前缀固定到
+[illumos 的 DDR5 定义](https://github.com/illumos/illumos-gate/blob/3581f14f537c0eb36b5ac466e58351628abcfeb4/usr/src/lib/libjedec/common/spd_ddr5.h)，
+来源、摘要和预期见 `tests/fixtures/spd/metadata.json`。两个原始 CRC 前缀
+分别解析为 16/64 GiB、1/2 Rank、64/80 位宽，并进入 Snapshot 和硬件详情；
+512 字节之后的制造身份区不在夹具内。非对称、3DS 和 128 TiB 边界是合成
+检查，不是真实大容量模组结果。候选已通过 Lua 5.4/5.5 硬件清单回归、
+全部 0–511 字节截断，以及现有 Windows 11、Server 2008、M4 上的回放；
+两台 Windows 的 32 位 Lua 运行时使用 64 位整数，128 TiB 计算保持精确。
+
+本机两条 SPD 在普通/root 只读对照中仍只读到 128 字节，后续读取返回
+errno 6，完整公开结果与原版相同。CRC 和几何字段保持未知，没有新增槽位
+归属。上述回放不替代这些主机的物理 DDR5 验证。本地 `make check`、
+双 ABI 各 148 文件、PTY 和本机源码/终端检查通过；CI 与最终归档
+验收继续推进。
+
 ### 2026-10-17：cgroup 元数据查询与空命令行刷新
 
 cgroup 遍历可使用自带原生类型查询识别条目，避免对常规文件再做一次

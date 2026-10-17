@@ -1,0 +1,35 @@
+{
+  "source_commit": "3581f14f537c0eb36b5ac466e58351628abcfeb4",
+  "source_repository": "https://github.com/illumos/illumos-gate",
+  "layout_source": "https://github.com/illumos/illumos-gate/blob/3581f14f537c0eb36b5ac466e58351628abcfeb4/usr/src/lib/libjedec/common/spd_ddr5.h",
+  "fixtures": [
+    {
+      "file": "AQD-D5V16GR48-SB.bin",
+      "source": "https://github.com/illumos/illumos-gate/blob/3581f14f537c0eb36b5ac466e58351628abcfeb4/usr/src/test/util-tests/tests/libjedec/hex2spd/data/ddr5/AQD-D5V16GR48-SB.spd",
+      "scope": "First 512 bytes only; original CRC retained; manufacturing identity area excluded",
+      "sha256": "f5c2dec0da415ed3702c4d7ab427aaad1774958d6ab965533423a22719406af2",
+      "expected": {
+        "size_bytes": 17179869184,
+        "rank": 1,
+        "data_width_bits": 64,
+        "total_width_bits": 80,
+        "module_type": "RDIMM",
+        "minimum_cycle_ps": 416
+      }
+    },
+    {
+      "file": "MTC40F2046S1RC48BA1.bin",
+      "source": "https://github.com/illumos/illumos-gate/blob/3581f14f537c0eb36b5ac466e58351628abcfeb4/usr/src/test/util-tests/tests/libjedec/hex2spd/data/ddr5/MTC40F2046S1RC48BA1.spd",
+      "scope": "First 512 bytes only; original CRC retained; manufacturing identity area excluded",
+      "sha256": "f7a1ddb3b76099164c53074fe4d328ddabfdf12ec55614d5885f881747892d3b",
+      "expected": {
+        "size_bytes": 68719476736,
+        "rank": 2,
+        "data_width_bits": 64,
+        "total_width_bits": 80,
+        "module_type": "RDIMM",
+        "minimum_cycle_ps": 416
+      }
+    }
+  ]
+}

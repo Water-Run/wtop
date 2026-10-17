@@ -1,13 +1,12 @@
 -- Public FPM/EDO/SDR/DDR/DDR2/DDR3/DDR4/DDR5 SPD fields only. The serial number and raw EEPROM
--- bytes never leave the collector. Offsets follow the JEDEC SPD layouts and
--- coreboot's decoders.
+-- bytes never leave the collector. Offsets follow the JEDEC SPD layouts.
+-- DDR5 references are pinned in tests/fixtures/spd/metadata.json.
 local M = {}
 
 local DDR5_MODULE_TYPES = {
   [1] = "RDIMM", [2] = "UDIMM", [3] = "SO-DIMM", [4] = "LRDIMM",
-  [5] = "Mini-RDIMM", [6] = "Mini-UDIMM", [8] = "72-bit SO-UDIMM",
-  [9] = "72-bit SO-RDIMM", [11] = "Soldered", [12] = "16-bit SO-DIMM",
-  [13] = "32-bit SO-RDIMM",
+  [5] = "CUDIMM", [6] = "CSODIMM", [7] = "MRDIMM", [8] = "CAMM2",
+  [9] = "SOCAMM2", [10] = "DDIMM", [11] = "Soldered",
 }
 local DDR4_MODULE_TYPES = {
   [1] = "RDIMM", [2] = "UDIMM", [3] = "SO-DIMM", [4] = "LRDIMM",
@@ -163,8 +162,57 @@ local function parse_asynchronous(data)
   return result
 end
 
+-- DDR5 common-module widths are per subchannel. Only apply a known,
+-- CRC-checked layout; a short page or unsupported organization stays unknown.
+local function ddr5_geometry(data, result)
+  local total_code = (data:byte(1) >> 4) & 7
+  if not result.crc_valid or data:byte(2) >> 4 ~= 1
+      or data:byte(193) >> 4 ~= 1 or total_code < 2 or total_code > 4
+      or data:byte(4) & 0xf0 ~= 0 or not result.module_type then return end
+  local organization, bus = data:byte(235), data:byte(236)
+  local channels_code, primary_code, extension_code = bus >> 5, bus & 7, (bus >> 3) & 3
+  if channels_code > 3 or primary_code > 3 or extension_code > 2
+      or organization & 0x87 ~= 0 then return end
+  local channels = 1 << channels_code
+  local width = (8 << primary_code) * channels
+  local extension = ({ [0] = 0, [1] = 4, [2] = 8 })[extension_code]
+  result.rank = ((organization >> 3) & 7) + 1
+  result.data_width_bits = width
+  result.total_width_bits = width + extension * channels
+  local channel_width = 8 << primary_code
+  local function rank_bytes(offset)
+    local density_package, sdram = data:byte(offset + 1), data:byte(offset + 3)
+    local density = ({ [1] = 4, [2] = 8, [3] = 12, [4] = 16,
+      [5] = 24, [6] = 32, [7] = 48, [8] = 64 })[density_package & 0x1f]
+    local package_code, device_code = density_package >> 5, sdram >> 5
+    if not density or package_code > 5 or device_code > 3
+        or sdram & 0x1f ~= 0 then return nil end
+    local device_width = 4 << device_code
+    if channel_width < device_width then return nil end
+    -- DDP dies are already represented by ranks; only 3DS adds logical ranks.
+    local stack = package_code >= 2 and (1 << (package_code - 1)) or 1
+    return (density * 128 * 1024 * 1024)
+      * (channel_width // device_width) * channels * stack
+  end
+  local primary = rank_bytes(4)
+  if not primary then return end
+  if organization & 0x40 == 0 then
+    result.size_bytes = primary * result.rank
+  elseif result.rank >= 2 then
+    -- Primary SDRAM describes even ranks, secondary SDRAM the odd ranks.
+    -- Each may use a different die density, I/O width and 3DS stack.
+    local secondary = rank_bytes(8)
+    if secondary then
+      local odd = result.rank // 2
+      result.size_bytes = primary * (result.rank - odd) + secondary * odd
+    end
+  end
+end
+
 local function parse_ddr5(data)
   if #data < 24 then return nil, "unsupported_spd" end
+  local total_code = (data:byte(1) >> 4) & 7
+  local total_bytes = ({ [1] = 256, [2] = 512, [3] = 1024, [4] = 2048 })[total_code]
   local revision = data:byte(2)
   local type_code = data:byte(4) & 0x0f
   local cycle_ps = data:byte(21) + 256 * data:byte(22)
@@ -173,12 +221,13 @@ local function parse_ddr5(data)
     module_type = DDR5_MODULE_TYPES[type_code],
     revision = string.format("%d.%d", revision >> 4, revision & 0x0f),
     minimum_cycle_ps = cycle_ps >= 200 and cycle_ps <= 5000 and cycle_ps or nil,
-    bytes_read = #data, complete = #data >= 1024,
+    bytes_read = #data, complete = total_bytes ~= nil and #data >= total_bytes,
   }
   if #data >= 512 then
     local stored = data:byte(511) + 256 * data:byte(512)
     result.crc_valid = crc16(data, 1, 510) == stored
   end
+  ddr5_geometry(data, result)
   result.part_number = part_number(data, 521, 30)
   return result
 end
