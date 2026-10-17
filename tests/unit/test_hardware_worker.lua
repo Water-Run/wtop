@@ -330,4 +330,66 @@ local linux_instance=DefaultEngine.new()
 assert(wrapped==1 and linux_instance.collectors.hwmon~=sensor,"Linux lost its default isolated reader")
 linux_instance:stop()
 for name,value in pairs(saved)do package.loaded[name]=value end
+
+do
+    local old_native = package.loaded["wtop.native"]
+    local old_proxy = package.loaded["wtop.collectors.hardware_worker"]
+    local clock, opens, closes, available_reply = 100, 0, 0, true
+    local fake_native = { available = true }
+    function fake_native.hardware_worker_open(id, configuration)
+        assert(id == "spd" or id == "hwmon")
+        assert(next(Wire.decode(configuration)) == nil)
+        opens = opens + 1
+        return { id = id, generation = opens }
+    end
+    function fake_native.hardware_worker_query(session, _, wait)
+        assert(wait == 0 and not session.closed)
+        if not available_reply then return nil, "hardware_query_pending" end
+        return Wire.encode({ capability = { available = true, state = "available" },
+            result = { status = "ok", quality = "fresh", timestamp_ns = clock - 10,
+                data = { devices = { { id = "dimm", size_bytes = 17179869184 } } } } }),
+            { sample_started_ns = clock - 20, sample_finished_ns = clock - 5 }
+    end
+    function fake_native.hardware_worker_close(session, wait)
+        assert(wait == 0 and not session.closed)
+        session.closed = true
+        closes = closes + 1
+    end
+    package.loaded["wtop.native"] = fake_native
+    package.loaded["wtop.collectors.hardware_worker"] = nil
+    local Proxy = require("wtop.collectors.hardware_worker")
+    assert(Proxy.sources.spd)
+    local collector = Proxy.new({ id = "spd", default_interval_ms = 60000 })
+    local context = { now_ns = function() return clock end }
+    assert(collector:probe(context).available)
+    assert(opens == 1 and closes == 1, "completed SPD probe kept its reader alive")
+    local first = collector:sample(context)
+    assert(first.value_timestamp_ns == 90 and first.data.devices[1].size_bytes == 17179869184)
+    assert(opens == 1 and closes == 1, "first public observation repeated the completed probe")
+    local snapshot = Snapshot.merge(Snapshot.new(0, 0), { spd = first }, 1, clock)
+    clock, available_reply = 300000000, false
+    local pending = collector:sample(context)
+    assert(pending.sampling_pending and opens == 2 and closes == 1)
+    clock = clock + 150000000
+    pending = collector:sample(context)
+    assert(pending.sampling_pending and not pending.defer_publish and opens == 2 and closes == 1)
+    snapshot = Snapshot.merge(snapshot, { spd = pending }, 2, clock)
+    assert(snapshot.spd.devices[1].size_bytes == 17179869184)
+    assert(snapshot.quality.spd.quality == "stale" and snapshot.quality.spd.value_timestamp_ns == 90)
+    available_reply = true
+    local recovered = collector:sample(context)
+    assert(recovered.value_timestamp_ns == clock - 10 and opens == 2 and closes == 2)
+    collector:close()
+    assert(closes == 2 and collector:sample(context).reason == "hardware_worker_closed")
+    -- Counter-bearing/continuous sources keep their previous process lifetime.
+    local continuous = Proxy.new({ id = "hwmon", default_interval_ms = 1000 })
+    assert(continuous:sample(context).status == "ok")
+    assert(opens == 3 and closes == 2)
+    assert(continuous:sample(context).status == "ok" and opens == 3 and closes == 2)
+    continuous:close()
+    assert(closes == 3)
+    package.loaded["wtop.native"] = old_native
+    package.loaded["wtop.collectors.hardware_worker"] = old_proxy
+end
+
 return true
