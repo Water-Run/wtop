@@ -62,6 +62,7 @@
 #include <netpacket/packet.h>
 #include <poll.h>
 #include <signal.h>
+#include "wtop_terminal_signal.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -103,10 +104,7 @@ typedef struct terminal_state {
 } terminal_state;
 
 static terminal_state g_terminal = {0};
-static volatile sig_atomic_t g_resize = 0;
-static volatile sig_atomic_t g_interrupt = 0;
-static volatile sig_atomic_t g_terminate = 0;
-static volatile sig_atomic_t g_hangup = 0;
+
 static int g_atexit_registered = 0;
 static locale_t g_wcwidth_locale = (locale_t)0;
 
@@ -121,15 +119,7 @@ static void restore_handlers(void);
 static void cleanup_native(void);
 
 static void signal_handler(int signal_number) {
-    if (signal_number == SIGWINCH) {
-        g_resize = 1;
-    } else if (signal_number == SIGINT) {
-        g_interrupt = 1;
-    } else if (signal_number == SIGTERM) {
-        g_terminate = 1;
-    } else if (signal_number == SIGHUP) {
-        g_hangup = 1;
-    }
+    wtop_terminal_signal_notify(signal_number);
 }
 
 /* Async-signal-safe best-effort write.  A plain `(void)write(...)` does not
@@ -333,10 +323,7 @@ static int l_terminal_start(lua_State *L) {
     g_terminal.output_fd = output_fd;
     g_terminal.input_flags = flags;
     g_terminal.active = 1;
-    g_resize = 1;
-    g_interrupt = 0;
-    g_terminate = 0;
-    g_hangup = 0;
+    wtop_terminal_signal_reset(WTOP_TERMINAL_RESIZE);
 
     if (install_handlers() != 0) {
         int saved_errno = errno;
@@ -402,7 +389,7 @@ static int l_poll(lua_State *L) {
     do {
         result = poll(&descriptor, 1, timeout_ms);
     } while (result < 0 && errno == EINTR &&
-             !g_resize && !g_interrupt && !g_terminate && !g_hangup);
+             !wtop_terminal_signal_pending());
 
     if (result < 0 && errno != EINTR) {
         return push_errno(L, "poll");
@@ -418,25 +405,23 @@ static int l_poll(lua_State *L) {
         if (bytes_read < 0) bytes_read = 0;
     }
 
+    unsigned pending = wtop_terminal_signal_take();
     lua_createtable(L, 0, 5);
     if (bytes_read > 0) {
         lua_pushlstring(L, buffer, (size_t)bytes_read);
         lua_setfield(L, -2, "data");
     }
 
-    lua_pushboolean(L, g_resize != 0);
+    lua_pushboolean(L, (pending & WTOP_TERMINAL_RESIZE) != 0);
     lua_setfield(L, -2, "resize");
-    lua_pushboolean(L, g_interrupt != 0);
+    lua_pushboolean(L, (pending & WTOP_TERMINAL_INTERRUPT) != 0);
     lua_setfield(L, -2, "interrupt");
-    lua_pushboolean(L, g_terminate != 0);
+    lua_pushboolean(L, (pending & WTOP_TERMINAL_TERMINATE) != 0);
     lua_setfield(L, -2, "terminate");
-    lua_pushboolean(L, g_hangup != 0 || (descriptor.revents & POLLHUP));
+    lua_pushboolean(L, (pending & WTOP_TERMINAL_HANGUP) != 0 || (descriptor.revents & POLLHUP));
     lua_setfield(L, -2, "hangup");
 
-    g_resize = 0;
-    g_interrupt = 0;
-    g_terminate = 0;
-    g_hangup = 0;
+
     return 1;
 }
 

@@ -97,7 +97,7 @@ HARDWARE_WORKER := $(NATIVE_DIR)/wtop_hardware_worker
 HARDWARE_WORKER_HEADER := $(NATIVE_DIR)/wtop_hardware_worker_image.h
 HARDWARE_LUA_HEADER := $(NATIVE_DIR)/wtop_hardware_lua.h
 HARDWARE_LUA_INPUTS := $(shell find src/wtop -name '*.lua')
-NATIVE_HEADERS += native/wtop_hardware_worker.h native/wtop_cpuid_protocol.h native/wtop_cpuid_capture.h
+NATIVE_HEADERS += native/wtop_terminal_signal.h native/wtop_hardware_worker.h native/wtop_cpuid_protocol.h native/wtop_cpuid_capture.h
 NATIVE_REVISION_HEADER := $(NATIVE_DIR)/build_revision.h
 NATIVE_VERSION_HEADER := $(NATIVE_DIR)/build_version.h
 LUA_PATH_DEV := $(CURDIR)/src/?.lua;$(CURDIR)/src/?/init.lua;;
@@ -458,7 +458,7 @@ test-native-gpu-worker-sanitized: sanitize-native $(LUA_STAMP)
 		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' \
 		--output build/native-gpu-worker-san --native-only
 
-check: resource-check native locales test-native-cpu-limits test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid
+check: resource-check native locales test-native-terminal-signals test-native-cpu-limits test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAC) -p $$(find src tools tests -type f -name '*.lua' -print)
 	@sh -n tools/*.sh
 	@python3 -c 'import pathlib; [compile(path.read_bytes(), str(path), "exec") for path in pathlib.Path("tests").rglob("*.py")]'
@@ -859,3 +859,9 @@ test-bundles: test-bundle-dir test-bundle-file
 	@python3 tools/check_macos.py --bundle dist/macos-bundle
 
 endif
+
+.PHONY: test-native-terminal-signals
+test-native-terminal-signals: native
+	@python3 tests/test_terminal_signals.py --cc "$(CC)" \
+		--lua-prefix '$(or $(LUA_PREFIX),$(CURDIR)/.tools/lua-5.5.1)' \
+		--output build/native-terminal-signals

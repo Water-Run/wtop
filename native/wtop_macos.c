@@ -31,6 +31,7 @@
 #include <poll.h>
 #include <pwd.h>
 #include <signal.h>
+#include "wtop_terminal_signal.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,10 +57,7 @@
 static struct termios saved_terminal;
 static int terminal_active = 0;
 static int cleanup_registered = 0;
-static volatile sig_atomic_t resized = 0;
-static volatile sig_atomic_t interrupted = 0;
-static volatile sig_atomic_t terminated = 0;
-static volatile sig_atomic_t hung_up = 0;
+
 static struct sigaction previous_winch, previous_int, previous_term, previous_hup;
 static locale_t width_locale = (locale_t)0;
 
@@ -97,10 +95,7 @@ static void restore_terminal(void) {
 }
 
 static void terminal_signal(int number) {
-    if (number == SIGWINCH) resized = 1;
-    else if (number == SIGINT) interrupted = 1;
-    else if (number == SIGTERM) terminated = 1;
-    else if (number == SIGHUP) hung_up = 1;
+    wtop_terminal_signal_notify(number);
 }
 
 static int l_terminal_start(lua_State *L) {
@@ -126,6 +121,7 @@ static int l_terminal_start(lua_State *L) {
     raw.c_cc[VTIME] = 0;
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0)
         return push_errno(L, "tcsetattr");
+    wtop_terminal_signal_reset(0);
     memset(&action, 0, sizeof(action));
     action.sa_handler = terminal_signal;
     sigemptyset(&action.sa_mask);
@@ -146,7 +142,7 @@ static int l_terminal_start(lua_State *L) {
         goto failed;
     }
     terminal_active = 1;
-    resized = 1;
+    wtop_terminal_signal_notify(SIGWINCH);
     if (!cleanup_registered) {
         if (atexit(restore_terminal) != 0) {
             restore_terminal();
@@ -188,8 +184,7 @@ static int l_poll(lua_State *L) {
         "timeout must be in -1..60000");
     do {
         ready = poll(&descriptor, 1, (int)timeout);
-    } while (ready < 0 && errno == EINTR && !resized && !interrupted
-        && !terminated && !hung_up);
+    } while (ready < 0 && errno == EINTR && !wtop_terminal_signal_pending());
     if (ready < 0 && errno != EINTR) return push_errno(L, "poll");
     if (ready > 0 && descriptor.revents & POLLIN) {
         do { count = read(STDIN_FILENO, buffer, sizeof(buffer)); }
@@ -197,20 +192,21 @@ static int l_poll(lua_State *L) {
         if (count < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
             return push_errno(L, "read");
     }
+    unsigned pending = wtop_terminal_signal_take();
     lua_createtable(L, 0, 5);
     if (count > 0) {
         lua_pushlstring(L, buffer, (size_t)count);
         lua_setfield(L, -2, "data");
     }
-    lua_pushboolean(L, resized != 0);
+    lua_pushboolean(L, (pending & WTOP_TERMINAL_RESIZE) != 0);
     lua_setfield(L, -2, "resize");
-    lua_pushboolean(L, interrupted != 0);
+    lua_pushboolean(L, (pending & WTOP_TERMINAL_INTERRUPT) != 0);
     lua_setfield(L, -2, "interrupt");
-    lua_pushboolean(L, terminated != 0);
+    lua_pushboolean(L, (pending & WTOP_TERMINAL_TERMINATE) != 0);
     lua_setfield(L, -2, "terminate");
-    lua_pushboolean(L, hung_up != 0 || (descriptor.revents & POLLHUP));
+    lua_pushboolean(L, (pending & WTOP_TERMINAL_HANGUP) != 0 || (descriptor.revents & POLLHUP));
     lua_setfield(L, -2, "hangup");
-    resized = interrupted = terminated = hung_up = 0;
+
     return 1;
 }
 
