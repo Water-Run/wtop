@@ -14,6 +14,7 @@ local MAX_ISSUES_PER_NODE = 128
 local DIRECTORY_ENTRY_SLACK = 64
 local MAX_DIRECTORY_ENTRIES = 2147483647
 local MAX_PIDS_PER_NODE = 65536
+local NOT_A_LINK = { kind = "not_link" }
 
 local METRIC_FILES = {
   ["cgroup.procs"] = true,
@@ -704,7 +705,17 @@ local function discover_children(fs, item, node, queue, scan, max_depth, max_nod
       end
 
       local candidate = item.path .. "/" .. entry
-      local target, link_error = fs:readlink(candidate)
+      local candidate_kind, kind_error, native_metadata
+      if type(fs.kind_nofollow) == "function" then
+        candidate_kind, kind_error, native_metadata = fs:kind_nofollow(candidate)
+      end
+      local target, link_error
+      if native_metadata then
+        if candidate_kind == "symlink" then target = true
+        else link_error = NOT_A_LINK end
+      else
+        target, link_error = fs:readlink(candidate)
+      end
       if target then
         scan.skipped_symlinks = scan.skipped_symlinks + 1
       elseif not is_not_link(link_error) then
@@ -718,7 +729,7 @@ local function discover_children(fs, item, node, queue, scan, max_depth, max_nod
       else
         -- No fallback here, and deliberately: see `checked_fs`.  An entry whose
         -- kind cannot be read is not a directory.
-        local candidate_kind, kind_error = fs:kind(candidate)
+        if not native_metadata then candidate_kind, kind_error = fs:kind(candidate) end
         if candidate_kind == "symlink" then
           scan.skipped_symlinks = scan.skipped_symlinks + 1
         elseif candidate_kind == nil then

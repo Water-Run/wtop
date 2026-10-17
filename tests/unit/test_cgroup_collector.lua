@@ -617,4 +617,62 @@ do
     "an unrelated cgroup.procs failure is not evidence of a threaded subtree")
 end
 
+-- Native metadata already distinguishes a directory, regular file, and final
+-- symlink. A supported result must preserve the full scan without readlink;
+-- a custom or unavailable result keeps the original filesystem protocol.
+do
+  local files = {
+    ["/metadata/cgroup.controllers"] = "cpu\n",
+    ["/metadata/cgroup.procs"] = "10\n",
+    ["/metadata/untracked.kernel"] = "unused\n",
+    ["/metadata/child/cgroup.procs"] = "11\n",
+  }
+  local directories = {
+    ["/metadata"] = { "cgroup.controllers", "cgroup.procs", "untracked.kernel", "child", "link" },
+    ["/metadata/child"] = { "cgroup.procs" },
+  }
+  local links = { ["/metadata/link"] = "child" }
+  local function scan(mode, depth)
+    local fs = fake_fs(files, directories, links, {})
+    local calls = { readlink = 0, metadata = 0 }
+    local original_readlink = fs.readlink
+    function fs:readlink(path)
+      calls.readlink = calls.readlink + 1
+      return original_readlink(self, path)
+    end
+    if mode then
+      function fs:kind_nofollow(path)
+        calls.metadata = calls.metadata + 1
+        if mode == "unavailable" then return nil, nil, false end
+        if mode == "denied" and path == "/metadata/child" then
+          return nil, { kind = "denied", message = "fixture_denied", path = path }, true
+        end
+        local kind, err = self:kind(path)
+        return kind, err, true
+      end
+    end
+    local result = Cgroup.new({ fs = fs, mount_path = "/metadata", max_nodes = 8,
+      max_depth = depth or 3 }):sample({ now_ns = function() return 1000000000 end })
+    return result, calls
+  end
+  local original, old_calls = scan()
+  local native_result, native_calls = scan("native")
+  local fallback, fallback_calls = scan("unavailable")
+  local Json = require("wtop.format.json")
+  assert(Json.encode(original) == Json.encode(native_result)
+    and Json.encode(original) == Json.encode(fallback),
+    "native metadata and the legacy protocol must publish the same complete result")
+  assert(native_calls.readlink == 0 and native_calls.metadata > 0)
+  assert(fallback_calls.readlink == old_calls.readlink and fallback_calls.readlink > 0)
+  assert(native_result.data.summary.node_count == 2
+    and native_result.data.summary.skipped_symlinks == 1)
+  local denied = scan("denied")
+  assert(denied.data.by_id["/child"] == nil
+    and denied.data.summary.denied_issue_count == 1 and denied.quality == "partial",
+    "a native type error must remain an explicit failure rather than a guessed directory")
+  local limited, limited_calls = scan("native", 0)
+  assert(limited.data.summary.depth_limited and limited_calls.metadata == 0
+    and limited_calls.readlink == 0, "the depth budget precedes every metadata query")
+end
+
 return true

@@ -6,6 +6,21 @@ local FS = require("wtop.linux.fs")
 local System = require("wtop.system")
 local Sysfs = require("wtop.linux.sysfs")
 
+-- Only built-in native metadata can promise not to follow a final symlink.
+do
+    local kind, _, supported = FS.default:kind_nofollow("src/wtop.lua")
+    if native.available and type(native.path_type) == "function" then
+        assert(supported and kind == "regular")
+    else
+        assert(not supported and kind == nil)
+    end
+    for _, option in ipairs({ "path_type", "read_link" }) do
+        local custom = FS.new({ [option] = function() error("must not call custom metadata") end })
+        assert(select(3, custom:kind_nofollow("/entry")) == false,
+            "custom metadata must keep the explicit symlink checks")
+    end
+end
+
 -- Waiting for a child to be reaped is not a performance measurement: the loop
 -- only fails when the process is still live after the whole budget.  The old
 -- 200 ms cap made this a load-sensitive flake on a busy machine, which is

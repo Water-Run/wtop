@@ -818,6 +818,7 @@ function Process:sample(context, previous)
               command_value = process.command
             elseif cmdline == "" then
               -- A genuinely empty command line is stable; do not reread it.
+              process.command = nil
               command_value = false
             elseif cmdline_error then
               process.partial = true

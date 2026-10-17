@@ -1131,6 +1131,38 @@ near(process_second.data.list[1].cpu_percent, 50)
 assert(process_second.data.list[1].io.write_bytes == 8192)
 assert(Process.sanitize_text("bad\255name") == "bad�name")
 
+-- A selected refresh can observe an empty command line after a non-empty one.
+-- Drop the old text immediately, while later argv changes keep refreshing.
+do
+  local command = "old\0argument\0"
+  local command_now = 1000000000
+  local files = {
+    ["/proc/100/stat"] = fixture("proc/100.stat.1"),
+    ["/proc/100/cmdline"] = function() return command end,
+  }
+  local collector = Process.new({ read_status = false, read_cmdline = true,
+    read_io = false, read_cgroup = false, clock_ticks_per_second = 100, page_size_bytes = 4096 })
+  local ctx = { fs = fake_fs(files, { ["/proc"] = { "100" } }),
+    now_ns = function() return command_now end }
+  local first = collector:sample(ctx)
+  assert(first.data.by_id["100:1000"].command == "old argument")
+  command = ""
+  ctx.selected_process_ids = { ["100:1000"] = true }
+  command_now = command_now + 1000000000
+  local empty = collector:sample(ctx, first)
+  assert(empty.data.by_id["100:1000"].command == nil,
+    "a fresh empty command must not retain the old cached text")
+  ctx.selected_process_ids = nil
+  command = "changed\0arguments\0"
+  local updated = empty
+  for _ = 1, 3 do
+    command_now = command_now + 1000000000
+    updated = collector:sample(ctx, updated)
+  end
+  assert(updated.data.by_id["100:1000"].command == "changed arguments",
+    "the empty-value correction must preserve later argv refreshes")
+end
+
 -- A PID reused between stat and supplemental status reads must be discarded.
 local original_stat = fixture("proc/100.stat.1")
 local reused_stat = original_stat:gsub(" 1000 10485760 ", " 2000 10485760 ")

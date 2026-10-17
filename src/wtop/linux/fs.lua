@@ -290,6 +290,18 @@ function FS:kind(path)
   return self.path_type_impl(self:path(path))
 end
 
+-- Native entry metadata does not follow the final symlink. A supplied
+-- path_type or read_link callback does not inherit that guarantee.
+function FS:kind_nofollow(path)
+  if self.path_type_impl ~= default_path_type
+      or self.readlink_impl ~= default_read_link
+      or not (ok_native and native and native.available and type(native.path_type) == "function") then
+    return nil, nil, false
+  end
+  local kind, err = default_path_type(self:path(path))
+  return kind, err, true
+end
+
 function FS:exists(path)
   if self.path_type_impl ~= default_path_type then
     local kind, err = self:kind(path)
