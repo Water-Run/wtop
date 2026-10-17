@@ -199,19 +199,22 @@ local function build(i18n, name)
   elseif name == "sensor_detail_lines" then
     return TUI.sensor_detail_lines(snapshot, i18n, 1000000000)
   elseif name == "power_detail_lines" then
-    return TUI.power_detail_lines({ cpu_limits = { domains = {
+    return TUI.power_detail_lines({ timestamp_ns = 1000000000, cpu_limits = { domains = {
       { id = "package:0", scope = "cpu_package", active = true, quality = "fresh",
         source = LONG, reasons = { { id = "pl1", active = true, logged = true },
           { id = "thermal", active = false, logged = true } } },
     } }, power = { zones = {
       { id = "intel-rapl:0", name = "package-0", source_kind = "intel-rapl",
-        enabled = true, controls_enabled = true, power_watts = 30,
+        enabled = true, controls_enabled = true, power_watts = 30, observed_at_ns = 1000000000,
         power_interval_ns = 1000000000, power_quality = "measured",
         constraints = {
           { id = 0, name = "long_term", power_limit_watts = 20, time_window_seconds = 28 },
           { id = 1, name = "short_term", power_limit_watts = 26, time_window_seconds = 0.00244 },
           { id = 2, name = "peak_power", power_limit_watts = 114 },
         } },
+      { id = "intel-rapl:0:1", parent_id = "intel-rapl:0", name = "uncore", source_kind = "intel-rapl",
+        enabled = false, controls_enabled = false, power_watts = .04, power_quality = "measured",
+        observed_at_ns = 1000000000, power_interval_ns = 1000000000 },
       { id = LONG, name = LONG, source_kind = LONG, power_quality = "denied" },
     }, denied_zones = 1 }, gpus = { devices = { gpu_device } } }, i18n)
   elseif name == "hardware_detail_lines" then

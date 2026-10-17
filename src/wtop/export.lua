@@ -5,6 +5,7 @@ local Privacy = require("wtop.privacy")
 local Hardware = require("wtop.model.hardware")
 local Quality = require("wtop.model.quality")
 local Power = require("wtop.model.power")
+local PowerDomains = require("wtop.model.power_domains")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
@@ -259,7 +260,7 @@ local function export_performance_limits(limits, maximum, summary, quality)
     return result
 end
 
-local function export_power(power, quality)
+local function export_power(power, quality, now_ns)
     local result = json.object({
         schema = power and power.schema,
         total_power_watts = power and power.total_power_watts,
@@ -275,14 +276,19 @@ local function export_power(power, quality)
         denied_zones = power and power.denied_zones,
         truncated = power and power.truncated == true or false,
         zones = json.array({}),
+        graphics_domains = json.array({}),
     })
+    local identities = PowerDomains.identities(power and power.zones)
     for index, zone in ipairs(power and power.zones or {}) do
         local output = copy_fields(zone, {
             "id", "name", "source_kind", "parent_id", "enabled", "energy_joules",
-            "maximum_energy_range_joules", "observed_at_ns", "power_watts",
+            "maximum_energy_range_joules", "observed_at_ns", "energy_observed_at_ns", "power_watts",
             "power_source", "power_quality", "power_interval_ns", "quality", "truncated", "aggregate", "source",
             "platform_aggregate", "aggregate_domain", "control_enabled", "controls_enabled", "control_source",
         })
+        output.domain_kind = PowerDomains.kind(zone, identities)
+        if output.domain_kind then output.domain_role_source = "linux_intel_rapl" end
+        output.power_quality = Power.zone_state(zone, quality, now_ns) or output.power_quality
         output.constraints = json.array({})
         for constraint_index, constraint in ipairs(zone.constraints or {}) do
             output.constraints[constraint_index] = copy_fields(constraint, {
@@ -290,7 +296,7 @@ local function export_power(power, quality)
                 "minimum_power_watts", "time_window_seconds", "maximum_time_window_seconds",
                 "minimum_time_window_seconds", "source",
             })
-            local comparison = Power.zone(zone, constraint, quality)
+            local comparison = Power.zone(zone, constraint, quality, now_ns)
             if comparison then
                 output.constraints[constraint_index].usage_percent = comparison.percent
                 output.constraints[constraint_index].headroom_watts = comparison.headroom_watts
@@ -300,6 +306,16 @@ local function export_power(power, quality)
         result.zones[index] = output
     end
     result.issues = export_issues(power and power.issues)
+    local graphics, truncated = PowerDomains.graphics({ timestamp_ns = now_ns, power = power,
+        quality = { power = quality } })
+    for index, domain in ipairs(graphics) do
+        if index > 128 then break end
+        local output = copy_fields(domain, { "id", "parent_id", "source", "source_kind", "scope", "role_source",
+            "quality", "observed_at_ns", "interval_ns", "controls_enabled", "pci_device_known" })
+        output.power_watts = domain.watts
+        result.graphics_domains[index] = output
+    end
+    result.graphics_domains_truncated = truncated or #graphics > #result.graphics_domains
     return result
 end
 
@@ -2045,7 +2061,7 @@ function M.snapshot(snapshot, options)
         edac = export_edac(snapshot.edac),
         spd = export_spd(snapshot.spd),
         sensors = export_sensors(snapshot),
-        power = export_power(snapshot.power, snapshot.quality and snapshot.quality.power),
+        power = export_power(snapshot.power, snapshot.quality and snapshot.quality.power, snapshot.timestamp_ns),
         mounts = export_mounts(snapshot.mounts),
         workloads = export_workloads(snapshot.workloads, options.workload_limit),
         system = export_system(snapshot.system),
@@ -2368,6 +2384,12 @@ function M.agent(snapshot, options)
     for index, device in ipairs(full.wifi and full.wifi.devices or {}) do
         if index > device_limit then break end
         top_wifi[index] = device
+    end
+
+    local graphics_domains = json.array({})
+    for index, domain in ipairs(full.power and full.power.graphics_domains or {}) do
+        if index > device_limit then break end
+        graphics_domains[index] = domain
     end
 
     local top_processes = json.array({})
@@ -2723,6 +2745,9 @@ function M.agent(snapshot, options)
                 providers = export_gpu_providers(full.gpus and full.gpus.providers),
             }),
             power = json.object({
+                graphics_domains = graphics_domains,
+                graphics_domains_truncated = (full.power and full.power.graphics_domains_truncated == true)
+                    or #(full.power and full.power.graphics_domains or {}) > #graphics_domains,
                 total_watts = full.power and full.power.total_power_watts,
                 measured_aggregate_zones = full.power and full.power.measured_aggregate_zones,
                 aggregate_zone_count = full.power and full.power.aggregate_zone_count,

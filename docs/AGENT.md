@@ -43,6 +43,16 @@ Linux 的 `top.wifi` 是独立的无线接口报告，遵循设备列表上限�
 `wifi.devices` 保留相同的字段、逐设备质量与关联频率列表；原始协议帧、
 SSID 和 BSSID 不输出。
 
+Linux RAPL 的 Snapshot `power.graphics_domains` 与 Agent
+`metrics.power.graphics_domains` 独立描述 PP1 图形功耗域，使用相同的瓦数、
+观察时间、采样窗口和质量。`scope=rapl_graphics_domain`、
+`pci_device_known=false` 不建立与 `top.gpus` 的卡级对应关系；厂商整卡功耗
+继续保留自己的来源和范围。多个后端分别列出，并以截断位说明列表范围。
+`power.zones[].domain_kind` 按内核驱动语义区分 CPU 包、CPU 核心、图形、
+内存和平台；未知来源不猜测类型。`energy_observed_at_ns` 为能量读取捕获
+时间，功率差值按同一域相邻捕获时间计算；控制关闭不抹去有效读数，但不
+据此生成正常的上限占比。
+
 `metrics.cpu.frequency` 按各策略已知的在线 CPU 数加权给出平均 Hz；缺少成员列表的策略按一个读数计。它携带来源与 measured/estimated/partial 质量，混用来源时标为 `mixed`。CPUFreq 采集失败或数据过期时不把保留值作为当前频率输出。
 
 `data_quality.value_timestamp_ns` 是该资源当前所持值的单调时钟时间；

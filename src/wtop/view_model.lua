@@ -7,6 +7,7 @@ local WorkloadFilter = require("wtop.model.workload_filter")
 local MountFilter = require("wtop.model.mount_filter")
 local Quality = require("wtop.model.quality")
 local Power = require("wtop.model.power")
+local PowerDomains = require("wtop.model.power_domains")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
@@ -1767,6 +1768,14 @@ end
 
 local function power_rows(snapshot, format, i18n)
     local rows, total = {}, 0
+    local domain_ids = PowerDomains.identities(snapshot.power and snapshot.power.zones)
+    local domain_labels = {
+        cpu_package = { "power.rapl_package", "RAPL CPU package" },
+        cpu_cores = { "power.rapl_cores", "RAPL PP0 CPU cores" },
+        graphics = { "power.rapl_graphics", "RAPL PP1 graphics domain" },
+        memory = { "power.rapl_memory", "RAPL DRAM" },
+        platform = { "power.rapl_platform", "RAPL platform" },
+    }
     local function seconds(value)
         if not Power.reading(value) then return "—" end
         if value > 0 and value < 1 then return number(format, value * 1000, 3) .. " ms" end
@@ -1789,6 +1798,8 @@ local function power_rows(snapshot, format, i18n)
         return tostring(left.id or left.name) < tostring(right.id or right.name)
     end)
     for _, zone in ipairs(zones) do
+        local kind = PowerDomains.kind(zone, domain_ids)
+        local role = kind and domain_labels[kind]
         local constraints = {}
         for _, constraint in ipairs(zone.constraints or {}) do constraints[#constraints + 1] = constraint end
         table.sort(constraints, function(left, right)
@@ -1810,7 +1821,7 @@ local function power_rows(snapshot, format, i18n)
         for _, constraint in ipairs(constraints) do
             if #rows >= TABLE_ROW_LIMIT then break end
             local power_state = snapshot.quality and snapshot.quality.power
-            local comparison = Power.zone(zone, constraint, power_state)
+            local comparison = Power.zone(zone, constraint, power_state, snapshot.timestamp_ns)
             local limit = Power.limit(constraint.power_limit_watts)
                 and formatted(function()
                     return assert(format:number(constraint.power_limit_watts, { precision = 1 }))
@@ -1819,6 +1830,8 @@ local function power_rows(snapshot, format, i18n)
                 zone = zone.name or zone.id or "?",
                 domain = zone.source_kind or "—",
                 zone_id = zone.id,
+                domain_kind = kind,
+                scope = role and translated(i18n, role[1], role[2]) or nil,
                 constraint = names[constraint.name] or constraint.name
                     or (constraint.id ~= nil and "#" .. tostring(constraint.id)) or "—",
                 power = power,
@@ -1830,8 +1843,7 @@ local function power_rows(snapshot, format, i18n)
                 window = seconds(constraint.time_window_seconds),
                 interval = seconds(zone.power_interval_ns and zone.power_interval_ns / 1e9),
                 source = zone.power_source or zone.power_quality or "—",
-                state = Power.unusable(power_state) and (power_state.quality or power_state.status)
-                    or zone.power_quality or zone.quality or "—",
+                state = Power.zone_state(zone, power_state, snapshot.timestamp_ns) or "—",
                 controls = (zone.enabled == false or zone.control_enabled == false
                     or zone.controls_enabled == false) and "disabled"
                     or zone.controls_enabled == true and "enabled" or "unknown",
@@ -1844,7 +1856,7 @@ end
 
 local function overview_power_budgets(snapshot, format, i18n)
     local rows, total = Power.cpu_budgets(snapshot.power, snapshot.quality and snapshot.quality.power,
-        TABLE_ROW_LIMIT)
+        TABLE_ROW_LIMIT, snapshot.timestamp_ns)
     local names = {
         long_term = translated(i18n, "power.long_term", "Sustained"),
         short_term = translated(i18n, "power.short_term", "Short"),
@@ -1874,6 +1886,20 @@ local function overview_power_budgets(snapshot, format, i18n)
         row.combined = row.usage .. " · " .. row.headroom
     end
     return { rows = rows, total = total }
+end
+
+local function graphics_power_summary(snapshot, format, i18n)
+    local rows, truncated = PowerDomains.graphics(snapshot)
+    if #rows == 0 then return nil end
+    if #rows ~= 1 or truncated then
+        return translated(i18n, "power.rapl_graphics_many", "RAPL PP1 domains: {count}",
+            { count = truncated and tostring(#rows) .. "+" or #rows })
+    end
+    local row = rows[1]
+    local value = row.watts ~= nil and number(format, row.watts, 2) .. " W"
+        or Technical.state(i18n, row.quality)
+    return translated(i18n, "power.rapl_graphics", "RAPL PP1 graphics domain") .. " · " .. value,
+        { "RAPL PP1 · " .. value }
 end
 
 function M.power_detail_rows(snapshot, i18n)
@@ -3079,6 +3105,10 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
     local cpu_power = snapshot.power and snapshot.power.total_power_watts
     local power_budgets = on("overview", "power_overview")
         and overview_power_budgets(snapshot, format, i18n) or nil
+    local graphics_power, graphics_power_compact
+    if on("gpu", "gpu_summary") then
+        graphics_power, graphics_power_compact = graphics_power_summary(snapshot, format, i18n)
+    end
     local workload_root = snapshot.workloads and snapshot.workloads.summary
         and snapshot.workloads.summary.root
     local battery_summary = snapshot.power_supplies and snapshot.power_supplies.summary
@@ -3562,6 +3592,8 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
 
         -- GPU ------------------------------------------------------------
         gpu_summary = {
+            secondary_value = graphics_power,
+            secondary_values = graphics_power_compact,
             label = translated(i18n, "metrics.gpu", "GPU"),
             value = first_gpu.utilization_percent,
             display_value = #gpu_devices == 0 and translated(i18n, "ui.no_data", "No data")

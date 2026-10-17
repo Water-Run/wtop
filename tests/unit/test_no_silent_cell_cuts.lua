@@ -321,7 +321,12 @@ local function snapshot()
                            { class = "hwmon0", name = "probe",
                              channels = { { type = "temperature", input = 69.8,
                                             quality = "fresh" } } } } },
-    power = { zones = { { name = "package-0", power_watts = 12.5, quality = "fresh" } } },
+    timestamp_ns = 1000000000,
+    power = { zones = {
+      { id = "intel-rapl:0", source_kind = "intel-rapl", name = "package-0", power_watts = 12.5, quality = "fresh" },
+      { id = "intel-rapl:0:1", source_kind = "intel-rapl", name = "uncore", parent_id = "intel-rapl:0",
+        power_watts = .04, power_quality = "measured", quality = "fresh", observed_at_ns = 1000000000 },
+    } },
     quality = { mounts = { status = "ok", quality = "fresh" },
                 disks = { status = "ok", quality = "fresh" } },
     connections = { owner_scan = { quality = "fresh" }, connections = {

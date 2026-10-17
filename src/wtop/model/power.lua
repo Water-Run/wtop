@@ -24,15 +24,38 @@ function M.compare(watts, limit, enabled)
 end
 
 local unusable = { denied = true, unavailable = true, stale = true, gap = true,
-    reset = true, error = true }
+    reset = true, error = true, unknown = true, held = true }
 
-function M.unusable(quality)
-    if type(quality) == "table" then quality = quality.power or quality.quality or quality.status end
-    return unusable[quality] == true
+function M.state(quality)
+    if type(quality) == "table" then
+        if quality.status and quality.status ~= "ok" then
+            return quality.quality == "stale" and "stale" or quality.status
+        end
+        return quality.power or quality.quality or quality.status
+    end
+    return quality
 end
 
-function M.zone(zone, constraint, quality)
-    if M.unusable(quality) or unusable[zone.power_quality] or unusable[zone.quality] then return nil end
+function M.unusable(quality)
+    return unusable[M.state(quality)] == true
+end
+
+function M.zone_state(zone, quality, now_ns)
+    local state = M.state(quality)
+    if M.unusable(state) then return state end
+    if M.unusable(zone.power_quality) then return zone.power_quality end
+    if M.unusable(zone.quality) then return zone.quality end
+    if now_ns ~= nil then
+        local observed = zone.observed_at_ns
+            or type(quality) == "table" and quality.value_timestamp_ns
+        if not M.reading(now_ns) or not M.reading(observed) or observed > now_ns then return "unknown" end
+        if now_ns - observed > 15000000000 then return "stale" end
+    end
+    return zone.power_quality or zone.quality or state
+end
+
+function M.zone(zone, constraint, quality, now_ns)
+    if M.unusable(M.zone_state(zone, quality, now_ns)) then return nil end
     local enabled = zone.controls_enabled
     if zone.enabled == false or zone.control_enabled == false then enabled = false end
     return M.compare(zone.power_watts, constraint and constraint.power_limit_watts, enabled)
@@ -40,7 +63,7 @@ end
 
 -- Keep controller aliases and packages separate. The headline total cannot be
 -- used as the numerator of an individual controller's cap.
-function M.cpu_budgets(power, quality, maximum)
+function M.cpu_budgets(power, quality, maximum, now_ns)
     maximum = maximum or 512
     local rows, rank = {}, { long_term = 1, short_term = 2, peak_power = 3 }
     for _, zone in ipairs(power and power.zones or {}) do
@@ -48,12 +71,11 @@ function M.cpu_budgets(power, quality, maximum)
             for _, cap in ipairs(zone.constraints or {}) do
                 local limit = M.limit(cap.power_limit_watts)
                 if limit then
-                    local state = type(quality) == "table" and (quality.quality or quality.status) or quality
-                    state = M.unusable(state) and state or zone.power_quality or zone.quality
+                    local state = M.zone_state(zone, quality, now_ns)
                     rows[#rows + 1] = {
                         zone_id = zone.id, constraint_id = cap.id, constraint_name = cap.name,
                         watts = M.reading(zone.power_watts), limit_watts = limit,
-                        comparison = M.zone(zone, cap, quality), quality = state,
+                        comparison = M.zone(zone, cap, quality, now_ns), quality = state,
                         disabled = zone.enabled == false or zone.control_enabled == false
                             or zone.controls_enabled == false,
                     }

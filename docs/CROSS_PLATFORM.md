@@ -629,6 +629,22 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
+### 2026-10-18：RAPL 图形域与逐域计时（验证中）
+
+Linux intel_rapl 公共驱动将 PP1 命名为 `uncore`，语义为 graphics uncore。
+仅按已核对的驱动命名与父子关系解释域类型，未知后端不按名字推断。图形域
+独立列出，PCI 显卡归属保持未知，不覆盖厂商提供的整卡功耗，不将子域加入
+CPU 包总量，也不把并行 MSR/MMIO 后端相加。GPU 页和功耗详情显示同一数据。
+依据为 [内核 RAPL 类型](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/refs/tags/v6.17/include/linux/intel_rapl.h) 与
+[域命名实现](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/refs/tags/v6.17/drivers/powercap/intel_rapl_common.c)。
+
+能量差值现按各域自己的读取捕获时间计算，较晚的属性不会刷新先前读数；
+陈旧域不作为当前总功耗或占比的依据。夹具复现不同读取延迟下的间隔和
+二十秒慢批次；关闭的域控制不意味着能量计数器停止。实际源码 root 快照
+读到 PP1 约 0.043 W、约 0.825 秒窗口，CPU 包约 20.39 W；普通用户保留
+明确的拒绝状态。完整回归、终端、跨平台与精确包验证仍在推进。
+证据位于 `build/hardware-rapl-graphics-20261018/`。
+
 ### 2026-10-18：Linux Wi-Fi 原生链路信息
 
 通过 nl80211 查询接口、已有 BSS 缓存和关联站点信息，不触发无线扫描或
@@ -4106,7 +4122,7 @@ Windows/macOS 的 NUMA 原生提供方仍待实现，本轮没有新增这些平
   Lua 5.5.1 与系统 Lua 5.4.8 下通过。本次沙箱的实时网络命名空间
   只暴露 `lo`；源码 Snapshot 的 `lo` 队列为 RX 1、TX 1，与 sysfs
   对应目录一致。多队列网卡仍缺少本机实测。
-- 当前源码套件包含 151 个 Lua 测试文件；此前矩阵和按日期记载的
+- 当前源码套件包含 152 个 Lua 测试文件；此前矩阵和按日期记载的
   120 文件运行是当时的验证结果，不计作本轮新增测试的覆盖证据。
 - `make check test-55 test-pty-quick` 通过，121 个 Lua 文件均通过；
   源码和 onedir 的硬件详情 PTY 场景也通过。onedir Snapshot 导出

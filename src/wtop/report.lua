@@ -469,11 +469,21 @@ function M.render(snapshot)
                 quantity(battery.energy_design_watt_hours, 1, " Wh", 2) }
         end, power)
     local zones = object(snapshot.power)
-    table_section(lines, "Power zones", { "Zone", "Current power", "Quality", "Source" },
+    table_section(lines, "Power zones", { "Zone", "Domain", "Current power", "Sample window", "Quality", "Source" },
         zones.zones, function(zone)
-            return { named_id(zone), quantity(zone.power_watts, 1, " W", 2),
-                zone.power_quality or zone.quality, zone.power_source }
+            return { named_id(zone), zone.domain_kind, quantity(zone.power_watts, 1, " W", 2),
+                quantity(zone.power_interval_ns, 1e9, " s", 6), zone.power_quality or zone.quality, zone.power_source }
         end, zones)
+    if #list(zones.graphics_domains) > 0 then
+        table_section(lines, "RAPL graphics domains",
+            { "Domain", "Parent", "Power", "Sample window", "Quality", "PCI adapter known" },
+            zones.graphics_domains, function(domain)
+                return { domain.id, domain.parent_id, quantity(domain.power_watts, 1, " W", 2),
+                    quantity(domain.interval_ns, 1e9, " s", 6), domain.quality, domain.pci_device_known }
+            end, { truncated = zones.graphics_domains_truncated })
+        lines[#lines + 1] = "These readings cover the RAPL graphics power plane; PCI adapter ownership is unknown."
+        lines[#lines + 1] = ""
+    end
     local constraints, constraints_truncated = {}, zones.truncated == true
     for _, zone in ipairs(list(zones.zones)) do
         for _, constraint in ipairs(list(zone.constraints)) do

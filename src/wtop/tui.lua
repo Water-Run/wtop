@@ -648,6 +648,11 @@ local function power_detail_lines(snapshot, i18n)
         if identity ~= previous then
             lines[#lines + 1] = ""
             lines[#lines + 1] = inspector_text(row.zone .. " [" .. identity .. "]", INSPECTOR_ROW_WIDTH)
+            if row.scope then field("limits.scope", "Scope", row.scope) end
+            if row.domain_kind == "graphics" then
+                lines[#lines + 1] = translated(i18n, "power.rapl_graphics_note",
+                    "RAPL graphics-domain reading; PCI adapter ownership is unknown.")
+            end
             field("metrics.source", "Source", row.domain .. " · " .. row.source)
             field("metrics.power", "Power", row.power .. " · "
                 .. translated(i18n, "power.interval", "Sample window") .. ": " .. row.interval)

@@ -142,7 +142,7 @@ local TAB_COLLECTORS = {
         pressure = true, system_info = true },
     storage = { disk = true, disk_health = true, mounts = true, pressure = true },
     network = { network = true, connections = true, wifi = true },
-    gpu = { gpu = true, hwmon = true },
+    gpu = { gpu = true, hwmon = true, powercap = true },
     workloads = { cpu = true, memory = true, pressure = true, cgroup = true },
     system = { system_info = true, cpu_info = true, memory = true,
         power_supply = true, inventory = true, disk = true, network = true,
@@ -205,7 +205,7 @@ local TAB_WIDGET_COLLECTORS = {
         connection_table = { "connections" }, address_table = { "network" },
     },
     gpu = {
-        gpu_summary = { "gpu" }, gpu_table = { "gpu", "hwmon" },
+        gpu_summary = { "gpu", "powercap" }, gpu_table = { "gpu", "hwmon" },
         gpu_process_table = { "gpu" },
     },
     workloads = {

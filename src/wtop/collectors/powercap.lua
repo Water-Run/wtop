@@ -1,6 +1,8 @@
 local Capability = require("wtop.core.capability")
 local FS = require("wtop.linux.fs")
 local Common = require("wtop.collectors.common")
+local Domains = require("wtop.model.power_domains")
+local Power = require("wtop.model.power")
 
 local Powercap = {}
 Powercap.__index = Powercap
@@ -211,7 +213,7 @@ local function energy_delta(current, previous, maximum_range)
   return nil, "reset"
 end
 
-local function read_zone(self, fs, entry, entries, previous, now_ns, controls)
+local function read_zone(self, fs, entry, entries, previous, context, controls)
   local base = self.base_path .. "/" .. entry
   local issues = {}
   local listed, list_error, list_truncated = fs:list(base, self.max_zone_entries + 1)
@@ -225,10 +227,12 @@ local function read_zone(self, fs, entry, entries, previous, now_ns, controls)
   if not name then return nil, issues end
   local energy, energy_error = optional_integer(fs, base .. "/energy_uj", issues,
     "energy", self, self.max_counter_value)
+  local energy_observed_ns = Common.now_ns(context)
   local maximum_range = optional_integer(fs, base .. "/max_energy_range_uj", issues,
     "maximum_energy_range", self, self.max_counter_value)
   local direct_power = optional_integer(fs, base .. "/power_uw", issues,
     "power", self, self.max_counter_value)
+  local power_observed_ns = direct_power ~= nil and Common.now_ns(context) or nil
   local enabled = optional_integer(fs, base .. "/enabled", issues,
     "enabled", self, 1)
   if enabled ~= nil then enabled = enabled == 1 end
@@ -254,7 +258,8 @@ local function read_zone(self, fs, entry, entries, previous, now_ns, controls)
     energy_uj = energy,
     maximum_energy_range_joules = maximum_range and maximum_range / 1000000 or nil,
     maximum_energy_range_uj = maximum_range,
-    observed_at_ns = now_ns,
+    observed_at_ns = power_observed_ns or energy_observed_ns,
+    energy_observed_at_ns = energy ~= nil and energy_observed_ns or nil,
     power_watts = direct_power and direct_power / 1000000 or nil,
     power_source = direct_power and "power_uw" or nil,
     power_quality = direct_power and "measured" or "gap",
@@ -267,7 +272,8 @@ local function read_zone(self, fs, entry, entries, previous, now_ns, controls)
   if previous_zone and (previous_zone.name ~= name
       or previous_zone.maximum_energy_range_uj ~= maximum_range) then previous_zone = nil end
   if not zone.power_watts and energy and previous_zone and previous_zone.energy_uj then
-    local elapsed_ns = Common.elapsed_ns(now_ns, previous_zone.observed_at_ns)
+    local elapsed_ns = Common.elapsed_ns(energy_observed_ns,
+      previous_zone.energy_observed_at_ns or previous_zone.observed_at_ns)
     local delta, delta_quality = energy_delta(energy, previous_zone.energy_uj,
       maximum_range or previous_zone.maximum_energy_range_uj)
     if delta and elapsed_ns and elapsed_ns > 0 then
@@ -341,7 +347,6 @@ function Powercap:sample(context, previous)
       reason = "no_powercap_zones", duration_ns = Common.elapsed_ns(finished, started) or 0,
       source = self.base_path })
   end
-  local now_ns = Common.now_ns(context)
   local previous_data = Common.previous_data(previous)
   local entry_set = {}
   for _, entry in ipairs(entries) do entry_set[entry] = true end
@@ -359,7 +364,7 @@ function Powercap:sample(context, previous)
   local zones, by_id, all_issues = {}, {}, {}
   local truncated, partial, denied = class_truncated == true, false, 0
   for _, entry in ipairs(entries) do
-    local zone, issues = read_zone(self, fs, entry, entry_set, previous_data, now_ns, controls)
+    local zone, issues = read_zone(self, fs, entry, entry_set, previous_data, context, controls)
     if zone then
       zones[#zones + 1] = zone
       by_id[zone.id] = zone
@@ -376,6 +381,20 @@ function Powercap:sample(context, previous)
     return Common.result("unavailable", finished, nil, { quality = "unavailable",
       reason = "no_readable_powercap_zones", duration_ns = Common.elapsed_ns(finished, started) or 0,
       source = self.base_path })
+  end
+
+  -- Batch completion does not renew an earlier domain's energy observation.
+  -- A later slow sysfs attribute can leave a usable number as historical data.
+  local measured_at = Common.now_ns(context)
+  local identities = Domains.identities(zones)
+  for _, zone in ipairs(zones) do
+    zone.domain_kind = Domains.kind(zone, identities)
+    if zone.domain_kind then zone.domain_role_source = "linux_intel_rapl" end
+    local q = Domains.quality(zone, measured_at)
+    if q == "stale" or q == "unknown" then
+      zone.power_quality = q
+      partial = true
+    end
   end
 
   -- Child domains must never be added to their package. Select a complete
@@ -425,7 +444,8 @@ function Powercap:sample(context, previous)
       local backend = cohort.backends[name]
       local measured_count, energy_count, denied_count = 0, 0, 0
       for _, zone in ipairs(backend.roots) do
-        if finite_number(zone.power_watts) then measured_count = measured_count + 1 end
+        if finite_number(zone.power_watts) and not Power.unusable(zone.power_quality)
+            and zone.power_quality ~= "unknown" then measured_count = measured_count + 1 end
         if finite_number(zone.energy_uj) then energy_count = energy_count + 1 end
         if zone.power_quality == "denied" then denied_count = denied_count + 1 end
       end
@@ -457,7 +477,8 @@ function Powercap:sample(context, previous)
   local total_power_watts, measured = 0, 0
   for _, zone in ipairs(selected_roots) do
     zone.aggregate = true
-    if finite_number(zone.power_watts) then
+    if finite_number(zone.power_watts) and not Power.unusable(zone.power_quality)
+        and zone.power_quality ~= "unknown" then
       total_power_watts = total_power_watts + zone.power_watts
       measured = measured + 1
     end
@@ -465,7 +486,8 @@ function Powercap:sample(context, previous)
   local aggregate_complete = #selected_roots > 0 and measured == #selected_roots
 
   local function platform_rank(zone)
-    if finite_number(zone.power_watts) then return 3 end
+    if finite_number(zone.power_watts) and not Power.unusable(zone.power_quality)
+        and zone.power_quality ~= "unknown" then return 3 end
     if finite_number(zone.energy_uj) then return 2 end
     if zone.power_quality == "denied" then return 0 end
     return 1
@@ -479,7 +501,8 @@ function Powercap:sample(context, previous)
   local platform_power_watts, platform_measured = nil, 0
   if platform_root then
     platform_root.platform_aggregate = true
-    if finite_number(platform_root.power_watts) then
+    if finite_number(platform_root.power_watts) and not Power.unusable(platform_root.power_quality)
+        and platform_root.power_quality ~= "unknown" then
       platform_power_watts = platform_root.power_watts
       platform_measured = 1
     end
