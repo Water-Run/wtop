@@ -25,7 +25,7 @@ static void enumerate(struct wtop_cpuid_cpu *cpu,struct wtop_cpuid_leaf *leaves,
     if(!terminated)cpu->flags|=WTOP_CPUID_FLAG_TRUNCATED;
 }
 static void wtop_cpuid_snapshot(struct wtop_cpuid_cpu *cpu,struct wtop_cpuid_leaf *leaves) {
-    unsigned vendor=0;cpu->max_basic=__get_cpuid_max(0,&vendor);
+    unsigned vendor=0;cpu->max_basic=(uint32_t)__get_cpuid_max(0,&vendor);
     if(!cpu->max_basic&&!vendor){cpu->status=WTOP_CPUID_STATUS_UNSUPPORTED;return;}
     cpu->flags|=WTOP_CPUID_FLAG_CPUID;
     if(!add(cpu,leaves,0,0)||!add(cpu,leaves,0x80000000,0)){cpu->status=WTOP_CPUID_STATUS_UNSTABLE;return;}
