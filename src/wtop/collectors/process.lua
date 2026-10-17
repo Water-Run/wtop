@@ -7,6 +7,17 @@ local native = require("wtop.native")
 local Process = {}
 Process.__index = Process
 
+-- Revalidation still parses the complete stat record. Reuse the native
+-- parser when available, and keep Lua's handling of unusual or invalid input.
+local function process_stat(provider, content)
+  if type(content) == "string" and provider.available == true
+      and type(provider.process_stat_fields) == "function" then
+    local parsed = provider.process_stat_fields(content)
+    if parsed then return parsed end
+  end
+  return Parsers.process_stat(content)
+end
+
 local DEFAULT_MAX_PROCESSES = 8192
 local HARD_MAX_PROCESSES = 65536
 local DIRECTORY_ENTRY_SLACK = 256
@@ -695,7 +706,7 @@ function Process:sample(context, previous)
         end
       else
         local stat = type(stat_content) == "table" and stat_content
-          or Parsers.process_stat(stat_content)
+          or process_stat(self.native, stat_content)
         if not stat then
           parse_errors = parse_errors + 1
         elseif stat.pid ~= pid then
@@ -950,7 +961,7 @@ function Process:sample(context, previous)
                 if tid then
                   local task_stat, task_stat_error =
                     fs:read(base .. "/task/" .. task_entry .. "/stat", 65536)
-                  local parsed_task = task_stat and Parsers.process_stat(task_stat)
+                  local parsed_task = task_stat and process_stat(self.native, task_stat)
                   if parsed_task and parsed_task.pid == tid then
                     local thread = {
                       tid = tid,
@@ -1168,7 +1179,7 @@ function Process:sample(context, previous)
               races = races + 1
               generation_matches = false
             else
-              local final_stat = Parsers.process_stat(final_content)
+              local final_stat = process_stat(self.native, final_content)
               if not final_stat then
                 parse_errors = parse_errors + 1
                 generation_matches = false

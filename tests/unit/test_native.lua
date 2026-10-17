@@ -213,6 +213,18 @@ local legacy_processes = require("wtop.collectors.process").new({
     native = legacy_native, read_status = false, max_processes = 128 }):sample({})
 assert(legacy_processes.status == "ok" and legacy_mode == "stat",
     "an older native module without parsed stat support keeps the string path")
+local revalidation_calls = 0
+local revalidation_provider = {
+    available = true, system_constants = native.system_constants, proc_batch = native.proc_batch,
+    process_stat_fields = function(content)
+        revalidation_calls = revalidation_calls + 1
+        return native.process_stat_fields(content)
+    end,
+}
+local revalidated = require("wtop.collectors.process").new({
+    native = revalidation_provider, max_processes = 64, read_status = true }):sample({})
+assert(revalidated.status == "ok" and revalidation_calls > 0,
+    "supplemental reads must retain generation verification using the full native parser")
 local source_stat = assert(Parsers.process_stat(batch_contents[1]))
 local fast_stat = assert(native.process_stat_fields(batch_contents[1]))
 for _, key in ipairs({ "id", "pid", "comm", "state", "ppid", "pgrp", "session",
@@ -232,6 +244,49 @@ for key, value in pairs(tricky_lua) do
     assert(tricky_native[key] == value, "native parser differs on comm or signed field: " .. key)
 end
 assert(native.process_stat_fields("invalid") == nil)
+-- A matching PID/start time is insufficient if the final record is malformed.
+-- Keep the complete verification with new, old and explicitly disabled APIs.
+do
+    local malformed = {}
+    for index, value in ipairs(fields) do malformed[index] = value end
+    malformed[7] = "invalid"
+    local good = "123 (worker) S " .. table.concat(fields, " ")
+    local bad = "123 (worker) S " .. table.concat(malformed, " ")
+    for _, mode in ipairs({ "native", "legacy", "disabled" }) do
+        local reads, fast_calls = 0, 0
+        local provider = { available = mode ~= "disabled" }
+        if mode ~= "legacy" then
+            provider.process_stat_fields = function(content)
+                fast_calls = fast_calls + 1
+                assert(mode ~= "disabled", "disabled native parser was called")
+                return native.process_stat_fields(content)
+            end
+        end
+        local fs = {
+            list = function(_, path)
+                if path == "/fixture" then return { "123" } end
+                return nil, { kind = "not_found" }
+            end,
+            read = function(_, path)
+                if path == "/fixture/123/stat" then
+                    reads = reads + 1
+                    return reads == 1 and good or bad
+                end
+                if path == "/fixture/123/cmdline" then return "worker\0" end
+                if path == "/fixture-uptime" then return "10.00 10.00\n" end
+                return nil, { kind = "not_found" }
+            end,
+        }
+        local result = require("wtop.collectors.process").new({
+            native = provider, fs = fs, proc_path = "/fixture", uptime_path = "/fixture-uptime",
+            system_constants = { clock_ticks_per_second = 100, page_size_bytes = 4096 },
+            read_status = false, read_cmdline = true,
+        }):sample({ now_ns = function() return 1000000000 end })
+        assert(reads == 2 and result.status == "ok" and #result.data.list == 0
+            and result.data.parse_errors == 1, mode .. " accepted an invalid final stat")
+        assert(fast_calls == (mode == "native" and 2 or 0))
+    end
+end
 assert(native.process_stat_fields("123 (worker) S nope " .. table.concat(fields, " ")) == nil,
     "a malformed field must fall back to Lua's parser and reason code")
 for sample = 1, 300 do
