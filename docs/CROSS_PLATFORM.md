@@ -631,6 +631,12 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 
 ### 2026-10-19：macOS 在线显示设备与当前模式
 
+提交 `1db0561` 的 [主 CI](https://github.com/Water-Run/wtop/actions/runs/39148121773)
+16 个作业与 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/39148121799)
+两个作业通过。四类精确归档、五项产物验收、源码双 Lua 各 162 文件、
+完整终端矩阵与三主机各 16 个共享文件通过。751 个非文档文件与冻结源码
+及共享包一致，十语言各 1960 条消息。
+
 macOS 的 `displays` 原生来源读取 CoreGraphics 在线显示清单和当前模式，
 作为第六个独立读取器追加，保留原有来源编号。两次读取核对系统身份、
 在线与可绘制状态、模式参数及枚举清单；发生变化时不发布旧模式，清单
@@ -652,8 +658,12 @@ macOS 的 `displays` 原生来源读取 CoreGraphics 在线显示清单和当前
 生产采集代码的 API 夹具覆盖重排、替换、模式/状态变化、读取间新增或消失、
 重复、容量、错误、Retina 和未指定刷新率，以及 Lua OOM 前 CF 对象已释放。
 六读取器的功耗、传感器、网络与显示挂起路径、独立恢复、回收及三次独立
-VM 退出通过。完整源码、CI 与精确包验收仍在进行；证据位于
-`build/hardware-macos-displays-20261019/`。API 语义参考 Apple 的
+VM 退出通过。两种精确 Mac 包另完成六项新显示 CLI、八次真实终端与
+十六个流式快照，公开字段与独立系统接口一致，时钟、会话身份、名义
+刷新率及点数/像素区别保持；原有功耗、频率、GPU 和传感器检查通过。
+Windows 两主机经典控制台、Linux 普通/root 功耗与健康、rootless 和静态
+检查同样通过。证据位于 `build/hardware-macos-displays-20261019/`。
+API 语义参考 Apple 的
 [显示状态与当前模式](https://developer.apple.com/library/archive/documentation/GraphicsImaging/Conceptual/QuartzDisplayServicesConceptual/Articles/DisplayInfo.html)
 和所用 SDK 的 `CGDirectDisplay.h`、`CGDisplayConfiguration.h`、`ColorSyncDevice.h`。
 物理热插拔、多显示器真机、旧 Intel Mac、EDID 扩展和资源预算仍需继续验证。
