@@ -845,6 +845,39 @@ function M.render(snapshot)
         lines[#lines+1]=""
     end
 
+    local displays = object(snapshot.displays)
+    table_section(lines, "Display connectors", { "Connector", "Connection", "Enabled", "DPMS", "PCI device", "Quality" },
+        displays.devices, function(device)
+            return { device.id, device.connection, device.enabled, device.dpms, device.pci_address, device.quality }
+        end, displays)
+    local display_specs, display_timings = {}, {}
+    for _, device in ipairs(list(displays.devices)) do
+        if type(device.edid) == "table" then
+            display_specs[#display_specs + 1] = { device = device.id, edid = device.edid }
+            for _, value in ipairs(list(device.edid.detailed_timings)) do
+                display_timings[#display_timings + 1] = { device = device.id, timing = value }
+            end
+        end
+    end
+    table_section(lines, "Cached EDID declarations", { "Connector", "Manufacturer", "Name", "Product code", "Size", "Input", "Bits per color", "EDID", "Quality" },
+        display_specs, function(item)
+            local e = item.edid
+            local size = e.width_mm and e.height_mm and (tostring(e.width_mm) .. " x " .. tostring(e.height_mm) .. " mm")
+            return { item.device, e.manufacturer, e.name, e.product_code, size, e.interface,
+                e.bits_per_color, e.version, e.quality }
+        end, displays)
+    table_section(lines, "EDID base detailed timings", { "Connector", "Horizontal pixels", "Encoded vertical lines", "Pixel clock", "Progressive refresh", "Interlaced", "Preferred" },
+        display_timings, function(item)
+            local t = item.timing
+            return { item.device, t.horizontal_active_pixels, t.vertical_active_lines,
+                quantity(t.pixel_clock_hz, 1e6, " MHz", 3), quantity(t.refresh_hz, 1, " Hz", 3),
+                t.interlaced, t.preferred }
+        end, displays)
+    if #list(displays.devices) > 0 then
+        lines[#lines + 1] = "Cached EDID declarations and driver mode names are not the active resolution, refresh rate, color depth or HDR state. Interlaced timings retain encoded lines; extensions are not decoded. Serial values are omitted."
+        lines[#lines + 1] = ""
+    end
+
     local inventory = object(snapshot.inventory)
     local pci, usb = object(inventory.pci), object(inventory.usb)
     table_section(lines, "PCI devices", { "Address", "Vendor", "Device", "Driver" },

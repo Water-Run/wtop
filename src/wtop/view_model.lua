@@ -2486,6 +2486,7 @@ local COLLECTOR_RESOURCE = {
     process = "processes", gpu = "gpus", cpufreq = "cpu_frequency", hwmon = "sensors",
     powercap = "power", mounts = "mounts", cgroup = "workloads",
     system_info = "system", power_supply = "power_supplies", inventory = "inventory",
+    displays = "displays",
 }
 
 local function collector_rows(snapshot, capabilities, i18n)

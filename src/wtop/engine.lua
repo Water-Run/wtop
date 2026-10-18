@@ -78,6 +78,7 @@ local INTERVAL_FLOORS_MS = {
     system_info = 2000,
     power_supply = 2000,
     inventory = 30000,
+    displays = 5000,
 }
 
 -- Expensive and high-cardinality sources continue sampling while their page
@@ -128,6 +129,7 @@ local BACKGROUND_INTERVALS_MS = {
     system_info = 30000,
     power_supply = 15000,
     inventory = 120000,
+    displays = 60000,
 }
 
 local TAB_COLLECTORS = {
@@ -149,7 +151,7 @@ local TAB_COLLECTORS = {
     gpu = { gpu = true, hwmon = true, powercap = true },
     workloads = { cpu = true, memory = true, pressure = true, cgroup = true },
     system = { system_info = true, cpu_info = true, memory = true,
-        power_supply = true, inventory = true, disk = true, network = true,
+        power_supply = true, inventory = true, displays = true, disk = true, network = true,
         cpufreq = true, hwmon = true, numa = true, memory_devices = true,
         expansion_slots = true, port_connectors = true,
         onboard_devices = true, firmware_batteries = true,
@@ -222,7 +224,7 @@ local TAB_WIDGET_COLLECTORS = {
         system_identity = { "system_info" }, system_kernel = { "system_info" },
         system_firmware = { "system_info", "cpu_info" },
         system_limits = { "system_info" }, battery_bars = { "power_supply" },
-        system_devices = { "inventory", "disk", "network", "cpu_info", "cpufreq", "hwmon",
+        system_devices = { "inventory", "displays", "disk", "network", "cpu_info", "cpufreq", "hwmon",
             "numa", "memory_devices", "expansion_slots", "port_connectors",
             "onboard_devices",
             "firmware_batteries",
@@ -498,7 +500,7 @@ function Engine.new(options)
         "processor_firmware", "thermal_throttle", "cpuidle",
         "edac", "spd", "pressure", "disk", "disk_health", "network", "wifi", "connections",
         "process", "gpu", "cpufreq", "hwmon", "powercap", "mounts", "cgroup",
-        "system_info", "power_supply", "inventory",
+        "system_info", "power_supply", "inventory", "displays",
     }
     local foreground_floors = {}
     local background_targets = {}

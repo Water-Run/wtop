@@ -222,3 +222,7 @@ Linux 快照会对进程集合额外读取两次 `/proc/<pid>/io`。`processes.t
 context="$(wtop --agent)" || exit
 printf '%s\n' "$context" | jq '.overall, .signals, .top.processes'
 ```
+
+显示连接器在 `metrics.displays` 中提供有界设备清单、总数和截断标识。
+EDID 字段为驱动缓存的公开声明，不作为当前显示模式；来源不支持或旧数据
+保留自己的状态与观察时间，序列号原值不导出。当前原生来源仅 Linux。

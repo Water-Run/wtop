@@ -111,6 +111,11 @@ local KIND_LABELS = {
 
 function M.label(node, i18n)
   local device = node.device
+  if node.kind == "display_connector" then
+    local edid = type(device.edid) == "table" and device.edid or {}
+    local model = identifier(edid.name) or identifier(edid.manufacturer)
+    return model and model .. " (" .. node.identifier .. ")" or node.identifier
+  end
   if node.kind == "cpu_cache" then
     local text = i18n and i18n:t("metrics.cache") or "Cache"
     return "L" .. tostring(device.level or "?") .. " " .. tostring(device.type or "") .. " " .. text
@@ -360,6 +365,23 @@ function M.build(snapshot)
           and type(sriov.enabled_vfs) == "number"
           and #node.vf_ids == sriov.enabled_vfs
         if not node.sriov_membership_complete then result.partial = true end
+      end
+    end
+  end
+  local displays = type(snapshot.displays) == "table" and snapshot.displays or {}
+  result.truncated = result.truncated or displays.truncated == true
+  for index, device in ipairs(type(displays.devices) == "table" and displays.devices or {}) do
+    if index > 128 then result.truncated = true break end
+    if type(device) == "table" and identifier(device.id) then
+      local node = add_node("display", device.id, device, "display:" .. device.id,
+        nil, "displays", device.id)
+      if node then
+        node.kind = "display_connector"
+        local address = pci_address(device.pci_address)
+        local target = address and result.by_id["pci:" .. address]
+        if device.quality ~= "gap" and Quality.current_source(snapshot.quality, "displays")
+            and Quality.current_source(snapshot.quality, "inventory")
+            and target and not target.ambiguous then node.parent_id = target.id end
       end
     end
   end

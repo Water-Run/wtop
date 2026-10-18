@@ -1981,6 +1981,46 @@ local function export_pci_msi(msi)
     return result
 end
 
+local function export_displays(source, limit, state)
+    source = type(source) == "table" and source or {}
+    local devices = type(source.devices) == "table" and source.devices or {}
+    local output = json.array({})
+    local current = Quality.current_source({ displays = state }, "displays")
+    for index = 1, math.min(#devices, limit or 128) do
+        local device = devices[index]
+        local row = copy_fields(device, { "id", "card", "connector", "connector_id", "connection",
+            "enabled", "dpms", "pci_address", "source", "status", "quality", "reason",
+            "edid_status", "edid_reason", "observed_at_ns", "modes_status", "modes_truncated" })
+        if not current then row.quality = "stale" end
+        row.modes = json.array({})
+        for position, mode in ipairs(device.modes or {}) do
+            if position > 128 then row.modes_truncated = true break end
+            row.modes[position] = mode
+        end
+        if type(device.edid) == "table" then
+            row.edid = copy_fields(device.edid, { "version", "quality", "reason", "manufacturer",
+                "name", "product_code", "serial_present", "manufacture_week", "manufacture_year",
+                "model_year", "digital", "interface", "bits_per_color", "width_mm", "height_mm",
+                "extension_count", "blocks_available", "extensions_decoded" })
+            if not current then row.edid.quality = "stale" end
+            row.edid.detailed_timings = json.array({})
+            for position, value in ipairs(device.edid.detailed_timings or {}) do
+                if position > 4 then break end
+                row.edid.detailed_timings[position] = copy_fields(value, {
+                    "horizontal_active_pixels", "vertical_active_lines", "horizontal_blanking_pixels",
+                    "vertical_blanking_lines", "pixel_clock_hz", "interlaced", "preferred",
+                    "refresh_hz", "width_mm", "height_mm" })
+            end
+        end
+        output[index] = row
+    end
+    return json.object({ devices = output, total = source.total or #devices,
+        total_is_lower_bound = source.total_is_lower_bound,
+        truncated = source.truncated == true or #devices > #output,
+        status = state and state.status or source.status, quality = state and state.quality,
+        source = source.source })
+end
+
 local function export_inventory(snapshot)
     local inventory = type(snapshot.inventory) == "table" and snapshot.inventory or {}
     local function devices(source, fields, limit)
@@ -2157,6 +2197,7 @@ function M.snapshot(snapshot, options)
         system = export_system(snapshot.system),
         power_supplies = export_power_supplies(snapshot.power_supplies),
         inventory = export_inventory(snapshot),
+        displays = export_displays(snapshot.displays, 128, snapshot.quality and snapshot.quality.displays),
     })
 end
 
@@ -2891,6 +2932,7 @@ function M.agent(snapshot, options)
             }),
             firmware_enclosures = export_firmware_enclosures(full.firmware_enclosures, device_limit),
             platform_firmware = export_platform_firmware(full.platform_firmware, device_limit),
+            displays = export_displays(full.displays, device_limit, snapshot.quality and snapshot.quality.displays),
             processes = json.object({ total = full.processes and full.processes.total }),
         }),
         signals = signals,

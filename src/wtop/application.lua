@@ -25,7 +25,7 @@ local REPORT_COLLECTORS = {
     host_interfaces = true,
     processor_firmware = true, edac = true, spd = true, disk = true, disk_health = true,
     network = true, wifi = true, gpu = true, cpufreq = true, hwmon = true,
-    powercap = true, power_supply = true, inventory = true,
+    powercap = true, power_supply = true, inventory = true, displays = true,
 }
 
 -- The longest either one-shot JSON invocation deliberately waits between its

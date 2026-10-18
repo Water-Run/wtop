@@ -2684,7 +2684,50 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
             add(key, fallback, table.concat(batch, ", "))
         end
     end
-    if node.kind == "numa" then
+    if node.kind == "display_connector" then
+        add("display.connection", "Connection", Technical.state(i18n, device.connection))
+        add("display.enabled", "Encoder enabled", device.enabled)
+        add("display.dpms", "Driver DPMS", device.dpms)
+        add("display.connector_id", "DRM connector ID", device.connector_id)
+        add("display.edid_status", "Cached EDID status", Technical.state(i18n, device.edid_status))
+        add("inspector.quality", "Quality", Technical.state(i18n, device.quality))
+        if device.reason then add("inspector.reason", "Reason", Technical.reason(i18n, device.reason)) end
+        if device.edid_reason then add("inspector.reason", "Reason", Technical.reason(i18n, device.edid_reason)) end
+        if type(now_ns) == "number" and type(device.observed_at_ns) == "number" then
+            add("systemd.sample_age", "Sample age", math.max(0, now_ns - device.observed_at_ns), "nanoseconds")
+        end
+        local edid = device.edid
+        if type(edid) == "table" then
+            add("display.edid_version", "EDID version", edid.version)
+            add("display.manufacturer", "Manufacturer code", edid.manufacturer)
+            add("display.name", "EDID name", edid.name)
+            add("display.product", "Product code", hardware_hex(edid.product_code, 4))
+            add("display.size", "Declared size", edid.width_mm and edid.height_mm
+                and tostring(edid.width_mm) .. " x " .. tostring(edid.height_mm) .. " mm")
+            add("display.input", "Declared digital input", edid.interface)
+            add("display.digital", "Digital signal declared", edid.digital)
+            add("display.depth", "Declared bits per color", edid.bits_per_color)
+            if edid.model_year then add("display.model_year", "Model year", edid.model_year)
+            else add("display.year", "Manufacture year", edid.manufacture_year) end
+            add("display.week", "Manufacture week", edid.manufacture_week)
+            add("display.serial_present", "Serial number present", edid.serial_present)
+            add("display.extensions", "Declared extension blocks", edid.extension_count)
+            add("inspector.quality", "Quality", Technical.state(i18n, edid.quality))
+            if edid.reason then add("inspector.reason", "Reason", Technical.reason(i18n, edid.reason)) end
+            for _, value in ipairs(edid.detailed_timings or {}) do
+                add("display.timing", "EDID base timing (pixels x encoded lines)",
+                    tostring(value.horizontal_active_pixels) .. " x " .. tostring(value.vertical_active_lines))
+                add("display.pixel_clock", "Declared pixel clock", value.pixel_clock_hz, "hertz")
+                if value.refresh_hz then add("display.refresh", "Declared progressive refresh", value.refresh_hz, "hertz") end
+                add("display.interlaced", "Interlaced declaration", value.interlaced)
+                add("display.preferred", "Preferred declaration", value.preferred)
+            end
+        end
+        add_list("display.modes", "Driver mode names", device.modes or {})
+        if device.modes_truncated then add("inspector.quality", "Quality", Technical.state(i18n, "truncated")) end
+        lines[#lines + 1] = translated(i18n, "display.note",
+            "Cached declarations, not active resolution, refresh, color depth or HDR. Interlaced lines are not expanded; extensions are not decoded.")
+    elseif node.kind == "numa" then
         add("widgets.logical_cpus", "Logical CPUs", device.cpu_ids and #device.cpu_ids)
     end
     if #node.cpu_ids > 0 or node.kind == "numa" then
@@ -8538,7 +8581,7 @@ local function run_loop(options, backend, renderer, engine, translator)
                 end
                 return hardware_detail_lines(engine.snapshot, hardware_detail.id,
                     translator, engine.clock:now_ns(), #hardware_detail.history)
-            end, { inventory = true, hwmon = true, disk = true,
+            end, { inventory = true, displays = true, hwmon = true, disk = true,
                 network = true, mounts = true, cpu_info = true, cpufreq = true, cpu_clocks = true, numa = true,
                 memory_devices = true }, hardware_detail)
             dirty = true

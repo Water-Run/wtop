@@ -45,6 +45,7 @@ local RESOURCE_KEYS = {
   system = true,
   power_supplies = true,
   inventory = true,
+  displays = true,
 }
 
 -- A collector id that is not also a slot name is mapped here, because the id is

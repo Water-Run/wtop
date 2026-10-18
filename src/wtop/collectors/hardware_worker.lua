@@ -7,7 +7,7 @@ local Proxy = {}
 Proxy.__index = Proxy
 M.sources = { hwmon = true, cpufreq = true, powercap = true, cpu_limits = true,
     thermal_throttle = true, cpuidle = true, thermal_zones = true, smbios_input = true, gpu_drm = true,
-    cpu_clocks = true, cpuid = true, spd = true, disk_health = true, wifi = true }
+    cpu_clocks = true, cpuid = true, spd = true, disk_health = true, wifi = true, displays = true }
 
 function M.available(native)
     native = native or Native
@@ -72,7 +72,7 @@ function Proxy:_read(context)
     result.sample_started_ns = metadata.sample_started_ns
     result.sample_finished_ns = metadata.sample_finished_ns
     -- Stateless, infrequent reads do not need an idle VM between replies.
-    if self.id == "spd" or self.id == "wifi" then
+    if self.id == "spd" or self.id == "wifi" or self.id == "displays" then
         local session = self.session
         self.session = nil
         Native.hardware_worker_close(session, 0)

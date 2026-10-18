@@ -629,6 +629,34 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
+### 2026-10-18：DRM 显示连接器与 EDID 基础规格
+
+Linux 的 `displays` 来源只读缓存的连接器属性与 EDID，在独立进程中运行，
+每次完成后释放。EDID 1.0–1.4 基础块须通过文件头和校验和检查；扩展块
+校验和会检查，但扩展时序和 HDR 尚未解码。损坏字段标明异常；读取期间
+变化不生成正常规格或设备关联，断开的连接器不保留旧显示器身份。
+
+System 硬件树、详情、Snapshot、Agent 与公开报告使用同一份公开声明。
+连接器通过稳定的内核设备链接关联 PCI 父设备；EDID 时序、色深与接口
+声明不作为当前显示配置，隔行编码行数不展开成猜测的帧大小或刷新率。
+序列号只报告是否存在，序列号值和原始块不进入输出。
+
+本机普通用户与 root 的两个快照各有 11 项公开字段与独立 `edid-decode`
+结果一致：BOE 产品代码 2263，8 位每色，基础声明 310×170 mm，详细时序
+1920×1080、60 Hz、147.84 MHz、309×174 mm。三个连接器中 eDP 已连接，
+DP/HDMI 断开；设备关系核对到 `0000:00:02.0`。三次实际终端覆盖英文
+80×24/200×60 和中文 80×24；三种 CLI、三次软件终端含 ASCII 回放通过。
+原生阻塞负例验证 CPU 独立、保留原时间、超时回收、恢复与无空闲读取进程。
+完整源码、共享主机和精确归档验收仍在进行，证据保存在
+`build/hardware-display-inventory-20261018/`。
+
+接口语义依据 Linux v6.17 的
+[DRM sysfs](https://github.com/torvalds/linux/blob/v6.17/drivers/gpu/drm/drm_sysfs.c)、
+[EDID 字段](https://github.com/torvalds/linux/blob/v6.17/include/drm/drm_edid.h)与
+[详细时序处理](https://github.com/torvalds/linux/blob/v6.17/drivers/gpu/drm/drm_edid.c)。
+Windows/macOS 原生显示来源、物理显示热插拔、扩展块、XP、资源预算与
+完整 HWiNFO 级交付仍待推进。
+
 ### 2026-10-18：平台固件规格与公开系统声明
 
 Type 0 平台固件与 Type 1 公开系统记录已接入共享采集、硬件树、详情、
@@ -4550,7 +4578,7 @@ Windows/macOS 的 NUMA 原生提供方仍待实现，本轮没有新增这些平
   Lua 5.5.1 与系统 Lua 5.4.8 下通过。本次沙箱的实时网络命名空间
   只暴露 `lo`；源码 Snapshot 的 `lo` 队列为 RX 1、TX 1，与 sysfs
   对应目录一致。多队列网卡仍缺少本机实测。
-- 当前源码套件包含 160 个 Lua 测试文件；此前矩阵和按日期记载的
+- 当前源码套件包含 161 个 Lua 测试文件；此前矩阵和按日期记载的
   120 文件运行是当时的验证结果，不计作本轮新增测试的覆盖证据。
 - `make check test-55 test-pty-quick` 通过，121 个 Lua 文件均通过；
   源码和 onedir 的硬件详情 PTY 场景也通过。onedir Snapshot 导出

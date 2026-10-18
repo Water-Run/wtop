@@ -52,6 +52,17 @@ def main() -> None:
         spd_entered=directory/'spd-entered';spd_reads=directory/'spd-reads'
         firmware_control=directory/'firmware-control';firmware_control.write_text('0\n')
         firmware_entered=directory/'firmware-entered';firmware_reads=directory/'firmware-reads'
+        drm=directory/'drm';panel=drm/'card1-eDP-1';panel.mkdir(parents=True)
+        for name,value in {'status':'connected\n','enabled':'enabled\n','dpms':'On\n',
+                           'connector_id':'95\n','modes':'1920x1080\n'}.items():
+            (panel/name).write_text(value)
+        subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),'-e',
+            'package.path="./tests/?.lua;"..package.path;'
+            'local f=assert(io.open(os.getenv("WTOP_TEST_EDID_OUTPUT"),"wb"));'
+            'assert(f:write(require("support.display_fixtures").edid()));assert(f:close())'],
+            input=b'',env={**os.environ,'WTOP_TEST_EDID_OUTPUT':str(panel/'edid')},cwd=ROOT,check=True,timeout=5)
+        display_control=directory/'display-control';display_control.write_text('0\n')
+        display_entered=directory/'display-entered';display_reads=directory/'display-reads'
         env={**os.environ,'LD_PRELOAD':(os.environ['LD_PRELOAD']+':' if os.environ.get('LD_PRELOAD') else '')+str(library),
              'LUA_PATH':str(ROOT/'src/?.lua')+';'+str(ROOT/'src/?/init.lua')+';;',
              'LUA_CPATH':str(args.module.resolve().parent/'?.so')+';;',
@@ -76,6 +87,13 @@ def main() -> None:
         subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/spd_hidden_worker_smoke.lua'),
                         str(ROOT),str(spd_control),str(spd_entered),str(spd_reads)],
                        cwd=ROOT,env=spd_env,check=True,timeout=20)
+        display_env={**env,'WTOP_DRM_FIXTURE_ROOT':str(drm),
+                     'WTOP_DISPLAY_FIXTURE_CONTROL':str(display_control),
+                     'WTOP_DISPLAY_FIXTURE_ENTERED':str(display_entered),
+                     'WTOP_DISPLAY_FIXTURE_READS':str(display_reads)}
+        subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/display_worker_smoke.lua'),
+                        str(ROOT),str(display_control),str(display_entered),str(display_reads)],
+                       cwd=ROOT,env=display_env,check=True,timeout=20)
         for _ in range(args.shutdown_rounds):
             subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/hardware_worker_shutdown.lua'),
                             str(ROOT)],cwd=ROOT,env=env,check=True,timeout=5)

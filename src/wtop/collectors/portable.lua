@@ -34,6 +34,7 @@ local sources = {
   system_info = {"collect_system_info", 2000},
   power_supply = {"collect_power_supply", 5000},
   inventory = {"collect_inventory", 30000},
+  displays = {"collect_displays", 5000},
 }
 
 local function previous_ok(previous)

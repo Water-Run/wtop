@@ -19,6 +19,7 @@ local constructors = {
     cpu_clocks = function(o) return require("wtop.collectors.cpu_clocks").new(o) end,
     disk_health = function(o) return require("wtop.collectors.linux_nvme").new(o) end,
     wifi = function(o) return require("wtop.collectors.wifi").new(o) end,
+    displays = function(o) return require("wtop.collectors.drm_displays").new(o) end,
 }
 
 return function(id, configuration)
