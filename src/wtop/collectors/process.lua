@@ -29,6 +29,15 @@ local BULK_IO_REFRESH_NS = 5 * 1000000000
 local BULK_IO_RATE_REFRESH_NS = 2 * 1000000000
 local NUMA_MAPS_MAX_BYTES = 2 * 1024 * 1024
 local NUMA_REFRESH_NS = 10 * 1000000000
+-- Linux get_task_mm() excludes PF_KTHREAD even when a kernel worker borrows
+-- an address space; procfs cmdline therefore returns EOF for these tasks.
+-- include/linux/sched.h and kernel/fork.c define this flag/relationship.
+local PF_KTHREAD = 0x00200000
+
+local function kernel_thread(stat)
+  return math.type(stat.flags) == "integer" and stat.flags >= 0
+    and (stat.flags & PF_KTHREAD) ~= 0
+end
 
 -- wchan is a symbolic kernel location, not a diagnosis or a duration. The
 -- kernel prints 0 when it has no sleeping location to report. Keep this read
@@ -779,7 +788,11 @@ function Process:sample(context, previous)
           local thread_list = wants_thread_list(context, process.id)
           local command_value = nil
           local io_attempted = false
+          local is_kernel_thread = kernel_thread(stat)
           local cached = prior_cache[process.id]
+          if cached and cached.kernel_thread ~= nil and cached.kernel_thread ~= is_kernel_thread then
+            cached = nil
+          end
           if cached then
             process.uid = cached.uid
             process.user = cached.user
@@ -828,7 +841,10 @@ function Process:sample(context, previous)
           end
 
           local supplemental_read = false
-          if (self.read_cmdline or detail) and (detail or not cached or not cached.command_read) then
+          if is_kernel_thread and not detail then
+            process.command = nil
+            command_value = false
+          elseif (self.read_cmdline or detail) and (detail or not cached or not cached.command_read) then
             supplemental_read = true
             local cmdline, cmdline_error = fs:read(base .. "/cmdline", 64 * 1024)
             if cmdline and cmdline ~= "" then
@@ -1192,6 +1208,7 @@ function Process:sample(context, previous)
                 generation_matches = false
               elseif final_stat.pid ~= process.pid
                 or final_stat.starttime_ticks ~= process.starttime_ticks
+                or kernel_thread(final_stat) ~= is_kernel_thread
               then
                 races = races + 1
                 generation_matches = false
@@ -1220,6 +1237,7 @@ function Process:sample(context, previous)
               live_cache[process.id] = entry
             end
             entry.uid = process.uid
+            entry.kernel_thread = is_kernel_thread
             entry.user = process.user
             entry.affinity = process.affinity
             entry.namespaces = process.namespaces
