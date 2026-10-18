@@ -631,10 +631,19 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 
 ### 2026-10-18：DRM 显示连接器与 EDID 基础规格
 
+提交 `6fe3134` 的 [主 CI](https://github.com/Water-Run/wtop/actions/runs/39135462279)
+16 个作业和 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/39135462271)
+两个作业通过。四类精确归档的静态检查、Linux/macOS/Windows 与 rootless
+五项最终验收通过；Windows 包保留了一次来源超时及后续恢复重验的记录。
+本地原生检查、Lua 5.5/5.4 各 161 文件和完整终端矩阵通过；746 个非文档
+文件与冻结源码/共享包一致，十语言各 1939 条消息。三台既有主机各通过
+14 个共享用例文件。
+
 Linux 的 `displays` 来源只读缓存的连接器属性与 EDID，在独立进程中运行，
 每次完成后释放。EDID 1.0–1.4 基础块须通过文件头和校验和检查；扩展块
 校验和会检查，但扩展时序和 HDR 尚未解码。损坏字段标明异常；读取期间
 变化不生成正常规格或设备关联，断开的连接器不保留旧显示器身份。
+枚举到达上限时保留下界标识，不把未完成的扫描解释成没有连接器。
 
 System 硬件树、详情、Snapshot、Agent 与公开报告使用同一份公开声明。
 连接器通过稳定的内核设备链接关联 PCI 父设备；EDID 时序、色深与接口
@@ -644,12 +653,22 @@ System 硬件树、详情、Snapshot、Agent 与公开报告使用同一份公�
 本机普通用户与 root 的两个快照各有 11 项公开字段与独立 `edid-decode`
 结果一致：BOE 产品代码 2263，8 位每色，基础声明 310×170 mm，详细时序
 1920×1080、60 Hz、147.84 MHz、309×174 mm。三个连接器中 eDP 已连接，
-DP/HDMI 断开；设备关系核对到 `0000:00:02.0`。三次实际终端覆盖英文
-80×24/200×60 和中文 80×24；三种 CLI、三次软件终端含 ASCII 回放通过。
-原生阻塞负例验证 CPU 独立、保留原时间、超时回收、恢复与无空闲读取进程。
-完整源码、共享主机和精确归档验收仍在进行，证据保存在
-`build/hardware-display-inventory-20261018/`。
+DP/HDMI 断开；设备关系核对到 `0000:00:02.0`。源码三次实际终端覆盖英文
+80×24/200×60 和中文 80×24，两种实际 Linux 包各再通过三次显示详情界面。
+三种 CLI、三次软件终端含 ASCII，以及冻结代码搭配精确包原生模块的七次
+跨主机新界面回放通过；后者是软件输入，包含两台 Windows 的经典无 ANSI
+控制台，不计作其原生显示硬件来源。原生阻塞负例验证 CPU 独立、保留原
+时间、超时回收、恢复与无空闲读取进程。
 
+Windows 11 的首次目录包快照有一次 CPU 频率读取超时，明确返回旧/不可用
+状态；同机旧版 `1dc07a5` 和新版后续各恢复八个 fresh 策略。保留该次失败，
+复用已通过的旧 Windows 和目录包检查，只补齐剩余调用与单文件界面。
+四种 Windows 程序形态最终通过二十项 CLI 和四次经典控制台验收；
+另一次验收脚本读取旧文件名的失败及修正也保留。超时触发原因尚未定位，
+这些恢复结果不作为长期无超时的证明。
+
+证据保存在 `build/hardware-display-inventory-20261018/`，
+`exact-acceptance-combined.json` 明确关联原始退出收据与 Windows 恢复收据。
 接口语义依据 Linux v6.17 的
 [DRM sysfs](https://github.com/torvalds/linux/blob/v6.17/drivers/gpu/drm/drm_sysfs.c)、
 [EDID 字段](https://github.com/torvalds/linux/blob/v6.17/include/drm/drm_edid.h)与
