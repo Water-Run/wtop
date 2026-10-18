@@ -881,6 +881,7 @@ function M.render(snapshot)
                 quantity(t.pixel_clock_hz, 1e6, " MHz", 3), quantity(t.refresh_hz, 1, " Hz", 3),
                 t.interlaced, t.preferred }
         end, displays)
+    require("wtop.format.edid_report").append(lines, displays, table_section, quantity)
     table_section(lines, "OS display state", { "Display", "Online", "Drawable", "Asleep", "Built-in", "Main", "OS vendor number", "OS model number", "Mode status", "Quality" },
         os_displays, function(d)
             return { d.id, d.online, d.active, d.asleep, d.builtin, d.main, d.vendor_number, d.model_number, d.current_mode_status, d.quality }
@@ -904,7 +905,7 @@ function M.render(snapshot)
         lines[#lines + 1] = ""
     end
     if cached_displays then
-        lines[#lines + 1] = "Cached EDID declarations and driver mode names are not the active resolution, refresh rate, color depth or HDR state. Interlaced timings retain encoded lines; extensions are not decoded. Serial values are omitted."
+        lines[#lines + 1] = "Cached EDID declarations and driver mode names are not the active resolution, refresh rate, color depth, audio, HDR or VRR state. CTA rates identify nominal format families, with field rates for interlaced formats. Detailed timings retain encoded lines. Serial values are omitted."
         lines[#lines + 1] = ""
         if windows_displays and displays.identity_session then
             lines[#lines + 1] = "Windows display IDs identify devices within this sampling session. OS presence does not establish a physical connection or an active desktop mode."

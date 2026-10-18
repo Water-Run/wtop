@@ -113,6 +113,7 @@ done
 cp "$work_dir/wtop_native.dll" "$output_dir/wtop_native.dll"
 cp "$project_dir/native/licenses/NVML-NVIDIA.txt" "$output_dir/NVML-NVIDIA.txt"
 cp "$project_dir/native/licenses/Level-Zero-MIT.txt" "$output_dir/Level-Zero-MIT.txt"
+cp "$project_dir/native/licenses/DRM-EDID-MIT.txt" "$output_dir/DRM-EDID-MIT.txt"
 cp "$project_dir/native/licenses/AMD-ADL-MIT.txt" "$output_dir/AMD-ADL-MIT.txt"
 cp -R "$project_dir/src" "$output_dir/"
 cat > "$output_dir/wtop.cmd" <<'EOF'

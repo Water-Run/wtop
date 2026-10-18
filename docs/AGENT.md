@@ -229,6 +229,20 @@ EDID 字段为驱动缓存的公开声明，不作为当前显示模式；来源
 清单中的存在；`identity_scope=session` 的显示 ID 只在同一 `identity_session`
 中比较。确认消失后再次出现会使用新 ID，原始 PnP 身份与 EDID 字节不导出。
 
+`edid.extensions` 保存按扩展序号区分的 CTA 声明，最多 32 项。每项包含
+`tag`、`revision`、`checksum_ok`、`decoded`、质量与原因。校验失败的块没有
+派生能力；未知块、字段或截断不会伪装为完整解码。
+`video_formats` 的 `vic` 是 CTA 编号，`nominal_rate_hz` 是格式族名义值，
+`rate_kind=field` 表示隔行场率，`frame` 为逐行帧率；`pixel_repetition` 和
+`picture_aspect` 保持标准含义。YCbCr 4:2:0-only 与可兼容标识分别保留，
+能力映射的索引只引用同一扩展内的普通视频声明。
+音频格式的频率单位是 Hz、采样位数为 bit、`maximum_bitrate_kbps` 为 kb/s。
+HDR 的 `desired_*_luminance_cdm2` 是期望内容亮度声明，零代码保持缺失；
+HDMI/HDMI Forum 的色深、TMDS 及 VRR 范围也不表示正在启用。
+扩展详细时序位于各扩展的 `detailed_timings`，基础时序仍单独保留。
+慢读数不更新时间；源过期时扩展和带质量的子记录一并标为 stale。
+原始块、序列号、CEC 物理地址和厂商私有载荷不导出。
+
 macOS 的 `backend=coregraphics` 提供在线、可绘制、休眠、内置和主显示标识，
 以及系统报告的 32 位 `vendor_number`/`model_number`；它们不作为 EDID 的
 EISA 厂商代码。`current_mode.width_points`/`height_points` 是模式点数，

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Warmed hardware I/O timeout, source independence, recovery and real TUI input."""
 import argparse
+import hashlib
+import json
 import os
 from pathlib import Path
 import shlex
@@ -11,12 +13,94 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def verify_cta_application(args, env, work):
+    """Exercise decoded claims in the production CLI and terminal, via fake sysfs."""
+    command = ([str(args.executable.resolve())] if args.executable else
+               [str(args.lua_prefix.resolve()/'bin/lua'), str(ROOT/'src/wtop.lua')])
+    records, observations = {}, set()
+    for mode in ['snapshot', 'agent', 'report', 'stream']:
+        extra = ['--count', '8', '--interval', '1000'] if mode == 'stream' else []
+        result = subprocess.run(command+['--'+mode]+extra, cwd=ROOT, env=env,
+                                capture_output=True, timeout=40)
+        for suffix, data in [('out', result.stdout), ('stderr', result.stderr)]:
+            path = work/('cta-'+mode+'.'+suffix);path.write_bytes(data);path.chmod(0o600)
+        result.check_returncode()
+        records[mode] = hashlib.sha256(result.stdout).hexdigest()
+        if mode == 'report':
+            for text in [b'CTA video declarations', b'CTA audio declarations', b'CTA static HDR declarations',
+                         b'CTA HDMI declarations', b'CTA extension detailed timings', b'smpte_st2084']:
+                assert text in result.stdout, text
+            continue
+        rows = [json.loads(line) for line in result.stdout.splitlines()]
+        assert len(rows) == (8 if mode == 'stream' else 1)
+        for data in rows:
+            displays = data['metrics']['displays'] if mode == 'agent' else data['displays']
+            panel = next(x for x in displays['devices'] if x['id'] == 'card1-eDP-1')
+            if mode == 'stream':observations.add(panel['observed_at_ns'])
+            ext = panel['edid']['extensions'][0]
+            assert ext['decoded'] and ext['quality'] == 'fresh'
+            assert ext['video_formats'][1]['vic'] == 97 and ext['video_formats'][1]['ycbcr420_capable']
+            assert ext['audio_formats'][0]['maximum_channels'] == 2
+            assert ext['hdr_static_metadata'][0]['desired_maximum_luminance_cdm2'] == 400
+            assert ext['vendors'][1]['vrr_minimum_hz'] == 40 and ext['vendors'][1]['vrr_maximum_hz'] == 120
+            assert ext['detailed_timings'][0]['refresh_hz'] == 60
+            assert panel['current_mode']['refresh_hz'] == 60 and panel['current_mode']['pixel_width'] == 1920
+            assert 'PRIVATE' not in json.dumps(panel) and 'physical_address' not in json.dumps(panel)
+    assert len(observations) >= 2, 'CTA stream never received a second display observation'
+    saved = os.environ.copy()
+    os.environ.update(env, WTOP_ROOT=str(ROOT), WTOP_LUA=str(args.lua_prefix.resolve()/'bin/lua'))
+    if args.executable:os.environ['WTOP_EXECUTABLE'] = str(args.executable.resolve())
+    sys.path.insert(0, str(ROOT/'tests'))
+    import pty_smoke as pty
+    original = pty._markers_visible
+    tty = []
+    try:
+        for columns, rows, locale, ascii_mode in [(80, 24, 'en-US', False), (80, 24, 'zh-CN', False), (100, 30, 'en-US', True)]:
+            screens = {}
+            def visible(markers, data, width, height):
+                screen = pty.VirtualScreen(width, height);screen.feed(bytes(data));text = screen.text()
+                if 'card1-eDP-1' in text:screens[hashlib.sha256(text.encode()).hexdigest()] = text
+                return not markers or all(marker in text for marker in markers)
+            pty._markers_visible = visible
+            detail = 'Device:' if locale == 'en-US' else '设备：'
+            script = [(b'9', None), (('sleep', 1), None), (b'/', None), (b'id:display:card1-eDP-1', None),
+                      (b'\r', None), (('sleep', .3), None), (b'\r', None), (('sleep', .3), (detail, 'card1-eDP-1'))]
+            for _ in range(10):script.extend([(b'\x1b[6~', None), (('sleep', .12), None)])
+            script.extend([(b'\x1b', None), (b'2', None), (('sleep', .2), ('Processes',) if locale == 'en-US' else ('进程',)), (b'q', None)])
+            environment = {'TERM':'dumb', 'COLORTERM':None, 'LANG':'C', 'LC_ALL':'C', 'LC_CTYPE':'C'} if ascii_mode else None
+            raw = pty.run_session(columns, rows, exercise=False, cli_options=('--lang', locale, '--no-color'),
+                                  terminal_environment=environment, script=script)
+            normalized = ' '.join(' '.join(screens.values()).split())
+            for text in ['CTA-861', 'VIC 97', 'VIC 193', 'Linear PCM', 'PQ', '400', '40 - 120 Hz']:
+                assert text in normalized, (locale, text)
+            if ascii_mode:assert all(byte < 128 for byte in raw)
+            stem = 'cta-'+str(columns)+'-'+locale+('-ascii' if ascii_mode else '')
+            path = work/(stem+'.pty');path.write_bytes(raw);path.chmod(0o600)
+            hashes = {}
+            for index, (digest, text) in enumerate(screens.items()):
+                path = work/(stem+'-screen-'+str(index)+'.txt');path.write_text(text);path.chmod(0o600);hashes[path.name] = digest
+            tty.append({'columns':columns, 'rows':rows, 'locale':locale, 'ascii':ascii_mode,
+                        'pty_sha256':hashlib.sha256(raw).hexdigest(), 'screens':hashes})
+    finally:
+        pty._markers_visible = original;os.environ.clear();os.environ.update(saved)
+    readers = {int(pid) for pid in Path(env['WTOP_DISPLAY_FIXTURE_READS']).read_text().splitlines()}
+    deadline = time.monotonic()+2
+    while any(Path('/proc', str(pid)).exists() for pid in readers):
+        assert time.monotonic()<deadline, 'CTA reader survived application exit'
+        time.sleep(.01)
+    path = work/'CTA-application-acceptance.json'
+    path.write_text(json.dumps({'status':'passed', 'scope':'software sysfs declarations through production reader/CLI/TUI',
+                               'CLI_sha256':records, 'stream_snapshots':8, 'distinct_display_observations':len(observations),
+                               'display_readers_reaped':True, 'TTY':tty}, indent=2)+'\n');path.chmod(0o600)
+    print('ok: CTA production CLI/8 stream snapshots/three terminal cases: video, audio, color, HDR, VRR and configured-mode separation', flush=True)
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cc', default=os.environ.get('CC', 'cc'))
     parser.add_argument('--cflags', default='-std=c17 -O2 -Wall -Wextra -Werror')
     parser.add_argument('--lua-prefix', type=Path, default=ROOT/'.tools/lua-5.5.1')
     parser.add_argument('--module', type=Path, default=ROOT/'build/native/wtop_native.so')
+    parser.add_argument('--executable', type=Path, help='Installed program for the application checks')
     parser.add_argument('--output', type=Path, default=ROOT/'build/native-hardware-worker')
     parser.add_argument('--native-only', action='store_true')
     parser.add_argument('--shutdown-rounds', type=int, default=3)
@@ -58,9 +142,13 @@ def main() -> None:
                            'connector_id':'95\n','modes':'1920x1080\n'}.items():
             (panel/name).write_text(value)
         subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),'-e',
-            'package.path="./tests/?.lua;"..package.path;'
-            'local f=assert(io.open(os.getenv("WTOP_TEST_EDID_OUTPUT"),"wb"));'
-            'assert(f:write(require("support.display_fixtures").edid()));assert(f:close())'],
+            r'''package.path="./tests/?.lua;"..package.path
+local D=require("support.display_fixtures");local B=D.cta_block
+local data=B(2,"\144\97\193")..B(1,"\9\7\7")..B(4,"\1\0\0")
+  ..B(7,"\5\224\192")..B(7,"\6\15\1\96\64\128")
+  ..B(3,"\3\12\0\16\0\56\30")..B(3,"\216\93\196\1\120\128\3\2\40\120")..B(7,"\15\2")
+local bytes=D.edid({extensions=1,tail=D.cta({data=data,flags=0xf1,timings=D.edid():sub(55,72)})})
+local f=assert(io.open(os.getenv("WTOP_TEST_EDID_OUTPUT"),"wb"));assert(f:write(bytes));assert(f:close())'''],
             input=b'',env={**os.environ,'WTOP_TEST_EDID_OUTPUT':str(panel/'edid')},cwd=ROOT,check=True,timeout=5)
         display_control=directory/'display-control';display_control.write_text('0\n')
         display_entered=directory/'display-entered';display_reads=directory/'display-reads'
@@ -100,6 +188,9 @@ def main() -> None:
         subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/display_worker_smoke.lua'),
                         str(ROOT),str(display_control),str(display_entered),str(display_reads),str(mode_control),str(mode_entered)],
                        cwd=ROOT,env=display_env,check=True,timeout=35)
+        if not args.native_only:
+            display_control.write_text('0\n');mode_control.write_text('0\n')
+            verify_cta_application(args, display_env, work)
         for _ in range(args.shutdown_rounds):
             subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/hardware_worker_shutdown.lua'),
                             str(ROOT)],cwd=ROOT,env=env,check=True,timeout=5)

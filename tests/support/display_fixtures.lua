@@ -1,5 +1,27 @@
 local M = {}
 
+function M.cta_block(tag, payload)
+  assert(tag >= 0 and tag <= 7 and #payload <= 31)
+  return string.char((tag << 5) | #payload) .. payload
+end
+
+function M.cta(options)
+  options = options or {}
+  local data, dtd = options.data or "", options.timings or ""
+  assert(#data + #dtd <= 123)
+  local b = {}
+  for i = 1, 128 do b[i] = 0 end
+  b[1], b[2], b[3], b[4] = 2, options.revision or 3, options.offset or (4 + #data), options.flags or 0
+  for i = 1, #data do b[4 + i] = data:byte(i) end
+  for i = 1, #dtd do b[4 + #data + i] = dtd:byte(i) end
+  for offset, value in pairs(options.bytes or {}) do b[offset + 1] = value end
+  local sum = 0
+  for i = 1, 127 do sum = sum + b[i] end
+  b[128] = (-sum) % 256
+  if options.corrupt_checksum then b[128] = (b[128] + 1) % 256 end
+  return string.char(table.unpack(b))
+end
+
 function M.edid(options)
   options = options or {}
   local b = {}

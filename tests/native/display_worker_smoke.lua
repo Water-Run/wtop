@@ -34,6 +34,12 @@ repeat
 until false
 assert(first.displays.devices[1].edid.name == "FixturePanel" and first.displays.devices[1].connection == "connected")
 assert(first.quality.displays.quality == "fresh" and engine.scheduler:task("displays").last_result.transport == "process")
+local declaration = first.displays.devices[1].edid.extensions[1]
+assert(declaration.decoded and declaration.quality == "fresh" and #declaration.video_formats == 3)
+assert(declaration.video_formats[2].vic == 97 and declaration.video_formats[2].ycbcr420_capable)
+assert(declaration.video_formats[3].vic == 193 and declaration.audio_formats[1].maximum_channels == 2)
+assert(declaration.hdr_static_metadata[1].desired_maximum_luminance_cdm2 == 400)
+assert(declaration.vendors[2].vrr_minimum_hz == 40 and declaration.vendors[2].vrr_maximum_hz == 120)
 local mode_control, mode_entered = arg[5], arg[6]
 if mode_control then assert(first.displays.devices[1].current_mode.refresh_hz == 60) end
 no_idle_reader()
@@ -48,6 +54,10 @@ repeat
     stale = true
     assert(snapshot.displays.devices[1].edid.name == "FixturePanel")
     assert(snapshot.quality.displays.value_timestamp_ns == stamp, "old EDID acquired a new read time")
+    local public = require("wtop.export").snapshot(snapshot).displays.devices[1].edid.extensions[1]
+    assert(public.quality == "stale" and public.video_formats[1].quality == "stale")
+    assert(public.audio_formats[1].quality == "stale" and public.vendors[2].quality == "stale")
+    assert(public.hdr_static_metadata[1].desired_maximum_luminance_cdm2 == 400)
   end
   if snapshot.quality.displays.reason == "hardware_query_timeout" then timeout = true;break end
   assert(Native.monotonic_ns() < deadline, "display timeout deadline");Native.sleep_ms(20)
@@ -66,6 +76,7 @@ repeat
   assert(Native.monotonic_ns() < deadline, "display recovery deadline");Native.sleep_ms(25)
 until false
 no_idle_reader()
+print("CTA_WORKER_PASSED:cached video/audio/HDR/VRR declarations through default worker,stale nested exports and original time,timeout/reap/recovery")
 if mode_control then
   local current = engine.snapshot.displays.devices[1].current_mode
   local mode_stamp = current.observed_at_ns

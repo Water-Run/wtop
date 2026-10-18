@@ -90,7 +90,7 @@ SOURCE_ROCK_ARGS ?=
 
 NATIVE_SOURCES := native/wtop_native.c native/wtop_nvml.c native/wtop_worker_client.c native/wtop_amdsmi.c \
   native/wtop_levelzero.c
-NATIVE_HEADERS := native/wtop_nvml_platform.h native/wtop_nvml.h native/wtop_gpu_output.h native/wtop_gpu_protocol.h native/wtop_gpu_lua.h native/wtop_gpu_worker.h native/wtop_amdsmi.h native/wtop_amdsmi_abi.h native/licenses/AMD-SMI-MIT.txt native/licenses/NVML-NVIDIA.txt native/wtop_levelzero.h native/wtop_levelzero_abi.h native/wtop_levelzero_platform.h native/licenses/Level-Zero-MIT.txt native/wtop_build.h
+NATIVE_HEADERS := native/wtop_nvml_platform.h native/wtop_nvml.h native/wtop_gpu_output.h native/wtop_gpu_protocol.h native/wtop_gpu_lua.h native/wtop_gpu_worker.h native/wtop_amdsmi.h native/wtop_amdsmi_abi.h native/licenses/AMD-SMI-MIT.txt native/licenses/NVML-NVIDIA.txt native/wtop_levelzero.h native/wtop_levelzero_abi.h native/wtop_levelzero_platform.h native/licenses/Level-Zero-MIT.txt native/wtop_build.h native/wtop_edid_license.h native/licenses/DRM-EDID-MIT.txt
 NATIVE_DIR := $(CURDIR)/build/native
 NATIVE_MODULE := $(NATIVE_DIR)/wtop_native.so
 GPU_WORKER_SOURCES := native/wtop_gpu_worker.c native/wtop_nvml.c native/wtop_amdsmi.c native/wtop_levelzero.c
@@ -735,6 +735,7 @@ bundle-dir: build-id native locales luainstaller
 	@cp native/licenses/AMD-SMI-MIT.txt dist/wtop/.luai/licenses/AMD-SMI-MIT.txt
 	@cp native/licenses/NVML-NVIDIA.txt dist/wtop/.luai/licenses/NVML-NVIDIA.txt
 	@cp native/licenses/Level-Zero-MIT.txt dist/wtop/.luai/licenses/Level-Zero-MIT.txt
+	@cp native/licenses/DRM-EDID-MIT.txt dist/wtop/.luai/licenses/DRM-EDID-MIT.txt
 	@find dist/wtop -type d -exec chmod 0755 {} +
 	@find dist/wtop -type f -exec chmod a+r {} +
 	@chmod 0755 dist/wtop/wtop
@@ -772,7 +773,7 @@ test-bundle-file: resource-check-full bundle-file
 # not the other.
 test-release-notices: resource-check-full sbom checksums
 	@for required in $(RELEASE_LICENCE) THIRD_PARTY_NOTICES.md \
-		.luai/licenses/Lua-MIT.txt .luai/licenses/AMD-SMI-MIT.txt .luai/licenses/NVML-NVIDIA.txt .luai/licenses/Level-Zero-MIT.txt .luai/licenses/LGPL-3.0-or-later.txt; do \
+		.luai/licenses/Lua-MIT.txt .luai/licenses/AMD-SMI-MIT.txt .luai/licenses/NVML-NVIDIA.txt .luai/licenses/Level-Zero-MIT.txt .luai/licenses/DRM-EDID-MIT.txt .luai/licenses/LGPL-3.0-or-later.txt; do \
 		test -f "dist/wtop/$$required" || { \
 			echo "wtop: the onedir bundle does not carry $$required, and the"; \
 			echo "     release is documented as being distributed under terms"; \

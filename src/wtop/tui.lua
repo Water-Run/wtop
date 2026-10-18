@@ -2764,7 +2764,8 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
             add("display.week", "Manufacture week", edid.manufacture_week)
             add("display.serial_present", "Serial number present", edid.serial_present)
             add("display.extensions", "Declared extension blocks", edid.extension_count)
-            add("inspector.quality", "Quality", Technical.state(i18n, edid.quality))
+            add("inspector.quality", "Quality", Technical.state(i18n,
+                Quality.current_source(snapshot.quality, "displays") and edid.quality or "stale"))
             if edid.reason then add("inspector.reason", "Reason", Technical.reason(i18n, edid.reason)) end
             for _, value in ipairs(edid.detailed_timings or {}) do
                 add("display.timing", "EDID base timing (pixels x encoded lines)",
@@ -2774,12 +2775,14 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
                 add("display.interlaced", "Interlaced declaration", value.interlaced)
                 add("display.preferred", "Preferred declaration", value.preferred)
             end
+            require("wtop.ui.edid_declarations").append(edid, add, add_list, i18n,
+                Quality.current_source(snapshot.quality, "displays"))
         end
         add_list("display.modes", "Driver mode names", device.modes or {})
         if device.modes_truncated then add("inspector.quality", "Quality", Technical.state(i18n, "truncated")) end
         if device.backend ~= "coregraphics" then
             lines[#lines + 1] = translated(i18n, "display.note",
-                "Cached declarations, not active resolution, refresh, color depth or HDR. Interlaced lines are not expanded; extensions are not decoded.")
+                "Cached declarations, not active resolution, refresh, color depth, audio, HDR or VRR. CTA rates are nominal format families; interlaced detailed lines remain encoded.")
         end
     elseif node.kind == "numa" then
         add("widgets.logical_cpus", "Logical CPUs", device.cpu_ids and #device.cpu_ids)

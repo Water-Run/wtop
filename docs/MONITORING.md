@@ -461,9 +461,23 @@ Linux 和 Windows 开发构建在 System 硬件树中列出显示设备；Linux 
 查看可核对的 PCI 父设备，`b` 返回。读取没有触发探测或修改显示配置。
 
 这些是驱动缓存和显示器声明，不代表当前分辨率、刷新率、输出色深或 HDR
-状态。sysfs 模式名称不包含这些当前值；隔行时序保留 EDID 编码行数，不
-猜测帧高度或刷新率。基础块通过文件头和校验和验证后才提供规格；扩展块
-校验和会检查，但扩展时序和 HDR 声明尚未解码。序列号只提供存在标识。
+状态，也不证明当前音频或 VRR 已启用。sysfs 模式名称不包含这些当前值；
+详细时序中的隔行行数保持 EDID 编码值。基础块通过文件头和校验和验证后
+才提供规格；CTA 扩展另行校验校验和、版本、长度、偏移和各数据块边界。
+扩展视频格式的名义频率表示格式族，隔行格式为场率；原生位、宽高比、
+像素重复和 YCbCr 4:2:0 声明分别保留。CTA 详细时序与基础块时序分开。
+
+音频声明保留格式、最大声道数、采样率、采样位数或最高码率，以及扬声器
+分配。色度、静态 HDR 传递函数和内容期望亮度来自各自的数据块；零亮度
+代码表示未提供，不作为实测屏幕亮度。HDMI 声明可包含深色位数、TMDS
+上限和 HDMI Forum 的 VRR 范围；未提供的字段保持未知。
+
+最多解码 32 个扩展，数据块、视频、音频和其他公开记录另有共享预算；
+截断、未知块和未解码字段保留原因。校验失败的块不贡献能力，其他完整
+块仍可见。序列号只提供存在标识，CEC 物理地址、原始字节和厂商私有载荷
+不导出。格式参考 [Linux DRM 的 CTA 表](https://github.com/torvalds/linux/blob/b8c60e8fc6f755c2cdf7164931afdbfa670c6646/drivers/gpu/drm/drm_edid.c)，
+字段语义对照 [edid-decode](https://android.googlesource.com/platform/external/edid-decode/+/2bdd37f940d987e84b8091101e20f0218db21bdd/parse-cta-block.cpp)
+及 [libdisplay-info](https://emersion.pages.freedesktop.org/libdisplay-info/libdisplay-info/cta.h.html)。
 
 读取经过隔离进程。变化、权限和损坏状态保留具体原因；超时保留旧值及
 其原始时间。界面可继续操作，下一次成功读取会恢复。

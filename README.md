@@ -55,6 +55,7 @@ build target but hasn't been tested on a real XP machine yet.
 - A process list with search, sorting, tree navigation, links to workloads,
   and a confirmed signal menu.
 - Linux and Windows development builds list display devices and cached EDID specifications in System. Select a device and press `Enter` for details.
+- Display details include cached CTA video, audio, color and HDR/VRR declarations when available. These describe capabilities, not the current signal.
 - Linux development builds show the kernel's configured output mode and nominal refresh separately from cached monitor specifications.
 - macOS development builds show online displays, current mode dimensions and nominal refresh rates in System.
 - On x86 Linux, development builds show CPUID capabilities alongside the kernel’s CPU topology and cache reports.

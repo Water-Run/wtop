@@ -19,6 +19,7 @@
 #include <string.h>
 #include <lua.h>
 #include <lauxlib.h>
+#include "wtop_edid_license.h"
 #include "wtop_build.h"
 
 #include "wtop_windows.h"

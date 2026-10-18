@@ -60,6 +60,7 @@ vraie machine XP.
 - Une liste de processus avec recherche, tri, navigation dans l'arbre, accès aux
   charges de travail et menu de signaux avec confirmation.
 - Les versions Linux et Windows en développement listent les écrans et les caractéristiques EDID en cache dans Système. Sélectionnez un appareil et appuyez sur `Enter` pour les détails.
+- Les détails affichent les déclarations CTA vidéo, audio, couleur et HDR/VRR en cache lorsqu’elles sont disponibles. Elles décrivent les capacités, pas le signal actuel.
 - Les versions Linux en développement affichent le mode de sortie configuré par le noyau et sa fréquence nominale, séparément des caractéristiques en cache.
 - Les versions macOS en développement affichent les écrans en ligne, les dimensions du mode actuel et la fréquence nominale dans Système.
 - Sur Linux x86, les versions en développement affichent les capacités CPUID aux côtés de la topologie CPU et des caches rapportés par le noyau.

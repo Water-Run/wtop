@@ -2008,19 +2008,7 @@ local function export_displays(source, limit, state)
             row.modes[position] = mode
         end
         if type(device.edid) == "table" then
-            row.edid = copy_fields(device.edid, { "version", "quality", "reason", "manufacturer",
-                "name", "product_code", "serial_present", "manufacture_week", "manufacture_year",
-                "model_year", "digital", "interface", "bits_per_color", "width_mm", "height_mm",
-                "extension_count", "blocks_available", "extensions_decoded" })
-            if not current then row.edid.quality = "stale" end
-            row.edid.detailed_timings = json.array({})
-            for position, value in ipairs(device.edid.detailed_timings or {}) do
-                if position > 4 then break end
-                row.edid.detailed_timings[position] = copy_fields(value, {
-                    "horizontal_active_pixels", "vertical_active_lines", "horizontal_blanking_pixels",
-                    "vertical_blanking_lines", "pixel_clock_hz", "interlaced", "preferred",
-                    "refresh_hz", "width_mm", "height_mm" })
-            end
+            row.edid = require("wtop.format.edid_public").copy(device.edid, json, copy_fields, current)
         end
         output[index] = row
     end

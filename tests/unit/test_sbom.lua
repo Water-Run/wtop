@@ -85,6 +85,7 @@ local LICENCES = {
     { path = ".luai/licenses/AMD-SMI-MIT.txt", bytes = "AMD interface MIT fixture\n" },
     { path = ".luai/licenses/NVML-NVIDIA.txt", bytes = "NVIDIA interface fixture\n" },
     { path = ".luai/licenses/Level-Zero-MIT.txt", bytes = "Level Zero interface MIT fixture\n" },
+    { path = ".luai/licenses/DRM-EDID-MIT.txt", bytes = "DRM EDID reference data MIT fixture\n" },
     { path = ".luai/licenses/LGPL-3.0-or-later.txt",
       bytes = "LGPL-3.0-or-later fixture text\n" },
 }
@@ -533,6 +534,17 @@ local amd_report = refuses("a release without the AMD interface notice",
     "python3 tools/make_sbom.py --onedir " .. missing_amd
         .. " --onefile " .. fixture .. "/wtop-onefile --output " .. fixture .. "/missing-amd.json")
 assert(amd_report:find("AMD-SMI-MIT.txt", 1, true), "the missing AMD notice is named")
+
+assert(properties_of("cta_vic_reference", "path") == ".luai/licenses/DRM-EDID-MIT.txt")
+assert(properties_of("cta_vic_reference", "sha256")
+    == sha256(fixture .. "/bundle/.luai/licenses/DRM-EDID-MIT.txt"))
+local missing_cta = fixture .. "/missing-cta"
+os.execute("cp -a " .. fixture .. "/bundle " .. missing_cta)
+assert(os.remove(missing_cta .. "/.luai/licenses/DRM-EDID-MIT.txt"))
+local cta_report = refuses("a release without the CTA reference notice",
+    "python3 tools/make_sbom.py --onedir " .. missing_cta
+        .. " --onefile " .. fixture .. "/wtop-onefile --output " .. fixture .. "/missing-cta.json")
+assert(cta_report:find("DRM-EDID-MIT.txt", 1, true))
 
 local unlicensed = fixture .. "/unlicensed"
 os.execute("cp -a " .. fixture .. "/bundle " .. unlicensed)

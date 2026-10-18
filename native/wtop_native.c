@@ -43,6 +43,7 @@
 
 #include <lua.h>
 #include <lauxlib.h>
+#include "wtop_edid_license.h"
 
 #include "wtop_nvml.h"
 #include "wtop_gpu_worker.h"

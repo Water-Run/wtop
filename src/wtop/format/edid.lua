@@ -1,5 +1,6 @@
--- Public declarations from EDID 1.x base blocks. No serial values or raw
+-- Public declarations from EDID 1.x base and CTA extension blocks. No serial values or raw
 -- descriptors leave this parser. Driver-corrected/current modes belong to KMS.
+local CTA = require("wtop.format.edid_cta")
 local M = {}
 local BLOCK = 128
 local MAX_BYTES = 256 * BLOCK
@@ -49,7 +50,8 @@ function M.parse(bytes)
   if version ~= 1 or revision > 4 then return nil, "edid_unsupported_version" end
   local result = { version = "1." .. revision, quality = "fresh",
     serial_present = bytes:sub(13, 16) ~= "\0\0\0\0",
-    extension_count = bytes:byte(127), detailed_timings = {} }
+    extension_count = bytes:byte(127), detailed_timings = {}, extensions = {},
+    extensions_decoded = false, extensions_truncated = false }
   local function partial(reason)
     result.quality = "partial"
     result.reason = result.reason or reason
@@ -97,11 +99,31 @@ function M.parse(bytes)
   local expected = (1 + result.extension_count) * BLOCK
   result.blocks_available = #bytes // BLOCK
   if #bytes ~= expected then partial("edid_incomplete") end
-  for start = BLOCK + 1, math.min(#bytes - BLOCK + 1, expected), BLOCK do
-    if not checksum(bytes, start) then partial("edid_invalid_extension_checksum") end
+  local budget = CTA.budget()
+  local complete = result.extension_count > 0 and #bytes == expected
+  for index = 1, math.min(result.blocks_available - 1, result.extension_count) do
+    local start = index * BLOCK + 1
+    local valid = checksum(bytes, start)
+    if not valid then partial("edid_invalid_extension_checksum");complete = false end
+    if index <= CTA.MAX_EXTENSIONS then
+      local extension = { index = index, tag = bytes:byte(start), checksum_ok = valid,
+        quality = valid and "fresh" or "partial", decoded = false }
+      result.extensions[#result.extensions + 1] = extension
+      if not valid then extension.reason = "edid_invalid_extension_checksum"
+      elseif extension.tag == 2 then CTA.parse(bytes, start, extension, budget, timing)
+      else
+        extension.quality = "partial"
+        extension.reason = "edid_unsupported_extension"
+      end
+      if not extension.decoded then complete = false end
+      if extension.quality ~= "fresh" then partial(extension.reason) end
+      if extension.truncated then result.extensions_truncated = true end
+    else
+      result.extensions_truncated, complete = true, false
+      partial("edid_extensions_truncated")
+    end
   end
-  -- Extension timing/HDR declarations are not decoded by this base parser.
-  result.extensions_decoded = false
+  result.extensions_decoded = complete
   return result
 end
 

@@ -28,6 +28,15 @@ assert(row.connection == "unknown" and row.enabled == nil and row.dpms == nil,
   "SetupAPI presence was promoted to a physical connection or active display mode")
 assert(row.edid.name == "FixturePanel" and row.edid.detailed_timings[1].refresh_hz == 60)
 assert(row._edid == nil and row._identity_verified == nil and row.edid.serial == nil)
+local cta = Fixtures.cta({ data = Fixtures.cta_block(2, "\144\97") })
+local declared = NativeDisplays.result(sample({ _edid = Fixtures.edid({ extensions = 1, tail = cta }) }), 1000).data.devices[1]
+assert(declared.edid.extensions[1].video_formats[2].vic == 97 and declared.edid.extensions_decoded)
+assert(declared.current_mode == nil and declared.enabled == nil and declared.connection == "unknown",
+  "a native CTA declaration became a current desktop mode or physical connection")
+local damaged_cta = cta:sub(1, 127) .. string.char((cta:byte(128) + 1) % 256)
+local damaged = NativeDisplays.result(sample({ _edid = Fixtures.edid({ extensions = 1, tail = damaged_cta }) }), 1000).data.devices[1]
+assert(damaged.edid.name == "FixturePanel" and damaged.edid.extensions[1].video_formats == nil)
+assert(damaged.edid.quality == "partial" and damaged.quality == "partial")
 local wire = Wire.encode(result)
 assert(not wire:find("PRIVATE-SN", 1, true) and not wire:find("PRIVATE-TEXT", 1, true),
   "raw monitor EDID left the reader normalization boundary")

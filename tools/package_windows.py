@@ -42,7 +42,7 @@ def installer_archive(root: Path) -> Path:
 
 
 def copy_vendor_notices(root: Path, output_root: Path) -> None:
-    for name in ("NVML-NVIDIA.txt", "Level-Zero-MIT.txt", "AMD-ADL-MIT.txt"):
+    for name in ("NVML-NVIDIA.txt", "Level-Zero-MIT.txt", "AMD-ADL-MIT.txt", "DRM-EDID-MIT.txt"):
         notice = root / "native" / "licenses" / name
         shutil.copy2(notice, output_root / name)
         directory = output_root / "wtop"

@@ -4,6 +4,7 @@
 
 #include <lua.h>
 #include <lauxlib.h>
+#include "wtop_edid_license.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>

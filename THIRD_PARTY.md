@@ -9,6 +9,7 @@ it; the repository carries no other third-party runtime code.
 | [NVIDIA NVML interface declarations](https://github.com/NVIDIA/go-nvml) | 13.4.92 | NVIDIA NVML header license | Runtime API declarations and SDK test excerpts; the NVIDIA implementation is loaded from the host |
 | [AMD SMI public interface declarations](https://github.com/ROCm/amdsmi) | ROCm 5.7.1–7.2.4 | MIT © Advanced Micro Devices, Inc. | Complete versioned ABI declarations; the vendor library is loaded from the host |
 | [Level Zero Sysman interface declarations](https://github.com/oneapi-src/level-zero) | 1.5.0–1.34.0 | MIT © 2019–2026 Intel Corporation | Complete ABI layouts and SDK test declarations; the implementation is loaded in the isolated reader |
+| [CTA VIC reference data from Linux DRM](https://github.com/torvalds/linux/blob/b8c60e8fc6f755c2cdf7164931afdbfa670c6646/drivers/gpu/drm/drm_edid.c) | `b8c60e8f` | MIT © Luc Verhaegen, Intel Corporation, Red Hat, Inc., Dennis Munsie | Reference format facts for cached CTA declarations |
 | [luainstaller](https://github.com/Water-Run/luainstaller/releases/tag/v1.5.0) | 1.5.0 | LGPL-3.0-or-later | Packaging tool; generated launchers and license notices ship in the onedir/onefile bundles |
 
 Throughout this file, a path in `backticks` is one the release actually
@@ -17,6 +18,12 @@ contains. A path in quotes is being talked about, not shipped.
 The Level Zero interface notice is embedded in the Linux native module and
 reader, and ships at `.luai/licenses/Level-Zero-MIT.txt` in the onedir bundle.
 The Intel runtime itself is not bundled.
+
+The CTA reference data retains its upstream notice in
+`src/wtop/format/cta_modes.lua`. The same notice is embedded in the native
+module for bundled programs and ships as `DRM-EDID-MIT.txt` with the platform
+packages. Linux onedir packages place it in `.luai/licenses/`; LuaRocks puts
+it in `doc/licenses/`.
 
 The Linux LuaRocks installation copies `native/licenses/Lua-MIT.txt` and the
 other native interface notices into `doc/licenses/`.

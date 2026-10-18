@@ -108,6 +108,8 @@ LICENCE_TEXTS = (
      "the NVIDIA NVML interface declarations in the native module"),
     ("MIT-Level-Zero", ".luai/licenses/Level-Zero-MIT.txt",
      "the complete Level Zero Sysman public interface declarations"),
+    ("MIT-DRM-EDID", ".luai/licenses/DRM-EDID-MIT.txt",
+     "the CTA VIC reference facts adapted from Linux drm_edid.c"),
     ("LGPL-3.0-or-later", ".luai/licenses/LGPL-3.0-or-later.txt",
      "the packaging tool the generated launcher derives from"),
 )
@@ -326,6 +328,11 @@ def main() -> int:
                   "the driver implementation is loaded from the host in the isolated reader."
                   + notice_sentence(licences["MIT-Level-Zero"]),
                   properties=licence_properties(licences["MIT-Level-Zero"])),
+        component("cta-vic-reference@b8c60e8f", "cta_vic_reference", "b8c60e8fc6f755c2cdf7164931afdbfa670c6646", "MIT",
+                  "CTA video format reference facts adapted from Linux drm_edid.c. "
+                  "These describe cached sink declarations, not active output timings."
+                  + notice_sentence(licences["MIT-DRM-EDID"]),
+                  properties=licence_properties(licences["MIT-DRM-EDID"])),
         component(lua_ref, "lua", LUA_VERSION, "MIT",
                   "PUC Lua runtime. It is linked into the onedir launcher, whose "
                   "measured glibc floor is the interpreter's, and carried as a "
@@ -360,11 +367,12 @@ def main() -> int:
         },
         "components": components,
         "dependencies": [
-            {"ref": launcher_ref, "dependsOn": [module_ref, lua_ref]},
+            {"ref": launcher_ref, "dependsOn": [module_ref, lua_ref, "cta-vic-reference@b8c60e8f"]},
             {"ref": module_ref, "dependsOn": ["amd-smi-abi@ROCm-5.7.1-7.2.4", "nvml-interface@13.4.92", "level-zero-abi@1.5.0-1.34.0"]},
             {"ref": "amd-smi-abi@ROCm-5.7.1-7.2.4", "dependsOn": []},
             {"ref": "nvml-interface@13.4.92", "dependsOn": []},
             {"ref": "level-zero-abi@1.5.0-1.34.0", "dependsOn": []},
+            {"ref": "cta-vic-reference@b8c60e8f", "dependsOn": []},
             {"ref": lua_ref, "dependsOn": []},
         ],
     }
