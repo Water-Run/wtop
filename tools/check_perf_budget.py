@@ -211,10 +211,12 @@ def evaluate(result: typing.Dict[str, object], budget: typing.Dict[str, object])
     latency_pages = pages if len(pages) > 1 else \
         [2 if pages[0] == 1 else 1, pages[0]] if pages else []
     required.update("input_latency_ms.page_%d_p95" % page for page in latency_pages)
-    # A claimed family rate must agree with its raw endpoint counters; a quiet
-    # parent rate cannot be substituted while retaining family metadata.
+    # Bind both the counters and their elapsed time to saved observations.
+    # Otherwise a longer invented divisor (or unrelated endpoint counters)
+    # can turn a failed CPU budget into a passing one.
     windows = result.get("cpu_windows")
     ticks_per_second = resources.get("clock_ticks_per_second")
+    previous_window_end = None
     for page in pages:
         key = "page_%d" % page
         window = windows.get(key) if isinstance(windows, dict) else None
@@ -228,6 +230,25 @@ def evaluate(result: typing.Dict[str, object], budget: typing.Dict[str, object])
                 or after["family_ticks"] < before["family_ticks"]:
             failures.append("invalid family CPU counters for %s" % key)
             continue
+        if any(any(not _number(row.get(field)) for field in ("sample_started", "sample_finished"))
+               or row["sample_finished"] < row["sample_started"] for row in (before, after)) \
+                or after["sample_started"] < before["sample_finished"]:
+            failures.append("invalid CPU observation bounds for %s" % key)
+            continue
+        if before not in resource_samples or after not in resource_samples:
+            failures.append("CPU endpoints are not saved resource observations for %s" % key)
+        before_mid = before["sample_started"] + (before["sample_finished"]-before["sample_started"])/2
+        after_mid = after["sample_started"] + (after["sample_finished"]-after["sample_started"])/2
+        observed_seconds = after_mid - before_mid
+        tolerance = max(0.000001, observed_seconds * 0.000000001)
+        if abs(window["seconds"]-observed_seconds) > tolerance:
+            failures.append("CPU window duration disagrees with observed bounds for %s" % key)
+        requested = expected_settings.get("window_seconds") if isinstance(expected_settings, dict) else None
+        if _number(requested) and observed_seconds + tolerance < requested:
+            failures.append("observed CPU window is shorter than the requested duration for %s" % key)
+        if previous_window_end is not None and before["sample_started"] < previous_window_end:
+            failures.append("CPU windows overlap or reverse page order for %s" % key)
+        previous_window_end = after["sample_finished"]
         rate = (after["family_ticks"]-before["family_ticks"])/ticks_per_second/window["seconds"]*100
         rates = result.get("steady_cpu_percent")
         value = rates.get(key) if isinstance(rates, dict) else None

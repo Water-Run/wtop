@@ -104,6 +104,36 @@ def main():
     bad = copy.deepcopy(result)
     bad["steady_cpu_percent"]["page_1"] = 0
     rejects(bad, budget, "disagrees with observed counters")
+    # The rate and its divisor used to agree with each other while the
+    # divisor disagreed with the actual observation times. Both forged
+    # windows and detached counter records must fail the release gate.
+    bad = copy.deepcopy(result)
+    for key, window in bad["cpu_windows"].items():
+        window["seconds"] *= 1000
+        bad["steady_cpu_percent"][key] /= 1000
+    rejects(bad, budget, "duration disagrees with observed bounds")
+    bad = copy.deepcopy(result)
+    window = bad["cpu_windows"]["page_1"]
+    window["before"] = copy.deepcopy(window["before"])
+    window["before"]["family_ticks"] = window["after"]["family_ticks"]
+    bad["steady_cpu_percent"]["page_1"] = 0
+    rejects(bad, budget, "not saved resource observations")
+    for value in (None, True, math.nan, math.inf, -1):
+        bad = copy.deepcopy(result)
+        bad["cpu_windows"]["page_1"]["before"]["sample_started"] = value
+        rejects(bad, budget, "CPU observation bounds")
+    bad = copy.deepcopy(result)
+    bad["cpu_windows"]["page_1"]["before"]["sample_finished"] = 6
+    rejects(bad, budget, "CPU observation bounds")
+    bad = copy.deepcopy(result)
+    samples = bad["resource_accounting"]["samples"]
+    bad["cpu_windows"]["page_1"] = {"before": samples[0], "after": samples[1], "seconds": .2}
+    bad["steady_cpu_percent"]["page_1"] = 0
+    rejects(bad, budget, "shorter than the requested duration")
+    bad = copy.deepcopy(result)
+    bad["cpu_windows"]["page_2"] = copy.deepcopy(bad["cpu_windows"]["page_1"])
+    bad["steady_cpu_percent"]["page_2"] = bad["steady_cpu_percent"]["page_1"]
+    rejects(bad, budget, "overlap or reverse page order")
     bad = copy.deepcopy(result)
     bad["resource_accounting"]["memory_status"] = "denied"
     rejects(bad, budget, "memory_status is incomplete")
