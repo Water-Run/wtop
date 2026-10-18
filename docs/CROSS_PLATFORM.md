@@ -631,6 +631,12 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 
 ### 2026-10-19：Linux DRM 当前配置模式
 
+提交 `f7cb450` 的 [主 CI](https://github.com/Water-Run/wtop/actions/runs/39155091058)
+16 个作业和 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/39155091067)
+两个作业通过。四类精确归档、五项产物验收、双 Lua 各 162 文件、完整
+终端矩阵和三主机各 16 个共享文件通过。755 个非文档文件与冻结源码和
+共享包一致，十语言各 1971 条消息。
+
 Linux 的显示读取器在缓存规格之外取得当前配置的 KMS 模式。只读卡节点
 按字符设备主次号和路径身份核对，连接器、编码器与 CRTC 状态前后复核；
 帧缓冲交换不作为模式变化。`GETCONNECTOR` 的 `count_modes=1` 和有效临时
@@ -652,8 +658,21 @@ Linux 的显示读取器在缓存规格之外取得当前配置的 KMS 模式。
 权限、错误、正常帧缓冲变化及 23 个 Lua OOM 位置。默认 Engine 的受控
 读取器阻塞保留旧模式与原时间，CPU 继续更新，超时回收后从 60 Hz 恢复
 到软件夹具的 75 Hz，同时 EDID 声明仍为 60 Hz。软件故障场景不作为真实
-驱动故障或物理热插拔证明。完整源码、CI 和精确包验收仍在进行；证据在
-`build/hardware-linux-current-display-20261019/`。接口语义参考 Linux 的
+驱动故障或物理热插拔证明。实际终端另覆盖阻塞时旧模式可见且标为过期、
+进程/概览/功耗/系统导航、退出和读取器回收。
+
+同一 UAPI 布局另在 i386、x86_64、ARMv7、AArch64 和 RISC-V64 的 Clang
+编译目标中通过尺寸与偏移断言；这是静态布局检查，不作为这些目标的
+运行、系统调用或旧硬件验证。
+
+精确 Linux 目录包和单文件包完成普通用户/root 十二项 CLI 与六次显示终端
+导航，配置模式、名义时序、父设备和观察时间保持；原有功耗、健康、无线、
+GPU 与 rootless 检查通过。两种 Mac 包的当前模式及功耗/传感器、两台
+Windows 的缓存规格和经典控制台、四类归档的静态检查也通过。证据在
+`build/hardware-linux-current-display-20261019/`。旧窄屏验收脚本曾要求首屏
+出现新增字段下方的 EDID 版本，修正为滚动后核对；早期失败画面与日志
+保留，已通过的平台、归档检查与 CLI 按哈希复用，不重启构建。
+接口语义参考 Linux 的
 [DRM 用户态接口](https://www.kernel.org/doc/html/latest/gpu/drm-uapi.html)
 及 `drm_mode_modeinfo`、`drm_mode_vrefresh`。多显示器/物理热插拔、旧驱动、
 Windows 当前模式、EDID 扩展、XP/最低硬件与资源预算仍需继续推进。
