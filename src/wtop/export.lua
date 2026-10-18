@@ -1216,6 +1216,48 @@ local function export_port_connectors(ports)
     return result
 end
 
+local function export_firmware_enclosures(firmware, maximum)
+    maximum = math.min(maximum or 64, 64)
+    local result = copy_fields(firmware, { "source", "major", "minor", "docrev",
+        "partial", "truncated", "structure_count" })
+    for _, spec in ipairs({ { "baseboards", {
+        "id", "handle", "structure_type", "manufacturer", "product", "version", "location",
+        "serial_present", "asset_tag_present", "feature_flags", "chassis_handle",
+        "board_type_code", "board_type", "contained_count", "containment_complete",
+        "source", "quality", "ambiguous" } }, { "enclosures", {
+        "id", "handle", "structure_type", "manufacturer", "version", "sku", "chassis_type_code",
+        "chassis_type", "serial_present", "asset_tag_present", "lock_reported_present",
+        "boot_state_code", "boot_state", "power_state_code", "power_state", "thermal_state_code",
+        "thermal_state", "security_state_code", "security_state", "oem_data_present",
+        "height_u", "height_ou", "rack_type_code", "power_cords", "contained_count",
+        "contained_record_length", "containment_complete", "source", "quality", "ambiguous" } } }) do
+        local list = firmware and firmware[spec[1]] or {}
+        result[spec[1]] = json.array({})
+        result[spec[1] .. "_total"] = #list
+        for index, device in ipairs(list) do
+            if index > maximum then result.truncated = true break end
+            local record = copy_fields(device, spec[2])
+            if spec[1] == "baseboards" then
+                record.contained_handles = json.array({})
+                for n, handle in ipairs(device.contained_handles or {}) do
+                    if n > 120 then result.truncated = true break end
+                    record.contained_handles[n] = handle
+                end
+            else
+                record.contained_elements = json.array({})
+                for n, element in ipairs(device.contained_elements or {}) do
+                    if n > 78 then result.truncated = true break end
+                    record.contained_elements[n] = copy_fields(element,
+                        { "type_code", "type_kind", "board_type", "minimum", "maximum" })
+                end
+            end
+            result[spec[1]][index] = record
+        end
+    end
+    result.issues = export_issues(firmware and firmware.issues)
+    return result
+end
+
 local function export_firmware_batteries(firmware)
     local result = copy_fields(firmware, { "source", "major", "minor", "docrev",
         "partial", "truncated", "structure_count" })
@@ -1983,6 +2025,9 @@ local function export_inventory(snapshot)
         nodes[index].holder_ids = json.array(node.holder_ids)
         nodes[index].cache_ids = json.array(node.cache_ids)
         nodes[index].firmware_socket_ids = json.array(node.firmware_socket_ids)
+        for _, key in ipairs({ "chassis_ids", "baseboard_ids", "contained_ids" }) do
+            if #node[key] > 0 then nodes[index][key] = json.array(node[key]) end
+        end
         if #node.associated_ids > 0 then
             nodes[index].associated_ids = json.array(node.associated_ids)
         end
@@ -2060,6 +2105,7 @@ function M.snapshot(snapshot, options)
         port_connectors = export_port_connectors(snapshot.port_connectors),
         onboard_devices = export_onboard_devices(snapshot.onboard_devices),
         firmware_batteries = export_firmware_batteries(snapshot.firmware_batteries),
+        firmware_enclosures = export_firmware_enclosures(snapshot.firmware_enclosures),
         firmware_power_supplies = export_firmware_power_supplies(snapshot.firmware_power_supplies),
         firmware_bmcs = export_firmware_bmcs(snapshot.firmware_bmcs),
         firmware_tpms = export_firmware_tpms(snapshot.firmware_tpms),
@@ -2812,6 +2858,7 @@ function M.agent(snapshot, options)
                 minimum_headroom_celsius = closest_critical and closest_critical.headroom_celsius,
                 closest_to_critical = closest_critical,
             }),
+            firmware_enclosures = export_firmware_enclosures(full.firmware_enclosures, device_limit),
             processes = json.object({ total = full.processes and full.processes.total }),
         }),
         signals = signals,

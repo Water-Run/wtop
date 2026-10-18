@@ -1,5 +1,5 @@
 -- One bounded raw input, shared by the firmware views in the parent. Keep the
--- existing batch parser there instead of transporting eleven full parse trees.
+-- existing batch parser there instead of transporting full parse trees.
 local Capability = require("wtop.core.capability")
 local Common = require("wtop.collectors.common")
 local FS = require("wtop.linux.fs")

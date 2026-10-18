@@ -6,6 +6,7 @@ local M, Shared, Proxy = {}, {}, {}
 Shared.__index, Proxy.__index = Shared, Proxy
 M.sources = { memory_devices = true, expansion_slots = true, port_connectors = true,
     onboard_devices = true, firmware_batteries = true, firmware_power_supplies = true,
+    firmware_enclosures = true,
     firmware_bmcs = true, firmware_tpms = true, firmware_components = true,
     host_interfaces = true, processor_firmware = true }
 
@@ -58,7 +59,7 @@ function Proxy:_sample(context)
     ctx._collector_batch = ctx._collector_batch or {}
     ctx.smbios_input = self.shared
     local raw = self.collector:sample(ctx)
-    -- Failures from the raw reader can be shared by all eleven consumers.
+    -- Failures from the raw reader are shared by the firmware consumers.
     -- Each result owns its status/capability fields, just as parsed records do.
     local result = {}
     for key, value in pairs(raw) do result[key] = value end

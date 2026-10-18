@@ -550,6 +550,29 @@ function M.render(snapshot)
         lines[#lines + 1] = "Ratios compare sampled power with configured caps; they do not establish throttling."
         lines[#lines + 1] = ""
     end
+    local enclosures = object(snapshot.firmware_enclosures)
+    table_section(lines, "Baseboards", { "Handle", "Manufacturer", "Product", "Version", "Type", "Location", "Chassis handle" },
+        enclosures.baseboards, function(board)
+            return { board.id, board.manufacturer, board.product, board.version,
+                board.board_type or board.board_type_code, board.location, board.chassis_handle }
+        end, enclosures)
+    table_section(lines, "Enclosures", { "Handle", "Manufacturer", "Type", "Version", "SKU", "Height", "Power cords" },
+        enclosures.enclosures, function(chassis)
+            return { chassis.id, chassis.manufacturer, chassis.chassis_type or chassis.chassis_type_code,
+                chassis.version, chassis.sku, chassis.height_u and tostring(chassis.height_u) .. " U"
+                    or chassis.height_ou and tostring(chassis.height_ou) .. " OU", chassis.power_cords }
+        end, enclosures)
+    table_section(lines, "Enclosure states at last boot", { "Handle", "Boot", "Power supply", "Thermal", "Security" },
+        enclosures.enclosures, function(chassis)
+            return { chassis.id, chassis.boot_state or chassis.boot_state_code,
+                chassis.power_state or chassis.power_state_code,
+                chassis.thermal_state or chassis.thermal_state_code,
+                chassis.security_state or chassis.security_state_code }
+        end, enclosures)
+    if #(enclosures.enclosures or {}) > 0 then
+        lines[#lines + 1] = "SMBIOS enclosure states describe the last boot; they are not live health readings."
+        lines[#lines + 1] = ""
+    end
     local firmware_batteries = object(snapshot.firmware_batteries)
     table_section(lines, "Firmware batteries", { "Battery", "Location", "Chemistry", "Design energy", "Design voltage" },
         firmware_batteries.batteries, function(battery)

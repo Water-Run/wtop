@@ -3334,6 +3334,53 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         end
         lines[#lines + 1] = translated(i18n, "cooling_device.note",
             "Cooling states are device-specific; they are not fan speed or percent.")
+    elseif node.kind == "baseboard" then
+        add("memory_hw.manufacturer", "Manufacturer", device.manufacturer)
+        add("metrics.model", "Model", device.product)
+        add("firmware_component.version", "Version", device.version)
+        add("enclosure.board_type", "Board type", device.board_type or device.board_type_code)
+        add("enclosure.location", "Location in chassis", device.location)
+        add("enclosure.chassis_handle", "Declared chassis handle", device.chassis_handle)
+        if device.feature_flags ~= nil then
+            add("enclosure.flags", "Feature flags", string.format("0x%02x", device.feature_flags))
+            for _, feature in ipairs({ { 0, "hosting", "Hosting board" },
+                { 1, "daughter", "Requires a daughterboard" }, { 2, "removable", "Removable" },
+                { 3, "replaceable", "Replaceable" }, { 4, "hot_swap", "Hot-swappable" } }) do
+                add("enclosure.feature." .. feature[2], feature[3],
+                    device.feature_flags & (1 << feature[1]) ~= 0)
+            end
+        end
+        add("enclosure.contained_count", "Declared element count", device.contained_count)
+        add_list("enclosure.handles", "Declared contained handles", device.contained_handles or {})
+        lines[#lines + 1] = translated(i18n, "enclosure.board_note",
+            "Firmware board declarations; only explicit, unambiguous handles establish device links.")
+    elseif node.kind == "enclosure" then
+        add("memory_hw.manufacturer", "Manufacturer", device.manufacturer)
+        add("enclosure.chassis_type", "Chassis type", device.chassis_type or device.chassis_type_code)
+        add("firmware_component.version", "Version", device.version)
+        add("enclosure.sku", "SKU", device.sku)
+        add("enclosure.lock", "Lock reported present", device.lock_reported_present)
+        add("enclosure.height", "Rack height", device.height_u and tostring(device.height_u) .. " U"
+            or device.height_ou and tostring(device.height_ou) .. " OU")
+        add("enclosure.cords", "Power cords", device.power_cords)
+        for _, field in ipairs({ { "boot_state", "Boot state at last boot" },
+            { "power_state", "Power supply state at last boot" },
+            { "thermal_state", "Thermal state at last boot" },
+            { "security_state", "Security state at last boot" } }) do
+            add("enclosure." .. field[1], field[2], device[field[1]] or device[field[1] .. "_code"])
+        end
+        add("enclosure.contained_count", "Declared element count", device.contained_count)
+        local elements = {}
+        for _, element in ipairs(device.contained_elements or {}) do
+            elements[#elements + 1] = (element.type_kind == "structure" and "SMBIOS "
+                .. tostring(element.type_code) or element.board_type or tostring(element.type_code))
+                .. " " .. tostring(element.minimum) .. ".." .. tostring(element.maximum)
+        end
+        add_list("enclosure.elements", "Declared element types and ranges", elements)
+        lines[#lines + 1] = translated(i18n, "enclosure.element_note",
+            "Element ranges are firmware declarations, not measured installed counts.")
+        lines[#lines + 1] = translated(i18n, "enclosure.note",
+            "SMBIOS enclosure states describe the last boot; they are not live health readings.")
     elseif node.kind == "host_interface" then
         add("host_interface.type", "Interface type", device.interface_type
             or device.interface_type_code)
@@ -4007,6 +4054,16 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
             names[#names + 1] = onboard and Hardware.label(onboard, i18n) or id
         end
         add_list("onboard.references", "Firmware onboard references", names)
+    end
+    for _, spec in ipairs({ { "baseboard_ids", "enclosure.boards", "Related baseboards" },
+        { "chassis_ids", "enclosure.chassis_links", "Related enclosures" },
+        { "contained_ids", "enclosure.devices", "Declared contained devices" } }) do
+        local names = {}
+        for _, related_id in ipairs(node[spec[1]]) do
+            local related = graph.by_id[related_id]
+            names[#names + 1] = related and Hardware.label(related, i18n) or related_id
+        end
+        if #names > 0 then add_list(spec[2], spec[3], names) end
     end
     if #node.firmware_component_ids > 0 then
         local names = {}
@@ -8714,6 +8771,15 @@ local function run_loop(options, backend, renderer, engine, translator)
             }
             dirty = true
         elseif key == "/" and workspace:content_page() == "system" then
+            -- A hardware search must reveal its table even when a narrow
+            -- layout gave the initial space to the host summary panels.
+            for _, widget_id in ipairs(workspace:orders()[workspace.active] or {}) do
+                if widget_id == "system_devices" then
+                    workspace.focus[workspace.active] = widget_id
+                    sync_engine_visibility()
+                    break
+                end
+            end
             search_edit = {
                 kind = "hardware", original = hardware_query,
                 original_selected_id = hardware_selected_id,

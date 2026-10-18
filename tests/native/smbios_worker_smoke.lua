@@ -16,7 +16,7 @@ for id in pairs(Worker.sources) do
     assert(scheduler:add(shared:wrap(require("wtop.collectors."..id).new())))
     count=count+1
 end
-assert(count==11)
+assert(count==12 and Worker.sources.firmware_enclosures)
 local function tick()
     for _, id in ipairs(scheduler.order) do scheduler:task(id).next_due_ns=0 end
     local start=Native.monotonic_ns();local results=scheduler:tick(context)
@@ -30,7 +30,7 @@ local function settle(seconds,wanted)
         for _, value in pairs(results) do
             if wanted and value.reason==wanted or not wanted and not value.sampling_pending then done=done+1 end
         end
-        if done==11 then return results end
+        if done==count then return results end
         assert(Native.monotonic_ns()<deadline,"firmware batch never settled")
         Native.sleep_ms(10)
     until false
@@ -40,7 +40,7 @@ assert(fresh.onboard_devices.status=="ok" and fresh.port_connectors.status=="ok"
 local observed=fresh.onboard_devices.value_timestamp_ns
 assert(observed==fresh.port_connectors.value_timestamp_ns and observed<=fresh.onboard_devices.timestamp_ns)
 local pids={};for pid in contents(count_file):gmatch("%d+") do pids[#pids+1]=pid end
-assert(#pids==1,"eleven views read the firmware table more than once")
+assert(#pids==1,"firmware views read the table more than once")
 for id,value in pairs(fresh) do
     assert(value.reason~="hardware_query_timeout")
     assert(value.capability.available==(value.status=="ok"),id)
@@ -80,4 +80,4 @@ assert(recovered.onboard_devices.value_timestamp_ns>observed
 pids={};for pid in contents(count_file):gmatch("%d+") do pids[#pids+1]=pid end
 assert(#pids==3 and pids[1]==pids[2] and pids[3]~=pids[1],"raw source duplication or wrong recovery epoch")
 scheduler:stop(context);shared:close();independent:close()
-print("ok: eleven firmware views, one raw read/parse epoch, real timestamps, timeout/reap, independent source and shared recovery")
+print("ok: twelve firmware views, one raw read/parse epoch, real timestamps, timeout/reap, independent source and shared recovery")

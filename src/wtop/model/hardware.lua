@@ -90,6 +90,8 @@ local KIND_LABELS = {
     port_connector = { "port.connector", "Port connector {id}" },
     onboard_device = { "onboard.device", "Onboard device {id}" },
     firmware_battery = { "firmware_battery.device", "Firmware battery {id}" },
+    baseboard = { "enclosure.board", "Baseboard {id}" },
+    enclosure = { "enclosure.chassis", "Enclosure {id}" },
     firmware_power_supply = { "firmware_psu.device", "Firmware power supply {id}" },
     firmware_bmc = { "firmware_bmc.device", "Firmware BMC interface {id}" },
     firmware_tpm = { "firmware_tpm.device", "Firmware TPM {id}" },
@@ -121,6 +123,7 @@ function M.label(node, i18n)
     if label then return label end
   end
   if node.kind == "onboard_device" and identifier(device.designation) then return device.designation end
+  if node.kind == "baseboard" and identifier(device.product) then return device.product end
   if node.kind == "firmware_battery" then
     local label = identifier(device.name) or identifier(device.location)
     if label then return label end
@@ -204,7 +207,8 @@ function M.build(snapshot)
       cache_ids = {}, firmware_socket_ids = {},
       mapped_range_ids = {}, channel_ids = {}, memory_device_ids = {},
       redundant_peer_ids = {}, slave_ids = {}, holder_ids = {},
-      associated_ids = {}, firmware_component_ids = {}, esrt_ids = {} }
+      associated_ids = {}, firmware_component_ids = {}, esrt_ids = {},
+      chassis_ids = {}, baseboard_ids = {}, contained_ids = {} }
     result.by_id[id] = node
     unsorted[#unsorted + 1] = node
     return node
@@ -991,6 +995,21 @@ function M.build(snapshot)
       end
     end
   end
+  local enclosures = type(snapshot.firmware_enclosures) == "table"
+    and snapshot.firmware_enclosures or {}
+  result.truncated = result.truncated or enclosures.truncated == true
+  result.partial = result.partial or enclosures.partial == true
+  for _, spec in ipairs({ { "baseboards", "baseboard:", "baseboard" },
+                         { "enclosures", "enclosure:", "enclosure" } }) do
+    for index, device in ipairs(type(enclosures[spec[1]]) == "table" and enclosures[spec[1]] or {}) do
+      if index > 64 then result.truncated = true break end
+      if type(device) == "table" and identifier(device.id) then
+        local node = add_node("firmware", device.product or ("0x" .. device.id),
+          device, spec[2] .. device.id, nil, "firmware_enclosures", device.id)
+        if node then node.kind, node.ambiguous = spec[3], device.ambiguous == true end
+      else result.partial = true end
+    end
+  end
   local batteries = type(snapshot.firmware_batteries) == "table"
     and snapshot.firmware_batteries or {}
   local battery_list = type(batteries.batteries) == "table" and batteries.batteries or {}
@@ -1237,23 +1256,61 @@ function M.build(snapshot)
   -- Type 45 association handles are explicit firmware cross-references, not
   -- a physical parent relationship. Resolve only handles represented by one
   -- unambiguous SMBIOS node; an unmodeled structure stays a raw handle.
-  if Quality.current_source(snapshot.quality, "firmware_components") then
-    local smbios_resources = { memory_devices = true, expansion_slots = true,
+  local smbios_resources = { memory_devices = true, expansion_slots = true,
       port_connectors = true, onboard_devices = true, firmware_batteries = true,
       firmware_power_supplies = true, firmware_bmcs = true, firmware_tpms = true,
-      firmware_components = true, host_interfaces = true,
+      firmware_components = true, host_interfaces = true, firmware_enclosures = true,
       processor_firmware = true }
-    local by_handle = {}
-    for _, node in ipairs(unsorted) do
-      local handle = type(node.device) == "table" and node.device.handle or nil
-      if smbios_resources[node.resource] and type(handle) == "number"
-          and math.type(handle) == "integer" and handle >= 0 and handle < 65535 then
-        local id = string.format("%04x", handle)
-        if by_handle[id] ~= nil or (node.device.structure_type == 10
-            and node.device.device_count ~= 1) then by_handle[id] = false
-        else by_handle[id] = node end
+  local by_handle = {}
+  for _, node in ipairs(unsorted) do
+    local handle = type(node.device) == "table" and node.device.handle or nil
+    if smbios_resources[node.resource] and type(handle) == "number"
+        and math.type(handle) == "integer" and handle >= 0 and handle < 65535 then
+      local id = string.format("%04x", handle)
+      if by_handle[id] ~= nil or node.device.ambiguous or node.ambiguous
+          or (node.device.structure_type == 10 and node.device.device_count ~= 1) then
+        by_handle[id] = false
+      else by_handle[id] = node end
+    end
+  end
+  local function current_firmware_node(node)
+    return node and not node.ambiguous and not node.device.ambiguous
+      and node.device.quality == "fresh"
+      and not (type(snapshot[node.resource]) == "table" and snapshot[node.resource].truncated)
+      and Quality.current_source(snapshot.quality, node.resource)
+  end
+  if enclosures.truncated ~= true and #(enclosures.baseboards or {}) <= 64
+      and #(enclosures.enclosures or {}) <= 64
+      and Quality.current_source(snapshot.quality, "firmware_enclosures") then
+    for _, board in ipairs(unsorted) do
+      if board.kind == "baseboard" and current_firmware_node(board) then
+        local chassis = by_handle[board.device.chassis_handle]
+        if current_firmware_node(chassis) and chassis.kind == "enclosure" then
+          board.parent_id = chassis.id
+          board.chassis_ids[#board.chassis_ids + 1] = chassis.id
+          chassis.baseboard_ids[#chassis.baseboard_ids + 1] = board.id
+        end
+        if board.device.containment_complete == true then
+          for _, handle in ipairs(board.device.contained_handles or {}) do
+            local target = by_handle[handle]
+            if target ~= board and current_firmware_node(target) then
+              board.contained_ids[#board.contained_ids + 1] = target.id
+              target.baseboard_ids[#target.baseboard_ids + 1] = board.id
+            end
+          end
+        end
       end
     end
+  end
+  for _, node in ipairs(unsorted) do
+    for _, key in ipairs({ "baseboard_ids", "contained_ids" }) do
+      table.sort(node[key])
+      for index = #node[key], 2, -1 do
+        if node[key][index] == node[key][index - 1] then table.remove(node[key], index) end
+      end
+    end
+  end
+  if Quality.current_source(snapshot.quality, "firmware_components") then
     for _, source in ipairs(unsorted) do
       if source.kind == "firmware_component" and not source.ambiguous
           and source.device.quality == "fresh"
@@ -1606,6 +1663,7 @@ function M.related(graph, id, limit)
       { "cooling_ids" }, { "thermal_zone_ids" },
       { "cache_ids" }, { "firmware_socket_ids" },
       { "associated_ids" }, { "firmware_component_ids" },
+      { "chassis_ids" }, { "baseboard_ids" }, { "contained_ids" },
       { "esrt_ids" },
       { "numa_node_ids", "numa:" }, { "cpufreq_ids", "cpufreq:" },
       { "cpu_ids", "cpu:" },

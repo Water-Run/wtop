@@ -709,7 +709,7 @@ make test-bundle-dir
 make checksums
 ```
 
-`make test` 目前包含 158 个 Lua 5.5 单元/夹具测试文件，外加响应式/色深的真实 PTY 矩阵；`make test-54` 检查纯 Lua 5.4 兼容子集。硬件夹具覆盖异构 ARM、混合 x86、RISC-V、大共享 CPU 缓存列表、powercap 增量/回绕/复位/约束和重叠的 `psys`、GPU PCI/fdinfo 行为，以及无效 hwmon 哨兵值，而不需要开发主机真的暴露每台设备。权限和预检测试覆盖 CLI 解析、身份元数据、净化重执行的构造、cgroup v2 限制和输出集成，且不触发交互式密码提示。一套夹具文件系统还会驱动 hwmon、powercap、cpufreq、DRM 和电源采集器跑在记录下的驱动树上，为按需检查器回放真实的 `smartctl --json` 和 `perf stat -x ;` 输出，并演练进程采集上限和 sudo 文件访问策略——这些都不是开发主机自己能触达的。`make test-fuzz` 向真实终端循环抛随机按键、鼠标报告、畸形转义序列、无效 UTF-8 和缩放；因为它按设计既慢又不确定，所以被排除在 `make test` 之外，改为在 CI 中每次推送都运行。
+`make test` 目前包含 159 个 Lua 5.5 单元/夹具测试文件，外加响应式/色深的真实 PTY 矩阵；`make test-54` 检查纯 Lua 5.4 兼容子集。硬件夹具覆盖异构 ARM、混合 x86、RISC-V、大共享 CPU 缓存列表、powercap 增量/回绕/复位/约束和重叠的 `psys`、GPU PCI/fdinfo 行为，以及无效 hwmon 哨兵值，而不需要开发主机真的暴露每台设备。权限和预检测试覆盖 CLI 解析、身份元数据、净化重执行的构造、cgroup v2 限制和输出集成，且不触发交互式密码提示。一套夹具文件系统还会驱动 hwmon、powercap、cpufreq、DRM 和电源采集器跑在记录下的驱动树上，为按需检查器回放真实的 `smartctl --json` 和 `perf stat -x ;` 输出，并演练进程采集上限和 sudo 文件访问策略——这些都不是开发主机自己能触达的。`make test-fuzz` 向真实终端循环抛随机按键、鼠标报告、畸形转义序列、无效 UTF-8 和缩放；因为它按设计既慢又不确定，所以被排除在 `make test` 之外，改为在 CI 中每次推送都运行。
 
 选定的构建和测试 Make 目标会先运行轻量级资源预检，并在编排层保持非并行。`build`、`test` 和 `full` 三种配置检查更严格的主机/cgroup 内存和 Swap 余量、主机/cgroup 内存 PSI 和每 CPU 负载。存在一个显式的环境变量覆盖供操作员有意使用，但正常路径会拒绝在不健康的主机上启动资源密集型工作。
 

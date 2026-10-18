@@ -12,6 +12,7 @@ local REPORT_COLLECTORS = {
     memory_devices = true, expansion_slots = true, port_connectors = true,
     onboard_devices = true,
     firmware_batteries = true, firmware_power_supplies = true,
+    firmware_enclosures = true,
     firmware_bmcs = true,
     firmware_tpms = true,
     firmware_components = true,

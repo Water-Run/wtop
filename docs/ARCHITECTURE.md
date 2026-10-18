@@ -87,7 +87,7 @@ TUI 使用单线程调度器；Lua UI 状态与采集器都运行在主线程上
 引擎（Engine）按固定顺序注册采集器，包括：
 
 ```text
-cpu, cpu_info, thermal_throttle, thermal_zones, cpuidle, memory, numa, memory_devices, expansion_slots, port_connectors, onboard_devices, firmware_batteries, firmware_power_supplies, firmware_bmcs, firmware_tpms, tpm, watchdog, rfkill, host_interfaces, processor_firmware, edac, spd, pressure, disk, network, connections,
+cpu, cpu_info, thermal_throttle, thermal_zones, cpuidle, memory, numa, memory_devices, expansion_slots, port_connectors, onboard_devices, firmware_enclosures, firmware_batteries, firmware_power_supplies, firmware_bmcs, firmware_tpms, tpm, watchdog, rfkill, host_interfaces, processor_firmware, edac, spd, pressure, disk, network, connections,
 process, gpu, cpufreq, hwmon, powercap, mounts, cgroup,
 system_info, power_supply, inventory
 ```
@@ -249,7 +249,7 @@ CPUIdle 状态同样按逻辑 CPU ID 连接线程节点；核心和封装上的
 解码；各采集器取得独立的记录副本，下一轮重新读取。直接调用采集器时
 不保留缓存。
 `format/smbios.lua` 校验入口校验和、记录长度和字符串终止符，解码
-Type 4/7/9/16/17/19/20/22/37/39/41，使用句柄关联内存阵列、设备、固件地址范围
+Type 2/3/4/7/9/16/17/19/20/22/37/39/41，使用句柄关联内存阵列、设备、固件地址范围
 及内存通道。
 读取上限 4 MiB，遍历最多 4096 条结构，输出最多 128 个处理器插槽、
 512 条缓存、128 个扩展槽、128 个端口连接器、64 块固件电池、64 台固件电源、64 个内存阵列、256 个内存设备、64 个内存通道、
@@ -282,6 +282,15 @@ Type 45 的句柄引用只有在 Type 10 结构恰含一个设备、记录完整
 端口用途。固件没有给出当前操作系统设备的身份，因此端口保留独立节点，
 不按名称猜测 PCI、USB 或网络接口的关系。
 前台下限与后台间隔为 60 秒 / 5 分钟。
+
+`collectors/firmware_enclosures.lua` 共用固件输入，采集 Type 2 主板与 Type 3
+机箱各最多 64 条记录。按 [DMTF SMBIOS 3.9](https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_3.9.0.pdf)
+保留公开型号、功能位、机箱位置、机架 U/OU 高度、供电线数量及可变长度部件声明；
+序列号、资产标签与 OEM 数据只保留存在性，不导出值。
+主板的机箱句柄只有在当前清单中唯一命中有效机箱记录时才建立父子关系；
+内含设备句柄和 Type 45 关联保持可双向导航的引用，不改变 CPU 或 PCI 的父子树。
+Type 3 部件类型与数量范围不生成设备，启动、供电、温度及安全状态注明为
+上次启动时的记录，不进入实时健康告警。前台下限与后台间隔为 60 秒 / 5 分钟。
 
 `collectors/firmware_batteries.lua` 独立采集 Type 22 便携电池设计值。
 旧结构的容量倍率默认为 1，新结构按固件倍率换算 mWh；未知容量、电压和
@@ -589,7 +598,7 @@ CLI/配置中的主题值只接受五个确切的内置名称。未知的 CLI �
 
 ## 10. 当前测试边界
 
-- 现有的 158 个 Lua 单元/夹具测试文件覆盖：平台门控、procfs、sysfs、连接、cgroup v2、DRM fdinfo、GPU 频率/hwmon 连接、磁盘/挂载与 hwmon 的设备拓扑联接、异构 CPU 清单、powercap、SMART、PMU、布局、i18n、输入、渲染器、Runner 隔离、资源预检、权限处理、pidfd 操作、JSON 边界、导出隐私、无硬件环境下的驱动树、离线检查器重放、进程采集的规模限制、sudo 文件访问策略、主机或显卡必须提供的最小 GPU 能力、Lua 代码树内的版本收敛、原生模块与 SBOM、内存带宽能力声明、Insights 的 Collectors 表中采集器与槽位的对应关系、`truncated` 结果质量及其原因，以及发布证据——glibc 基线、内嵌 ELF 下限、构建身份和发布 SBOM。
+- 现有的 159 个 Lua 单元/夹具测试文件覆盖：平台门控、procfs、sysfs、连接、cgroup v2、DRM fdinfo、GPU 频率/hwmon 连接、磁盘/挂载与 hwmon 的设备拓扑联接、异构 CPU 清单、powercap、SMART、PMU、布局、i18n、输入、渲染器、Runner 隔离、资源预检、权限处理、pidfd 操作、JSON 边界、导出隐私、无硬件环境下的驱动树、离线检查器重放、进程采集的规模限制、sudo 文件访问策略、主机或显卡必须提供的最小 GPU 能力、Lua 代码树内的版本收敛、原生模块与 SBOM、内存带宽能力声明、Insights 的 Collectors 表中采集器与槽位的对应关系、`truncated` 结果质量及其原因，以及发布证据——glibc 基线、内嵌 ELF 下限、构建身份和发布 SBOM。
 - PTY 冒烟测试覆盖 `40×10`、`60×20`、`80×24/25`、`80×50`、`160×24`、`200×22`、`180×45`、窗口缩放、CJK、按键路径、备用屏幕恢复和布局持久化。
 - onedir/onefile 构建后有针对 CLI、快照和 PTY 的目标。
 - `tests/support/` 下三个共享测试辅助模块各有自己的测试，因为一个被十几个调用方使用、自身却没有测试的辅助模块，其正确性只是碰巧由哪些调用方使用它而决定的意外。`test_makefile_readers.lua` 在一个合成本地 Makefile 上固定了 Makefile 读取器的行为，该 Makefile 带有本项目并不使用的形态——本项目的 Makefile 正是那些它所钉住的缺陷处于蛰伏状态的原因。`test_fixture_fs.lua` 钉住的是“合并不得改变夹具所声明的内容”这一性质，而不是声明种类的清单，因为清单会成为同一事实的第三份副本；`merge` 曾经把 `errors` 整个丢掉，于是一个回答 `ENODATA` 的驱动被变成了一份“文件不存在”的记录。`test_hardware_fixtures.lua` 是第三个，它那里的缺口更糟：另外两个模块是在构建东西，而这个模块本身*就是*证据——每个需要本项目没有的硬件的采集器测试都从它那里取一棵树并采信它，因此一个自相矛盾的夹具不会让测试失败，反而会让读到它的测试通过。它按性质审计全部十二个夹具，并且不点名任何路径。

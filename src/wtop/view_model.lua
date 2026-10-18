@@ -2465,6 +2465,7 @@ local COLLECTOR_RESOURCE = {
     port_connectors = "port_connectors",
     onboard_devices = "onboard_devices",
     firmware_batteries = "firmware_batteries",
+    firmware_enclosures = "firmware_enclosures",
     firmware_power_supplies = "firmware_power_supplies",
     firmware_bmcs = "firmware_bmcs",
     firmware_tpms = "firmware_tpms",

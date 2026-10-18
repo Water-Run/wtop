@@ -1,4 +1,4 @@
--- Bounded SMBIOS 2.x/3.x hardware inventory (DSP0134, types 4, 7, 8, 9, 10,
+-- Bounded SMBIOS 2.x/3.x hardware inventory (DSP0134, types 2, 3, 4, 7, 8, 9, 10,
 -- 16, 17, 19, 20, 22, 37, 38, 39, 41, 42, 43 and 45).
 -- Only named public fields are copied out. Serial numbers, asset tags, UUIDs
 -- and raw firmware bytes are not retained in the parsed result.
@@ -140,6 +140,23 @@ local BATTERY_CHEMISTRIES = { [1] = "Other", [2] = "Unknown",
 local FIRMWARE_STATES = { [1] = "Other", [2] = "Unknown", [3] = "Disabled",
   [4] = "Enabled", [5] = "Absent", [6] = "Standby offline",
   [7] = "Standby spare", [8] = "Unavailable offline" }
+local BOARD_TYPES = { [1] = "Unknown", [2] = "Other", [3] = "Server blade",
+  [4] = "Connectivity switch", [5] = "System management module", [6] = "Processor module",
+  [7] = "I/O module", [8] = "Memory module", [9] = "Daughter board", [10] = "Motherboard",
+  [11] = "Processor/memory module", [12] = "Processor/I/O module", [13] = "Interconnect board" }
+local CHASSIS_TYPES = { [1] = "Other", [2] = "Unknown", [3] = "Desktop", [4] = "Low profile desktop",
+  [5] = "Pizza box", [6] = "Mini tower", [7] = "Tower", [8] = "Portable", [9] = "Laptop",
+  [10] = "Notebook", [11] = "Hand held", [12] = "Docking station", [13] = "All in one",
+  [14] = "Sub notebook", [15] = "Space-saving", [16] = "Lunch box", [17] = "Main server chassis",
+  [18] = "Expansion chassis", [19] = "Subchassis", [20] = "Bus expansion chassis",
+  [21] = "Peripheral chassis", [22] = "RAID chassis", [23] = "Rack mount chassis",
+  [24] = "Sealed-case PC", [25] = "Multi-system chassis", [26] = "Compact PCI", [27] = "Advanced TCA",
+  [28] = "Blade", [29] = "Blade enclosure", [30] = "Tablet", [31] = "Convertible",
+  [32] = "Detachable", [33] = "IoT gateway", [34] = "Embedded PC", [35] = "Mini PC", [36] = "Stick PC" }
+local CHASSIS_STATES = { [1] = "Other", [2] = "Unknown", [3] = "Safe", [4] = "Warning",
+  [5] = "Critical", [6] = "Non-recoverable" }
+local CHASSIS_SECURITY = { [1] = "Other", [2] = "Unknown", [3] = "None",
+  [4] = "External interface locked out", [5] = "External interface enabled" }
 local PLACEHOLDERS = { ["unknown"] = true, ["not specified"] = true, ["not provided"] = true,
   ["none"] = true, ["default string"] = true, ["to be filled by o.e.m."] = true }
 
@@ -160,6 +177,8 @@ function M.parse(data, metadata, options)
     "max_firmware_supplies", options.max_firmware_supplies, 64, 64)
   local max_firmware_batteries = Common.positive_integer(
     "max_firmware_batteries", options.max_firmware_batteries, 64, 64)
+  local max_baseboards = Common.positive_integer("max_baseboards", options.max_baseboards, 64, 64)
+  local max_enclosures = Common.positive_integer("max_enclosures", options.max_enclosures, 64, 64)
   local max_firmware_bmcs = Common.positive_integer(
     "max_firmware_bmcs", options.max_firmware_bmcs, 64, 64)
   local max_firmware_tpms = Common.positive_integer(
@@ -169,6 +188,7 @@ function M.parse(data, metadata, options)
   local max_host_interfaces = Common.positive_integer(
     "max_host_interfaces", options.max_host_interfaces, 64, 64)
   local result = { arrays = {}, devices = {}, slots = {}, ports = {}, onboard_devices = {},
+    baseboards = {}, enclosures = {},
     processors = {}, caches = {},
     array_ranges = {}, device_ranges = {}, channels = {}, firmware_power_supplies = {},
     firmware_batteries = {}, firmware_bmcs = {}, firmware_tpms = {},
@@ -204,7 +224,7 @@ function M.parse(data, metadata, options)
     result.structure_count = result.structure_count + 1
     if kind == 127 then ended = true; break end
     local record, members
-    if kind == 4 or kind == 7 or kind == 8 or kind == 9 or kind == 10 or kind == 16 or kind == 17
+    if kind == 2 or kind == 3 or kind == 4 or kind == 7 or kind == 8 or kind == 9 or kind == 10 or kind == 16 or kind == 17
         or kind == 19 or kind == 20 or kind == 22 or kind == 37
         or kind == 38 or kind == 39 or kind == 41 or kind == 42 or kind == 43
         or kind == 45 then
@@ -254,7 +274,88 @@ function M.parse(data, metadata, options)
           record.address_span_bytes = end_bytes - start_bytes + 1
         else issue("mapped_address_span", position - 1, record) end
       end
-      if kind == 4 and length >= 26 then
+      if kind == 2 and length >= 8 then
+        record.manufacturer, record.product, record.version = read_string(4), read_string(5), read_string(6)
+        record.serial_present, record.asset_tag_present = read_string(7) ~= nil, read_string(8) ~= nil
+        record.structure_type = 2
+        record.location = read_string(10)
+        local flags = uint(fields, 9, 1)
+        if flags then
+          record.feature_flags = flags
+          if flags & 0xe0 ~= 0 then issue("baseboard_reserved_flags", position - 1, record) end
+        end
+        local chassis = uint(fields, 11, 2)
+        if chassis and chassis ~= 0xffff then record.chassis_handle = string.format("%04x", chassis) end
+        record.board_type_code = uint(fields, 13, 1)
+        record.board_type = BOARD_TYPES[record.board_type_code]
+        record.contained_handles = {}
+        record.contained_count = uint(fields, 14, 1)
+        record.containment_complete = record.contained_count ~= nil
+          and 15 + record.contained_count * 2 <= length
+        if record.contained_count and not record.containment_complete then issue("baseboard_contained_length", position - 1, record) end
+        local references = {}
+        for index = 1, math.min(record.contained_count or 0, math.max(0, (length - 15) // 2)) do
+          local reference = uint(fields, 15 + (index - 1) * 2, 2)
+          if reference == 0xffff or reference == handle or references[reference] then
+            record.containment_complete = false
+            issue("baseboard_contained_handle", position - 1, record)
+          else
+            references[reference] = true
+            record.contained_handles[#record.contained_handles + 1] = string.format("%04x", reference)
+          end
+        end
+        if #result.baseboards < max_baseboards then result.baseboards[#result.baseboards + 1] = record
+        else result.truncated = true; issue("baseboard_limit", position - 1) end
+      elseif kind == 3 and length >= 9 then
+        record.structure_type = 3
+        record.manufacturer, record.version = read_string(4), read_string(6)
+        record.serial_present, record.asset_tag_present = read_string(7) ~= nil, read_string(8) ~= nil
+        local chassis = uint(fields, 5, 1)
+        record.chassis_type_code, record.lock_reported_present = chassis & 0x7f, chassis & 0x80 ~= 0
+        record.chassis_type = CHASSIS_TYPES[record.chassis_type_code]
+        for offset, key in pairs({ [9] = "boot_state", [10] = "power_state", [11] = "thermal_state" }) do
+          local value = uint(fields, offset, 1)
+          record[key .. "_code"], record[key] = value, CHASSIS_STATES[value]
+        end
+        record.security_state_code = uint(fields, 12, 1)
+        record.security_state = CHASSIS_SECURITY[record.security_state_code]
+        local oem = uint(fields, 13, 4)
+        record.oem_data_present = oem ~= nil and oem ~= 0
+        local height, cords = uint(fields, 17, 1), uint(fields, 18, 1)
+        record.height_u = height and height > 0 and height < 255 and height or nil
+        record.power_cords = cords and cords > 0 and cords or nil
+        record.contained_elements = {}
+        local count, stride = uint(fields, 19, 1), uint(fields, 20, 1)
+        record.contained_count, record.contained_record_length = count, stride
+        if count ~= nil then
+          local complete = stride ~= nil and ((count == 0 and stride == 0) or (count > 0 and stride >= 3))
+            and 21 + count * stride <= length
+          record.containment_complete = complete
+          if not complete then issue("enclosure_contained_length", position - 1, record)
+          else
+            for index = 1, count do
+              local offset = 21 + (index - 1) * stride
+              local code, minimum, maximum = uint(fields, offset, 1), uint(fields, offset + 1, 1), uint(fields, offset + 2, 1)
+              local element = { type_code = code & 0x7f, type_kind = code & 0x80 ~= 0 and "structure" or "baseboard",
+                minimum = minimum, maximum = maximum }
+              if element.type_kind == "baseboard" then element.board_type = BOARD_TYPES[element.type_code] end
+              if minimum == 255 or maximum == 0 or minimum > maximum then
+                record.containment_complete = false;issue("enclosure_contained_range", position - 1, record)
+              else record.contained_elements[#record.contained_elements + 1] = element end
+            end
+            local tail = 21 + count * stride
+            record.sku = read_string(tail)
+            record.rack_type_code = uint(fields, tail + 1, 1)
+            local rack_height = uint(fields, tail + 2, 1)
+            if height == 255 and record.rack_type_code == 1 and rack_height and rack_height > 0 then
+              record.height_ou = rack_height
+            end
+          end
+        end
+        if height == 255 and not record.height_ou then issue("enclosure_extended_height", position - 1, record) end
+        if #result.enclosures < max_enclosures then result.enclosures[#result.enclosures + 1] = record
+        else result.truncated = true; issue("enclosure_limit", position - 1) end
+      elseif kind == 4 and length >= 26 then
         record.designation = read_string(4)
         record.processor_type_code = uint(fields, 5, 1)
         record.family_code = uint(fields, 6, 1)
@@ -877,6 +978,7 @@ function M.parse(data, metadata, options)
     end
   end
   if #result.arrays == 0 and #result.devices == 0 and #result.slots == 0
+      and #result.baseboards == 0 and #result.enclosures == 0
       and #result.ports == 0
       and #result.onboard_devices == 0
       and #result.channels == 0
