@@ -631,6 +631,13 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 
 ### 2026-10-19：Windows 原生显示清单与会话身份
 
+提交 `21c7a50` 的 [主 CI](https://github.com/Water-Run/wtop/actions/runs/39143263087)
+16 个作业与 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/39143263263)
+两个作业通过。四类精确归档、Linux/macOS/Windows、rootless 与静态检查
+五项产物验收通过；源码双 Lua 各 162 文件、完整终端矩阵和三主机各
+16 个共享文件通过。749 个非文档文件与冻结源码/共享包一致，十语言
+各 1946 条消息。
+
 Windows 的 `displays` 来源使用只读 SetupAPI 当前存在设备清单和缓存 EDID，
 不依赖当前会话的 GDI 桌面。读取在独立进程中运行，完成回复后关闭；原有
 传输编号保持，新来源追加在编号 8。所有设备清单、注册表句柄先关闭，再
@@ -641,28 +648,32 @@ Windows 的 `displays` 来源使用只读 SetupAPI 当前存在设备清单和�
 重复实例和未知身份不借用旧设备的规格或父设备关系。公开输出只保留会话
 范围说明和核对后的关系，不输出原始 PnP 身份与序列号值。
 
-候选的两台 Windows 三种 CLI 和四次实际经典控制台通过，覆盖 80×25、
-200×60、搜索、滚动、父设备、返回、进程页与退出。Windows 11 报告 IPS
-产品代码 8528、EDID 1.3，名称描述符异常保持 partial；Server 2008 报告
-XRQ 产品代码 4448、PTV-W116-WH，EDID 为 fresh。两者均核对到
-`pci:01:00.0`，实际缓存数据与独立 `edid-decode` 的公开厂商、产品、版本
-字段一致，旧主机还核对名称。系统列为存在不代表物理连接或活动桌面模式。
+候选两主机三种 CLI、四次实际经典控制台通过，覆盖 80×25、200×60、搜索、
+滚动、父设备、返回、进程页与退出。Windows 11 报告 IPS 产品代码 8528、
+EDID 1.3，名称描述符异常保持 partial；Server 2008 报告 XRQ 产品代码
+4448、PTV-W116-WH，EDID 为 fresh。两者均核对到 `pci:01:00.0`；实际
+缓存数据与独立 `edid-decode` 的公开厂商、产品、版本字段一致，旧主机还
+核对名称。基础块数值另有 23/17 项通过独立核对，包含尺寸、声明刷新率与
+像素时钟；扩展块时序未混入基础块。系统列为存在不代表物理连接或活动
+桌面模式。候选各八个流式
+快照跨两次观察仍保持同一会话与设备 ID。
 
-同一生产采集代码的 32 位 API 夹具已在两台主机运行，覆盖权限、替换、
-重父级、重复、限额和 Lua OOM，并核查句柄在任何 Lua 分配前已关闭。
-两台主机的 49 个传输场景均通过；各八个流式快照跨两次观察、读取器退出
-仍保持同一会话与设备 ID。完整源码、共享主机、CI 和精确包验收仍在进行；
-证据保存在
-`build/hardware-windows-displays-20261018/`。早期采集包装器丢失 Lua 启动
-参数、Windows 相对可执行路径和窄屏证据重排的失败已保留，均未作为程序
-缺陷或成功证据。
+精确 Windows 目录包和单文件包在两台主机完成二十项 CLI、四次经典控制台
+导航与三十二个流式快照；显示规格、OS 存在标记、父设备和会话 ID 范围
+保持。生产 API 采集代码的 32 位夹具在两台主机验证权限、替换、重父级、
+重复、上限、Lua OOM，以及任何 Lua 分配前句柄已关闭；通用传输的
+49 个场景也在两台主机通过。软件身份用例覆盖重排、确认消失后再现、
+时钟回退、缓存上限和隔离读取器重启，不作为物理热插拔证明。
 
+证据保存在 `build/hardware-windows-displays-20261018/`。采集包装器丢失
+Lua 启动参数、Windows 相对可执行路径、测试复制脚本旧文件名和窄屏
+证据重排的早期失败均保留；修正后复用有效记录，不将其算作程序失败。
 数据语义依据 Microsoft 的
 [当前存在设备枚举](https://learn.microsoft.com/en-us/windows/win32/api/setupapi/nf-setupapi-setupdigetclassdevsw)、
 [设备硬件键](https://learn.microsoft.com/en-us/windows/win32/api/setupapi/nf-setupapi-setupdiopendevregkey)和
 [只读注册表值](https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regqueryvalueexw)。
 XP 真机、macOS 原生显示来源、活动模式、EDID 扩展、物理热插拔、资源预算
-与完整交付仍需继续推进。
+与完整交付仍需继续推进；此前 Windows 偶发频率超时的原因仍未定位。
 
 ### 2026-10-18：DRM 显示连接器与 EDID 基础规格
 
