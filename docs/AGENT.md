@@ -225,4 +225,6 @@ printf '%s\n' "$context" | jq '.overall, .signals, .top.processes'
 
 显示连接器在 `metrics.displays` 中提供有界设备清单、总数和截断标识。
 EDID 字段为驱动缓存的公开声明，不作为当前显示模式；来源不支持或旧数据
-保留自己的状态与观察时间，序列号原值不导出。当前原生来源仅 Linux。
+保留自己的状态与观察时间，序列号原值不导出。当前原生来源包括 Linux 与 Windows。Windows 的 `os_present` 仅表示系统设备
+清单中的存在；`identity_scope=session` 的显示 ID 只在同一 `identity_session`
+中比较。确认消失后再次出现会使用新 ID，原始 PnP 身份与 EDID 字节不导出。

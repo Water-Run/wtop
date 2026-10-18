@@ -54,7 +54,7 @@ build target but hasn't been tested on a real XP machine yet.
   Workloads, System and Insights.
 - A process list with search, sorting, tree navigation, links to workloads,
   and a confirmed signal menu.
-- Linux development builds list display connectors and cached EDID specifications in System. Select a connector and press `Enter` for details.
+- Linux and Windows development builds list display devices and cached EDID specifications in System. Select a device and press `Enter` for details.
 - On x86 Linux, development builds show CPUID capabilities alongside the kernel’s CPU topology and cache reports.
 - Windows development builds can use Intel Sysman for GPU power, reported caps, clocks and throttling reasons.
 - Supported AMD Windows drivers can provide chip power, temperature, clocks and fan speed through ADL.

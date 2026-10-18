@@ -71,6 +71,10 @@ function Proxy:_read(context)
     result.transport = "process"
     result.sample_started_ns = metadata.sample_started_ns
     result.sample_finished_ns = metadata.sample_finished_ns
+    if self.id == "displays" then
+        self.display_identities = self.display_identities or {}
+        require("wtop.collectors.native_displays").publish(result, self.display_identities)
+    end
     -- Stateless, infrequent reads do not need an idle VM between replies.
     if self.id == "spd" or self.id == "wifi" or self.id == "displays" then
         local session = self.session

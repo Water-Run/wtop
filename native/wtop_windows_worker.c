@@ -24,9 +24,9 @@ static char launcher_key;
 #define NVML_SOURCE 3u
 #define LEVELZERO_SOURCE 6u
 #define ADL_SOURCE 7u
-#define HARDWARE_SOURCES 8u
-static const char *const source_names[HARDWARE_SOURCES]={"cpufreq","gpu","hwmon","nvml","disk_health","disk","levelzero","adl"};
-static const WCHAR *const wide_source_names[HARDWARE_SOURCES]={L"cpufreq",L"gpu",L"hwmon",L"nvml",L"disk_health",L"disk",L"levelzero",L"adl"};
+#define HARDWARE_SOURCES 9u
+static const char *const source_names[HARDWARE_SOURCES]={"cpufreq","gpu","hwmon","nvml","disk_health","disk","levelzero","adl","displays"};
+static const WCHAR *const wide_source_names[HARDWARE_SOURCES]={L"cpufreq",L"gpu",L"hwmon",L"nvml",L"disk_health",L"disk",L"levelzero",L"adl",L"displays"};
 static volatile LONG controllers,source_controllers[HARDWARE_SOURCES];
 static int sdk_source(unsigned source) {return source==NVML_SOURCE||source==LEVELZERO_SOURCE||source==ADL_SOURCE;}
 static unsigned source_index(const char *name,size_t size){

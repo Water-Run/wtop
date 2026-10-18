@@ -846,9 +846,9 @@ function M.render(snapshot)
     end
 
     local displays = object(snapshot.displays)
-    table_section(lines, "Display connectors", { "Connector", "Connection", "Enabled", "DPMS", "PCI device", "Quality" },
+    table_section(lines, "Display connectors", { "Connector", "Connection", "OS present", "Enabled", "DPMS", "PCI device", "Quality" },
         displays.devices, function(device)
-            return { device.id, device.connection, device.enabled, device.dpms, device.pci_address, device.quality }
+            return { device.id, device.connection, device.os_present, device.enabled, device.dpms, device.pci_address, device.quality }
         end, displays)
     local display_specs, display_timings = {}, {}
     for _, device in ipairs(list(displays.devices)) do
@@ -876,6 +876,10 @@ function M.render(snapshot)
     if #list(displays.devices) > 0 then
         lines[#lines + 1] = "Cached EDID declarations and driver mode names are not the active resolution, refresh rate, color depth or HDR state. Interlaced timings retain encoded lines; extensions are not decoded. Serial values are omitted."
         lines[#lines + 1] = ""
+        if displays.identity_session then
+            lines[#lines + 1] = "Windows display IDs identify devices within this sampling session. OS presence does not establish a physical connection or an active desktop mode."
+            lines[#lines + 1] = ""
+        end
     end
 
     local inventory = object(snapshot.inventory)

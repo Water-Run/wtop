@@ -1988,7 +1988,7 @@ local function export_displays(source, limit, state)
     local current = Quality.current_source({ displays = state }, "displays")
     for index = 1, math.min(#devices, limit or 128) do
         local device = devices[index]
-        local row = copy_fields(device, { "id", "card", "connector", "connector_id", "connection",
+        local row = copy_fields(device, { "id", "card", "connector", "connector_id", "connection", "backend", "os_present", "driver", "win32_error", "identity_scope",
             "enabled", "dpms", "pci_address", "source", "status", "quality", "reason",
             "edid_status", "edid_reason", "observed_at_ns", "modes_status", "modes_truncated" })
         if not current then row.quality = "stale" end
@@ -2015,6 +2015,7 @@ local function export_displays(source, limit, state)
         output[index] = row
     end
     return json.object({ devices = output, total = source.total or #devices,
+        identity_session = source.identity_session,
         total_is_lower_bound = source.total_is_lower_bound,
         truncated = source.truncated == true or #devices > #output,
         status = state and state.status or source.status, quality = state and state.quality,

@@ -37,6 +37,10 @@ local interface_reasons = {
   "hardware_worker_unavailable",
 
   "display_changed_during_read",
+  "display_edid_budget_exhausted",
+  "display_identity_unavailable",
+  "display_native_data_invalid",
+  "display_parent_unavailable",
   "display_edid_incomplete",
   "display_edid_unavailable",
   "display_invalid_modes",
@@ -56,6 +60,7 @@ local interface_reasons = {
   "edid_too_large",
   "edid_unsupported_version",
   "no_display_connectors",
+  "no_windows_displays",
 
   "no_memory_devices",
   "smbios_unavailable",

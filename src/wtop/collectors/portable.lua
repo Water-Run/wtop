@@ -664,6 +664,15 @@ local function new_collector(id, description, options)
       })
     end
     if id == "powercap" then timestamp_ns = Common.now_ns(context) end
+    if id == "displays" then
+      local Displays = require("wtop.collectors.native_displays")
+      local result = Displays.result(data, Common.now_ns(context))
+      if not (options and options._hardware_direct) then
+        self.display_identities = self.display_identities or {}
+        Displays.publish(result, self.display_identities)
+      end
+      return result
+    end
     local sampling_pending = data._sampling_pending == true
     data._sampling_pending = nil
     local quality, retry_after_ms = "fresh", nil

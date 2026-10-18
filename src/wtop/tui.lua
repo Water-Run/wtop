@@ -2685,10 +2685,16 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         end
     end
     if node.kind == "display_connector" then
-        add("display.connection", "Connection", Technical.state(i18n, device.connection))
-        add("display.enabled", "Encoder enabled", device.enabled)
-        add("display.dpms", "Driver DPMS", device.dpms)
-        add("display.connector_id", "DRM connector ID", device.connector_id)
+        if device.backend == "setupapi" then
+            add("display.os_present", "Present in OS device list", device.os_present)
+            lines[#lines + 1] = translated(i18n, "display.os_note",
+                "OS presence does not establish a physical connection or an active desktop mode.")
+        else
+            add("display.connection", "Connection", Technical.state(i18n, device.connection))
+            add("display.enabled", "Encoder enabled", device.enabled)
+            add("display.dpms", "Driver DPMS", device.dpms)
+            add("display.connector_id", "DRM connector ID", device.connector_id)
+        end
         add("display.edid_status", "Cached EDID status", Technical.state(i18n, device.edid_status))
         add("inspector.quality", "Quality", Technical.state(i18n, device.quality))
         if device.reason then add("inspector.reason", "Reason", Technical.reason(i18n, device.reason)) end

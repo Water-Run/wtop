@@ -286,6 +286,18 @@ function M.build(snapshot)
       node.parent_id = target.id
     else node.parent_id, result.partial = nil, true end
   end
+  local function attach_pnp_parent(node, device, resource)
+    local parent = pnp_identity(device._pnp_parent_id)
+    if not node or not parent then return end
+    local target = pnp_nodes[parent]
+    if Quality.current_source(snapshot.quality, "inventory")
+        and Quality.current_source(snapshot.quality, resource)
+        and target and not target.ambiguous
+        and (device._pnp_parent_bus == "pci" or device._pnp_parent_bus == "usb")
+        and target.bus == device._pnp_parent_bus then
+      node.parent_id = target.id
+    else result.partial = true end
+  end
   for _, node in ipairs(unsorted) do
     registry_parent(node, node.device, "inventory")
   end
@@ -382,6 +394,7 @@ function M.build(snapshot)
         if device.quality ~= "gap" and Quality.current_source(snapshot.quality, "displays")
             and Quality.current_source(snapshot.quality, "inventory")
             and target and not target.ambiguous then node.parent_id = target.id end
+        if device.quality ~= "gap" then attach_pnp_parent(node, device, "displays") end
       end
     end
   end
@@ -423,17 +436,7 @@ function M.build(snapshot)
           local node = add_node(source[1], name, device, source[1] .. ":" .. identity,
             M.target_id(path and path:match("^(.*)/[^/]+$"), result.by_id),
             source[2], device.id or name)
-          local pnp_parent = pnp_identity(device._pnp_parent_id)
-          if node and pnp_parent then
-            local target = pnp_nodes[pnp_parent]
-            if Quality.current_source(snapshot.quality, "inventory")
-                and Quality.current_source(snapshot.quality, source[2])
-                and target and not target.ambiguous
-                and (device._pnp_parent_bus == "pci" or device._pnp_parent_bus == "usb")
-                and target.bus == device._pnp_parent_bus then
-              node.parent_id = target.id
-            else result.partial = true end
-          end
+          attach_pnp_parent(node, device, source[2])
           if node then registry_parent(node, device, source[2]) end
           if source[1] == "block" then
             index_unique(blocks_by_path, path, node)

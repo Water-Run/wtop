@@ -1764,6 +1764,190 @@ static int l_read_smbios(lua_State *L) {
     return 1;
 }
 
+/* Cached monitor declarations are available through SetupAPI even when this
+ * session has no GDI desktop. DIGCF_PRESENT is OS presence, not an active mode
+ * or a measured physical connection. All APIs used here predate XP. */
+#define MAX_DISPLAY_DEVICES 128u
+#define MAX_DISPLAY_EDID 32768u
+#define MAX_DISPLAY_EDID_TOTAL (1024u * 1024u)
+static const GUID display_class = { 0x4d36e96e, 0xe325, 0x11ce,
+    { 0xbf, 0xc1, 0x08, 0x00, 0x2b, 0xe1, 0x03, 0x18 } };
+enum display_edid_state { DISPLAY_EDID_ABSENT, DISPLAY_EDID_BYTES,
+    DISPLAY_EDID_DENIED, DISPLAY_EDID_ERROR, DISPLAY_EDID_OVERSIZE, DISPLAY_EDID_CHANGED, DISPLAY_EDID_BUDGET };
+typedef struct {
+    WCHAR instance[256], parent[256], driver[160];
+    char parent_bus[4];
+    DWORD ordinal, error, edid_size, edid_offset;
+    int identity_verified, initial_identity, parent_status;
+    enum display_edid_state edid_state;
+    uint64_t observed_at_ns;
+} display_record;
+typedef struct {
+    display_record records[MAX_DISPLAY_DEVICES];
+    BYTE first[MAX_DISPLAY_EDID], second[MAX_DISPLAY_EDID];
+    BYTE edid[MAX_DISPLAY_EDID_TOTAL];
+} display_sample;
+
+static uint64_t display_now_ns(void) {
+    LARGE_INTEGER counter, frequency;
+    if (!QueryPerformanceCounter(&counter) || !QueryPerformanceFrequency(&frequency)
+            || counter.QuadPart < 0 || frequency.QuadPart <= 0) return 0;
+    uint64_t n = (uint64_t)counter.QuadPart, f = (uint64_t)frequency.QuadPart;
+    return n / f * UINT64_C(1000000000) + n % f * UINT64_C(1000000000) / f;
+}
+
+static void display_utf8_field(lua_State *L, const char *name, const WCHAR *value) {
+    char bytes[1024];
+    int length = WideCharToMultiByte(CP_UTF8, 0, value, -1, bytes, sizeof(bytes), NULL, NULL);
+    if (length > 0) {
+        lua_pushlstring(L, bytes, (size_t)length - 1);
+        lua_setfield(L, -2, name);
+    }
+}
+
+static enum display_edid_state display_edid(HDEVINFO set, SP_DEVINFO_DATA *device,
+    display_sample *sample, display_record *row, DWORD *used) {
+    HKEY key = SetupDiOpenDevRegKey(set, device, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_QUERY_VALUE);
+    if (key == INVALID_HANDLE_VALUE) {
+        row->error = GetLastError();
+        return row->error == ERROR_ACCESS_DENIED ? DISPLAY_EDID_DENIED : DISPLAY_EDID_ABSENT;
+    }
+    DWORD type = 0, second_type = 0, bytes = MAX_DISPLAY_EDID, second_bytes = MAX_DISPLAY_EDID;
+    LONG status = RegQueryValueExW(key, L"EDID", NULL, &type, sample->first, &bytes);
+    LONG second_status = RegQueryValueExW(key, L"EDID", NULL, &second_type, sample->second, &second_bytes);
+    RegCloseKey(key);
+    row->error = (DWORD)status;
+    if (status != second_status || type != second_type || bytes != second_bytes)
+        return DISPLAY_EDID_CHANGED;
+    if (status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND) return DISPLAY_EDID_ABSENT;
+    if (status == ERROR_ACCESS_DENIED) return DISPLAY_EDID_DENIED;
+    if (status == ERROR_MORE_DATA || bytes > MAX_DISPLAY_EDID) return DISPLAY_EDID_OVERSIZE;
+    if (status != ERROR_SUCCESS || type != REG_BINARY) return DISPLAY_EDID_ERROR;
+    if (memcmp(sample->first, sample->second, bytes) != 0) return DISPLAY_EDID_CHANGED;
+    if (!bytes) return DISPLAY_EDID_ABSENT;
+    if (bytes > MAX_DISPLAY_EDID_TOTAL - *used) return DISPLAY_EDID_BUDGET;
+    row->edid_offset = *used;
+    row->edid_size = bytes;
+    memcpy(sample->edid + *used, sample->first, bytes);
+    *used += bytes;
+    return DISPLAY_EDID_BYTES;
+}
+
+static int l_collect_displays(lua_State *L) {
+    /* Allocate before opening handles; no Lua allocation occurs while a
+     * device set or registry key is live. Lua owns the sample across OOM. */
+    display_sample *sample = (display_sample *)lua_newuserdatauv(L, sizeof(*sample), 0);
+    memset(sample->records, 0, sizeof(sample->records));
+    DWORD count = 0, total = 0, used = 0, enumeration_error = ERROR_SUCCESS;
+    int truncated = 0, partial = 0;
+    HDEVINFO set = SetupDiGetClassDevsW(&display_class, NULL, NULL, DIGCF_PRESENT);
+    if (set != INVALID_HANDLE_VALUE) {
+        for (DWORD index = 0; index <= MAX_DISPLAY_DEVICES; ++index) {
+            SP_DEVINFO_DATA device;
+            memset(&device, 0, sizeof(device));
+            device.cbSize = sizeof(device);
+            if (!SetupDiEnumDeviceInfo(set, index, &device)) {
+                DWORD error = GetLastError();
+                if (error != ERROR_NO_MORE_ITEMS) enumeration_error = error;
+                break;
+            }
+            ++total;
+            if (index == MAX_DISPLAY_DEVICES) { truncated = 1; break; }
+            display_record *row = &sample->records[count++];
+            row->ordinal = index;
+            WCHAR confirmed[256] = { 0 }, parent[256] = { 0 };
+            char bus[4] = { 0 };
+            row->identity_verified = SetupDiGetDeviceInstanceIdW(set, &device, row->instance, 256, NULL)
+                && row->instance[0] && row->instance[255] == 0
+                && wtop_pnp_identity(device.DevInst, confirmed, 256)
+                && _wcsicmp(confirmed, row->instance) == 0;
+            row->initial_identity = row->identity_verified;
+            if (row->identity_verified) {
+                row->parent_status = wtop_pnp_parent(device.DevInst, row->instance, row->parent, row->parent_bus);
+                DWORD type = 0;
+                if (!SetupDiGetDeviceRegistryPropertyW(set, &device, SPDRP_SERVICE, &type,
+                        (BYTE *)row->driver, sizeof(row->driver) - sizeof(WCHAR), NULL)
+                        || type != REG_SZ) row->driver[0] = 0;
+                row->edid_state = display_edid(set, &device, sample, row, &used);
+                int after_parent = wtop_pnp_parent(device.DevInst, row->instance, parent, bus);
+                if (!wtop_pnp_identity(device.DevInst, confirmed, 256)
+                        || _wcsicmp(confirmed, row->instance) != 0
+                        || after_parent != row->parent_status || _wcsicmp(parent, row->parent) != 0
+                        || strcmp(bus, row->parent_bus) != 0 || row->edid_state == DISPLAY_EDID_CHANGED)
+                    row->identity_verified = 0;
+            }
+            row->observed_at_ns = display_now_ns();
+            if (!row->identity_verified || row->parent_status < 0
+                    || row->edid_state >= DISPLAY_EDID_DENIED) partial = 1;
+        }
+        SetupDiDestroyDeviceInfoList(set);
+    } else enumeration_error = GetLastError();
+    for (DWORD i = 0; i < count; ++i) {
+        for (DWORD j = i + 1; j < count; ++j) {
+            if (sample->records[i].instance[0] && sample->records[j].instance[0]
+                    && _wcsicmp(sample->records[i].instance, sample->records[j].instance) == 0) {
+                sample->records[i].identity_verified = sample->records[j].identity_verified = 0;
+                partial = 1;
+            }
+        }
+    }
+    if (enumeration_error != ERROR_SUCCESS) partial = 1;
+    lua_createtable(L, 0, 8);
+    string_field(L, "backend", "setupapi");
+    string_field(L, "status", count ? "ok" : enumeration_error == ERROR_ACCESS_DENIED ? "denied"
+        : enumeration_error != ERROR_SUCCESS ? "error" : "unavailable");
+    string_field(L, "quality", partial ? "partial" : truncated ? "truncated" : "fresh");
+    if (!count) string_field(L, "reason", enumeration_error == ERROR_ACCESS_DENIED ? "display_inventory_denied"
+        : enumeration_error != ERROR_SUCCESS ? "display_inventory_incomplete" : "no_windows_displays");
+    else if (partial) string_field(L, "reason", "display_inventory_incomplete");
+    else if (truncated) string_field(L, "reason", "device_enumeration_truncated");
+    string_field(L, "source", "SetupAPI:GUID_DEVCLASS_MONITOR/EDID");
+    integer_field(L, "total", total);
+    boolean_field(L, "truncated", truncated);
+    boolean_field(L, "total_is_lower_bound", truncated || enumeration_error != ERROR_SUCCESS);
+    lua_createtable(L, (int)count, 0);
+    for (DWORD i = 0; i < count; ++i) {
+        display_record *row = &sample->records[i];
+        char id[32];
+        snprintf(id, sizeof(id), "monitor%lu", (unsigned long)row->ordinal);
+        lua_createtable(L, 0, 16);
+        string_field(L, "id", id);
+        string_field(L, "backend", "setupapi");
+        string_field(L, "source", "SetupAPI:GUID_DEVCLASS_MONITOR/EDID");
+        boolean_field(L, "_identity_verified", row->identity_verified);
+        if (row->observed_at_ns) integer_field(L, "observed_at_ns", (lua_Integer)row->observed_at_ns);
+        if (row->identity_verified) {
+            boolean_field(L, "os_present", 1);
+            /* Private identity for the parent's bounded session-ID map. */
+            display_utf8_field(L, "_pnp_instance_id", row->instance);
+            string_field(L, "connection", "unknown");
+            string_field(L, "quality", row->parent_status < 0 || row->edid_state >= DISPLAY_EDID_DENIED ? "partial" : "fresh");
+            if (row->driver[0]) display_utf8_field(L, "driver", row->driver);
+            if (row->parent_status > 0) {
+                display_utf8_field(L, "_pnp_parent_id", row->parent);
+                string_field(L, "_pnp_parent_bus", row->parent_bus);
+            } else if (row->parent_status < 0) string_field(L, "reason", "display_parent_unavailable");
+            const char *state = row->edid_state == DISPLAY_EDID_BYTES ? "ok" : row->edid_state == DISPLAY_EDID_DENIED ? "denied"
+                : row->edid_state == DISPLAY_EDID_BUDGET ? "unavailable"
+                : row->edid_state >= DISPLAY_EDID_ERROR ? "error" : "unavailable";
+            string_field(L, "edid_status", state);
+            if (row->edid_state == DISPLAY_EDID_BYTES) {
+                lua_pushlstring(L, (const char *)sample->edid + row->edid_offset, row->edid_size);
+                lua_setfield(L, -2, "_edid");
+            } else if (row->edid_state == DISPLAY_EDID_OVERSIZE) string_field(L, "edid_reason", "edid_too_large");
+            else if (row->edid_state == DISPLAY_EDID_BUDGET) string_field(L, "edid_reason", "display_edid_budget_exhausted");
+            if (row->error) integer_field(L, "win32_error", row->error);
+        } else {
+            string_field(L, "quality", "gap");
+            string_field(L, "reason", row->initial_identity ? "display_changed_during_read" : "display_identity_unavailable");
+            string_field(L, "edid_status", "gap");
+        }
+        lua_rawseti(L, -2, (lua_Integer)i + 1);
+    }
+    lua_setfield(L, -2, "devices");
+    return 1;
+}
+
 static const luaL_Reg hardware_functions[] = {
     {"read_smbios", l_read_smbios},
     {"collect_gpu", l_collect_gpu},
@@ -1772,6 +1956,7 @@ static const luaL_Reg hardware_functions[] = {
     {"collect_hwmon", l_collect_hwmon},
     {"collect_cgroup", l_collect_cgroup},
     {"collect_inventory", l_collect_inventory},
+    {"collect_displays", l_collect_displays},
     {NULL, NULL},
 };
 

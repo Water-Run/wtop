@@ -629,6 +629,41 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
+### 2026-10-19：Windows 原生显示清单与会话身份
+
+Windows 的 `displays` 来源使用只读 SetupAPI 当前存在设备清单和缓存 EDID，
+不依赖当前会话的 GDI 桌面。读取在独立进程中运行，完成回复后关闭；原有
+传输编号保持，新来源追加在编号 8。所有设备清单、注册表句柄先关闭，再
+分配 Lua 输出；原始 EDID 在读取器内进入共享解析器，不进入公共输出。
+
+私有 PnP 身份由父进程映射为有界的会话 ID。清单重排和读取器退出不会
+重定向已选择的设备；确认消失后再次出现会取得新 ID。失败、读取间替换、
+重复实例和未知身份不借用旧设备的规格或父设备关系。公开输出只保留会话
+范围说明和核对后的关系，不输出原始 PnP 身份与序列号值。
+
+候选的两台 Windows 三种 CLI 和四次实际经典控制台通过，覆盖 80×25、
+200×60、搜索、滚动、父设备、返回、进程页与退出。Windows 11 报告 IPS
+产品代码 8528、EDID 1.3，名称描述符异常保持 partial；Server 2008 报告
+XRQ 产品代码 4448、PTV-W116-WH，EDID 为 fresh。两者均核对到
+`pci:01:00.0`，实际缓存数据与独立 `edid-decode` 的公开厂商、产品、版本
+字段一致，旧主机还核对名称。系统列为存在不代表物理连接或活动桌面模式。
+
+同一生产采集代码的 32 位 API 夹具已在两台主机运行，覆盖权限、替换、
+重父级、重复、限额和 Lua OOM，并核查句柄在任何 Lua 分配前已关闭。
+两台主机的 49 个传输场景均通过；各八个流式快照跨两次观察、读取器退出
+仍保持同一会话与设备 ID。完整源码、共享主机、CI 和精确包验收仍在进行；
+证据保存在
+`build/hardware-windows-displays-20261018/`。早期采集包装器丢失 Lua 启动
+参数、Windows 相对可执行路径和窄屏证据重排的失败已保留，均未作为程序
+缺陷或成功证据。
+
+数据语义依据 Microsoft 的
+[当前存在设备枚举](https://learn.microsoft.com/en-us/windows/win32/api/setupapi/nf-setupapi-setupdigetclassdevsw)、
+[设备硬件键](https://learn.microsoft.com/en-us/windows/win32/api/setupapi/nf-setupapi-setupdiopendevregkey)和
+[只读注册表值](https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regqueryvalueexw)。
+XP 真机、macOS 原生显示来源、活动模式、EDID 扩展、物理热插拔、资源预算
+与完整交付仍需继续推进。
+
 ### 2026-10-18：DRM 显示连接器与 EDID 基础规格
 
 提交 `6fe3134` 的 [主 CI](https://github.com/Water-Run/wtop/actions/runs/39135462279)
@@ -4597,7 +4632,7 @@ Windows/macOS 的 NUMA 原生提供方仍待实现，本轮没有新增这些平
   Lua 5.5.1 与系统 Lua 5.4.8 下通过。本次沙箱的实时网络命名空间
   只暴露 `lo`；源码 Snapshot 的 `lo` 队列为 RX 1、TX 1，与 sysfs
   对应目录一致。多队列网卡仍缺少本机实测。
-- 当前源码套件包含 161 个 Lua 测试文件；此前矩阵和按日期记载的
+- 当前源码套件包含 162 个 Lua 测试文件；此前矩阵和按日期记载的
   120 文件运行是当时的验证结果，不计作本轮新增测试的覆盖证据。
 - `make check test-55 test-pty-quick` 通过，121 个 Lua 文件均通过；
   源码和 onedir 的硬件详情 PTY 场景也通过。onedir Snapshot 导出
