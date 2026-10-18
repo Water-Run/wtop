@@ -21,6 +21,7 @@ local ThreadMembers = require("wtop.linux.thread_members")
 local ProcessCgroup = require("wtop.linux.process_cgroup")
 local Quality = require("wtop.model.quality")
 local Thermal = require("wtop.model.thermal")
+local SensorPower = require("wtop.model.sensor_power")
 local WorkloadNavigation = require("wtop.model.workload_navigation")
 local Terminal = require("wtop.terminal")
 local UI = require("wtop.ui")
@@ -707,9 +708,34 @@ local function power_detail_lines(snapshot, i18n)
         if type(row.power_interval_ns) == "number" and row.power_interval_ns > 0 then
             field("power.interval", "Sample window", format_value(row.power_interval_ns / 1e9, i18n, "seconds"))
         end
-        field("power.limit", "Power cap", row.power_limit)
-        field("power.of_limit", "% of cap", row.power_usage)
+        if not row.sensor_power or #(row.sensor_power.limits or {}) == 0 then
+            field("power.limit", "Power cap", row.power_limit)
+            field("power.of_limit", "% of cap", row.power_usage)
+        end
         field("metrics.source", "Source", row.power_budget_source)
+        if row.sensor_power then
+            local stats = row.sensor_power.power_session
+            if stats then
+                field("sensor.session_range", "Session min / avg / max", format_value(stats.minimum_watts,i18n,"watts")
+                    .. " / " .. format_value(stats.average_watts,i18n,"watts") .. " / " .. format_value(stats.maximum_watts,i18n,"watts"))
+                field("power.session_average", "Average method", translated(i18n,"power.session_weighted","Time-weighted"))
+                field("power.session_samples", "Accepted readings", stats.samples)
+                field("power.session_coverage", "Observed time", format_value(stats.covered_time_ns / 1e9,i18n,"seconds"))
+                field("power.session_energy", "Observed energy", format_value(stats.energy_joules,i18n,"joules"))
+            end
+            if row.sensor_power.interval_uncertainty_ns then
+                field("cpu_clock.uncertainty", "Interval uncertainty", format_value(row.sensor_power.interval_uncertainty_ns,i18n,"nanoseconds"))
+            end
+            for _, cap in ipairs(row.sensor_power.limits or {}) do
+                local kind = cap.id == "long_term" and "PL1" or "PL2"
+                field("power.limit", "Power cap", kind .. " · " .. format_value(cap.power_limit_watts, i18n, "watts")
+                    .. " · " .. (cap.enabled and cap.usage or Technical.state(i18n,"disabled")))
+                if cap.headroom_watts then field("power.headroom", "To cap", format_value(cap.headroom_watts, i18n, "watts")) end
+                if cap.window_ns then field("power.window", "Cap window", format_value(cap.window_ns / 1e9, i18n, "seconds")) end
+                field("metrics.source", "Source", cap.source)
+            end
+            if stats then lines[#lines + 1] = translated(i18n,"power.session_note","Current reader session; gaps are excluded.") end
+        end
         if #(row.power_sessions or {}) > 0 then
             lines[#lines + 1] = translated(i18n, "power.api_statistics", "API power statistics")
             local labels = { power_watts = {"power.reading.reported", "Reported power"},
@@ -984,6 +1010,40 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
                 .. Technical.state(i18n, status) .. "]", INSPECTOR_ROW_WIDTH)
             add_values(channel.readings, channel.unit, true)
             add_values(channel.thresholds, channel.unit, false)
+            local power = SensorPower.public(channel, now_ns or snapshot.timestamp_ns, quality)
+            if power then
+                lines[#lines + 1] = "    " .. translated(i18n,"power.measurement.energy_delta","Energy-window average")
+                    .. ": " .. format_value(power.power_watts,i18n,"watts") .. " [" .. Technical.state(i18n,power.power_quality) .. "]"
+                if power.scope then
+                    lines[#lines + 1] = "    " .. translated(i18n,"limits.scope","Scope") .. ": "
+                        .. translated(i18n,"power.scope."..power.scope,power.scope)
+                end
+                for _, cap in ipairs(power.limits or {}) do
+                    local usage = cap.percent and i18n.format:percent(cap.percent,{precision=1}) or "—"
+                    lines[#lines + 1] = "    " .. (cap.id=="long_term" and "PL1" or "PL2") .. ": "
+                        .. format_value(cap.power_limit_watts,i18n,"watts") .. " · "
+                        .. (cap.enabled and usage or Technical.state(i18n,"disabled"))
+                    if cap.headroom_watts then
+                        lines[#lines + 1] = "    " .. translated(i18n,"power.headroom","To cap") .. ": "
+                            .. format_value(cap.headroom_watts,i18n,"watts")
+                    end
+                end
+                if power.power_interval_ns then
+                    lines[#lines + 1] = "    " .. translated(i18n,"power.interval","Sample window") .. ": "
+                        .. format_value(power.power_interval_ns / 1e9,i18n,"seconds")
+                    lines[#lines + 1] = "    " .. translated(i18n,"cpu_clock.uncertainty","Interval uncertainty") .. ": "
+                        .. format_value(power.interval_uncertainty_ns,i18n,"nanoseconds")
+                end
+                local stats = power.power_session
+                if stats then
+                    lines[#lines + 1] = "    " .. translated(i18n,"sensor.session_range","Session min / avg / max") .. ": "
+                        .. format_value(stats.minimum_watts,i18n,"watts") .. " / " .. format_value(stats.average_watts,i18n,"watts")
+                        .. " / " .. format_value(stats.maximum_watts,i18n,"watts")
+                    lines[#lines + 1] = "    " .. translated(i18n,"power.session_weighted","Time-weighted") .. " · "
+                        .. translated(i18n,"power.session_samples","Accepted readings") .. ": " .. stats.samples
+                end
+                lines[#lines + 1] = inspector_text("    " .. translated(i18n,"metrics.source","Source") .. ": " .. power.source,INSPECTOR_ROW_WIDTH)
+            end
             local thermal = Thermal.channel(snapshot, device, channel, now_ns)
             if thermal then
                 local margin = "—"

@@ -8,6 +8,7 @@ _meta:
   catalog_version: 1
 
 messages:
+  power.measurement.energy_delta: "能量區間平均功率"
   limits.reason.soc_thermal: "SoC 溫度限制"
   limits.reason.memory_thermal: "顯示記憶體溫度限制"
   limits.reason.iccmax: "ICCMAX 電流限制"

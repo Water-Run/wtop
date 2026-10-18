@@ -8,6 +8,7 @@ _meta:
   catalog_version: 1
 
 messages:
+  power.measurement.energy_delta: "Средняя мощность за интервал энергии"
   limits.reason.soc_thermal: "Температурный предел SoC"
   limits.reason.memory_thermal: "Температурный предел памяти"
   limits.reason.iccmax: "Токовый предел ICCMAX"

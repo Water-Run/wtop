@@ -7,6 +7,7 @@ _meta:
   catalog_version: 1
 
 messages:
+  power.measurement.energy_delta: "Energy-window average"
   limits.reason.soc_thermal: "SoC thermal"
   limits.reason.memory_thermal: "Memory thermal"
   limits.reason.iccmax: "ICCMAX"

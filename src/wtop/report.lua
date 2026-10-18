@@ -745,6 +745,38 @@ function M.render(snapshot)
                 channel.quality }
         end, sensors)
 
+    local energy_power = {}
+    for _, item in ipairs(readings) do
+        if item.channel.power then energy_power[#energy_power + 1] = item end
+    end
+    table_section(lines, "Energy-derived sensor power",
+        { "Device", "Channel", "Scope", "Average power", "Window", "Timing uncertainty", "Minimum", "Session average", "Maximum", "Readings", "Quality", "Source" },
+        energy_power, function(item)
+            local p = item.channel.power
+            local stats = p.power_session or {}
+            return { named_id(item.device), item.channel.label or item.channel.id, p.scope,
+                quantity(p.power_watts,1," W",2),quantity(p.power_interval_ns,1e9," s",3),
+                quantity(p.interval_uncertainty_ns,1e9," s",6),quantity(stats.minimum_watts,1," W",2),
+                quantity(stats.average_watts,1," W",2),quantity(stats.maximum_watts,1," W",2),stats.samples,p.power_quality,p.source }
+        end,sensors)
+    local energy_limits = {}
+    for _, item in ipairs(energy_power) do
+        for _, cap in ipairs(item.channel.power.limits or {}) do
+            energy_limits[#energy_limits+1] = { item=item,cap=cap }
+        end
+    end
+    table_section(lines,"Energy-domain power limits",{ "Device","Channel","Scope","Limit","Configured","Enabled","Cap window","Usage","Headroom","Source" },
+        energy_limits,function(entry)
+            local item,cap=entry.item,entry.cap
+            return { named_id(item.device),item.channel.label or item.channel.id,item.channel.power.scope,
+                cap.id=="long_term" and "PL1" or "PL2",quantity(cap.power_limit_watts,1," W",2),cap.enabled,
+                quantity(cap.window_ns,1e9," s",3),quantity(cap.percent,1,"%",1),quantity(cap.headroom_watts,1," W",2),cap.source }
+        end,sensors)
+    if #energy_power>0 then
+        lines[#lines+1]="Power comes from adjacent cumulative energy observations. Session averages are time-weighted; gaps and resets are excluded."
+        lines[#lines+1]=""
+    end
+
     local inventory = object(snapshot.inventory)
     local pci, usb = object(inventory.pci), object(inventory.usb)
     table_section(lines, "PCI devices", { "Address", "Vendor", "Device", "Driver" },

@@ -8,6 +8,7 @@ local Power = require("wtop.model.power")
 local PowerDomains = require("wtop.model.power_domains")
 local PowerSession = require("wtop.model.power_session")
 local GPUPowerSession = require("wtop.model.gpu_power_session")
+local SensorPower = require("wtop.model.sensor_power")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
@@ -1513,17 +1514,21 @@ local function export_sensors(snapshot)
     for device_index, device in ipairs(sensors and sensors.devices or {}) do
         local exported = copy_fields(device, {
             "id", "class", "class_index", "name", "device_target", "device_path",
-            "identity_quality", "quality", "truncated", "source",
+            "identity_quality", "quality", "truncated", "source", "driver",
         })
         exported.channels = json.array({})
         for channel_index, channel in ipairs(device.channels or {}) do
             local output = copy_fields(channel, {
                 "id", "type", "index", "unit", "label", "input", "input_source",
-                "alarm", "fault", "identity_quality", "quality", "source",
+                "alarm", "fault", "identity_quality", "quality", "source", "enabled",
+                "energy_microjoules", "energy_read_started_ns", "energy_read_finished_ns",
             })
             output.readings = copy_object(channel.readings)
             output.thresholds = copy_object(channel.thresholds)
             output.errors = copy_object(channel.errors)
+            output.intervals_ms = copy_object(channel.intervals_ms)
+            output.power = SensorPower.public(channel, snapshot.timestamp_ns, snapshot.quality and snapshot.quality.sensors)
+            if output.power then output.power.limits = json.array(output.power.limits) end
             local thermal = Thermal.channel(snapshot, device, channel)
             if thermal then
                 output.critical_celsius = thermal.critical_celsius
@@ -2488,10 +2493,20 @@ function M.agent(snapshot, options)
         "GPU utilization is elevated", "gpus")
 
     local temperature_count, fan_count, sensor_power_count = 0, 0, 0
+    local energy_power, energy_power_count = json.array({}), 0
     local top_temperatures = json.array({})
     local threshold_temperature, closest_critical
     for _, device in ipairs(full.sensors and full.sensors.devices or {}) do
         for _, channel in ipairs(device.channels or {}) do
+            if channel.type == "energy" and channel.power then
+                energy_power_count = energy_power_count + 1
+                if #energy_power < device_limit then
+                    local power = copy_object(channel.power)
+                    power.device_id, power.channel_id = device.id, channel.id
+                    power.device, power.label = device.name, channel.label
+                    energy_power[#energy_power + 1] = power
+                end
+            end
             if channel.type == "temperature" and finite_number(channel.input) then
                 temperature_count = temperature_count + 1
                 local temperature = json.object({
@@ -2778,6 +2793,9 @@ function M.agent(snapshot, options)
                 temperature_count = temperature_count,
                 fan_count = fan_count,
                 power_count = sensor_power_count,
+                energy_power = energy_power,
+                energy_power_total = energy_power_count,
+                energy_power_truncated = energy_power_count > #energy_power,
                 maximum_temperature_celsius = hottest and hottest.temperature_celsius,
                 minimum_headroom_celsius = closest_critical and closest_critical.headroom_celsius,
                 closest_to_critical = closest_critical,

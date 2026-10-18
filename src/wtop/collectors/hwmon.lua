@@ -2,6 +2,7 @@ local Capability = require("wtop.core.capability")
 local FS = require("wtop.linux.fs")
 local Common = require("wtop.collectors.common")
 local SensorSession = require("wtop.model.sensor_session")
+local SensorPower = require("wtop.model.sensor_power")
 
 local Hwmon = {}
 Hwmon.__index = Hwmon
@@ -25,6 +26,7 @@ local SENSOR_SPECS = {
     kind = "power", order = 3, unit = "watts", scale = 1000000,
     thresholds = { min = true, max = true, crit = true, cap = true, cap_hyst = true },
     readings = { input = true, average = true },
+    intervals = { average_interval = true, max_interval = true, cap_interval = true },
   },
   ["in"] = {
     -- The hwmon ABI numbers voltage channels `in[0-*]`, unlike every other
@@ -281,8 +283,10 @@ local function discover_channels(entries, options)
     -- was invisible on most Intel machines.
     local limit_alarm = attribute and attribute:match("^(%a[%w_]-)_alarm$")
     local recognized = spec and (attribute == "label" or attribute == "alarm" or attribute == "fault"
+      or (prefix == "energy" and attribute == "enable")
       or (limit_alarm and spec.thresholds[limit_alarm])
-      or spec.thresholds[attribute] or spec.readings[attribute])
+      or spec.thresholds[attribute] or spec.readings[attribute]
+      or (spec.intervals and spec.intervals[attribute]))
     local minimum_index = spec and spec.minimum_index or 1
     if recognized and number and number >= minimum_index
         and number <= options.max_channel_index then
@@ -317,7 +321,7 @@ local function discover_channels(entries, options)
   return ordered, truncated
 end
 
-local function read_channel(fs, base, group, options)
+local function read_channel(fs, base, group, options, context)
   local spec = SENSOR_SPECS[group.prefix]
   local local_id = spec.kind .. ":" .. tostring(group.number)
   local channel = {
@@ -342,6 +346,15 @@ local function read_channel(fs, base, group, options)
     local path = base .. "/" .. filename
     if attribute == "label" then
       channel.label = optional_text(fs, path, options.max_text_bytes, channel.errors, attribute)
+    elseif attribute == "enable" then
+      local value, err = normalized_number(fs, path, 1, 1)
+      if value == 0 or value == 1 then channel.enabled = value == 1
+      else channel.errors.enable = error_record(err or { kind = "parse_error", message = "expected_boolean" }, path) end
+    elseif spec.intervals and spec.intervals[attribute] then
+      local value, err = normalized_number(fs, path, 1, options.max_abs_raw_value)
+      channel.intervals_ms = channel.intervals_ms or {}
+      if value and value >= 0 then channel.intervals_ms[attribute] = value
+      else channel.errors[attribute] = error_record(err or { kind = "parse_error", message = "number_out_of_range" }, path) end
     elseif attribute == "alarm" or attribute == "fault" then
       local value, err = boolean_number(fs, path)
       if value == nil then
@@ -362,7 +375,16 @@ local function read_channel(fs, base, group, options)
         if value then channel.alarm = true end
       end
     else
-      local value, err = normalized_number(fs, path, spec.scale, options.max_abs_raw_value)
+      local energy = spec.kind == "energy" and attribute == "input"
+      local began = energy and Common.now_ns(context) or nil
+      local value, err = normalized_number(fs, path, energy and 1 or spec.scale, options.max_abs_raw_value)
+      if energy then
+        channel.energy_read_started_ns, channel.energy_read_finished_ns = began, Common.now_ns(context)
+        if value and math.type(value) == "float" and value % 1 == 0 then value = math.tointeger(value) end
+        if value and value >= 0 and math.type(value) == "integer" then channel.energy_microjoules = value
+        elseif value then value, err = nil, { kind = "parse_error", message = "number_out_of_range" } end
+        value = value and value / spec.scale or nil
+      end
       if value == nil then
         channel.errors[attribute] = error_record(err, path)
       elseif not plausible_sensor_value(spec, value) then
@@ -375,6 +397,10 @@ local function read_channel(fs, base, group, options)
         end
         value = nil
       elseif spec.thresholds[attribute] then
+        if spec.kind == "power" and (attribute == "max" or attribute == "cap") then
+          channel._raw_power_limits = channel._raw_power_limits or {}
+          channel._raw_power_limits[attribute] = value
+        end
         -- A threshold of exactly zero is a driver's unset attribute, not a
         -- bound, so it is left absent rather than reported.  On the development
         -- host the `spd5118` DIMM sensor registers `temp1_min` and
@@ -410,7 +436,7 @@ local function read_channel(fs, base, group, options)
   return channel
 end
 
-local function read_device(self, fs, entry, used_ids)
+local function read_device(self, fs, entry, used_ids, context)
   local base = self.base_path .. "/" .. entry.name
   local errors = {}
   local name = optional_text(fs, base .. "/name", self.max_text_bytes, errors, "name")
@@ -457,8 +483,12 @@ local function read_device(self, fs, entry, used_ids)
   local counts = {}
   local any_partial = has_entries(errors)
   local any_estimated = false
+  local has_energy = false
+  for _, group in ipairs(groups) do has_energy = has_energy or group.prefix == "energy" end
+  local power_path = has_energy and normalize_target(fs:readlink(base)) or nil
+  local driver_link = has_energy and fs:readlink(base .. "/device/driver") or nil
   for _, group in ipairs(groups) do
-    local channel = read_channel(fs, base, group, self)
+    local channel = read_channel(fs, base, group, self, context)
     channels[#channels + 1] = channel
     by_id[channel.id] = channel
     counts[channel.type] = (counts[channel.type] or 0) + 1
@@ -474,13 +504,17 @@ local function read_device(self, fs, entry, used_ids)
   else
     quality = "fresh"
   end
+  local device_path = normalize_target(fs:readlink(base))
+  local verified_power_identity = has_energy and power_path ~= nil and power_path == device_path
+    and target ~= nil and target == normalize_target(fs:readlink(base .. "/device"))
+    and driver_link == fs:readlink(base .. "/device/driver")
   return {
     id = id,
     class = entry.name,
     class_index = entry.number,
     name = name,
     device_target = target,
-    device_path = normalize_target(fs:readlink(base)),
+    device_path = device_path,
     identity_quality = identity_quality,
     quality = quality,
     channels = channels,
@@ -489,6 +523,8 @@ local function read_device(self, fs, entry, used_ids)
     truncated = channels_truncated,
     errors = errors,
     source = base,
+    driver = driver_link and driver_link:match("/drivers/([%w_.-]+)$") or nil,
+    _power_identity_verified = verified_power_identity == true,
   }
 end
 
@@ -516,13 +552,16 @@ function Hwmon:sample(context, previous)
   local any_partial = truncated
   local any_estimated = false
   for index = 1, math.min(#entries, self.max_devices) do
-    local device = read_device(self, fs, entries[index], used_ids)
+    local device = read_device(self, fs, entries[index], used_ids, context)
     devices[#devices + 1] = device
     by_id[device.id] = device
     any_partial = any_partial or device.quality == "partial"
     any_estimated = any_estimated or device.quality == "estimated"
   end
   local sampled_at = Common.now_ns(context)
+  local previous_power = self._power_fs == fs and Common.previous_data(previous) or nil
+  self._power_fs = fs
+  SensorPower.attach(devices, previous_power, sampled_at, truncated)
   SensorSession.attach(devices, Common.previous_data(previous), sampled_at, "hwmon")
   local finished = Common.now_ns(context)
   return Common.result("ok", finished, {

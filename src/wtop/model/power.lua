@@ -107,7 +107,7 @@ function M.gpu(metrics, channel, quality)
         watts = M.reading(channel.input)
         cap = M.limit(channel.thresholds and channel.thresholds.cap)
         source, cap_source = channel.source, channel.source
-        if channel.enabled == false or unusable[channel.quality] then cap = nil end
+        if channel.enabled == false or (unusable[channel.quality] and channel.input_source ~= "energy_delta") then cap = nil end
     else
         cap, cap_source = M.limit(metrics.power_limit_watts), metrics.power_limit_source
     end

@@ -8,6 +8,7 @@ _meta:
   catalog_version: 1
 
 messages:
+  power.measurement.energy_delta: "Potencia media del intervalo de energía"
   limits.reason.soc_thermal: "Límite térmico del SoC"
   limits.reason.memory_thermal: "Límite térmico de memoria"
   limits.reason.iccmax: "Corriente ICCMAX"

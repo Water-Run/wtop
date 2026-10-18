@@ -629,6 +629,25 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
+### 2026-10-18：hwmon 能量区间功率（验证中）
+
+hwmon 的累计微焦耳计数现在可形成相邻观察间的平均功率，逐项保留读取
+时间，整数求差后换算瓦数。首次读取、缺测、禁用、计数下降、身份变化、
+重复身份、非正或过长间隔以及过大的读取时间不确定度不生成当前瓦数。
+本次会话统计按实际覆盖时长加权；缺口不补零，也不猜测计数器回绕。
+
+只有可核对的 Xe 驱动链路与已公布的卡级/封装级 ABI，才允许关联
+energy1/power1 或 energy2/power2；PL1、PL2 保留各自窗口、占比和余量。
+零限制保留为禁用，通用 hwmon 不根据编号或标签推断电源轨归属。
+GPU 优先直接功率，缺少时使用能量区间平均；详情、Snapshot、Agent 与
+报告保留同一份来源和区间数据，区分累计能量、平均瓦数和实际限制标志。
+
+依据 [hwmon 能量接口](https://docs.kernel.org/hwmon/sysfs-interface.html) 和
+[Xe hwmon ABI](https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-driver-intel-xe-hwmon)。
+定向回归进行中，证据保存在 `build/hardware-hwmon-energy-20261018/`。
+本机没有 hwmon `energyN_input` 通道，软件回放不计作正向硬件测量；
+既有 RAPL 路径独立保留。完整回归、产物与跨平台验收尚待完成。
+
 ### 2026-10-18：Xe GPU 当前限制原因
 
 Linux Xe 的 `tileN/gtN/freqN/throttle` 已接入。优先使用单次 `reasons`
@@ -4407,7 +4426,7 @@ Windows/macOS 的 NUMA 原生提供方仍待实现，本轮没有新增这些平
   Lua 5.5.1 与系统 Lua 5.4.8 下通过。本次沙箱的实时网络命名空间
   只暴露 `lo`；源码 Snapshot 的 `lo` 队列为 RX 1、TX 1，与 sysfs
   对应目录一致。多队列网卡仍缺少本机实测。
-- 当前源码套件包含 157 个 Lua 测试文件；此前矩阵和按日期记载的
+- 当前源码套件包含 158 个 Lua 测试文件；此前矩阵和按日期记载的
   120 文件运行是当时的验证结果，不计作本轮新增测试的覆盖证据。
 - `make check test-55 test-pty-quick` 通过，121 个 Lua 文件均通过；
   源码和 onedir 的硬件详情 PTY 场景也通过。onedir Snapshot 导出

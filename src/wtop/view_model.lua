@@ -10,6 +10,7 @@ local Power = require("wtop.model.power")
 local PowerDomains = require("wtop.model.power_domains")
 local PowerSession = require("wtop.model.power_session")
 local GPUPowerSession = require("wtop.model.gpu_power_session")
+local SensorPower = require("wtop.model.sensor_power")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
@@ -810,8 +811,8 @@ end
 -- `class`/`device_target`.  hwmon has no vocabulary for "board total": a GPU
 -- driver may publish a package power *and* per-rail powers on the same device,
 -- and those overlap, so summing them would invent a number no meter ever
--- measured.  The single defensible rule is therefore the largest published
--- channel, and the channel it came from has to travel with it -- otherwise the
+-- measured. Direct power readings take priority over energy-window averages;
+-- within that kind the largest channel is shown. Its source travels with it -- otherwise the
 -- table shows a bare watt figure that a reader will take for a board total.
 --
 -- This is one function with two consumers on purpose: the GPU table's numbers
@@ -843,11 +844,12 @@ function M.gpu_sensor_join(snapshot)
         add_sensor(gpu.device_target and by_target[gpu.device_target])
 
         local temperature, power, fan
-        local power_channels = 0
+        local power_channels, energy_channels = 0, 0
         for _, sensor in ipairs(matched) do
             for _, channel in ipairs(sensor.channels or {}) do
-                if type(channel.input) == "number" then
-                    local current = channel
+                local current = channel.type == "energy"
+                    and SensorPower.channel(channel, snapshot.timestamp_ns, snapshot.quality and snapshot.quality.sensors) or channel
+                if current and (type(current.input) == "number" or current.input_source == "energy_delta") then
                     if channel.type == "temperature" then
                         -- The hottest junction is the one that throttles; an
                         -- edge sensor and a hot spot are not interchangeable, so
@@ -856,10 +858,13 @@ function M.gpu_sensor_join(snapshot)
                         temperature = temperature
                             and (current.input > temperature.input and current or temperature)
                             or current
-                    elseif channel.type == "power" then
-                        power_channels = power_channels + 1
-                        power = power and (current.input > power.input and current or power)
-                            or current
+                    elseif channel.type == "power" or current.input_source == "energy_delta" then
+                        if current.input_source == "energy_delta" then energy_channels = energy_channels + 1
+                        else power_channels = power_channels + 1 end
+                        local direct = current.input_source ~= "energy_delta"
+                        local prior_direct = power and power.input_source ~= "energy_delta"
+                        if not power or (direct and not prior_direct)
+                            or (direct == prior_direct and (current.input or -1) > (power.input or -1)) then power = current end
                     elseif channel.type == "fan" then
                         -- A board with several fans reports several channels;
                         -- the fastest is the one an operator would act on.
@@ -875,7 +880,7 @@ function M.gpu_sensor_join(snapshot)
                 sensors = matched,
                 temperature = temperature,
                 power = power,
-                power_channels = power_channels,
+                power_channels = power and power.input_source == "energy_delta" and energy_channels or power_channels,
                 fan = fan,
             }
         end
@@ -1173,6 +1178,10 @@ local function gpu_rows(snapshot, format, i18n)
             vendor_power and vendor_state or power_state)
         if use_sensor then power_budget=Power.gpu({},power_channel,sensor_state);vendor_power=false end
         local power_from_sensor = power_channel and not vendor_power
+        local sensor_power = power_from_sensor and power_channel.power or nil
+        for _, cap in ipairs(sensor_power and sensor_power.limits or {}) do
+            cap.usage = power_usage(format, cap.percent and { percent = cap.percent } or nil)
+        end
         local function qualified_power(text,value,key)
             if not power_from_sensor then return qualified(text,value,key,key=="power_watts" and "power" or nil) end
             local q = Power.unusable(sensor_state) and (type(sensor_state)=="table"
@@ -1281,11 +1290,19 @@ local function gpu_rows(snapshot, format, i18n)
             power_usage = power_usage(format, power_budget.comparison),
             power_percent = power_budget.comparison and power_budget.comparison.percent,
             power_budget_source = power_budget.source or power_budget.limit_source,
-            power_scope = metrics.power_scope=="asic" and translated(i18n,"power.scope.asic","ASIC chip") or nil,
-            power_measurement = not power_from_sensor and (metrics.power_measurement == "current" or metrics.power_measurement == "average"
+            power_scope = power_from_sensor and power_channel.power and power_channel.power.scope
+                and translated(i18n,"power.scope."..power_channel.power.scope,power_channel.power.scope)
+                or not power_from_sensor and metrics.power_scope=="asic" and translated(i18n,"power.scope.asic","ASIC chip") or nil,
+            power_measurement = power_from_sensor and power_channel.input_source == "energy_delta"
+                and translated(i18n,"power.measurement.energy_delta","Energy-window average")
+                or power_from_sensor and power_channel.input_source == "average"
+                    and translated(i18n,"power.measurement.average","Average")
+                or not power_from_sensor and (metrics.power_measurement == "current" or metrics.power_measurement == "average"
                 or metrics.power_measurement == "device_sample" or metrics.power_measurement == "driver_snapshot") and translated(i18n,
                     "power.measurement." .. metrics.power_measurement, metrics.power_measurement) or nil,
-            power_interval_ns = not power_from_sensor and metrics.power_interval_ns or nil,
+            power_interval_ns = power_from_sensor and power_channel.power and power_channel.power.power_interval_ns
+                or not power_from_sensor and metrics.power_interval_ns or nil,
+            sensor_power = sensor_power,
             power_age_ns = power_age_ns,
             power_reason = power_observation and power_observation.retained and power_observation.reason or nil,
             power_sessions = GPUPowerSession.public(gpu, snapshot.timestamp_ns, snapshot.quality and snapshot.quality.gpus),
