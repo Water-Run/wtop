@@ -629,6 +629,23 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
+### 2026-10-18：Xe GPU 当前限制原因（验证中）
+
+Linux Xe 的 `tileN/gtN/freqN/throttle` 已接入。优先使用单次 `reasons`
+聚合读取；只有该属性缺失时才回退到已枚举的逐项属性，并要求两轮一致。
+聚合 `none` 表示该域当前未报告限制；其他未列出的原因不推断支持位。
+新的 SoC/显存温度、ICCMAX、PSYS 与 P0 原因有十语言名称，未知名称
+保留为部分数据；权限、竞争、不完整清单及过期读数不补零。多原因详情
+逐项列出，避免长行截断。Snapshot、Agent 与报告保留域身份、来源、
+读取方式和观察时间；该能力不把功耗墙占比推断为实际节流。
+
+依据 [Linux Xe 频率文档](https://docs.kernel.org/gpu/xe/xe_gt_freq.html)、
+[Linux 6.8 逐项实现](https://github.com/torvalds/linux/blob/v6.8/drivers/gpu/drm/xe/xe_gt_throttle_sysfs.c)
+和 [Linux 7.2 聚合实现](https://github.com/torvalds/linux/blob/v7.2/drivers/gpu/drm/xe/xe_gt_throttle.c)。
+原始源码摘要和软件回放证据保存在 `build/hardware-xe-limits-20261018/`。
+定向采集、导出及界面回归通过；完整回归和产物验收进行中。本机使用
+i915，没有新增 Xe 物理硬件或实际触发限制的测量证据。
+
 ### 2026-10-18：进程私有缓存记录复用
 
 进程采集复用仍存活且身份/任务类型一致的私有缓存记录。它只替换记录

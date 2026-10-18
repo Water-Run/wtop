@@ -7,6 +7,15 @@ _meta:
   catalog_version: 1
 
 messages:
+  limits.reason.soc_thermal: "SoC thermal"
+  limits.reason.memory_thermal: "Memory thermal"
+  limits.reason.iccmax: "ICCMAX"
+  limits.reason.soc_average_thermal: "SoC average thermal"
+  limits.reason.fast_vmode: "VR FastVMode"
+  limits.reason.psys_pl1: "PSYS PL1"
+  limits.reason.psys_pl2: "PSYS PL2"
+  limits.reason.p0_frequency: "P0 frequency"
+  limits.reason.psys_critical: "PSYS critical"
   limits.reason.idle: "GPU idle"
   limits.reason.application_clock: "Application clocks"
   limits.reason.software_power_cap: "Software power cap"

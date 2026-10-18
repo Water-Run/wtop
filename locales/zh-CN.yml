@@ -8,6 +8,15 @@ _meta:
   catalog_version: 1
 
 messages:
+  limits.reason.soc_thermal: "SoC 温度限制"
+  limits.reason.memory_thermal: "显存温度限制"
+  limits.reason.iccmax: "ICCMAX 电流限制"
+  limits.reason.soc_average_thermal: "SoC 平均温度限制"
+  limits.reason.fast_vmode: "VR FastVMode"
+  limits.reason.psys_pl1: "PSYS PL1"
+  limits.reason.psys_pl2: "PSYS PL2"
+  limits.reason.p0_frequency: "P0 频率限制"
+  limits.reason.psys_critical: "PSYS 临界限制"
   limits.reason.idle: "GPU 空闲"
   limits.reason.application_clock: "应用时钟设置"
   limits.reason.software_power_cap: "软件功耗限制"

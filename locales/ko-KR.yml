@@ -8,6 +8,15 @@ _meta:
   catalog_version: 1
 
 messages:
+  limits.reason.soc_thermal: "SoC 온도 제한"
+  limits.reason.memory_thermal: "메모리 온도 제한"
+  limits.reason.iccmax: "ICCMAX 전류 제한"
+  limits.reason.soc_average_thermal: "SoC 평균 온도 제한"
+  limits.reason.fast_vmode: "VR FastVMode"
+  limits.reason.psys_pl1: "PSYS PL1"
+  limits.reason.psys_pl2: "PSYS PL2"
+  limits.reason.p0_frequency: "P0 주파수 제한"
+  limits.reason.psys_critical: "PSYS 임계 제한"
   limits.reason.idle: "GPU 유휴"
   limits.reason.application_clock: "앱 클록 설정"
   limits.reason.software_power_cap: "소프트웨어 전력 제한"

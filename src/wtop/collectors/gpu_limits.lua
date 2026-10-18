@@ -102,6 +102,176 @@ function M.i915(fs, class_path, max_domains, now_ns)
     return result
 end
 
+-- Xe's aggregate `reasons` attribute is one hardware observation. Older
+-- kernels expose only the individual attributes under freq0/throttle.
+local XE_REASONS = {
+    pl1 = "pl1", pl2 = "pl2", pl4 = "pl4", thermal = "thermal",
+    prochot = "prochot", ratl = "ratl", vr_thermalert = "vr_thermal",
+    vr_tdc = "vr_current", vr_thermal = "vr_thermal",
+    soc_thermal = "soc_thermal", mem_thermal = "memory_thermal",
+    iccmax = "iccmax", pwrbrk = "power_brake", soc_avg_thermal = "soc_average_thermal",
+    fastvmode = "fast_vmode", psys_pl1 = "psys_pl1", psys_pl2 = "psys_pl2",
+    p0_freq = "p0_frequency", psys_crit = "psys_critical",
+}
+local function xe_name(value)
+    return type(value) == "string" and #value <= 64 and value:match("^[a-z][a-z0-9_]*$")
+end
+
+local function xe_aggregate(domain, content)
+    if #content > 4096 then domain.quality = "error"; return end
+    local tokens, seen, ids = {}, {}, {}
+    for token in content:gmatch("%S+") do
+        local id = XE_REASONS[token]
+        if not xe_name(token) or seen[token] or (id and ids[id]) or #tokens >= 32 then
+            domain.quality = "error"; return
+        end
+        tokens[#tokens + 1], seen[token] = token, true
+        if id then ids[id] = true end
+    end
+    if #tokens == 0 or (seen.none and #tokens ~= 1) then domain.quality = "error"; return end
+    domain.reading_kind, domain.quality = "aggregate_reasons", "fresh"
+    domain.active = not seen.none
+    if seen.none then return end
+    for _, token in ipairs(tokens) do
+        local id = XE_REASONS[token]
+        if id then
+            domain.reasons[#domain.reasons + 1] = { id = id, active = true }
+        else
+            domain.unknown_reason_names[#domain.unknown_reason_names + 1] = token
+            domain.quality = "partial"
+        end
+    end
+end
+
+local function xe_individual(fs, domain, base)
+    local entries, err, cut = fs:list(base, 66)
+    if not entries then
+        domain.quality = FS.error_status(err)
+        return err and err.kind ~= "missing"
+    end
+    local names, seen = {}, {}
+    for _, entry in ipairs(entries) do
+        local name = type(entry) == "string" and entry:match("^reason_(.+)$")
+        if xe_name(name) and not seen[name] then names[#names + 1], seen[name] = name, true end
+    end
+    table.sort(names)
+    local truncated = cut == true or #entries > 65 or #names > 32
+    for i = #names, 33, -1 do names[i] = nil end
+    local function sample()
+        local values, issues = {}, {}
+        local function value(key, path)
+            local v, failure = read(fs, path)
+            values[key] = v
+            if failure and failure.kind ~= "missing" then
+                issues[#issues + 1] = { field = key, source = path,
+                    status = FS.error_status(failure), reason = failure.message }
+            end
+        end
+        value("status", base .. "/status")
+        for _, name in ipairs(names) do value(name, base .. "/reason_" .. name) end
+        return values, issues
+    end
+    local first, first_issues = sample()
+    local second, issues = sample()
+    if #names == 0 and first.status == nil and second.status == nil
+        and #first_issues == 0 and #issues == 0 then return false end
+    domain.reading_kind, domain.source = "individual_flags", base
+    domain.quality, domain.issues = "fresh", issues
+    local stable, complete, any = first.status == second.status,
+        second.status ~= nil and #names > 0 and not truncated and #issues == 0 and #first_issues == 0, false
+    for _, name in ipairs(names) do
+        if first[name] ~= second[name] then stable = false end
+        complete = complete and second[name] ~= nil
+        any = any or second[name] == true
+    end
+    if second.status == false and any then stable = false end
+    if not stable then
+        domain.quality = (#issues > 0 or #first_issues > 0) and "partial" or "gap"
+    else
+        if second.status ~= nil then domain.active = second.status elseif any then domain.active = true end
+        for _, name in ipairs(names) do
+            local id = XE_REASONS[name]
+            if id then domain.reasons[#domain.reasons + 1] = { id = id, active = second[name] }
+            elseif second[name] == true then
+                domain.unknown_reason_names[#domain.unknown_reason_names + 1] = name
+            end
+        end
+        if not complete or #domain.unknown_reason_names > 0 or (domain.active and not any) then
+            domain.quality = "partial"
+        end
+        if domain.active == nil and #issues > 0 then
+            local denied = true
+            for _, issue in ipairs(issues) do denied = denied and issue.status == "denied" end
+            if denied then domain.quality = "denied" end
+        end
+    end
+    if #issues == 0 then domain.issues = first_issues end
+    domain.truncated = truncated
+    return true
+end
+
+function M.xe(fs, device_path, max_domains, now_ns)
+    local result = { domains = {}, truncated = false, enumeration_complete = true, source_kind = "xe_sysfs" }
+    local walks, probes = 0, 0
+    local function children(path, prefix)
+        if walks >= max_domains * 4 + 4 then result.truncated = true; return {} end
+        walks = walks + 1
+        local entries, err, cut = fs:list(path, max_domains + 1)
+        if not entries then
+            result.enumeration_complete = false
+            if err and err.kind ~= "missing" then result.quality = FS.error_status(err) end
+            return {}
+        end
+        local names, seen = {}, {}
+        for _, entry in ipairs(entries) do
+            local number = type(entry) == "string" and entry:match("^" .. prefix .. "(%d+)$")
+            local id = number and tonumber(number)
+            if id and id <= 2147483647 and tostring(id) == number and not seen[entry] then
+                names[#names + 1], seen[entry] = entry, true
+            end
+        end
+        table.sort(names, function(a,b) return tonumber(a:sub(#prefix+1)) < tonumber(b:sub(#prefix+1)) end)
+        if #names == 0 then result.enumeration_complete = false end
+        result.truncated = result.truncated or cut == true or #names > max_domains
+        for i = #names, max_domains + 1, -1 do names[i] = nil end
+        return names
+    end
+    for _, tile in ipairs(children(device_path, "tile")) do
+        for _, gt in ipairs(children(device_path .. "/" .. tile, "gt")) do
+            local gt_path = device_path .. "/" .. tile .. "/" .. gt
+            for _, frequency in ipairs(children(gt_path, "freq")) do
+                if probes >= max_domains then result.truncated = true; break end
+                probes = probes + 1
+                local base = gt_path .. "/" .. frequency .. "/throttle"
+                local domain = { id = tile .. "/" .. gt .. "/" .. frequency,
+                    tile_id = tonumber(tile:sub(5)), gt_id = tonumber(gt:sub(3)),
+                    frequency_id = tonumber(frequency:sub(5)), scope = "gpu_gt", source_kind = "xe_sysfs",
+                    source = base .. "/reasons", reasons = {}, unknown_reason_names = {} }
+                local content, err = fs:read(domain.source, 4096)
+                local present = true
+                if type(content) == "string" then xe_aggregate(domain, content)
+                elseif err and err.kind == "missing" then present = xe_individual(fs, domain, base)
+                else domain.quality = FS.error_status(err) end
+                domain.observed_at_ns = type(now_ns) == "function" and now_ns() or now_ns
+                if present then
+                    result.domains[#result.domains + 1] = domain
+                    result.truncated = result.truncated or domain.truncated == true
+                else
+                    result.enumeration_complete = false
+                end
+            end
+        end
+    end
+    local quality = result.quality
+    result.enumeration_complete = result.enumeration_complete and not result.truncated
+    result.quality = #result.domains > 0 and "fresh" or (quality or "unavailable")
+    if #result.domains > 0 and (quality or not result.enumeration_complete) then result.quality = "partial" end
+    for _, domain in ipairs(result.domains) do
+        if domain.quality ~= "fresh" then result.quality = "partial" end
+    end
+    return result
+end
+
 -- NVML returns a coherent 64-bit current mask in one call. Capability bits
 -- are separate: a zero unsupported bit is not proof of an inactive limiter.
 local NVML_REASONS = {

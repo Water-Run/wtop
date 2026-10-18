@@ -472,6 +472,11 @@ function M.render(snapshot)
                 if reason.active == true then active[#active + 1] = reason.id end
                 if reason.logged == true then recorded[#recorded + 1] = reason.id end
             end
+            if domain.active == true then
+                for _, name in ipairs(list(domain.unknown_reason_names)) do
+                    active[#active + 1] = name .. " (unknown)"
+                end
+            end
             return { entry.owner, domain.id, domain.scope, domain.active,
                 #active > 0 and table.concat(active, ", ") or nil,
                 #recorded > 0 and table.concat(recorded, ", ") or nil, domain.quality, domain.source }

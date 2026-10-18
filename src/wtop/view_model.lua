@@ -1020,11 +1020,12 @@ local function limit_status(domain, state, i18n)
     if domain.active == false then return translated(i18n, "limits.inactive", "Not asserted") end
     if domain.active == true then
         local names = limit_names(domain, "active", i18n)
-        if domain.unknown_status_hex and domain.unknown_status_hex ~= "0x0000000000000000" then
+        if (domain.unknown_status_hex and domain.unknown_status_hex ~= "0x0000000000000000")
+            or #(domain.unknown_reason_names or {}) > 0 then
             names[#names + 1] = translated(i18n, "limits.unknown_flags", "Unknown flags")
         end
         return #names > 0 and table.concat(names, ", ")
-            or translated(i18n, "limits.unknown_reason", "Asserted; reason unavailable")
+            or translated(i18n, "limits.unknown_reason", "Asserted; reason unavailable"), names
     end
     return translated(i18n, "status.unknown", "Unknown")
 end
@@ -1097,8 +1098,9 @@ function M.performance_limit_rows(snapshot, i18n)
                 for _, reason in ipairs(domain.reasons or {}) do
                     if reason.logged ~= nil then history = true; break end
                 end
+                local current, current_items = limit_status(domain, state, i18n)
                 rows[#rows + 1] = { name = owner .. " [" .. tostring(domain.id) .. "]",
-                    current = limit_status(domain, state, i18n),
+                    current = current, current_items = current_items,
                     recorded = history and (#recorded > 0 and table.concat(recorded, ", ")
                         or translated(i18n, "limits.no_recorded", "No flags recorded")) or nil,
                     quality = limit_quality(domain, state) or "unknown",
@@ -1227,7 +1229,8 @@ local function gpu_rows(snapshot, format, i18n)
         frequency_text = qualified(frequency_text, metrics.frequency_current_hz, "frequency_current_hz", "frequency")
         local limits = gpu.performance_limits and gpu.performance_limits.domains or {}
         local limit_text, all_inactive, asserted, degraded = "—",
-            #limits > 0 and not gpu.performance_limits.truncated, false, nil
+            #limits > 0 and not gpu.performance_limits.truncated
+                and gpu.performance_limits.enumeration_complete ~= false, false, nil
         for _, domain in ipairs(limits) do
             local state = snapshot.quality and snapshot.quality.gpus
             local q = limit_quality(domain, state)

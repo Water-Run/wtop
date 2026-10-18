@@ -757,7 +757,14 @@ local function power_detail_lines(snapshot, i18n)
     for _, row in ipairs(limit_rows) do
         lines[#lines + 1] = ""
         lines[#lines + 1] = inspector_text(row.name, INSPECTOR_ROW_WIDTH)
-        field("limits.current", "Current limits", row.current)
+        if row.current_items and #row.current_items > 1 then
+            field("limits.current", "Current limits", row.current_items[1])
+            for index = 2, #row.current_items do
+                lines[#lines + 1] = inspector_text("    " .. row.current_items[index], INSPECTOR_ROW_WIDTH)
+            end
+        else
+            field("limits.current", "Current limits", row.current)
+        end
         field("limits.scope", "Scope", row.scope .. " · " .. Technical.state(i18n, row.quality))
         field("metrics.source", "Source", row.source)
         if row.raw_hex then field("limits.raw", "Raw flags", row.raw_hex) end

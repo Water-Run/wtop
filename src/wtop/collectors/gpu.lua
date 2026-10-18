@@ -1521,8 +1521,10 @@ local function build_device(self, fs, drm_path, card_name, used_ids, now_ns)
   if memory_hz then device.metrics.frequency_memory_hz = memory_hz end
 
   device.hwmon_refs, device.hwmon_truncated = hwmon_references(self, fs, device, issues)
-  if device.driver == "i915" then
-    device.performance_limits = GPULimits.i915(fs, device.class_path, self.max_frequency_domains, now_ns)
+  if device.driver == "i915" or device.driver == "xe" then
+    device.performance_limits = device.driver == "xe"
+      and GPULimits.xe(fs, device.device_path, self.max_frequency_domains, now_ns)
+      or GPULimits.i915(fs, device.class_path, self.max_frequency_domains, now_ns)
     device.capabilities.performance_limits = #device.performance_limits.domains > 0
     device.quality.performance_limits = device.performance_limits.quality
   end

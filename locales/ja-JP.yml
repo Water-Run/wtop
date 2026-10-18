@@ -8,6 +8,15 @@ _meta:
   catalog_version: 1
 
 messages:
+  limits.reason.soc_thermal: "SoC 温度制限"
+  limits.reason.memory_thermal: "メモリ温度制限"
+  limits.reason.iccmax: "ICCMAX 電流制限"
+  limits.reason.soc_average_thermal: "SoC 平均温度制限"
+  limits.reason.fast_vmode: "VR FastVMode"
+  limits.reason.psys_pl1: "PSYS PL1"
+  limits.reason.psys_pl2: "PSYS PL2"
+  limits.reason.p0_frequency: "P0 周波数制限"
+  limits.reason.psys_critical: "PSYS 臨界制限"
   limits.reason.idle: "GPU アイドル"
   limits.reason.application_clock: "アプリのクロック設定"
   limits.reason.software_power_cap: "ソフトウェア電力制限"

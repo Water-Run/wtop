@@ -31,6 +31,108 @@ local function fixture(files, dirs, links)
 end
 local function bytes(status, logged) return string.pack("<I4I4", status | (logged << 16), 0) end
 local function find(list, id) for _, v in ipairs(list) do if v.id == id then return v end end end
+
+-- Xe's aggregate file is a single observation, independent of the status and
+-- per-reason files. Tile/GT identities must not collapse into one clock.
+do
+    local Fixture = require("support.fixture_fs")
+    local path = "/drm/card0/device"
+    local base = path .. "/tile0/gt0/freq0/throttle"
+    local other = path .. "/tile2/gt1/freq0/throttle"
+    local files = { [base .. "/reasons"] = "pl1 thermal\n", [other .. "/reasons"] = "none\n" }
+    local function fs(extra)
+        extra = extra or {}; extra.files = files; return Fixture.new(extra)
+    end
+    local function sample(source, maximum)
+        return GPU.xe(source or fs(), path, maximum or 8, function() return 4000 end)
+    end
+    local source = fs()
+    local original_read, aggregate_reads = source.read, 0
+    function source:read(name, maximum)
+        assert(name:match("/reasons$"), "aggregate Xe state queried racy individual attributes")
+        aggregate_reads = aggregate_reads + 1
+        return original_read(self, name, maximum)
+    end
+    local data = sample(source)
+    assert(data.quality == "fresh" and data.enumeration_complete and aggregate_reads == 2)
+    assert(#data.domains == 2 and data.domains[1].id == "tile0/gt0/freq0")
+    local domain = data.domains[1]
+    assert(domain.tile_id == 0 and domain.gt_id == 0 and domain.frequency_id == 0)
+    assert(domain.source == base .. "/reasons" and domain.observed_at_ns == 4000)
+    assert(domain.reading_kind == "aggregate_reasons" and domain.active)
+    assert(find(domain.reasons, "pl1").active and find(domain.reasons, "thermal").active)
+    assert(find(domain.reasons, "pl2") == nil, "aggregate active reasons are not support bits")
+    assert(data.domains[2].active == false and #data.domains[2].reasons == 0)
+    for _, text in ipairs({"", "none pl1", "pl1 pl1", "pl1\0", "vr_thermal vr_thermalert", string.rep("x",4097)}) do
+        files[base .. "/reasons"] = text
+        local invalid = sample().domains[1]
+        assert(invalid.quality == "error" and invalid.active == nil)
+    end
+    files[base .. "/reasons"] = "soc_thermal mem_thermal iccmax pwrbrk soc_avg_thermal fastvmode psys_pl1 psys_pl2 p0_freq psys_crit\n"
+    local newer = sample().domains[1]
+    assert(newer.quality == "fresh" and #newer.reasons == 10)
+    files[base .. "/reasons"] = "pl2 future_reason\n"
+    local future = sample().domains[1]
+    assert(future.active and future.quality == "partial" and future.unknown_reason_names[1] == "future_reason")
+    local current = { gpus = { devices = { { id="gpu0",card="card0",metrics={},performance_limits={domains={future}} } } } }
+    assert(View.performance_limit_rows(current,assert(I18n.new({locale="en-US"})))[1].current:find("Unknown flags",1,true))
+    local exported = Export.snapshot(current).gpus.devices[1].performance_limits.domains[1]
+    assert(exported.unknown_reason_names[1] == "future_reason" and exported.tile_id == 0)
+    assert(Export.agent(current).top.gpus[1].performance_limits.domains[1].unknown_reason_names[1] == "future_reason")
+    assert(Report.render(Export.snapshot(current)):find("future_reason (unknown)",1,true))
+    current.quality={gpus={status="error",quality="stale"}}
+    assert(not Report.render(Export.snapshot(current)):find("future_reason (unknown)",1,true))
+    local denied = sample(fs({denied={[base.."/reasons"]=true}})).domains[1]
+    assert(denied.quality == "denied" and denied.active == nil)
+    files[base .. "/reasons"] = "none\n"
+    local cut = sample(nil,1)
+    assert(cut.truncated and not cut.enumeration_complete and #cut.domains == 1)
+    local missing = sample(fs({denied={[path.."/tile2"]=true}}))
+    assert(not missing.enumeration_complete and missing.quality == "partial")
+    current.quality=nil;current.gpus.devices[1].performance_limits=missing
+    assert(View.build({history_values=function()return{}end},current,assert(I18n.new({locale="en-US"})),{},"gpu").gpu_table.rows[1].limits=="Unknown")
+
+    -- On older kernels only the listed per-reason files are supported. Two
+    -- equal rounds are required; missing/denied reads never become false.
+    files[base.."/reasons"],files[other.."/reasons"] = nil,nil
+    files[base.."/status"],files[base.."/reason_pl1"],files[base.."/reason_thermal"]="0\n","0\n","0\n"
+    local old = sample().domains[1]
+    assert(old.active==false and old.quality=="fresh" and old.reading_kind=="individual_flags")
+    assert(#old.reasons==2 and find(old.reasons,"pl2")==nil)
+    files[base.."/status"],files[base.."/reason_pl1"]="1\n","1\n"
+    old=sample().domains[1];assert(old.active and find(old.reasons,"pl1").active)
+    local racing=fs();local original=racing.read;local reads=0
+    function racing:read(name,maximum)
+        if name==base.."/reason_pl1" then reads=reads+1;return reads==1 and "1\n" or "0\n" end
+        return original(self,name,maximum)
+    end
+    local mixed=sample(racing).domains[1];assert(mixed.quality=="gap" and mixed.active==nil and #mixed.reasons==0)
+    files[base.."/status"]="0\n"
+    mixed=sample().domains[1];assert(mixed.active==nil and mixed.quality=="gap")
+    local denied_flags=sample(fs({denied={[base.."/status"]=true,[base.."/reason_pl1"]=true,[base.."/reason_thermal"]=true}})).domains[1]
+    assert(denied_flags.active==nil and denied_flags.quality=="denied")
+
+    -- The actual DRM collector, not only the helper, must publish these domains.
+    files[base.."/reasons"]="pl1\n"
+    files["/drm/card0/dev"]="226:0\n"
+    files[path.."/vendor"],files[path.."/device"],files[path.."/class"]="0x8086\n","0x56a0\n","0x030000\n"
+    local drm_fs=fs({links={[path]="../../../devices/pci0000:00/0000:03:00.0",[path.."/driver"]="../../../../bus/pci/drivers/xe"}})
+    local collector=require("wtop.collectors.gpu").new({fs=drm_fs,drm_path="/drm",proc_path="/proc",scan_processes=false})
+    local result=collector:sample({fs=drm_fs,now_ns=function()return 4000 end})
+    assert(result.status=="ok" and #result.data.devices==1)
+    local device=result.data.devices[1]
+    assert(device.driver=="xe" and device.capabilities.performance_limits and device.performance_limits.domains[1].active)
+    for _,locale in ipairs({"en-US","zh-CN","zh-TW","ja-JP","ko-KR","fr-FR","de-DE","es-ES","pt-BR","ru-RU"}) do
+        local i=assert(I18n.new({locale=locale}))
+        local state={gpus={devices={{id="gpu0",card="card0",metrics={},performance_limits={domains={newer}}}}}}
+        local rendered=table.concat(TUI.power_detail_lines(state,i),"\n")
+        assert(rendered:find(i:t("limits.reason.soc_thermal"),1,true))
+        assert(rendered:find(i:t("limits.reason.psys_critical"),1,true))
+        assert(not rendered:find(i:t("limits.history_note"),1,true))
+    end
+    print("ok: Xe aggregate/legacy current reasons, tile/GT identity, races, bounds, exports and translated UI")
+end
+
 local parsed = CPU.decode(bytes(1 << 10, (1 << 1) | (1 << 11)))
 assert(parsed.active and find(parsed.reasons,"pl1").active)
 assert(not find(parsed.reasons,"thermal").active and find(parsed.reasons,"thermal").logged)

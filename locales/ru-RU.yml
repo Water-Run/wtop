@@ -8,6 +8,15 @@ _meta:
   catalog_version: 1
 
 messages:
+  limits.reason.soc_thermal: "Температурный предел SoC"
+  limits.reason.memory_thermal: "Температурный предел памяти"
+  limits.reason.iccmax: "Токовый предел ICCMAX"
+  limits.reason.soc_average_thermal: "Средняя температура SoC"
+  limits.reason.fast_vmode: "VR FastVMode"
+  limits.reason.psys_pl1: "PSYS PL1"
+  limits.reason.psys_pl2: "PSYS PL2"
+  limits.reason.p0_frequency: "Частота P0"
+  limits.reason.psys_critical: "Критический предел PSYS"
   limits.reason.idle: "Простой GPU"
   limits.reason.application_clock: "Частоты приложений"
   limits.reason.software_power_cap: "Программный лимит мощности"

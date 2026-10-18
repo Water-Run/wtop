@@ -223,7 +223,7 @@ local function export_performance_limits(limits, maximum, summary, quality)
     limits = limits or {}
     local domains = limits.domains or {}
     local result = copy_fields(limits, { "schema", "source", "source_kind", "denied_domains",
-        "domains_discovered", "domains_supported", "domains_observed", "roster_complete" })
+        "domains_discovered", "domains_supported", "domains_observed", "roster_complete", "enumeration_complete" })
     result.domains, result.domains_total = json.array({}), #domains
     result.truncated = limits.truncated == true or #domains > (maximum or #domains)
     if limits.coverage_complete ~= nil then
@@ -235,7 +235,11 @@ local function export_performance_limits(limits, maximum, summary, quality)
             "active", "quality", "source", "source_kind", "observed_at_ns", "register", "reason",
             "raw_hex", "unknown_status_mask", "unknown_log_mask", "reserved_high",
             "supported_hex", "unknown_status_hex", "unsupported_status_hex", "status_code",
-            "supported_status_code", "supported_source" })
+            "supported_status_code", "supported_source", "tile_id", "gt_id", "frequency_id", "reading_kind" })
+        output.unknown_reason_names = json.array({})
+        for i, name in ipairs(domain.unknown_reason_names or {}) do
+            output.unknown_reason_names[i] = name
+        end
         local stale = Power.unusable(quality) or Power.unusable(domain.quality)
         if Power.unusable(quality) then
             output.quality = type(quality) == "table" and (quality.quality or quality.status) or quality

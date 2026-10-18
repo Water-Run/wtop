@@ -8,6 +8,15 @@ _meta:
   catalog_version: 1
 
 messages:
+  limits.reason.soc_thermal: "Límite térmico del SoC"
+  limits.reason.memory_thermal: "Límite térmico de memoria"
+  limits.reason.iccmax: "Corriente ICCMAX"
+  limits.reason.soc_average_thermal: "Temperatura media del SoC"
+  limits.reason.fast_vmode: "VR FastVMode"
+  limits.reason.psys_pl1: "PSYS PL1"
+  limits.reason.psys_pl2: "PSYS PL2"
+  limits.reason.p0_frequency: "Frecuencia P0"
+  limits.reason.psys_critical: "Límite crítico PSYS"
   limits.reason.idle: "GPU inactiva"
   limits.reason.application_clock: "Frecuencias de aplicaciones"
   limits.reason.software_power_cap: "Límite de potencia por software"
