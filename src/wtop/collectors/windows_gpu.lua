@@ -125,6 +125,8 @@ function M:sample(context)
   self.scan=scan
   if not scan then for _,device in ipairs(data.devices) do device.processes=nil end end
   local anchors=Observations.anchors(data.devices)
+  self.observations:inventory_frame(anchors,self.raw and (self.raw.value_timestamp_ns or self.raw.timestamp_ns) or now,
+    result.status=="ok" and not retained and not data.truncated and not data.partial)
   local providers,pending,retry,any_reason,any_retained,warming={}
   local observed=self.raw and (self.raw.value_timestamp_ns or self.raw.timestamp_ns) or nil
   for _,source in ipairs(sources) do
@@ -152,13 +154,16 @@ function M:sample(context)
             end
           end
         end
-        self.observations:observe(source,merge_data,association,now)
-        local before=Observations.before(data.devices)
-        if source=="nvml" then
-          provider=NVML.merge(data.devices,lookup,merge_data,{used_ids=used,now_ns=now,include_processes=scan})
-        else provider=adapters[source].merge(data.devices,merge_data,lookup,{used_ids=used,now_ns=now}) end
-        Observations.mark(data.devices,before,source,merge_data,now)
-        if sdk.sample_started_ns then observed=math.max(observed or 0,sdk.sample_started_ns) end
+        local invalid
+        merge_data,invalid=self.observations:observe(source,merge_data,association,now)
+        if merge_data then
+          local before=Observations.before(data.devices)
+          if source=="nvml" then
+            provider=NVML.merge(data.devices,lookup,merge_data,{used_ids=used,now_ns=now,include_processes=scan})
+          else provider=adapters[source].merge(data.devices,merge_data,lookup,{used_ids=used,now_ns=now}) end
+          Observations.mark(data.devices,before,source,merge_data,now)
+          if sdk.sample_started_ns then observed=math.max(observed or 0,sdk.sample_started_ns) end
+        else reason=invalid;provider.reason=invalid end
       else
         provider.status="partial"
         provider.reason="gpu_data_incomplete"

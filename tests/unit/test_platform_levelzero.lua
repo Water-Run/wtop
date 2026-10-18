@@ -93,7 +93,7 @@ equal(#merged.data.devices, 1, "no stray device is invented")
 -- cross-wire them onto the wrong card.
 local wide = GPU.new({ fs = Fixture.new(intel_tree), scan_processes = false,
   levelzero = function() return levelzero_data end })
-local wide_sample = wide:sample({ now_ns = function() return 6 end })
+local wide_sample = wide:sample({ now_ns = function() return 2000000 end })
 equal(wide_sample.data.providers.levelzero.status, "ok",
   "a verified PCI identity remains valid without a DRM card")
 equal(wide_sample.data.providers.levelzero.unmatched_devices, 0, "verified address is not an inferred association")
@@ -142,7 +142,7 @@ local nvidia_tree = {
 }
 local foreign = GPU.new({ fs = Fixture.new(nvidia_tree), scan_processes = false,
   levelzero = function() return levelzero_data end })
-local foreign_sample = foreign:sample({ now_ns = function() return 5 end })
+local foreign_sample = foreign:sample({ now_ns = function() return 2000000 end })
 equal(#foreign_sample.data.devices, 3,
   "the NVIDIA card is listed and both Level Zero devices stand alone")
 local nv = foreign_sample.data.by_id["0000:01:00.0"]

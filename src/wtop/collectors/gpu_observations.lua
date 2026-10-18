@@ -64,14 +64,95 @@ end
 
 function M.copy(value, budget) return clone(value, budget) end
 
-function M.new() return setmetatable({sources={},generation=0},M) end
+function M.new() return setmetatable({sources={},inventory={},generation=0},M) end
 function M:begin(fs,now,safe)
   if self.fs~=fs or (self.now and now<self.now) or safe or self.generation==math.maxinteger then
-    self.sources={};self.generation=0
+    self.sources={};self.inventory={};self.inventory_evicted=nil;self.inventory_seen=nil;self.generation=0
   end
   self.fs,self.now=fs,now;self.generation=self.generation+1
 end
-function M:clear() self.sources={};self.fs=nil;self.now=nil end
+function M:clear()
+  self.sources={};self.inventory={};self.inventory_evicted=nil;self.inventory_seen=nil;self.fs=nil;self.now=nil
+end
+
+-- A completed inventory can establish a disappearance, unlike a timeout or a
+-- truncated listing. Keep bounded tombstones so the same address cannot renew
+-- a packet captured before its disappearance/reappearance was observed.
+function M:inventory_frame(anchors,at,complete)
+  self.inventory_seen=true
+  if not finite(at) or at>self.now then at=self.now end
+  local count=0
+  for bdf,record in pairs(self.inventory) do
+    if complete and anchors[bdf]==nil and record.anchor~=nil then
+      record.anchor=nil;record.changed_at_ns=at
+    end
+    count=count+1
+  end
+  for bdf,anchor in pairs(anchors) do
+    local record=self.inventory[bdf]
+    if record then
+      if record.anchor~=anchor then record.anchor=anchor;record.changed_at_ns=at end
+    else
+      if count>=4096 then
+        for old,history in pairs(self.inventory) do
+          if history.anchor==nil then
+            self.inventory[old]=nil;count=count-1;self.inventory_evicted=true;break
+          end
+        end
+      end
+      if count<4096 then
+        self.inventory[bdf]={anchor=anchor,changed_at_ns=self.inventory_evicted and at or nil}
+        count=count+1
+      end
+    end
+  end
+end
+
+local function binding(entry,data,anchors)
+  if type(entry)~="table" then return end
+  local bdf=NVML.normalize_bdf(entry.pci_bdf)
+  local parts={}
+  for _,value in ipairs({bdf or false,entry.uuid or false,entry.index or false,
+      entry.vendor_id or false,entry.device_id or false,entry.name or false,
+      entry.driver_version or data.driver_version or false}) do
+    local kind=type(value)
+    if kind~="string" and kind~="number" and kind~="boolean" then return end
+    local token=tostring(value);if #token>4096 then return end
+    parts[#parts+1]=kind..#token..":"..token
+  end
+  local anchor=bdf and anchors[bdf]
+  return table.concat(parts,"|"),anchor==nil and true or anchor,bdf
+end
+
+function M:_frame(source,data,anchors,now)
+  local previous=self.sources[source]
+  local captured=data.sample_started_ns
+  if captured~=nil and (not finite(captured) or captured>now
+      or previous and previous.capture_ns and captured<previous.capture_ns) then
+    return nil,source.."_invalid_response"
+  end
+  local replay=previous and captured~=nil and captured==previous.capture_ns
+  local ready,bindings={devices={}},{}
+  for key,value in pairs(data) do if key~="devices" then ready[key]=value end end
+  local rejected=false
+  for index,entry in ipairs(data.devices) do
+    if index>64 then ready.truncated=true;break end
+    local key,anchor,bdf=binding(entry,data,anchors)
+    local inventory=bdf and self.inventory[bdf]
+    local before_change=self.inventory_seen and bdf and anchors[bdf]~=nil and not inventory
+      or inventory and inventory.changed_at_ns and (not finite(captured) or captured<inventory.changed_at_ns)
+    if not key or before_change or replay and (not previous.bindings
+        or previous.bindings[key]~=anchor) then rejected=true
+    else ready.devices[#ready.devices+1]=entry;bindings[key]=anchor end
+  end
+  if rejected then
+    if #ready.devices==0 then return nil,source.."_invalid_response" end
+    ready.status="partial"
+  end
+  -- Replaying a subset must not forget the original batch's other bindings.
+  if replay then bindings=previous.bindings end
+  return ready,nil,bindings
+end
 
 -- This is a conservative association guard, not a replacement for a device
 -- UUID. Changed/missing DRM identities invalidate the old association.
@@ -130,6 +211,9 @@ end
 
 function M:observe(source,data,anchors,now)
   if not data then return end
+  local reason,bindings
+  data,reason,bindings=self:_frame(source,data,anchors,now)
+  if not data then return nil,reason end
   local devices,lookup={}, {by_bdf={}}
   local limited={devices={}}
   for key,value in pairs(data) do if key~="devices" then limited[key]=value end end
@@ -144,7 +228,8 @@ function M:observe(source,data,anchors,now)
   for _,record in ipairs(previous and previous.records or {})do old_devices[#old_devices+1]=record.device end
   PowerSession.attach(devices,old_devices,source,data,now,anchors)
   local state={records={},data={sample_started_ns=data.sample_started_ns,
-    sample_finished_ns=data.sample_finished_ns,transport=data.transport},truncated=#data.devices>64}
+    sample_finished_ns=data.sample_finished_ns,transport=data.transport},truncated=data.truncated==true,
+    capture_ns=data.sample_started_ns,bindings=bindings}
   local budget={nodes=65536,bytes=1048576}
   local ids,bdfs,uuids={},{},{}
   for _,device in ipairs(devices) do
@@ -174,6 +259,7 @@ function M:observe(source,data,anchors,now)
     end
   end
   self.sources[source]=state
+  return data
 end
 
 local function same_pci_id(left,right)

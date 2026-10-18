@@ -1806,6 +1806,9 @@ function GPU:sample(context, previous)
   local drm = self._drm_worker and self._drm_worker:sample(context) or self:_sample_drm(context, previous)
   if not self._drm_worker and drm.status ~= "ok" then return drm end
   local drm_cards = #drm.data.devices
+  local anchors = drm.data.anchors
+  self._observations:inventory_frame(anchors, drm.value_timestamp_ns or drm.timestamp_ns,
+    drm.status == "ok" and not drm.retained and not drm.data.drm_scan.truncated)
   -- Loading a vendor library is an optional provider, which safe mode excludes.
   local nvml_data, nvml_reason
   local amdsmi_data, amdsmi_reason
@@ -1823,11 +1826,13 @@ function GPU:sample(context, previous)
   end
   local vendor_data = { nvml=nvml_data, amdsmi=amdsmi_data, levelzero=levelzero_data }
   local vendor_reasons = { nvml=nvml_reason, amdsmi=amdsmi_reason, levelzero=levelzero_reason }
-  if #drm.data.devices == 0 then
-    for source, data in pairs(vendor_data) do
-      self._observations:observe(source, data, {}, Common.now_ns(context))
-    end
+  for source, data in pairs(vendor_data) do
+    local ready, reason = self._observations:observe(source, data, anchors, Common.now_ns(context))
+    vendor_data[source] = ready
+    if reason then vendor_reasons[source] = reason end
   end
+  nvml_data, amdsmi_data, levelzero_data = vendor_data.nvml, vendor_data.amdsmi, vendor_data.levelzero
+  nvml_reason, amdsmi_reason, levelzero_reason = vendor_reasons.nvml, vendor_reasons.amdsmi, vendor_reasons.levelzero
   local cached = false
   for _, state in pairs(self._observations.sources) do cached = cached or #state.records > 0 end
   if #drm.data.devices == 0 and not cached and next(vendor_data) == nil then
@@ -1863,12 +1868,6 @@ function GPU:sample(context, previous)
     for _, node in ipairs(device.drm_nodes or {}) do lookup.by_node[node.name] = device end
   end
   local drm_scan, process_scan = drm.data.drm_scan, drm.data.process_scan
-  local anchors = drm.data.anchors
-  if #devices > 0 then
-    for source, data in pairs(vendor_data) do
-      self._observations:observe(source, data, anchors, Common.now_ns(context))
-    end
-  end
   local partial = drm.retained or drm.status ~= "ok" or drm_scan.truncated
     or drm_scan.unattached_render_nodes > 0 or process_scan.quality == "partial"
     or (process_scan.enabled and process_scan.status ~= "ok")
