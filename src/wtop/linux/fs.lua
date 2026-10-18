@@ -188,7 +188,7 @@ function FS.new(options)
   -- The accessor names are also the only ones `FS.new` will ever substitute a real
   -- implementation for, so an unknown key can only ever be a misspelling or dead
   -- weight.
-  local FS_OPTION_KEYS = { "root", "read_file", "read_file_at", "list_dir", "read_link", "path_type" }
+  local FS_OPTION_KEYS = { "root", "read_file", "read_file_at", "list_dir", "read_link", "path_type", "usb_interface" }
   for key in pairs(options) do
     local known = false
     for _, accepted in ipairs(FS_OPTION_KEYS) do
@@ -199,7 +199,7 @@ function FS.new(options)
         .. table.concat(FS_OPTION_KEYS, ", "), 2)
     end
   end
-  for _, key in ipairs({ "read_file", "read_file_at", "list_dir", "read_link", "path_type" }) do
+  for _, key in ipairs({ "read_file", "read_file_at", "list_dir", "read_link", "path_type", "usb_interface" }) do
     if options[key] ~= nil and type(options[key]) ~= "function" then
       error(key .. " must be a function", 2)
     end
@@ -217,6 +217,7 @@ function FS.new(options)
     list_impl = options.list_dir or default_list_dir,
     readlink_impl = options.read_link or default_read_link,
     path_type_impl = options.path_type or default_path_type,
+    usb_interface_impl = options.usb_interface,
     root = root,
     default_limit = default_limit,
   }, FS)
@@ -284,6 +285,26 @@ end
 
 function FS:readlink(path)
   return self.readlink_impl(self:path(path))
+end
+
+-- A synthetic filesystem does not silently acquire access to the real host.
+function FS:usb_interface(path, limit)
+  local actual = self:path(path)
+  if type(limit) ~= "number" or limit % 1 ~= 0 or limit < 0 or limit > 30 then
+    return nil, { kind = "invalid", path = actual }
+  end
+  if self.usb_interface_impl then return self.usb_interface_impl(actual, limit) end
+  if self.read_impl ~= default_read_file or self.list_impl ~= default_list_dir
+      or self.readlink_impl ~= default_read_link or self.path_type_impl ~= default_path_type
+      or not (ok_native and native and native.available
+        and type(native.read_usb_interface) == "function") then
+    return nil, { kind = "unavailable", path = actual }
+  end
+  local called, value, message, errno, category = pcall(native.read_usb_interface, actual, limit)
+  if not called then return nil, { kind = "io_error", path = actual } end
+  if type(value) == "table" then return value end
+  return nil, { kind = category == "changed" and "changed" or classify_error(message, errno),
+    path = actual, errno = errno }
 end
 
 function FS:kind(path)

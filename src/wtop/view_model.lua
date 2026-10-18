@@ -2314,7 +2314,26 @@ local function system_device_rows(snapshot, i18n, query)
             end
         end
     end
-    return rows, pci.total or #pci_devices, usb.total or #usb_devices,
+    local function bus_total(source, devices)
+        local state = source.status
+        local text
+        if state == "denied" or state == "error" or state == "unavailable" then
+            text = Technical.state(i18n, state)
+        elseif source.total_known ~= false and type(source.total) == "number"
+                and source.total >= 0 and source.total <= math.maxinteger and source.total % 1 == 0 then
+            text = string.format("%d", source.total)
+        else
+            local seen = source.devices_seen or #devices
+            if type(seen) == "number" and seen > 0 and seen <= math.maxinteger and seen % 1 == 0 then
+                text = string.format("%d+", seen)
+            else text = state == "partial" and Technical.state(i18n, state) or "—" end
+        end
+        if not Quality.current_source(snapshot.quality, "inventory") then
+            text = text .. " (" .. Technical.state(i18n, "stale") .. ")"
+        end
+        return text
+    end
+    return rows, bus_total(pci, pci_devices), bus_total(usb, usb_devices),
         graph.truncated or graph.partial or total > #rows,
         ids, total, direct_count, first_match_index
 end
@@ -3766,8 +3785,8 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
                     matches = system_device_matches, visible = #system_device_ids,
                     total = system_device_total, query = system_query,
                 }) .. (system_devices_truncated and " · …" or "")
-                or string.format("PCI %d · USB %d · %s %d%s",
-                    system_pci_total or 0, system_usb_total or 0,
+                or string.format("PCI %s · USB %s · %s %d%s",
+                    system_pci_total or "—", system_usb_total or "—",
                     translated(i18n, "metrics.total", "Total"), #system_device_ids,
                     system_devices_truncated and " · …" or ""),
         },

@@ -3640,6 +3640,8 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         add("inventory.class", "Class", hex_byte(device.class_id))
         add("inventory.usb_subclass", "Subclass", hex_byte(device.subclass_id))
         add("inventory.usb_protocol", "Protocol", hex_byte(device.protocol_id))
+        require("wtop.ui.usb_endpoints").append(device.endpoint_details, add, lines, i18n,
+            Quality.current_source(snapshot.quality, "inventory"))
     end
     if node.bus == "pci" then
         add("inventory.class", "Class", hardware_hex(device.class_id, 6))

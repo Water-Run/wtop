@@ -245,10 +245,19 @@ assert(bare.system_devices ~= nil,
 assert(type(bare.system_devices.rows) == "table" and #bare.system_devices.rows == 0,
     "a host with no device inventory should show an empty device table, not "
         .. "fail to build the page")
-assert(bare.system_devices.status_text:find("PCI 0", 1, true) ~= nil
-    and bare.system_devices.status_text:find("USB 0", 1, true) ~= nil,
-    "an empty inventory should count zero devices, and the status line says "
+assert(bare.system_devices.status_text:find("PCI —", 1, true) ~= nil
+    and bare.system_devices.status_text:find("USB —", 1, true) ~= nil,
+    "an unavailable inventory keeps its unknown counts, and the status line says "
         .. tostring(bare.system_devices.status_text))
+local known_empty = ViewModel.build(engine, {
+  cpu = {}, memory = {}, pressure = {}, disks = {}, network = {}, processes = {},
+  cpu_frequency = {}, mounts = {}, workloads = {}, connections = {}, sensors = {}, quality = {},
+  inventory = { pci = { devices = {}, total = 0, total_known = true },
+    usb = { devices = {}, total = 0, total_known = true } },
+}, translator, {}, "system")
+assert(known_empty.system_devices.status_text:find("PCI 0", 1, true)
+  and known_empty.system_devices.status_text:find("USB 0", 1, true),
+  "a confirmed empty enumeration still displays zero")
 assert(type(bare.system_devices.empty_text) == "string"
     and bare.system_devices.empty_text ~= "",
     "an empty device table must say so.  A blank panel on the system page reads "

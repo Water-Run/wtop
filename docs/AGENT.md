@@ -43,6 +43,22 @@ Linux 的 `top.wifi` 是独立的无线接口报告，遵循设备列表上限�
 `wifi.devices` 保留相同的字段、逐设备质量与关联频率列表；原始协议帧、
 SSID 和 BSSID 不输出。
 
+Linux 的 `top.usb_interfaces` 最多保留五个 USB 接口，每个接口的
+`endpoint_details.list` 最多三十项。`metrics.usb` 给出接口总数、接口及
+端点截断状态。Snapshot 的 `inventory.usb.interfaces[]` 使用同一份端点
+详情，保留观察到的备用设置、方向、传输类型、最大包字节数、原始间隔代码
+和 `interval_microseconds`。这些字段来自内核缓存的端点设置，不提供传输
+流量或带宽测量。`total_known=false` 时省略精确总数，`observed_count`
+只表示扫描已见条目数；缺失、拒绝和采样变化分别保留状态。库存来源过期时，
+保留值标为 stale，`observation_current=false`。
+
+Snapshot 的 `inventory.pci` 和 `inventory.usb` 分别保留总线来源状态及
+`enumeration_complete`。来源被拒绝、缺失或扫描不完整时，精确总数省略，
+`total_known=false`；USB 接口还有独立的 `interface_total_known`。
+`devices_seen`、`interfaces_seen` 或 PCI 的 `entries_seen` 只描述已经观察到的
+前缀。正常读取到的空目录仍给出已知的零值。Agent 的 `metrics.usb.status`
+与 `quality` 保留相同的可用性，不把缺失来源转换成零个接口。
+
 Linux RAPL 的 Snapshot `power.graphics_domains` 与 Agent
 `metrics.power.graphics_domains` 独立描述 PP1 图形功耗域，使用相同的瓦数、
 观察时间、采样窗口和质量。`scope=rapl_graphics_domain`、

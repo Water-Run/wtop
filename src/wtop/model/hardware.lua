@@ -399,7 +399,10 @@ function M.build(snapshot)
     end
   end
   local usb = type(inventory.usb) == "table" and inventory.usb or {}
-  result.truncated = result.truncated or usb.interfaces_truncated == true
+  result.partial = result.partial or type(usb.status) == "string" and usb.status ~= "ok"
+  local pci_inventory = type(inventory.pci) == "table" and inventory.pci or {}
+  result.partial = result.partial or type(pci_inventory.status) == "string" and pci_inventory.status ~= "ok"
+  result.truncated = result.truncated or usb.interfaces_truncated == true or usb.endpoints_truncated == true
   for index, device in ipairs(type(usb.interfaces) == "table" and usb.interfaces or {}) do
     if index > 256 then result.truncated = true break end
     local id = type(device) == "table" and identifier(device.id)

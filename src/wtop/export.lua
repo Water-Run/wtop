@@ -14,6 +14,7 @@ local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
 local NVMeWarnings = require("wtop.model.nvme_warnings")
 local WiFi = require("wtop.model.wifi")
+local UsbEndpoints = require("wtop.format.usb_endpoints")
 local NVMe = require("wtop.linux.nvme_diagnostics")
 
 local M = {}
@@ -2032,6 +2033,32 @@ local function export_inventory(snapshot)
     end
     local pci = type(inventory.pci) == "table" and inventory.pci or {}
     local usb = type(inventory.usb) == "table" and inventory.usb or {}
+    local function bus_count(value)
+        if finite_number(value) and value >= 0 and value % 1 == 0 then return value end
+    end
+    local function bus_flag(value)
+        if type(value) == "boolean" then return value end
+    end
+    local usb_device_total_known = bus_count(usb.total) ~= nil and usb.total_known ~= false
+    local usb_interface_total_known = bus_count(usb.interface_total) ~= nil and usb.interface_total_known ~= false
+    local usb_status = (usb.status == "partial" or Quality.VALID_STATUS[usb.status]) and usb.status or nil
+    local pci_total_known = bus_count(pci.total) ~= nil and pci.total_known ~= false
+    local pci_status = (pci.status == "partial" or Quality.VALID_STATUS[pci.status]) and pci.status or nil
+    local usb_interfaces = devices(usb.interfaces, {
+        "id", "interface_number", "alternate_setting", "endpoint_count",
+        "class_id", "subclass_id", "protocol_id", "interface", "parent_id", "source", "driver",
+    }, 256)
+    local usb_remaining, usb_details_truncated = UsbEndpoints.MAX_TOTAL, usb.endpoints_truncated == true
+    local usb_stale = not Quality.current_source(snapshot.quality, "inventory")
+    for index, interface in ipairs(type(usb.interfaces) == "table" and usb.interfaces or {}) do
+        if index > 256 then break end
+        if type(interface) == "table" then
+            local detail = UsbEndpoints.public(interface.endpoint_details, usb_stale, math.min(30, usb_remaining))
+            usb_interfaces[index].endpoint_details = detail
+            usb_remaining = usb_remaining - #(detail and detail.list or {})
+            usb_details_truncated = usb_details_truncated or detail and detail.truncated == true or false
+        end
+    end
     local pci_devices = devices(pci.devices, {
         "address", "vendor_id", "device_id", "class_id", "revision",
         "vendor_name", "device_name",
@@ -2114,7 +2141,13 @@ local function export_inventory(snapshot)
         pci = json.object({
             devices = pci_devices,
             iommu_groups = iommu_groups,
-            total = pci.total, truncated = pci.truncated,
+            total = pci_total_known and pci.total or nil, total_known = pci_total_known,
+            entries_seen = bus_count(pci.entries_seen), devices_seen = bus_count(pci.devices_seen),
+            enumeration_complete = bus_flag(pci.enumeration_complete), status = pci_status,
+            source = type(pci.source) == "string" and #pci.source <= 4096 and pci.source or nil,
+            quality = usb_stale and "stale" or pci_status ~= "ok" and pci_status
+                or pci.truncated and "truncated" or pci_status and "fresh" or nil,
+            truncated = pci.truncated,
         }),
         usb = json.object({
             devices = devices(usb.devices, {
@@ -2122,13 +2155,19 @@ local function export_inventory(snapshot)
                 "manufacturer", "product",
                 "parent_id", "parent_bus", "source", "driver", "speed_mbps",
             }, 128),
-            interfaces = devices(usb.interfaces, {
-                "id", "interface_number", "alternate_setting", "endpoint_count",
-                "class_id", "subclass_id", "protocol_id", "interface",
-                "parent_id", "source", "driver",
-            }, 256),
-            total = usb.total, interface_total = usb.interface_total,
+            interfaces = usb_interfaces,
+            total = usb_device_total_known and usb.total or nil,
+            interface_total = usb_interface_total_known and usb.interface_total or nil,
+            total_known = usb_device_total_known, interface_total_known = usb_interface_total_known,
+            enumeration_complete = bus_flag(usb.enumeration_complete),
+            devices_seen = bus_count(usb.devices_seen), interfaces_seen = bus_count(usb.interfaces_seen),
+            status = usb_status,
+            source = type(usb.source) == "string" and #usb.source <= 4096 and usb.source or nil,
+            quality = usb_stale and "stale" or usb_status ~= "ok" and usb_status
+                or (usb.truncated or usb.interfaces_truncated or usb_details_truncated) and "truncated"
+                or usb_status and "fresh" or nil,
             truncated = usb.truncated, interfaces_truncated = usb.interfaces_truncated,
+            endpoints_truncated = usb_details_truncated,
         }),
         topology = json.object({ schema_version = 1, nodes = nodes,
             truncated = graph.truncated, partial = graph.partial }),
@@ -2807,6 +2846,28 @@ function M.agent(snapshot, options)
         if finite_number(value) then observed = observed + 1 end
     end
     local state = (#signals == 0 and observed == 0) and "unknown" or highest
+    local top_usb_interfaces, usb_metric = json.array({}), json.object({})
+    local usb_inventory = full.inventory and full.inventory.usb or {}
+    for index, interface in ipairs(usb_inventory.interfaces or {}) do
+        if index > device_limit then break end
+        top_usb_interfaces[#top_usb_interfaces + 1] = copy_fields(interface, {
+            "id", "interface_number", "alternate_setting", "endpoint_count", "class_id",
+            "subclass_id", "protocol_id", "parent_id", "driver", "endpoint_details",
+        })
+    end
+    usb_metric.interface_total_known = usb_inventory.interface_total_known == true
+    usb_metric.interfaces_seen = usb_inventory.interfaces_seen
+    usb_metric.enumeration_complete = usb_inventory.enumeration_complete
+    usb_metric.status = usb_inventory.status or (usb_metric.interface_total_known and "ok" or "unavailable")
+    usb_metric.quality = usb_inventory.quality or
+        (not Quality.current_source(full.quality, "inventory") and "stale"
+            or usb_metric.interface_total_known and "fresh" or "unavailable")
+    usb_metric.interfaces_truncated = usb_inventory.interfaces_truncated == true
+        or finite_number(usb_inventory.interface_total) and usb_inventory.interface_total > #top_usb_interfaces
+    usb_metric.endpoints_truncated = usb_inventory.endpoints_truncated == true
+    if usb_metric.interface_total_known and finite_number(usb_inventory.interface_total) and usb_inventory.interface_total >= 0 then
+        usb_metric.interfaces_total = usb_inventory.interface_total
+    end
     return json.object({
         schema = "dev.waterrun.wtop.agent/v1",
         producer = full.producer,
@@ -2866,6 +2927,7 @@ function M.agent(snapshot, options)
                 swap_total_bytes = memory.swap_total_bytes,
                 swap_used_percent = swap_used_percent,
             }),
+            usb = usb_metric,
             pressure = pressure_metrics,
             storage = json.object({
                 read_bytes_per_second = sum_field(disk_devices, "read_bytes_per_second"),
@@ -2940,6 +3002,7 @@ function M.agent(snapshot, options)
             disks = top_disks,
             interfaces = top_interfaces,
             wifi = top_wifi,
+            usb_interfaces = top_usb_interfaces,
             workloads = top_workloads,
             gpus = gpu_summaries,
             sensors = top_temperatures,

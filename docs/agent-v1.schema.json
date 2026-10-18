@@ -99,6 +99,13 @@
         "interfaces": { "type": "array", "maxItems": 5, "items": { "type": "object" } },
         "workloads": { "type": "array", "maxItems": 5, "items": { "type": "object" } },
         "gpus": { "type": "array", "maxItems": 5, "items": { "type": "object" } },
+        "usb_interfaces": { "type": "array", "maxItems": 5, "items": {
+          "type": "object", "properties": {
+            "endpoint_details": { "type": "object", "properties": {
+              "list": { "type": "array", "maxItems": 30, "items": { "type": "object" } }
+            } }
+          }
+        } },
         "sensors": { "type": "array", "maxItems": 50, "items": { "type": "object" } }
       },
       "additionalProperties": true

@@ -920,6 +920,10 @@ function M.render(snapshot)
             return { device.address, device.vendor_name or device.vendor_id,
                 device.device_name or device.device_id, device.driver }
         end, pci)
+    if pci.status and pci.status ~= "ok" then
+        lines[#lines + 1] = "PCI device source: " .. cell(pci.status)
+        lines[#lines + 1] = ""
+    end
     table_section(lines, "USB devices", { "ID", "Manufacturer", "Product", "Driver" },
         usb.devices, function(device)
             return { device.id, device.manufacturer, device.product, device.driver }
@@ -929,6 +933,34 @@ function M.render(snapshot)
             return { interface.id, interface.interface, interface.class_id,
                 interface.driver }
         end, usb)
+
+    local observations, endpoints = {}, {}
+    if usb.status and usb.status ~= "ok" then
+        lines[#lines + 1] = "USB interface source: " .. cell(usb.status)
+        lines[#lines + 1] = ""
+    end
+    for _, interface in ipairs(list(usb.interfaces)) do
+        local detail = object(interface.endpoint_details)
+        observations[#observations + 1] = { id = interface.id,
+            setting = detail.alternate_setting or interface.alternate_setting,
+            declared = detail.declared_count, read = type(detail.list) == "table" and #detail.list or nil,
+            total = detail.total, quality = detail.quality }
+        for _, row in ipairs(list(detail.list)) do
+            endpoints[#endpoints + 1] = { interface = interface.id, setting = detail.alternate_setting,
+                id = row.id, transfer_type = row.transfer_type, direction = row.direction,
+                packet = row.max_packet_bytes, interval = row.interval_microseconds, quality = row.quality }
+        end
+    end
+    table_section(lines, "USB endpoint observations", { "Interface", "Setting", "Declared", "Read", "Total", "Quality" },
+        observations, function(row)
+            return { row.id, row.setting, row.declared, row.read, row.total, row.quality }
+        end, { truncated = usb.endpoints_truncated })
+    table_section(lines, "USB endpoints", { "Interface", "Setting", "Endpoint", "Transfer", "Direction", "Max packet (bytes)", "Interval (us)", "Quality" },
+        endpoints, function(row)
+            return { row.interface, row.setting, row.id, row.transfer_type, row.direction, row.packet, row.interval, row.quality }
+        end, { truncated = usb.endpoints_truncated })
+    lines[#lines + 1] = "Cached endpoint settings; packet size and interval are declared parameters."
+    lines[#lines + 1] = ""
 
     local graph = object(inventory.topology)
     table_section(lines, "Device relationships", { "ID", "Kind", "Parent", "Sensors" },

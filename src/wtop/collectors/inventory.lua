@@ -7,6 +7,7 @@ local FS = require("wtop.linux.fs")
 local Common = require("wtop.collectors.common")
 local PciNames = require("wtop.linux.pci_names")
 local Parsers = require("wtop.linux.parsers")
+local UsbEndpoints = require("wtop.format.usb_endpoints")
 
 local Inventory = {}
 Inventory.__index = Inventory
@@ -486,27 +487,55 @@ local function read_usb_device(fs, base, name)
   }
 end
 
-local function read_usb_interface(fs, base, name)
+local function read_usb_interface(fs, base, name, endpoint_budget)
   local path = base .. "/" .. name
-  local number = hex_id(fs, path .. "/bInterfaceNumber")
+  local raw, failure, limit
+  if endpoint_budget then
+    limit = math.min(UsbEndpoints.MAX_PER_INTERFACE, endpoint_budget.remaining)
+    endpoint_budget.remaining = endpoint_budget.remaining - limit
+    if type(fs.usb_interface) == "function" then raw, failure = fs:usb_interface(path, limit)
+    else failure = { kind = "unavailable" } end
+    if type(raw) == "table" and raw.guarded == true and type(raw.fields) == "table"
+        and type(raw.endpoints) == "table" then
+      endpoint_budget.remaining = endpoint_budget.remaining + limit - math.min(limit, #raw.endpoints)
+    else raw = nil end
+  end
+  local function field(file, maximum)
+    if raw then return UsbEndpoints.hex(raw.fields[file], maximum) end
+    local value = hex_id(fs, path .. "/" .. file)
+    return value and value <= maximum and value or nil
+  end
+  local number = field("bInterfaceNumber", 255)
   local named_number = tonumber(name:match(":%d+%.(%d+)$"))
-  if not number or number > 255 or number ~= named_number then return nil end
-  local class = hex_id(fs, path .. "/bInterfaceClass")
-  local subclass = hex_id(fs, path .. "/bInterfaceSubClass")
-  local protocol = hex_id(fs, path .. "/bInterfaceProtocol")
-  local alternate = hex_id(fs, path .. "/bAlternateSetting")
-  local endpoints = hex_id(fs, path .. "/bNumEndpoints")
-  return {
+  if not named_number or named_number > 255 or (number and number ~= named_number)
+      or (not number and not raw) then return nil end
+  local class = field("bInterfaceClass", 255)
+  local subclass = field("bInterfaceSubClass", 255)
+  local protocol = field("bInterfaceProtocol", 255)
+  local alternate = field("bAlternateSetting", 255)
+  local endpoints = field("bNumEndpoints", 30)
+  local result = {
     id = Common.safe_text(name, 64), interface_number = number,
     alternate_setting = alternate and alternate <= 255 and alternate or nil,
     endpoint_count = endpoints and endpoints <= 30 and endpoints or nil,
     class_id = class and class <= 255 and class or nil,
     subclass_id = subclass and subclass <= 255 and subclass or nil,
     protocol_id = protocol and protocol <= 255 and protocol or nil,
-    interface = text(fs, path .. "/interface"),
-    parent_id = parent(link(fs, path), name),
-    driver = driver(fs, path), source = path,
+    source = path,
   }
+  if raw then
+    result.interface = type(raw.interface) == "string"
+      and Common.safe_text(Common.trim(raw.interface), 128) or nil
+    result.parent_id = parent(raw.source_target, name)
+    local target = type(raw.driver_target) == "string" and raw.driver_target:match("([^/]+)$")
+    result.driver = target and target ~= "." and target ~= ".." and Common.safe_text(target, 128) or nil
+    result.endpoint_details = UsbEndpoints.decode(raw, path, limit)
+  else
+    result.interface, result.parent_id, result.driver = text(fs, path .. "/interface"),
+      parent(link(fs, path), name), driver(fs, path)
+    if endpoint_budget then result.endpoint_details = UsbEndpoints.unavailable(failure, path) end
+  end
+  return result
 end
 
 function Inventory.new(options)
@@ -561,8 +590,8 @@ function Inventory:sample(context, previous)
     if type(device.address) == "string" then previous_pci[device.address] = device end
   end
 
-  local pci_entries, pci_list_error = fs:list(self.pci_base, MAX_PCI_DEVICES + 1)
-  local usb_entries, _, usb_entries_truncated = fs:list(self.usb_base,
+  local pci_entries, pci_list_error, pci_entries_truncated = fs:list(self.pci_base, MAX_PCI_DEVICES + 1)
+  local usb_entries, usb_list_error, usb_entries_truncated = fs:list(self.usb_base,
     MAX_USB_SCAN_ENTRIES + 1)
   if not pci_entries and not usb_entries then
     local finished = Common.now_ns(context)
@@ -575,12 +604,15 @@ function Inventory:sample(context, previous)
     })
   end
 
-  local pci_devices, pci_total, pci_truncated = {}, 0, false
+  local pci_devices, pci_total, pci_truncated, pci_unreadable = {}, 0, false, false
   local msi_budget = { remaining = MAX_MSI_VECTORS_TOTAL }
   local affinity_budget = { remaining = MAX_IRQ_AFFINITY_READS }
   if pci_entries then
     local sorted = {}
-    for _, address in ipairs(pci_entries) do sorted[#sorted + 1] = address end
+    for index, address in ipairs(pci_entries) do
+      if index > MAX_PCI_DEVICES + 1 then pci_entries_truncated = true break end
+      sorted[#sorted + 1] = address
+    end
     table.sort(sorted)
     for _, address in ipairs(sorted) do
       pci_total = pci_total + 1
@@ -590,13 +622,15 @@ function Inventory:sample(context, previous)
       end
       local device = read_pci_device(self, fs, self.pci_base, address,
         msi_budget, affinity_budget)
-      if device then pci_devices[#pci_devices + 1] = device end
+      if device then pci_devices[#pci_devices + 1] = device else pci_unreadable = true end
     end
   end
 
   local usb_devices, usb_total, usb_truncated = {}, 0, false
   local iommu_groups = read_iommu_groups(fs, pci_devices)
   local usb_interfaces, usb_interface_total, usb_interfaces_truncated = {}, 0, false
+  local endpoint_budget, usb_endpoints_truncated = { remaining = UsbEndpoints.MAX_TOTAL }, false
+  local usb_devices_unreadable, usb_interfaces_unreadable = false, false
   if usb_entries then
     local sorted = {}
     for _, name in ipairs(usb_entries) do sorted[#sorted + 1] = name end
@@ -616,18 +650,21 @@ function Inventory:sample(context, previous)
           else
             usb_devices[#usb_devices + 1] = device
           end
-        end
+        else usb_devices_unreadable = true end
       elseif type(name) == "string"
           and name:match("^%d+%-%d+[%.%d]*:%d+%.%d+$") then
-        local interface = read_usb_interface(fs, self.usb_base, name)
+        local interface = read_usb_interface(fs, self.usb_base, name,
+          #usb_interfaces < MAX_USB_INTERFACES and endpoint_budget or nil)
         if interface then
           usb_interface_total = usb_interface_total + 1
           if #usb_interfaces >= MAX_USB_INTERFACES then
             usb_interfaces_truncated = true
           else
             usb_interfaces[#usb_interfaces + 1] = interface
+            usb_endpoints_truncated = usb_endpoints_truncated
+              or interface.endpoint_details and interface.endpoint_details.truncated == true or false
           end
-        end
+        else usb_interfaces_unreadable = true end
       end
     end
   end
@@ -646,16 +683,35 @@ function Inventory:sample(context, previous)
       source = self.pci_base,
     })
   end
+  pci_truncated = pci_truncated or pci_entries_truncated == true
+  local pci_complete = type(pci_entries) == "table" and not pci_entries_truncated
+  local pci_status = not pci_entries and FS.error_status(pci_list_error)
+    or (not pci_complete or pci_unreadable) and "partial" or "ok"
   usb_truncated = usb_truncated or usb_entries_truncated == true
   usb_interfaces_truncated = usb_interfaces_truncated or usb_entries_truncated == true
-  local truncated = pci_truncated or usb_truncated or usb_interfaces_truncated
+  local usb_enumerated = type(usb_entries) == "table"
+  local usb_complete = usb_enumerated and not usb_entries_truncated
+  local usb_device_total_known = usb_complete and not usb_devices_unreadable
+  local usb_interface_total_known = usb_complete and not usb_interfaces_unreadable
+  local usb_status = not usb_enumerated and FS.error_status(usb_list_error)
+    or (not usb_complete or usb_devices_unreadable or usb_interfaces_unreadable) and "partial" or "ok"
+  local truncated = pci_truncated or usb_truncated or usb_interfaces_truncated or usb_endpoints_truncated
   local quality = truncated and "truncated" or "fresh"
   return Common.result("ok", finished, {
     pci = { devices = pci_devices, iommu_groups = iommu_groups,
-      total = pci_total, truncated = pci_truncated },
+      total = pci_complete and pci_total or nil, total_known = pci_complete,
+      entries_seen = pci_entries and pci_total or nil, devices_seen = pci_entries and #pci_devices or nil,
+      enumeration_complete = pci_complete, status = pci_status, source = self.pci_base,
+      truncated = pci_truncated },
     usb = { devices = usb_devices, interfaces = usb_interfaces,
-      total = usb_total, interface_total = usb_interface_total,
-      truncated = usb_truncated, interfaces_truncated = usb_interfaces_truncated },
+      total = usb_device_total_known and usb_total or nil,
+      interface_total = usb_interface_total_known and usb_interface_total or nil,
+      total_known = usb_device_total_known, interface_total_known = usb_interface_total_known,
+      devices_seen = usb_enumerated and usb_total or nil,
+      interfaces_seen = usb_enumerated and usb_interface_total or nil,
+      enumeration_complete = usb_complete, status = usb_status, source = self.usb_base,
+      truncated = usb_truncated, interfaces_truncated = usb_interfaces_truncated,
+      endpoints_truncated = usb_endpoints_truncated },
   }, {
     quality = quality,
     -- The cause is one condition and it is measured rather than assumed: an
