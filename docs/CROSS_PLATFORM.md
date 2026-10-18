@@ -629,7 +629,7 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
-### 2026-10-18：Intel hwmon 直接读数与 i915 范围（验证中）
+### 2026-10-18：Intel hwmon 直接读数与 i915 范围
 
 i915 名为 `i915` 的设备能量对应卡级，`i915_gtN` 对应自身 GT。只有
 可核对的驱动、设备身份和规范通道才能关联卡级 `power1_max` PL1；
@@ -643,8 +643,24 @@ GT 与未知名称不借用整卡限制，I1/critical 不标成 PL2。
 
 依据 [i915 hwmon ABI](https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-driver-intel-i915-hwmon)
 和 [Xe hwmon ABI](https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-driver-intel-xe-hwmon)。
-定向软件回归进行中；本轮证据位于 `build/hardware-hwmon-readings-20261018/`。
-没有新增厂商物理硬件测量、XP 或性能预算证明，完整验收尚待完成。
+提交 `f756f61` 的 [主 CI](https://github.com/Water-Run/wtop/actions/runs/39115182196) 16 个作业与
+[Windows CI](https://github.com/Water-Run/wtop/actions/runs/39115182236) 两个作业全部成功。
+四类归档和 Linux/M4/Windows/静态/rootless 五项精确产物验收通过；
+原生检查、Lua 5.5/5.4 各 158 文件、完整终端矩阵及三主机各 20 个
+共享文件通过。735 个非文档文件与冻结源码/共享包一致，十语言各 1837 条消息。
+
+正常应用软件回放完成三种 CLI、64 个流式快照和八个有确认的状态；
+分别核对直接 30 W、驱动平均 40 W、i915 卡级约 20 W 与 GT 约 10 W。
+读数类型、源文件、统计方法和独立限制保持，GT 不借用卡级功耗墙。
+三种本机终端尺寸及冻结源码搭配对应包原生模块的七次跨主机终端检查
+通过，含 Server 2008 经典控制台。状态切换在本机流式回放验证，跨主机
+检查复验显示和操作；软件瓦数不计作物理硬件测量。
+
+本轮证据保存在 `build/hardware-hwmon-readings-20261018/`。最初回归发现
+只有限制的直接通道遮蔽了有效能量瓦数，已修正选择顺序并保留原失败；
+输入错误标记的后续保护也已回归。普通/root 真实快照、既有 RAPL、健康、
+无线、图形域和 rootless 路径保持。没有新增厂商物理瓦数、XP 或资源预算
+证明，完整硬件、旧系统与交付目标继续推进。
 
 ### 2026-10-18：hwmon 能量区间功率
 
