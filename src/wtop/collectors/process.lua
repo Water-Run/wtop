@@ -1233,7 +1233,13 @@ function Process:sample(context, previous)
             -- outlive its processes or grow without bound.
             local entry = live_cache[process.id]
             if not entry then
-              entry = { command_read = false }
+              local unique_pid = (index == 1 or candidates[index - 1].pid ~= pid)
+                and (index == #candidates or candidates[index + 1].pid ~= pid)
+              -- This cache record is private. Its referenced values can also
+              -- belong to older snapshots, so replace fields, not their data.
+              entry = unique_pid and cached or {}
+              entry.command_read = false
+              entry.command = nil
               live_cache[process.id] = entry
             end
             entry.uid = process.uid
