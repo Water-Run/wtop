@@ -53,6 +53,19 @@ Linux RAPL 的 Snapshot `power.graphics_domains` 与 Agent
 时间，功率差值按同一域相邻捕获时间计算；控制关闭不抹去有效读数，但不
 据此生成正常的上限占比。
 
+Snapshot 的 `power.zones[].power_session` 与 Agent 的
+`metrics.power.zones[].power_session` 描述当前读取器会话接受的读数，
+不表示硬件启动以来的历史。`minimum_watts`、`maximum_watts` 和
+`average_watts` 使用瓦特，`samples` 为接受的读数或完整窗口数。
+`average_kind=time_weighted` 按能量差值窗口的时长加权，
+`covered_time_ns` 和 `energy_joules` 只累计这些完整窗口，缺失时段不插值；
+此时最小值、最大值也是窗口平均功耗的极值。
+`average_kind=samples` 为直接功率读数的算术平均，不估算覆盖时间或能量。
+`first_timestamp_ns`、`last_timestamp_ns` 标明统计范围；失效输入可保留已接受
+的历史统计，但不会增加样本数或刷新最后时间。身份、读取源纪元、测量方式
+改变或计数器重置后重新统计。重复与重叠窗口不会重复计入，读取器重启也
+建立新会话。缺少有效统计时省略该对象。
+
 `metrics.cpu.frequency` 按各策略已知的在线 CPU 数加权给出平均 Hz；缺少成员列表的策略按一个读数计。它携带来源与 measured/estimated/partial 质量，混用来源时标为 `mixed`。CPUFreq 采集失败或数据过期时不把保留值作为当前频率输出。
 
 `data_quality.value_timestamp_ns` 是该资源当前所持值的单调时钟时间；

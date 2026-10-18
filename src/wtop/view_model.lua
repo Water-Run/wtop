@@ -8,6 +8,7 @@ local MountFilter = require("wtop.model.mount_filter")
 local Quality = require("wtop.model.quality")
 local Power = require("wtop.model.power")
 local PowerDomains = require("wtop.model.power_domains")
+local PowerSession = require("wtop.model.power_session")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
@@ -1818,6 +1819,7 @@ local function power_rows(snapshot, format, i18n)
             and formatted(function()
                 return assert(format:number(zone.energy_joules, { precision = 1 }))
             end) .. " J" or "—"
+        local session = PowerSession.public(zone, snapshot.timestamp_ns)
         for _, constraint in ipairs(constraints) do
             if #rows >= TABLE_ROW_LIMIT then break end
             local power_state = snapshot.quality and snapshot.quality.power
@@ -1844,6 +1846,7 @@ local function power_rows(snapshot, format, i18n)
                 interval = seconds(zone.power_interval_ns and zone.power_interval_ns / 1e9),
                 source = zone.power_source or zone.power_quality or "—",
                 state = Power.zone_state(zone, power_state, snapshot.timestamp_ns) or "—",
+                power_session = session,
                 controls = (zone.enabled == false or zone.control_enabled == false
                     or zone.controls_enabled == false) and "disabled"
                     or zone.controls_enabled == true and "enabled" or "unknown",

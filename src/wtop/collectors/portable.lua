@@ -3,6 +3,7 @@
 local Capability = require("wtop.core.capability")
 local Common = require("wtop.collectors.common")
 local SensorSession = require("wtop.model.sensor_session")
+local PowerSession = require("wtop.model.power_session")
 local CPUID = require("wtop.model.cpuid")
 local native_default = require("wtop.native")
 
@@ -467,6 +468,7 @@ local function power_data(data, previous, timestamp_ns)
       any_gap = true
     end
     zone.quality = zone.power_quality
+    zone.observed_at_ns = zone._sample_timestamp_ns or timestamp_ns
     if zone.aggregate and type(zone.power_watts) == "number" then
       total = total + zone.power_watts
       total_count = total_count + 1
@@ -478,6 +480,7 @@ local function power_data(data, previous, timestamp_ns)
     data.aggregate_zone_count = total_count
     data.aggregate_complete = not any_gap
   end
+  PowerSession.attach(data.zones, old_data, timestamp_ns)
   return data, (data.quality == "partial" or data.partial == true) and "partial"
     or any_gap and "gap" or "fresh"
 end
@@ -659,6 +662,7 @@ local function new_collector(id, description, options)
         reason = tostring(called and reason or data or "native_collection_failed"),
       })
     end
+    if id == "powercap" then timestamp_ns = Common.now_ns(context) end
     local sampling_pending = data._sampling_pending == true
     data._sampling_pending = nil
     local quality, retry_after_ms = "fresh", nil

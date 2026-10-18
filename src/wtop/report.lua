@@ -474,6 +474,26 @@ function M.render(snapshot)
             return { named_id(zone), zone.domain_kind, quantity(zone.power_watts, 1, " W", 2),
                 quantity(zone.power_interval_ns, 1e9, " s", 6), zone.power_quality or zone.quality, zone.power_source }
         end, zones)
+    local power_sessions = {}
+    for _, zone in ipairs(list(zones.zones)) do
+        if type(zone.power_session) == "table" then power_sessions[#power_sessions + 1] = zone end
+    end
+    if #power_sessions > 0 then
+        table_section(lines, "Power session statistics",
+            { "Domain", "Minimum", "Average", "Maximum", "Average method", "Readings", "Observed time", "Observed energy", "Last reading age" },
+            power_sessions, function(zone)
+                local session = zone.power_session
+                local age = type(snapshot.captured_monotonic_ns) == "number"
+                    and type(session.last_timestamp_ns) == "number"
+                    and snapshot.captured_monotonic_ns - session.last_timestamp_ns or nil
+                return { named_id(zone), quantity(session.minimum_watts, 1, " W", 2),
+                    quantity(session.average_watts, 1, " W", 2), quantity(session.maximum_watts, 1, " W", 2),
+                    session.average_kind, session.samples, quantity(session.covered_time_ns, 1e9, " s", 6),
+                    quantity(session.energy_joules, 1, " J", 3), quantity(age, 1e9, " s", 6) }
+            end, zones)
+        lines[#lines + 1] = "Statistics cover accepted readings in the current reader session; gaps are excluded. Energy-derived extrema are sample-window averages."
+        lines[#lines + 1] = ""
+    end
     if #list(zones.graphics_domains) > 0 then
         table_section(lines, "RAPL graphics domains",
             { "Domain", "Parent", "Power", "Sample window", "Quality", "PCI adapter known" },

@@ -658,6 +658,32 @@ local function power_detail_lines(snapshot, i18n)
                 .. translated(i18n, "power.interval", "Sample window") .. ": " .. row.interval)
             field("power.controls", "Controls", Technical.state(i18n, row.controls)
                 .. " · " .. Technical.state(i18n, row.state))
+            local session = row.power_session
+            if session then
+                field("sensor.session_range", "Session min / avg / max",
+                    format_value(session.minimum_watts, i18n, "watts") .. " / "
+                    .. format_value(session.average_watts, i18n, "watts") .. " / "
+                    .. format_value(session.maximum_watts, i18n, "watts"))
+                local weighted = session.average_kind == "time_weighted"
+                field("power.session_average", "Average method", translated(i18n,
+                    weighted and "power.session_weighted" or "power.session_sampled",
+                    weighted and "Time-weighted" or "By sample count"))
+                field("power.session_samples", "Accepted readings", session.samples)
+                if weighted then
+                    field("power.session_coverage", "Observed time",
+                        format_value(session.covered_time_ns / 1e9, i18n, "seconds"))
+                    field("power.session_energy", "Observed energy",
+                        format_value(session.energy_joules, i18n, "joules"))
+                    lines[#lines + 1] = translated(i18n, "power.session_window_note",
+                        "Energy-derived minima and maxima are sample-window averages.")
+                end
+                if snapshot.timestamp_ns then
+                    field("power.session_last", "Last accepted reading",
+                        format_value((snapshot.timestamp_ns - session.last_timestamp_ns) / 1e9, i18n, "seconds"))
+                end
+                lines[#lines + 1] = translated(i18n, "power.session_note",
+                    "Current reader session; gaps are excluded.")
+            end
             previous = identity
         end
         lines[#lines + 1] = inspector_text("  " .. row.constraint .. ": " .. row.limit

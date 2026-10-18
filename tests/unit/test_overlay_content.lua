@@ -207,6 +207,9 @@ local function build(i18n, name)
       { id = "intel-rapl:0", name = "package-0", source_kind = "intel-rapl",
         enabled = true, controls_enabled = true, power_watts = 30, observed_at_ns = 1000000000,
         power_interval_ns = 1000000000, power_quality = "measured",
+        power_session = { minimum_watts = 10, maximum_watts = 30, average_watts = 20,
+          average_kind = "time_weighted", samples = 2, first_timestamp_ns = 0,
+          last_timestamp_ns = 1000000000, covered_time_ns = 1000000000, energy_joules = 20 },
         constraints = {
           { id = 0, name = "long_term", power_limit_watts = 20, time_window_seconds = 28 },
           { id = 1, name = "short_term", power_limit_watts = 26, time_window_seconds = 0.00244 },

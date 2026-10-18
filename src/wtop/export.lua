@@ -6,6 +6,7 @@ local Hardware = require("wtop.model.hardware")
 local Quality = require("wtop.model.quality")
 local Power = require("wtop.model.power")
 local PowerDomains = require("wtop.model.power_domains")
+local PowerSession = require("wtop.model.power_session")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
@@ -289,6 +290,7 @@ local function export_power(power, quality, now_ns)
         output.domain_kind = PowerDomains.kind(zone, identities)
         if output.domain_kind then output.domain_role_source = "linux_intel_rapl" end
         output.power_quality = Power.zone_state(zone, quality, now_ns) or output.power_quality
+        output.power_session = PowerSession.public(zone, now_ns)
         output.constraints = json.array({})
         for constraint_index, constraint in ipairs(zone.constraints or {}) do
             output.constraints[constraint_index] = copy_fields(constraint, {
@@ -2409,6 +2411,7 @@ function M.agent(snapshot, options)
         local summary = copy_fields(zone, { "id", "name", "source_kind", "parent_id",
             "enabled", "control_enabled", "controls_enabled", "power_watts", "power_quality",
             "power_interval_ns", "aggregate", "aggregate_domain" })
+        if zone.power_session then summary.power_session = copy_object(zone.power_session) end
         summary.constraints = json.array({})
         local constraints = zone.constraints or {}
         for constraint_index = 1, math.min(#constraints, 8) do

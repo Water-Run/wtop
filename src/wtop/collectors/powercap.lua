@@ -3,6 +3,7 @@ local FS = require("wtop.linux.fs")
 local Common = require("wtop.collectors.common")
 local Domains = require("wtop.model.power_domains")
 local Power = require("wtop.model.power")
+local PowerSession = require("wtop.model.power_session")
 
 local Powercap = {}
 Powercap.__index = Powercap
@@ -396,6 +397,7 @@ function Powercap:sample(context, previous)
       partial = true
     end
   end
+  PowerSession.attach(zones, previous_data, measured_at)
 
   -- Child domains must never be added to their package. Select a complete
   -- backend tree rather than deduplicating roots by name: two sockets in the
