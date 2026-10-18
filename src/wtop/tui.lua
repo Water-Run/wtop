@@ -718,10 +718,15 @@ local function power_detail_lines(snapshot, i18n)
             if stats then
                 field("sensor.session_range", "Session min / avg / max", format_value(stats.minimum_watts,i18n,"watts")
                     .. " / " .. format_value(stats.average_watts,i18n,"watts") .. " / " .. format_value(stats.maximum_watts,i18n,"watts"))
-                field("power.session_average", "Average method", translated(i18n,"power.session_weighted","Time-weighted"))
+                local weighted = stats.average_kind == "time_weighted"
+                field("power.session_average", "Average method", translated(i18n,
+                    weighted and "power.session_weighted" or "power.session_sampled",
+                    weighted and "Time-weighted" or "By sample count"))
                 field("power.session_samples", "Accepted readings", stats.samples)
-                field("power.session_coverage", "Observed time", format_value(stats.covered_time_ns / 1e9,i18n,"seconds"))
-                field("power.session_energy", "Observed energy", format_value(stats.energy_joules,i18n,"joules"))
+                if weighted then
+                    field("power.session_coverage", "Observed time", format_value(stats.covered_time_ns / 1e9,i18n,"seconds"))
+                    field("power.session_energy", "Observed energy", format_value(stats.energy_joules,i18n,"joules"))
+                end
             end
             if row.sensor_power.interval_uncertainty_ns then
                 field("cpu_clock.uncertainty", "Interval uncertainty", format_value(row.sensor_power.interval_uncertainty_ns,i18n,"nanoseconds"))
@@ -1012,11 +1017,13 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
             add_values(channel.thresholds, channel.unit, false)
             local power = SensorPower.public(channel, now_ns or snapshot.timestamp_ns, quality)
             if power then
-                lines[#lines + 1] = "    " .. translated(i18n,"power.measurement.energy_delta","Energy-window average")
+                local measurement = power.measurement or "energy_delta"
+                lines[#lines + 1] = "    " .. translated(i18n,"power.measurement."..measurement,
+                    measurement == "current" and "Instantaneous" or measurement == "average" and "Average" or "Energy-window average")
                     .. ": " .. format_value(power.power_watts,i18n,"watts") .. " [" .. Technical.state(i18n,power.power_quality) .. "]"
                 if power.scope then
                     lines[#lines + 1] = "    " .. translated(i18n,"limits.scope","Scope") .. ": "
-                        .. translated(i18n,"power.scope."..power.scope,power.scope)
+                        .. translated(i18n,power.scope == "gpu_gt" and "limits.scope.gpu_gt" or "power.scope."..power.scope,power.scope)
                 end
                 for _, cap in ipairs(power.limits or {}) do
                     local usage = cap.percent and i18n.format:percent(cap.percent,{precision=1}) or "—"
@@ -1031,15 +1038,19 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
                 if power.power_interval_ns then
                     lines[#lines + 1] = "    " .. translated(i18n,"power.interval","Sample window") .. ": "
                         .. format_value(power.power_interval_ns / 1e9,i18n,"seconds")
-                    lines[#lines + 1] = "    " .. translated(i18n,"cpu_clock.uncertainty","Interval uncertainty") .. ": "
-                        .. format_value(power.interval_uncertainty_ns,i18n,"nanoseconds")
+                    if power.interval_uncertainty_ns then
+                        lines[#lines + 1] = "    " .. translated(i18n,"cpu_clock.uncertainty","Interval uncertainty") .. ": "
+                            .. format_value(power.interval_uncertainty_ns,i18n,"nanoseconds")
+                    end
                 end
                 local stats = power.power_session
                 if stats then
                     lines[#lines + 1] = "    " .. translated(i18n,"sensor.session_range","Session min / avg / max") .. ": "
                         .. format_value(stats.minimum_watts,i18n,"watts") .. " / " .. format_value(stats.average_watts,i18n,"watts")
                         .. " / " .. format_value(stats.maximum_watts,i18n,"watts")
-                    lines[#lines + 1] = "    " .. translated(i18n,"power.session_weighted","Time-weighted") .. " · "
+                    lines[#lines + 1] = "    " .. translated(i18n,
+                        stats.average_kind == "time_weighted" and "power.session_weighted" or "power.session_sampled",
+                        stats.average_kind == "time_weighted" and "Time-weighted" or "By sample count") .. " · "
                         .. translated(i18n,"power.session_samples","Accepted readings") .. ": " .. stats.samples
                 end
                 lines[#lines + 1] = inspector_text("    " .. translated(i18n,"metrics.source","Source") .. ": " .. power.source,INSPECTOR_ROW_WIDTH)

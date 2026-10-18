@@ -745,10 +745,21 @@ function M.render(snapshot)
                 channel.quality }
         end, sensors)
 
-    local energy_power = {}
+    local energy_power, hwmon_power = {}, {}
     for _, item in ipairs(readings) do
-        if item.channel.power then energy_power[#energy_power + 1] = item end
+        if item.channel.power then
+            if item.channel.type == "energy" then energy_power[#energy_power + 1] = item
+            else hwmon_power[#hwmon_power + 1] = item end
+        end
     end
+    table_section(lines,"Direct hwmon power",
+        { "Device","Channel","Scope","Measurement","Power","Driver window","Session average","Readings","Quality","Source" },
+        hwmon_power,function(item)
+            local p=item.channel.power;local stats=p.power_session or {}
+            return { named_id(item.device),item.channel.label or item.channel.id,p.scope,p.measurement,
+                quantity(p.power_watts,1," W",2),quantity(p.power_interval_ns,1e9," s",3),
+                quantity(stats.average_watts,1," W",2),stats.samples,p.power_quality,p.source }
+        end,sensors)
     table_section(lines, "Energy-derived sensor power",
         { "Device", "Channel", "Scope", "Average power", "Window", "Timing uncertainty", "Minimum", "Session average", "Maximum", "Readings", "Quality", "Source" },
         energy_power, function(item)
@@ -765,6 +776,11 @@ function M.render(snapshot)
             energy_limits[#energy_limits+1] = { item=item,cap=cap }
         end
     end
+    for _, item in ipairs(hwmon_power) do
+        for _, cap in ipairs(item.channel.power.limits or {}) do
+            energy_limits[#energy_limits+1] = { item=item,cap=cap }
+        end
+    end
     table_section(lines,"Energy-domain power limits",{ "Device","Channel","Scope","Limit","Configured","Enabled","Cap window","Usage","Headroom","Source" },
         energy_limits,function(entry)
             local item,cap=entry.item,entry.cap
@@ -774,6 +790,10 @@ function M.render(snapshot)
         end,sensors)
     if #energy_power>0 then
         lines[#lines+1]="Power comes from adjacent cumulative energy observations. Session averages are time-weighted; gaps and resets are excluded."
+        lines[#lines+1]=""
+    end
+    if #hwmon_power>0 then
+        lines[#lines+1]="Direct and driver-average power sessions use sample-count averages; overlapping driver windows are not integrated as energy."
         lines[#lines+1]=""
     end
 

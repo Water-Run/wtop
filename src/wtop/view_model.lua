@@ -847,9 +847,9 @@ function M.gpu_sensor_join(snapshot)
         local power_channels, energy_channels = 0, 0
         for _, sensor in ipairs(matched) do
             for _, channel in ipairs(sensor.channels or {}) do
-                local current = channel.type == "energy"
+                local current = channel.power ~= nil
                     and SensorPower.channel(channel, snapshot.timestamp_ns, snapshot.quality and snapshot.quality.sensors) or channel
-                if current and (type(current.input) == "number" or current.input_source == "energy_delta") then
+                if current and (type(current.input) == "number" or current.input_source == "energy_delta" or current.verified_cap) then
                     if channel.type == "temperature" then
                         -- The hottest junction is the one that throttles; an
                         -- edge sensor and a hot spot are not interchangeable, so
@@ -863,8 +863,11 @@ function M.gpu_sensor_join(snapshot)
                         else power_channels = power_channels + 1 end
                         local direct = current.input_source ~= "energy_delta"
                         local prior_direct = power and power.input_source ~= "energy_delta"
-                        if not power or (direct and not prior_direct)
-                            or (direct == prior_direct and (current.input or -1) > (power.input or -1)) then power = current end
+                        local measured = Power.reading(current.input) ~= nil
+                        local prior_measured = power and Power.reading(power.input) ~= nil
+                        if not power or (measured and not prior_measured)
+                            or (measured == prior_measured and ((direct and not prior_direct)
+                                or (direct == prior_direct and (current.input or -1) > (power.input or -1)))) then power = current end
                     elseif channel.type == "fan" then
                         -- A board with several fans reports several channels;
                         -- the fastest is the one an operator would act on.
@@ -1291,10 +1294,13 @@ local function gpu_rows(snapshot, format, i18n)
             power_percent = power_budget.comparison and power_budget.comparison.percent,
             power_budget_source = power_budget.source or power_budget.limit_source,
             power_scope = power_from_sensor and power_channel.power and power_channel.power.scope
-                and translated(i18n,"power.scope."..power_channel.power.scope,power_channel.power.scope)
+                and translated(i18n,power_channel.power.scope == "gpu_gt" and "limits.scope.gpu_gt"
+                    or "power.scope."..power_channel.power.scope,power_channel.power.scope)
                 or not power_from_sensor and metrics.power_scope=="asic" and translated(i18n,"power.scope.asic","ASIC chip") or nil,
             power_measurement = power_from_sensor and power_channel.input_source == "energy_delta"
                 and translated(i18n,"power.measurement.energy_delta","Energy-window average")
+                or sensor_power and sensor_power.measurement == "current"
+                    and translated(i18n,"power.measurement.current","Instantaneous")
                 or power_from_sensor and power_channel.input_source == "average"
                     and translated(i18n,"power.measurement.average","Average")
                 or not power_from_sensor and (metrics.power_measurement == "current" or metrics.power_measurement == "average"

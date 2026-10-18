@@ -629,6 +629,23 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
+### 2026-10-18：Intel hwmon 直接读数与 i915 范围（验证中）
+
+i915 名为 `i915` 的设备能量对应卡级，`i915_gtN` 对应自身 GT。只有
+可核对的驱动、设备身份和规范通道才能关联卡级 `power1_max` PL1；
+GT 与未知名称不借用整卡限制，I1/critical 不标成 PL2。
+
+直接功率与独立有效的驱动平均值保留各自文件和读取时间；优先有效的
+直接输入，输入失败时可用仍有效的平均通道。读数类型切换重建统计，
+按样本数平均，不积分重叠窗口。禁用、故障和过期值不产生当前占比。
+仅有限制的设备保留已核对的墙，但不会压过其他有效瓦数。功耗与传感器
+详情、Snapshot、Agent 和报告提供同一份类型、范围、窗口及独立限制。
+
+依据 [i915 hwmon ABI](https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-driver-intel-i915-hwmon)
+和 [Xe hwmon ABI](https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-driver-intel-xe-hwmon)。
+定向软件回归进行中；本轮证据位于 `build/hardware-hwmon-readings-20261018/`。
+没有新增厂商物理硬件测量、XP 或性能预算证明，完整验收尚待完成。
+
 ### 2026-10-18：hwmon 能量区间功率
 
 hwmon 的累计微焦耳计数现在可形成相邻观察间的平均功率，逐项保留读取

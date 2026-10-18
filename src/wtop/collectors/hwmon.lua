@@ -283,7 +283,7 @@ local function discover_channels(entries, options)
     -- was invisible on most Intel machines.
     local limit_alarm = attribute and attribute:match("^(%a[%w_]-)_alarm$")
     local recognized = spec and (attribute == "label" or attribute == "alarm" or attribute == "fault"
-      or (prefix == "energy" and attribute == "enable")
+      or ((prefix == "energy" or prefix == "power") and attribute == "enable")
       or (limit_alarm and spec.thresholds[limit_alarm])
       or spec.thresholds[attribute] or spec.readings[attribute]
       or (spec.intervals and spec.intervals[attribute]))
@@ -376,8 +376,13 @@ local function read_channel(fs, base, group, options, context)
       end
     else
       local energy = spec.kind == "energy" and attribute == "input"
-      local began = energy and Common.now_ns(context) or nil
+      local point = spec.kind == "power" and spec.readings[attribute]
+      local began = (energy or point) and Common.now_ns(context) or nil
       local value, err = normalized_number(fs, path, energy and 1 or spec.scale, options.max_abs_raw_value)
+      if point then
+        channel.power_readings = channel.power_readings or {}
+        channel.power_readings[attribute] = { started_ns = began, finished_ns = Common.now_ns(context) }
+      end
       if energy then
         channel.energy_read_started_ns, channel.energy_read_finished_ns = began, Common.now_ns(context)
         if value and math.type(value) == "float" and value % 1 == 0 then value = math.tointeger(value) end
@@ -483,10 +488,10 @@ local function read_device(self, fs, entry, used_ids, context)
   local counts = {}
   local any_partial = has_entries(errors)
   local any_estimated = false
-  local has_energy = false
-  for _, group in ipairs(groups) do has_energy = has_energy or group.prefix == "energy" end
-  local power_path = has_energy and normalize_target(fs:readlink(base)) or nil
-  local driver_link = has_energy and fs:readlink(base .. "/device/driver") or nil
+  local has_power = false
+  for _, group in ipairs(groups) do has_power = has_power or group.prefix == "energy" or group.prefix == "power" end
+  local power_path = has_power and normalize_target(fs:readlink(base)) or nil
+  local driver_link = has_power and fs:readlink(base .. "/device/driver") or nil
   for _, group in ipairs(groups) do
     local channel = read_channel(fs, base, group, self, context)
     channels[#channels + 1] = channel
@@ -505,7 +510,7 @@ local function read_device(self, fs, entry, used_ids, context)
     quality = "fresh"
   end
   local device_path = normalize_target(fs:readlink(base))
-  local verified_power_identity = has_energy and power_path ~= nil and power_path == device_path
+  local verified_power_identity = has_power and power_path ~= nil and power_path == device_path
     and target ~= nil and target == normalize_target(fs:readlink(base .. "/device"))
     and driver_link == fs:readlink(base .. "/device/driver")
   return {

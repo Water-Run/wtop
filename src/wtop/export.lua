@@ -2494,6 +2494,7 @@ function M.agent(snapshot, options)
 
     local temperature_count, fan_count, sensor_power_count = 0, 0, 0
     local energy_power, energy_power_count = json.array({}), 0
+    local hwmon_power, hwmon_power_count = json.array({}), 0
     local top_temperatures = json.array({})
     local threshold_temperature, closest_critical
     for _, device in ipairs(full.sensors and full.sensors.devices or {}) do
@@ -2505,6 +2506,14 @@ function M.agent(snapshot, options)
                     power.device_id, power.channel_id = device.id, channel.id
                     power.device, power.label = device.name, channel.label
                     energy_power[#energy_power + 1] = power
+                end
+            elseif channel.type == "power" and channel.power then
+                hwmon_power_count = hwmon_power_count + 1
+                if #hwmon_power < device_limit then
+                    local power = copy_object(channel.power)
+                    power.device_id, power.channel_id = device.id, channel.id
+                    power.device, power.label = device.name, channel.label
+                    hwmon_power[#hwmon_power + 1] = power
                 end
             end
             if channel.type == "temperature" and finite_number(channel.input) then
@@ -2796,6 +2805,9 @@ function M.agent(snapshot, options)
                 energy_power = energy_power,
                 energy_power_total = energy_power_count,
                 energy_power_truncated = energy_power_count > #energy_power,
+                hwmon_power = hwmon_power,
+                hwmon_power_total = hwmon_power_count,
+                hwmon_power_truncated = hwmon_power_count > #hwmon_power,
                 maximum_temperature_celsius = hottest and hottest.temperature_celsius,
                 minimum_headroom_celsius = closest_critical and closest_critical.headroom_celsius,
                 closest_to_critical = closest_critical,
