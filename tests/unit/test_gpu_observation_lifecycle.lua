@@ -202,4 +202,45 @@ do
     assert(resumed.power_sessions[1].average_watts == 45)
     gpu:close()
 end
-print("ok: GPU packet bindings, inventory replacement/removal, prefetch fences, independent siblings and Linux/Windows compose")
+-- The receive clock advances while a provider or native inventory is queried.
+-- Compare capture times at receipt, rather than against the sample's start.
+do
+    local at = 1e9
+    local base = { probe = function() return { available = true } end,
+        sample = function() return { status = "unavailable" } end }
+    local gpu = Windows.new(base, { nvml_provider = function()
+        at = at + 2e6
+        return packet(at, 30)
+    end, levelzero_provider = false, adl_provider = false }, {})
+    local result = gpu:sample({ now_ns = function() return at end })
+    assert(result.status == "ok" and result.data.devices[1].metrics.power_watts == 30,
+        "a query completed after sample start was mistaken for future data")
+    assert(result.timestamp_ns == at and result.data.devices[1].power_sessions[1].last_timestamp_ns == at)
+    gpu:close()
+
+    local phase = "first"
+    at = 10e9
+    function base:sample()
+        at = at + 1e6
+        return { status = "ok", timestamp_ns = at, value_timestamp_ns = at, data = { devices = {
+            { id = BDF, pci_bdf = BDF, vendor_id = "0x10de", device_id = "0x1234",
+                driver = phase == "first" and "instance1" or "instance2", identity_quality = "fresh",
+                metrics = {}, quality = {}, capabilities = {} },
+        } } }
+    end
+    gpu = Windows.new(base, { nvml_provider = function()
+        at = at + 1e6
+        return packet(phase == "prefetch" and 11e9 + .5e6 or at, phase == "prefetch" and 99 or 40)
+    end, levelzero_provider = false, adl_provider = false }, {})
+    local context = { now_ns = function() return at end }
+    assert(gpu:sample(context).data.devices[1].metrics.power_watts == 40)
+    at, phase = 11e9, "prefetch"
+    local replaced = gpu:sample(context).data.devices[1]
+    assert(replaced.metrics.power_watts == nil and #replaced.power_sessions == 0,
+        "inventory completion was clamped back to sample start, admitting older prefetched watts")
+    at, phase = 12e9, "recovered"
+    local recovered = gpu:sample(context).data.devices[1]
+    assert(recovered.metrics.power_watts == 40 and recovered.power_sessions[1].samples == 1)
+    gpu:close()
+end
+print("ok: GPU packet bindings, inventory replacement/removal, capture/receive clocks, prefetch fences and Linux/Windows compose")

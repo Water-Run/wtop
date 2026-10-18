@@ -1808,7 +1808,7 @@ function GPU:sample(context, previous)
   local drm_cards = #drm.data.devices
   local anchors = drm.data.anchors
   self._observations:inventory_frame(anchors, drm.value_timestamp_ns or drm.timestamp_ns,
-    drm.status == "ok" and not drm.retained and not drm.data.drm_scan.truncated)
+    drm.status == "ok" and not drm.retained and not drm.data.drm_scan.truncated, Common.now_ns(context))
   -- Loading a vendor library is an optional provider, which safe mode excludes.
   local nvml_data, nvml_reason
   local amdsmi_data, amdsmi_reason

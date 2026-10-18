@@ -126,7 +126,7 @@ function M:sample(context)
   if not scan then for _,device in ipairs(data.devices) do device.processes=nil end end
   local anchors=Observations.anchors(data.devices)
   self.observations:inventory_frame(anchors,self.raw and (self.raw.value_timestamp_ns or self.raw.timestamp_ns) or now,
-    result.status=="ok" and not retained and not data.truncated and not data.partial)
+    result.status=="ok" and not retained and not data.truncated and not data.partial,Common.now_ns(context))
   local providers,pending,retry,any_reason,any_retained,warming={}
   local observed=self.raw and (self.raw.value_timestamp_ns or self.raw.timestamp_ns) or nil
   for _,source in ipairs(sources) do
@@ -155,7 +155,7 @@ function M:sample(context)
           end
         end
         local invalid
-        merge_data,invalid=self.observations:observe(source,merge_data,association,now)
+        merge_data,invalid=self.observations:observe(source,merge_data,association,Common.now_ns(context))
         if merge_data then
           local before=Observations.before(data.devices)
           if source=="nvml" then
@@ -201,12 +201,13 @@ function M:sample(context)
     sample_started_ns=self.raw and self.raw.sample_started_ns,
     sample_finished_ns=self.raw and self.raw.sample_finished_ns,transport=self.raw and self.raw.transport}
   data.by_id={};local processes=0
-  self.observations:publish_power_sessions(data.devices,anchors,Common.now_ns(context))
+  local finished=Common.now_ns(context)
+  self.observations:publish_power_sessions(data.devices,anchors,finished)
   for _,device in ipairs(data.devices) do
     data.by_id[device.id]=device;processes=processes+#(device.processes and device.processes.list or {})
   end
   data.summary=data.summary or {};data.summary.device_count=#data.devices;data.summary.process_count=processes
-  local output=Common.result("ok",now,data,{quality=partial and "partial" or "fresh",
+  local output=Common.result("ok",finished,data,{quality=partial and "partial" or "fresh",
     reason=partial and "gpu_data_incomplete" or nil,retry_after_ms=result.retry_after_ms or ((pending or warming) and 250 or nil)})
   output.capability=Capability.available({source="windows+nvml+levelzero+adl"})
   output.sampling_pending=result.sampling_pending or pending or warming

@@ -78,9 +78,10 @@ end
 -- A completed inventory can establish a disappearance, unlike a timeout or a
 -- truncated listing. Keep bounded tombstones so the same address cannot renew
 -- a packet captured before its disappearance/reappearance was observed.
-function M:inventory_frame(anchors,at,complete)
+function M:inventory_frame(anchors,at,complete,now)
   self.inventory_seen=true
-  if not finite(at) or at>self.now then at=self.now end
+  now=now or self.now
+  if not finite(at) or at>now then at=now end
   local count=0
   for bdf,record in pairs(self.inventory) do
     if complete and anchors[bdf]==nil and record.anchor~=nil then
