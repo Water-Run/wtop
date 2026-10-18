@@ -4,6 +4,8 @@ local Common = require("wtop.collectors.common")
 local Capability = require("wtop.core.capability")
 local FS = require("wtop.linux.fs")
 local EDID = require("wtop.format.edid")
+local CurrentMode = require("wtop.collectors.drm_current_mode")
+local Native = require("wtop.native")
 local M = {}
 M.__index = M
 local MAX_CONNECTORS, MAX_ENTRIES, MAX_MODES = 128, 1024, 128
@@ -19,13 +21,13 @@ local function link(fs, path)
   return type(value) == "string" and #value <= 4096 and value or nil
 end
 
-local function connector(fs, base, name, card, port, context)
+local function connector(fs, base, name, card, port, context, native)
   local path = base .. "/" .. name
   local target = link(fs, path)
   local card_target = link(fs, base .. "/" .. card .. "/device")
   local status, failure = text(fs, path .. "/status")
   local identity = text(fs, path .. "/connector_id")
-  local device = { id = name, card = card, connector = port, source = path, quality = "fresh" }
+  local device = { id = name, card = card, connector = port, source = path, quality = "fresh", backend = "drm-sysfs" }
   local function issue(reason)
     device.quality = "partial"
     device.reason = device.reason or reason
@@ -68,6 +70,7 @@ local function connector(fs, base, name, card, port, context)
     device.modes_status = FS.error_status(modes_failure)
     issue("display_modes_unavailable")
   end
+  if CurrentMode.attach(device, fs, base, context, native) then issue("display_inventory_incomplete") end
   device.observed_at_ns = Common.now_ns(context)
   local after = text(fs, path .. "/status")
   local after_id = text(fs, path .. "/connector_id")
@@ -79,6 +82,10 @@ local function connector(fs, base, name, card, port, context)
     device.edid, device.connection, device.enabled, device.dpms = nil, nil, nil, nil
     device.connector_id, device.edid_reason, device.modes_status = nil, nil, nil
     device.modes, device.edid_status = {}, "gap"
+    device.current_mode, device.current_mode_configured = nil, nil
+    device.current_mode_observed_at_ns, device.current_mode_errno = nil, nil
+    device.current_mode_status = "gap"
+    device.current_mode_reason = "display_changed_during_read"
     device.quality = "gap"
     device.reason = "display_changed_during_read"
     return device
@@ -92,7 +99,8 @@ local function connector(fs, base, name, card, port, context)
   return device
 end
 
-function M.read(fs, base, context)
+function M.read(fs, base, context, native)
+  native = native or Native
   local entries, failure, truncated = fs:list(base, MAX_ENTRIES + 1)
   local result = { devices = {}, total = 0, truncated = truncated == true, source = base }
   if type(entries) ~= "table" then result.status = FS.error_status(failure); return result end
@@ -107,7 +115,7 @@ function M.read(fs, base, context)
       seen[name] = true
       result.total = result.total + 1
       if #result.devices < MAX_CONNECTORS then
-        local device = connector(fs, base, name, card, port, context)
+        local device = connector(fs, base, name, card, port, context, native)
         result.devices[#result.devices + 1] = device
         if device.quality ~= "fresh" then result.status = "partial" end
       else result.truncated = true end
@@ -124,6 +132,7 @@ function M.new(options)
   return setmetatable({ id = "displays", _method_style = true,
     default_interval_ms = Common.positive_integer("interval_ms", options.interval_ms, 5000),
     fs = options.fs or FS.default,
+    native = options.native or Native,
     drm_base = Common.absolute_path("drm_base", options.drm_base, "/sys/class/drm") }, M)
 end
 
@@ -149,7 +158,7 @@ end
 
 function M:sample(context)
   local started = Common.now_ns(context)
-  local data = M.read(Common.fs(context, self.fs), self.drm_base, context)
+  local data = M.read(Common.fs(context, self.fs), self.drm_base, context, self.native)
   local finished = Common.now_ns(context)
   local metadata = { source = self.drm_base,
     duration_ns = Common.elapsed_ns(finished, started) or 0 }

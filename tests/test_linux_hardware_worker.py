@@ -53,6 +53,7 @@ def main() -> None:
         firmware_control=directory/'firmware-control';firmware_control.write_text('0\n')
         firmware_entered=directory/'firmware-entered';firmware_reads=directory/'firmware-reads'
         drm=directory/'drm';panel=drm/'card1-eDP-1';panel.mkdir(parents=True)
+        (drm/'card1').mkdir();(drm/'card1/dev').write_text('226:1\n')
         for name,value in {'status':'connected\n','enabled':'enabled\n','dpms':'On\n',
                            'connector_id':'95\n','modes':'1920x1080\n'}.items():
             (panel/name).write_text(value)
@@ -63,6 +64,8 @@ def main() -> None:
             input=b'',env={**os.environ,'WTOP_TEST_EDID_OUTPUT':str(panel/'edid')},cwd=ROOT,check=True,timeout=5)
         display_control=directory/'display-control';display_control.write_text('0\n')
         display_entered=directory/'display-entered';display_reads=directory/'display-reads'
+        mode_control=directory/'mode-control';mode_control.write_text('0\n')
+        mode_entered=directory/'mode-entered';mode_reads=directory/'mode-reads'
         env={**os.environ,'LD_PRELOAD':(os.environ['LD_PRELOAD']+':' if os.environ.get('LD_PRELOAD') else '')+str(library),
              'LUA_PATH':str(ROOT/'src/?.lua')+';'+str(ROOT/'src/?/init.lua')+';;',
              'LUA_CPATH':str(args.module.resolve().parent/'?.so')+';;',
@@ -90,14 +93,59 @@ def main() -> None:
         display_env={**env,'WTOP_DRM_FIXTURE_ROOT':str(drm),
                      'WTOP_DISPLAY_FIXTURE_CONTROL':str(display_control),
                      'WTOP_DISPLAY_FIXTURE_ENTERED':str(display_entered),
-                     'WTOP_DISPLAY_FIXTURE_READS':str(display_reads)}
+                     'WTOP_DISPLAY_FIXTURE_READS':str(display_reads),
+                     'WTOP_DRM_MODE_FIXTURE_CONTROL':str(mode_control),
+                     'WTOP_DRM_MODE_FIXTURE_ENTERED':str(mode_entered),
+                     'WTOP_DRM_MODE_FIXTURE_READS':str(mode_reads)}
         subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/display_worker_smoke.lua'),
-                        str(ROOT),str(display_control),str(display_entered),str(display_reads)],
-                       cwd=ROOT,env=display_env,check=True,timeout=20)
+                        str(ROOT),str(display_control),str(display_entered),str(display_reads),str(mode_control),str(mode_entered)],
+                       cwd=ROOT,env=display_env,check=True,timeout=35)
         for _ in range(args.shutdown_rounds):
             subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/hardware_worker_shutdown.lua'),
                             str(ROOT)],cwd=ROOT,env=env,check=True,timeout=5)
         print('ok: '+str(args.shutdown_rounds)+' standalone Lua VM exits with all declared asynchronous readers being reaped',flush=True)
+        if not args.native_only:
+            display_control.write_text('0\n');mode_control.write_text('0\n');mode_entered.unlink(missing_ok=True)
+            saved=os.environ.copy();os.environ.update(display_env)
+            os.environ.update(WTOP_ROOT=str(ROOT),WTOP_LUA=str(args.lua_prefix.resolve()/'bin/lua'))
+            sys.path.insert(0,str(ROOT/'tests'))
+            import pty_smoke as pty
+            original=pty._markers_visible;screens={};armed=False
+            def visible_mode(markers,data,columns,rows):
+                nonlocal armed
+                if not markers:return True
+                screen=pty.VirtualScreen(columns,rows);screen.feed(bytes(data));text=screen.text();screens['last']=text
+                if markers==('mode-ready',):
+                    ready='Configured output size'in text and '1920 x 1080'in text and 'FixturePanel'in text
+                    if ready and not armed:mode_control.write_text('1\n');armed=True
+                    if ready:screens['ready']=text
+                    return ready
+                if markers==('mode-stale',):
+                    ready=mode_entered.exists()and 'Configured output size'in text and 'Stale'in text and '60 Hz'in text
+                    if ready:screens['stale']=text
+                    return ready
+                return all(marker in text for marker in markers)
+            pty._markers_visible=visible_mode
+            try:
+                data=pty.run_session(240,60,exercise=False,cli_options=('--lang','en-US','--no-color','--interval','100'),
+                    script=[(b'9',None),(('sleep',1),None),(b'/',None),(b'id:display:card1-eDP-1',None),
+                            (b'\r',None),(('sleep',.2),None),(b'\r',None),(('sleep',.4),('mode-ready',)),
+                            (('sleep',5.5),('mode-stale',)),(b'\x1b',None),(b'2',None),
+                            (b'1',('PID','Command')),(b'p',None),(b'\x1b',('Power and limits',)),
+                            (b'9',None),(b'q',None)])
+                assert armed and 'stale'in screens
+                (work/'warmed-mode-stale.pty').write_bytes(data)
+                (work/'warmed-mode-stale.txt').write_text(screens['stale'])
+                for name in ['warmed-mode-stale.pty','warmed-mode-stale.txt']:(work/name).chmod(0o600)
+                deadline=time.monotonic()+2
+                pids={int(pid)for pid in mode_reads.read_text().splitlines()}
+                while any(Path('/proc',str(pid)).exists()for pid in pids):
+                    assert time.monotonic()<deadline,'mode reader survived TUI exit'
+                    time.sleep(.01)
+            finally:
+                (work/'mode-last-screen.txt').write_text(screens.get('last',''))
+                pty._markers_visible=original;os.environ.clear();os.environ.update(saved)
+            print('ok: warmed blocked mode ioctl: original mode marked stale, process/overview/power/system and quit responsive; owned readers reaped',flush=True)
         if not args.native_only:
             control.write_text('0\n'); entered.unlink(missing_ok=True)
             saved=os.environ.copy(); os.environ.update(env)

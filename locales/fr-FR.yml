@@ -8,6 +8,14 @@ _meta:
   catalog_version: 1
 
 messages:
+  display.configured_pixels: "Dimensions configurées (pixels)"
+  display.mode_clock: "Horloge pixel du mode"
+  display.mode_interlaced: "Mode entrelacé"
+  display.mode_double_scan: "Mode double balayage"
+  display.mode_vscan: "Multiplicateur de balayage vertical"
+  display.mode_approx_refresh: "Fréquence approximative du noyau"
+  display.configured_note: "Mode de sortie configuré ; la fréquence est nominale. Échelle du bureau, rotation, profondeur et HDR ne sont pas déterminés."
+  display.mode_age: "Ancienneté du mode"
   display.online: "Écran du système en ligne"
   display.active: "Dessin possible"
   display.asleep: "En veille"
@@ -1456,6 +1464,9 @@ messages:
   reason.display_invalid_state: "État du connecteur invalide"
   reason.display_inventory_denied: "Accès à l’inventaire des écrans refusé"
   reason.display_inventory_incomplete: "Inventaire des écrans incomplet"
+  reason.display_mode_identity_unavailable: "Identité du périphérique DRM indisponible"
+  reason.display_mode_invalid: "Données du mode configuré invalides"
+  reason.display_mode_not_configured: "Aucun mode CRTC actuellement configuré"
   reason.display_modes_unavailable: "Noms des modes du pilote indisponibles"
   reason.display_native_data_invalid: "Données natives d’affichage invalides"
   reason.display_parent_unavailable: "Ascendance du périphérique d’affichage non vérifiable"

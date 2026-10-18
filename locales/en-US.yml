@@ -7,6 +7,14 @@ _meta:
   catalog_version: 1
 
 messages:
+  display.configured_pixels: "Configured output size (pixels)"
+  display.mode_clock: "Mode pixel clock"
+  display.mode_interlaced: "Interlaced mode"
+  display.mode_double_scan: "Double-scan mode"
+  display.mode_vscan: "Vertical scan multiplier"
+  display.mode_approx_refresh: "Kernel approximate refresh"
+  display.configured_note: "Configured output mode; refresh is nominal. Desktop scaling, rotation, color depth and HDR are not determined."
+  display.mode_age: "Mode sample age"
   display.online: "Online OS display"
   display.active: "Drawable"
   display.asleep: "Asleep"
@@ -1448,6 +1456,9 @@ messages:
   reason.display_invalid_state: "Connector state is invalid"
   reason.display_inventory_denied: "Display inventory access was denied"
   reason.display_inventory_incomplete: "Display inventory is incomplete"
+  reason.display_mode_identity_unavailable: "DRM device identity is unavailable"
+  reason.display_mode_invalid: "Configured display mode data is invalid"
+  reason.display_mode_not_configured: "No current CRTC mode is configured"
   reason.display_modes_unavailable: "Driver mode names are unavailable"
   reason.display_native_data_invalid: "Native display data is invalid"
   reason.display_parent_unavailable: "Display device ancestry could not be verified"

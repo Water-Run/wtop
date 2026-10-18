@@ -8,6 +8,14 @@ _meta:
   catalog_version: 1
 
 messages:
+  display.configured_pixels: "Tamaño de salida configurado (píxeles)"
+  display.mode_clock: "Reloj de píxel del modo"
+  display.mode_interlaced: "Modo entrelazado"
+  display.mode_double_scan: "Modo de doble barrido"
+  display.mode_vscan: "Multiplicador de barrido vertical"
+  display.mode_approx_refresh: "Frecuencia aproximada del núcleo"
+  display.configured_note: "Modo de salida configurado; la frecuencia es nominal. No se determinan la escala del escritorio, la rotación, la profundidad de color ni HDR."
+  display.mode_age: "Antigüedad del modo"
   display.online: "Pantalla del sistema en línea"
   display.active: "Permite dibujar"
   display.asleep: "En reposo"
@@ -1456,6 +1464,9 @@ messages:
   reason.display_invalid_state: "Estado del conector no válido"
   reason.display_inventory_denied: "Acceso al inventario de pantallas denegado"
   reason.display_inventory_incomplete: "Inventario de pantallas incompleto"
+  reason.display_mode_identity_unavailable: "Identidad del dispositivo DRM no disponible"
+  reason.display_mode_invalid: "Datos del modo de pantalla configurado no válidos"
+  reason.display_mode_not_configured: "No hay ningún modo CRTC configurado"
   reason.display_modes_unavailable: "Nombres de modos del controlador no disponibles"
   reason.display_native_data_invalid: "Datos nativos de pantalla no válidos"
   reason.display_parent_unavailable: "No se pudo verificar la relación de dispositivos de la pantalla"

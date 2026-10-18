@@ -236,3 +236,11 @@ EISA 厂商代码。`current_mode.width_points`/`height_points` 是模式点数�
 名义刷新率，未指定的零 Hz 不导出为实际值；保留旧模式时其质量为 stale。
 显示设备可能为虚拟设备，不由这些字段推断物理尺寸、色深、HDR 或 GPU
 归属。身份同样限于 `identity_session`，原始系统 UUID 不导出。
+
+Linux 的 `backend=drm-sysfs` 继续提供缓存连接器与 EDID；可用时另给出
+`current_mode_status`、`current_mode_configured`、原因与观察时间。
+`current_mode.scope=configured_crtc` 表示经过复核的内核输出配置，像素尺寸
+不是桌面逻辑点数。`pixel_clock_hz`、横纵总时序和扫描标识用于计算
+`refresh_kind=nominal` 的刷新率；内核的整数近似值单列为
+`approx_refresh_hz`。未指定的时序不补成零 Hz；旧模式保留原时间并标记
+stale。桌面缩放、平面旋转、实测刷新、输出色深和 HDR 不由这些字段推断。

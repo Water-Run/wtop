@@ -207,4 +207,108 @@ assert(proxy:probe(context).available and closes == 1 and opens == 1)
 assert(proxy:sample(context).status == "ok" and closes == 1 and opens == 1)
 assert(proxy:sample(context).status == "ok" and closes == 2 and opens == 2)
 proxy:close();assert(closes == 2)
+
+-- A real-filesystem dependency can be replaced as a unit, without letting a
+-- replay filesystem perform host-device I/O. The native result is normalized
+-- independently of EDID declarations and never donates unknown/raw fields.
+local FS = require("wtop.linux.fs")
+local default_fs = FS.default
+local function configured(overrides)
+  local value = { status = "ok", backend = "drm-kms", device_major = 226, device_minor = 1,
+    connector_id = 95, observed_at_ns = 1900000000, configured = true,
+    mode = { pixel_width = 1920, pixel_height = 1080, pixel_clock_hz = 148500000,
+      horizontal_total = 2200, vertical_total = 1125, flags = 9, vscan = 0, approx_refresh_hz = 60,
+      _private = "PRIVATE-MODE" }, _private = "PRIVATE-DRM" }
+  for k, v in pairs(overrides or {}) do value[k] = v end
+  return value
+end
+local function mode_sample(raw, customize)
+  local tree = Input.tree();tree.files[base .. "/card1/dev"] = "226:1\n"
+  local fs = Fixture.new(tree)
+  if customize then customize(fs, tree) end
+  FS.default = fs
+  local provider = { available = true, read_drm_mode = function(card, major, minor, id)
+    assert(card == "card1" and major == 226 and minor == 1)
+    if id ~= 95 then return configured({ status = "unavailable", configured = false, connector_id = id }) end
+    return raw
+  end }
+  local ok, value = pcall(function() return Displays.new({ fs = fs, native = provider }):sample(context) end)
+  FS.default = default_fs
+  assert(ok, value)
+  return value, value.data.devices[3]
+end
+local mode_result, current_panel = mode_sample(configured())
+assert(mode_result.quality == "fresh" and current_panel.current_mode_status == "ok" and current_panel.current_mode_configured)
+local current_mode = current_panel.current_mode
+assert(current_mode.pixel_width == 1920 and current_mode.pixel_height == 1080)
+assert(current_mode.refresh_hz == 60 and current_mode.refresh_kind == "nominal" and current_mode.scope == "configured_crtc")
+assert(current_mode.observed_at_ns == 1900000000 and current_panel.observed_at_ns == 2000000000)
+assert(current_mode.width_points == nil and current_mode._private == nil)
+assert(not Wire.encode(mode_result):find("PRIVATE", 1, true))
+assert(mode_result.data.devices[1].current_mode_status == "unavailable"
+  and mode_result.data.devices[1].current_mode_configured == false)
+for _, flags in ipairs({ 0x10, 0x20, 0x30 }) do
+  local raw_mode = configured();raw_mode.mode.flags = flags
+  local _, p = mode_sample(raw_mode)
+  assert(p.current_mode.refresh_hz == (flags == 0x10 and 120 or flags == 0x20 and 30 or 60))
+end
+local twice = configured();twice.mode.vscan = 2
+assert(select(2, mode_sample(twice)).current_mode.refresh_hz == 30)
+local unspecified_mode = configured();unspecified_mode.mode.pixel_clock_hz = 0
+unspecified_mode.mode.horizontal_total, unspecified_mode.mode.vertical_total = 0, 0
+local _, unspecified_panel = mode_sample(unspecified_mode)
+assert(unspecified_panel.current_mode.refresh_hz == nil and unspecified_panel.current_mode.approx_refresh_hz == 60)
+for _, change in ipairs({ { pixel_width = 0 }, { pixel_width = 1920.5 }, { pixel_clock_hz = -1 },
+    { horizontal_total = 1000 }, { flags = 0x100000000 } }) do
+  local value = configured();for k, v in pairs(change) do value.mode[k] = v end
+  local result_value, p = mode_sample(value)
+  assert(result_value.quality == "partial" and p.current_mode == nil and p.current_mode_reason == "display_mode_invalid")
+  assert(p.edid and p.connection == "connected")
+end
+for _, value in ipairs({ configured({ backend = "other" }), configured({ connector_id = 100 }),
+    configured({ device_minor = 2 }), configured({ observed_at_ns = 2000000001 }), configured({ observed_at_ns = 0 }) }) do
+  local _, p = mode_sample(value)
+  assert(p.current_mode == nil and p.current_mode_reason == "display_native_data_invalid")
+end
+for _, state in ipairs({ "denied", "gap", "error", "unavailable" }) do
+  local _, p = mode_sample(configured({ status = state, configured = false, errno = 13 }))
+  assert(p.current_mode_status == state and p.current_mode == nil and p.current_mode_errno == 13 and p.edid)
+end
+local _, device_race = mode_sample(configured(), function(fs)
+  local read, calls = fs.read, 0
+  fs.read = function(self, value, limit)
+    if value == base .. "/card1/dev" then
+      calls = calls + 1
+      if calls % 2 == 0 then return "226:2\n" end
+    end
+    return read(self, value, limit)
+  end
+end)
+assert(device_race.current_mode == nil and device_race.current_mode_status == "gap")
+local _, panel_race = mode_sample(configured(), function(fs)
+  local read, calls = fs.read, 0
+  fs.read = function(self, value, limit)
+    if value == path .. "/edid" then calls = calls + 1;if calls == 2 then return "changed" end end
+    return read(self, value, limit)
+  end
+end)
+assert(panel_race.quality == "gap" and panel_race.current_mode == nil and panel_race.current_mode_observed_at_ns == nil)
+local mode_snap = Snapshot.merge(Snapshot.new(0, 0), { displays = mode_result }, 1, 2000000000)
+local mode_export = Export.snapshot(mode_snap).displays.devices[3]
+assert(mode_export.current_mode.scope == "configured_crtc" and mode_export.current_mode.pixel_clock_hz == 148500000)
+assert(Export.agent(mode_snap).metrics.displays.devices[3].current_mode_configured)
+assert(Report.render(Export.snapshot(mode_snap)):find("Kernel configuration", 1, true))
+for _, locale in ipairs({ "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "fr-FR", "de-DE", "es-ES", "pt-BR", "ru-RU" }) do
+  local i18n = assert(I18n.new({ locale = locale }))
+  local detail = table.concat(TUI.hardware_detail_lines(mode_snap, "display:card1-eDP-1", i18n, 2100000000), "\n")
+  assert(detail:find(i18n:t("display.configured_pixels"), 1, true) and detail:find(i18n:t("display.configured_note"), 1, true))
+end
+mode_snap.quality.displays = { status = "error", quality = "stale" }
+local stale_mode = Export.snapshot(mode_snap).displays.devices[3]
+assert(stale_mode.current_mode_status == "stale" and stale_mode.current_mode.quality == "stale"
+  and stale_mode.current_mode.observed_at_ns == 1900000000)
+local host_calls = 0
+Displays.new({ fs = Fixture.new(Input.tree()), native = { available = true,
+  read_drm_mode = function() host_calls = host_calls + 1;return configured() end } }):sample(context)
+assert(host_calls == 0, "a replay filesystem reached the host DRM device")
 return true

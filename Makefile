@@ -102,7 +102,7 @@ HARDWARE_WORKER := $(NATIVE_DIR)/wtop_hardware_worker
 HARDWARE_WORKER_HEADER := $(NATIVE_DIR)/wtop_hardware_worker_image.h
 HARDWARE_LUA_HEADER := $(NATIVE_DIR)/wtop_hardware_lua.h
 HARDWARE_LUA_INPUTS := $(shell find src/wtop -name '*.lua')
-NATIVE_HEADERS += native/wtop_terminal_signal.h native/wtop_hardware_worker.h native/wtop_cpuid_protocol.h native/wtop_cpuid_capture.h native/wtop_linux_nvme.h native/wtop_linux_wifi.h
+NATIVE_HEADERS += native/wtop_terminal_signal.h native/wtop_hardware_worker.h native/wtop_cpuid_protocol.h native/wtop_cpuid_capture.h native/wtop_linux_nvme.h native/wtop_linux_wifi.h native/wtop_linux_drm.h native/wtop_linux_drm_lua.h
 NATIVE_REVISION_HEADER := $(NATIVE_DIR)/build_revision.h
 NATIVE_VERSION_HEADER := $(NATIVE_DIR)/build_version.h
 LUA_PATH_DEV := $(CURDIR)/src/?.lua;$(CURDIR)/src/?/init.lua;;
@@ -396,6 +396,11 @@ test-native-nvme-health: native
 	@python3 tests/test_linux_nvme_health.py --cc '$(CC)' --module '$(NATIVE_MODULE)' --lua-prefix '$(LUA_PREFIX)'
 
 .PHONY: test-native-wifi
+.PHONY: test-native-drm-modes
+test-native-drm-modes: native
+	@$(CC) -std=c17 -O2 -Wall -Wextra -Werror -I$(LUA_PREFIX)/include \
+		tests/native/linux_drm_modes.c $(LUA_PREFIX)/lib/liblua.a -lm -ldl -o build/native/drm-modes-fixture
+	@build/native/drm-modes-fixture
 test-native-wifi: native
 	@python3 tests/test_linux_wifi.py --cc '$(CC)' --module '$(NATIVE_MODULE)' --lua-prefix '$(LUA_PREFIX)'
 
@@ -478,7 +483,7 @@ test-native-gpu-worker-sanitized: sanitize-native $(LUA_STAMP)
 		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' \
 		--output build/native-gpu-worker-san --native-only
 
-check: resource-check native locales test-native-terminal-signals test-native-cpu-limits test-native-nvme-health test-native-wifi test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid
+check: resource-check native locales test-native-terminal-signals test-native-cpu-limits test-native-nvme-health test-native-wifi test-native-drm-modes test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAC) -p $$(find src tools tests -type f -name '*.lua' -print)
 	@sh -n tools/*.sh
 	@python3 -c 'import pathlib; [compile(path.read_bytes(), str(path), "exec") for path in pathlib.Path("tests").rglob("*.py")]'

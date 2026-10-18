@@ -82,6 +82,7 @@
 #include <wchar.h>
 #include "wtop_linux_nvme.h"
 #include "wtop_linux_wifi.h"
+#include "wtop_linux_drm_lua.h"
 
 #ifndef NS_PER_SECOND
 #define NS_PER_SECOND 1000000000LL
@@ -2296,6 +2297,7 @@ static const luaL_Reg functions[] = {
     {"readfile_at", l_readfile_at},
     {"read_cpu_perf_limits", l_read_cpu_perf_limits},
     {"read_nvme_health", l_read_nvme_health},
+    {"read_drm_mode", wtop_linux_read_drm_mode},
     {"read_wifi_link", l_read_wifi_link},
     {"read_cpu_clock_counters", l_read_cpu_clock_counters},
     {"proc_batch", l_proc_batch},

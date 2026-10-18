@@ -8,6 +8,14 @@ _meta:
   catalog_version: 1
 
 messages:
+  display.configured_pixels: "Настроенный размер вывода (пиксели)"
+  display.mode_clock: "Пиксельная частота режима"
+  display.mode_interlaced: "Чересстрочный режим"
+  display.mode_double_scan: "Режим двойного сканирования"
+  display.mode_vscan: "Множитель вертикального сканирования"
+  display.mode_approx_refresh: "Приблизительная частота ядра"
+  display.configured_note: "Настроенный режим вывода; частота номинальная. Масштаб рабочего стола, поворот, глубина цвета и HDR не определены."
+  display.mode_age: "Возраст данных режима"
   display.online: "Дисплей ОС в сети"
   display.active: "Доступен для отрисовки"
   display.asleep: "В спящем режиме"
@@ -1463,6 +1471,9 @@ messages:
   reason.display_invalid_state: "Неверное состояние разъёма"
   reason.display_inventory_denied: "Доступ к списку дисплеев запрещён"
   reason.display_inventory_incomplete: "Список дисплеев неполный"
+  reason.display_mode_identity_unavailable: "Идентификатор устройства DRM недоступен"
+  reason.display_mode_invalid: "Некорректные данные настроенного режима дисплея"
+  reason.display_mode_not_configured: "Текущий режим CRTC не настроен"
   reason.display_modes_unavailable: "Названия режимов драйвера недоступны"
   reason.display_native_data_invalid: "Некорректные нативные данные дисплея"
   reason.display_parent_unavailable: "Не удалось проверить родительские устройства дисплея"

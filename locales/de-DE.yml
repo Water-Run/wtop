@@ -8,6 +8,14 @@ _meta:
   catalog_version: 1
 
 messages:
+  display.configured_pixels: "Konfigurierte Ausgabegröße (Pixel)"
+  display.mode_clock: "Pixeltakt des Modus"
+  display.mode_interlaced: "Zeilensprungmodus"
+  display.mode_double_scan: "Doppelter Scanmodus"
+  display.mode_vscan: "Vertikaler Scanmultiplikator"
+  display.mode_approx_refresh: "Ungefähre Kernelfrequenz"
+  display.configured_note: "Konfigurierter Ausgabemodus mit nominaler Frequenz. Desktopskalierung, Drehung, Farbtiefe und HDR sind nicht bestimmt."
+  display.mode_age: "Alter des Moduswerts"
   display.online: "OS-Anzeige online"
   display.active: "Zeichenfähig"
   display.asleep: "Im Ruhezustand"
@@ -1449,6 +1457,9 @@ messages:
   reason.display_invalid_state: "Ungültiger Anschlussstatus"
   reason.display_inventory_denied: "Zugriff auf Bildschirminventar verweigert"
   reason.display_inventory_incomplete: "Bildschirminventar unvollständig"
+  reason.display_mode_identity_unavailable: "DRM-Geräteidentität nicht verfügbar"
+  reason.display_mode_invalid: "Ungültige Daten des konfigurierten Anzeigemodus"
+  reason.display_mode_not_configured: "Kein aktueller CRTC-Modus konfiguriert"
   reason.display_modes_unavailable: "Treiber-Modusnamen nicht verfügbar"
   reason.display_native_data_invalid: "Ungültige native Anzeigedaten"
   reason.display_parent_unavailable: "Übergeordnete Geräte der Anzeige nicht überprüfbar"

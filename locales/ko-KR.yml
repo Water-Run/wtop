@@ -8,6 +8,14 @@ _meta:
   catalog_version: 1
 
 messages:
+  display.configured_pixels: "설정된 출력 크기(픽셀)"
+  display.mode_clock: "모드 픽셀 클럭"
+  display.mode_interlaced: "인터레이스 모드"
+  display.mode_double_scan: "더블 스캔 모드"
+  display.mode_vscan: "수직 스캔 배수"
+  display.mode_approx_refresh: "커널 근사 주사율"
+  display.configured_note: "설정된 출력 모드이며 주사율은 공칭값입니다. 데스크톱 배율, 회전, 색 심도, HDR 상태는 확인되지 않았습니다."
+  display.mode_age: "모드 표본 경과 시간"
   display.online: "온라인 OS 디스플레이"
   display.active: "그리기 가능"
   display.asleep: "절전 중"
@@ -1442,6 +1450,9 @@ messages:
   reason.display_invalid_state: "잘못된 커넥터 상태"
   reason.display_inventory_denied: "디스플레이 목록 접근 거부"
   reason.display_inventory_incomplete: "디스플레이 목록 불완전"
+  reason.display_mode_identity_unavailable: "DRM 장치 식별 정보 없음"
+  reason.display_mode_invalid: "설정된 디스플레이 모드 데이터가 잘못됨"
+  reason.display_mode_not_configured: "현재 CRTC 모드가 설정되지 않음"
   reason.display_modes_unavailable: "드라이버 모드 이름 사용 불가"
   reason.display_native_data_invalid: "잘못된 네이티브 디스플레이 데이터"
   reason.display_parent_unavailable: "디스플레이 장치의 상위 관계 확인 불가"

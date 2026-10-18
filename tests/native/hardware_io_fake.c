@@ -13,6 +13,9 @@
 #include <stdio.h>
 #include <time.h>
 #include <errno.h>
+#include <sys/ioctl.h>
+#include <sys/sysmacros.h>
+#include "../../native/wtop_linux_drm.h"
 static int (*real_open)(const char *,int,...);
 static ssize_t (*real_read)(int,void *,size_t);
 static ssize_t (*real_pread)(int,void *,size_t,off_t);
@@ -22,11 +25,16 @@ static int (*real_close)(int);
 static DIR *(*real_opendir)(const char *);
 static ssize_t (*real_readlink)(const char *,char *,size_t);
 static int (*real_lstat)(const char *,struct stat *);
+static int (*real_fstat)(int,struct stat *);
+static int (*real_ioctl)(int,unsigned long,...);
+static int mode_fd=-1;
 static int enabled,target_fd=-1,target_kind;
 __attribute__((constructor)) static void setup(void) {
     real_pread_chk=dlsym(RTLD_NEXT,"__pread_chk");real_pread64_chk=dlsym(RTLD_NEXT,"__pread64_chk");
     real_pread=dlsym(RTLD_NEXT,"pread");real_open=dlsym(RTLD_NEXT,"open");real_read=dlsym(RTLD_NEXT,"read");real_close=dlsym(RTLD_NEXT,"close");
     real_opendir=dlsym(RTLD_NEXT,"opendir");real_readlink=dlsym(RTLD_NEXT,"readlink");real_lstat=dlsym(RTLD_NEXT,"lstat");
+    real_fstat=dlsym(RTLD_NEXT,"fstat");real_ioctl=dlsym(RTLD_NEXT,"ioctl");
+    (void)wtop_drm_mode_read;
     char command[64]={0};int fd=real_open("/proc/self/cmdline",O_RDONLY|O_CLOEXEC);
     if(fd>=0){ssize_t n=real_read(fd,command,sizeof(command)-1);real_close(fd);
         enabled=n>0&&!strcmp(command,"wtop-hardware-reader");}
@@ -67,6 +75,11 @@ static void write_pid(const char *path,int append) {
 int open(const char *path,int flags,...) {
     mode_t mode=0;
     if(flags&O_CREAT){va_list args;va_start(args,flags);mode=(mode_t)va_arg(args,int);va_end(args);}
+    if(enabled&&!strcmp(path,"/dev/dri/card1")&&getenv("WTOP_DISPLAY_FIXTURE_CONTROL")){
+        mode_fd=real_open("/dev/null",flags,mode);
+        if(mode_fd>=0)write_pid(getenv("WTOP_DRM_MODE_FIXTURE_READS"),1);
+        return mode_fd;
+    }
     char mapped[8192];int fd=real_open(redirect(path,mapped),flags,mode);
     if(enabled&&fd>=0&&strstr(path,"/temp1_input")){target_fd=fd;target_kind=1;}
     if(enabled&&fd>=0&&!strcmp(path,"/sys/firmware/dmi/tables/DMI")&&getenv("WTOP_SMBIOS_FIXTURE_ROOT")){
@@ -83,10 +96,52 @@ int open(const char *path,int flags,...) {
     }
     return fd;
 }
-int close(int fd) {if(fd==target_fd)target_fd=-1;return real_close(fd);}
+int close(int fd) {if(fd==target_fd)target_fd=-1;if(fd==mode_fd)mode_fd=-1;return real_close(fd);}
 DIR *opendir(const char *path) {char mapped[8192];return real_opendir(redirect(path,mapped));}
 ssize_t readlink(const char *path,char *buffer,size_t size) {char mapped[8192];return real_readlink(redirect(path,mapped),buffer,size);}
-int lstat(const char *path,struct stat *value) {char mapped[8192];return real_lstat(redirect(path,mapped),value);}
+static void mode_metadata(struct stat *value) {
+    memset(value,0,sizeof(*value));value->st_mode=S_IFCHR|0600;
+    value->st_dev=1;value->st_ino=7;value->st_rdev=makedev(226,1);
+}
+int lstat(const char *path,struct stat *value) {
+    if(enabled&&!strcmp(path,"/dev/dri/card1")&&getenv("WTOP_DISPLAY_FIXTURE_CONTROL")){mode_metadata(value);return 0;}
+    char mapped[8192];return real_lstat(redirect(path,mapped),value);
+}
+int fstat(int fd,struct stat *value) {
+    if(enabled&&fd==mode_fd){mode_metadata(value);return 0;}
+    return real_fstat(fd,value);
+}
+static char mode_control(void) {
+    const char *path=getenv("WTOP_DRM_MODE_FIXTURE_CONTROL");if(!path)return '0';
+    int fd=real_open(path,O_RDONLY|O_CLOEXEC);if(fd<0)return '0';
+    char value='0';(void)real_read(fd,&value,1);real_close(fd);return value;
+}
+int ioctl(int fd,unsigned long request,...) {
+    va_list args;va_start(args,request);void *value=va_arg(args,void *);va_end(args);
+    if(!enabled||fd!=mode_fd)return real_ioctl(fd,request,value);
+    if(request==WTOP_DRM_GETCONNECTOR){
+        wtop_drm_connector *v=value;uint32_t id=v->connector_id;
+        if(v->count_modes!=1||!v->modes_ptr){errno=EINVAL;return -1;}
+        memset(v,0,sizeof(*v));v->connector_id=id;v->encoder_id=100;
+        v->connection=1;v->connector_type=14;v->connector_type_id=1;return 0;
+    }
+    if(request==WTOP_DRM_GETENCODER){
+        wtop_drm_encoder *v=value;uint32_t id=v->encoder_id;
+        memset(v,0,sizeof(*v));v->encoder_id=id;v->crtc_id=200;v->encoder_type=2;return 0;
+    }
+    if(request==WTOP_DRM_GETCRTC){
+        if(mode_control()=='1'){
+            write_pid(getenv("WTOP_DRM_MODE_FIXTURE_ENTERED"),0);
+            while(mode_control()=='1'){struct timespec delay={0,10000000};(void)nanosleep(&delay,NULL);}
+        }
+        wtop_drm_crtc *v=value;uint32_t id=v->crtc_id;
+        memset(v,0,sizeof(*v));v->crtc_id=id;v->mode_valid=1;
+        v->mode.clock=mode_control()=='2'?185625:148500;
+        v->mode.hdisplay=1920;v->mode.vdisplay=1080;v->mode.htotal=2200;v->mode.vtotal=1125;
+        v->mode.vrefresh=mode_control()=='2'?75:60;v->mode.flags=9;return 0;
+    }
+    errno=ENOTTY;return -1;
+}
 static int blocked(void) {
     const char *path=getenv(target_kind==5?"WTOP_DISPLAY_FIXTURE_CONTROL":target_kind==4?"WTOP_SPD_FIXTURE_CONTROL":target_kind==3?"WTOP_DRM_FIXTURE_CONTROL":target_kind==2?"WTOP_SMBIOS_FIXTURE_CONTROL":"WTOP_HARDWARE_FIXTURE_CONTROL");if(!path)return 0;
     int fd=real_open(path,O_RDONLY|O_CLOEXEC);if(fd<0)return 0;

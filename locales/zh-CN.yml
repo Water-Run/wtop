@@ -8,6 +8,14 @@ _meta:
   catalog_version: 1
 
 messages:
+  display.configured_pixels: "当前配置尺寸（像素）"
+  display.mode_clock: "模式像素时钟"
+  display.mode_interlaced: "隔行模式"
+  display.mode_double_scan: "双扫描模式"
+  display.mode_vscan: "垂直扫描倍数"
+  display.mode_approx_refresh: "内核近似刷新率"
+  display.configured_note: "这是配置的输出模式，刷新率为名义值。桌面缩放、旋转、色深和 HDR 状态尚未确定。"
+  display.mode_age: "模式采样距今"
   display.online: "系统显示设备在线"
   display.active: "可绘制"
   display.asleep: "休眠中"
@@ -1442,6 +1450,9 @@ messages:
   reason.display_invalid_state: "连接器状态无效"
   reason.display_inventory_denied: "显示设备清单访问被拒绝"
   reason.display_inventory_incomplete: "显示设备清单不完整"
+  reason.display_mode_identity_unavailable: "无法核对 DRM 设备身份"
+  reason.display_mode_invalid: "当前配置的显示模式数据无效"
+  reason.display_mode_not_configured: "当前未配置 CRTC 模式"
   reason.display_modes_unavailable: "驱动模式名称不可用"
   reason.display_native_data_invalid: "原生显示设备数据无效"
   reason.display_parent_unavailable: "无法核对显示设备的父级关系"

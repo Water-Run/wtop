@@ -846,9 +846,10 @@ function M.render(snapshot)
     end
 
     local displays = object(snapshot.displays)
-    table_section(lines, "Display connectors", { "Connector", "Connection", "OS present", "Enabled", "DPMS", "PCI device", "Quality" },
+    table_section(lines, "Display connectors", { "Connector", "Connection", "OS present", "Enabled", "DPMS", "PCI device", "Mode status", "Configured", "Quality" },
         displays.devices, function(device)
-            return { device.id, device.connection, device.os_present, device.enabled, device.dpms, device.pci_address, device.quality }
+            return { device.id, device.connection, device.os_present, device.enabled, device.dpms, device.pci_address,
+                device.current_mode_status, device.current_mode_configured, device.quality }
         end, displays)
     local display_specs, display_timings, display_modes, os_displays = {}, {}, {}, {}
     local windows_displays, cached_displays = false, false
@@ -884,12 +885,20 @@ function M.render(snapshot)
         os_displays, function(d)
             return { d.id, d.online, d.active, d.asleep, d.builtin, d.main, d.vendor_number, d.model_number, d.current_mode_status, d.quality }
         end, displays)
-    table_section(lines, "Current display modes", { "Display", "Width (points)", "Height (points)", "Backing width (pixels)", "Backing height (pixels)", "Nominal refresh", "Quality" },
+    table_section(lines, "Current display modes", { "Display", "Width (points)", "Height (points)", "Mode width (pixels)", "Mode height (pixels)", "Nominal refresh", "Mode clock", "Interlaced", "Double scan", "Scope", "Quality" },
         display_modes, function(item)
             local m = item.mode
             return { item.device, m.width_points, m.height_points, m.pixel_width, m.pixel_height,
-                quantity(m.refresh_hz, 1, " Hz", 3), m.quality }
+                quantity(m.refresh_hz, 1, " Hz", 3), quantity(m.pixel_clock_hz, 1e6, " MHz", 3),
+                m.interlaced, m.double_scan, m.scope == "configured_crtc" and "Kernel configuration" or "OS display mode", m.quality }
         end, displays)
+    for _, item in ipairs(display_modes) do
+        if item.mode.scope == "configured_crtc" then
+            lines[#lines + 1] = "DRM modes describe the configured CRTC timing. Refresh and clock are nominal; desktop scaling, plane rotation, actual refresh, color depth and HDR are not determined."
+            lines[#lines + 1] = ""
+            break
+        end
+    end
     if #os_displays > 0 then
         lines[#lines + 1] = "CoreGraphics describes OS displays, including virtual displays. Refresh is nominal, not measured; zero means unspecified and is omitted. Physical size, color depth and HDR are not determined. Display IDs apply only within this sampling session."
         lines[#lines + 1] = ""

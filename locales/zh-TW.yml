@@ -8,6 +8,14 @@ _meta:
   catalog_version: 1
 
 messages:
+  display.configured_pixels: "目前設定尺寸（像素）"
+  display.mode_clock: "模式像素時脈"
+  display.mode_interlaced: "交錯模式"
+  display.mode_double_scan: "雙掃描模式"
+  display.mode_vscan: "垂直掃描倍數"
+  display.mode_approx_refresh: "核心近似更新率"
+  display.configured_note: "這是設定的輸出模式，更新率為名義值。桌面縮放、旋轉、色深和 HDR 狀態尚未確定。"
+  display.mode_age: "模式取樣距今"
   display.online: "系統顯示裝置上線"
   display.active: "可繪製"
   display.asleep: "休眠中"
@@ -1442,6 +1450,9 @@ messages:
   reason.display_invalid_state: "連接器狀態無效"
   reason.display_inventory_denied: "顯示裝置清單存取遭拒"
   reason.display_inventory_incomplete: "顯示裝置清單不完整"
+  reason.display_mode_identity_unavailable: "無法核對 DRM 裝置身分"
+  reason.display_mode_invalid: "目前設定的顯示模式資料無效"
+  reason.display_mode_not_configured: "目前未設定 CRTC 模式"
   reason.display_modes_unavailable: "驅動模式名稱不可用"
   reason.display_native_data_invalid: "原生顯示裝置資料無效"
   reason.display_parent_unavailable: "無法核對顯示裝置的上層關係"

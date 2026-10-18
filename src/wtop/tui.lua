@@ -2697,7 +2697,8 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
             add("display.main", "Main display", device.main)
             add("display.os_vendor", "OS vendor number", hardware_hex(device.vendor_number, 8))
             add("display.os_model", "OS model number", hardware_hex(device.model_number, 8))
-            add("display.current_mode", "Current mode status", Technical.state(i18n, device.current_mode_status))
+            add("display.current_mode", "Current mode status", Technical.state(i18n,
+                Quality.current_source(snapshot.quality, "displays") and device.current_mode_status or "stale"))
             local mode = device.current_mode
             if type(mode) == "table" then
                 add("display.mode_points", "Mode size (points)", tostring(mode.width_points) .. " x " .. tostring(mode.height_points))
@@ -2711,6 +2712,31 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
             add("display.enabled", "Encoder enabled", device.enabled)
             add("display.dpms", "Driver DPMS", device.dpms)
             add("display.connector_id", "DRM connector ID", device.connector_id)
+        end
+        if device.backend == "drm-sysfs" and device.current_mode_status then
+            add("display.current_mode", "Current mode status", Technical.state(i18n,
+                Quality.current_source(snapshot.quality, "displays") and device.current_mode_status or "stale"))
+            local mode = device.current_mode
+            if type(mode) == "table" then
+                add("display.configured_pixels", "Configured output size (pixels)",
+                    tostring(mode.pixel_width) .. " x " .. tostring(mode.pixel_height))
+                add("display.nominal_refresh", "Nominal mode refresh", mode.refresh_hz, "hertz")
+                add("display.mode_clock", "Mode pixel clock", mode.pixel_clock_hz, "hertz")
+                add("display.mode_interlaced", "Interlaced mode", mode.interlaced)
+                add("display.mode_double_scan", "Double-scan mode", mode.double_scan)
+                if mode.vscan and mode.vscan > 1 then add("display.mode_vscan", "Vertical scan multiplier", mode.vscan) end
+                if not mode.refresh_hz then
+                    add("display.mode_approx_refresh", "Kernel approximate refresh", mode.approx_refresh_hz, "hertz")
+                end
+            end
+            if device.current_mode_reason then
+                add("inspector.reason", "Reason", Technical.reason(i18n, device.current_mode_reason))
+            end
+            if type(now_ns) == "number" and type(device.current_mode_observed_at_ns) == "number" then
+                add("display.mode_age", "Mode sample age", math.max(0, now_ns - device.current_mode_observed_at_ns), "nanoseconds")
+            end
+            lines[#lines + 1] = translated(i18n, "display.configured_note",
+                "Configured output mode; refresh is nominal. Desktop scaling, rotation, color depth and HDR are not determined.")
         end
         if device.backend ~= "coregraphics" then
             add("display.edid_status", "Cached EDID status", Technical.state(i18n, device.edid_status))
