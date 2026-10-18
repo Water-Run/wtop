@@ -629,7 +629,7 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
-### 2026-10-18：Xe GPU 当前限制原因（验证中）
+### 2026-10-18：Xe GPU 当前限制原因
 
 Linux Xe 的 `tileN/gtN/freqN/throttle` 已接入。优先使用单次 `reasons`
 聚合读取；只有该属性缺失时才回退到已枚举的逐项属性，并要求两轮一致。
@@ -643,8 +643,20 @@ Linux Xe 的 `tileN/gtN/freqN/throttle` 已接入。优先使用单次 `reasons`
 [Linux 6.8 逐项实现](https://github.com/torvalds/linux/blob/v6.8/drivers/gpu/drm/xe/xe_gt_throttle_sysfs.c)
 和 [Linux 7.2 聚合实现](https://github.com/torvalds/linux/blob/v7.2/drivers/gpu/drm/xe/xe_gt_throttle.c)。
 原始源码摘要和软件回放证据保存在 `build/hardware-xe-limits-20261018/`。
-定向采集、导出及界面回归通过；完整回归和产物验收进行中。本机使用
-i915，没有新增 Xe 物理硬件或实际触发限制的测量证据。
+提交 `cd2b2d3` 的 [主 CI](https://github.com/Water-Run/wtop/actions/runs/39106934315) 16 个作业和
+[Windows CI](https://github.com/Water-Run/wtop/actions/runs/39106934362) 两个作业全部成功。
+四类归档、Linux/M4/Windows/静态/rootless 五项精确产物验收通过；原生
+检查、Lua 5.5/5.4 各 157 文件、完整终端矩阵，以及三主机各 19 个共享
+文件通过。十语言各 1836 条消息，733 个非文档文件与冻结/共享包一致。
+
+正常应用路径的软件回放完成三种 CLI、32 个流式快照与七种有确认的
+状态切换；三种真实终端尺寸下，11 个原因、第二 GT、滚动、关闭和退出
+均可达。冻结源码搭配对应包原生模块，在 M4 和两台 Windows 完成七次
+原生终端检查，含 Server 2008 经典控制台，逐项核对 11 个原因可见。
+状态切换由本机应用回放验证，跨主机检查复验长原因清单和终端操作；
+它们不作为物理硬件、实际功耗/节流触发或性能预算证据。本机 i915 的实际读数、既有
+功耗、健康、无线、图形域与 rootless 路径保持。没有新增 Xe 物理硬件
+或实际触发限制的测量证据；完整硬件与旧系统目标继续推进。
 
 ### 2026-10-18：进程私有缓存记录复用
 
