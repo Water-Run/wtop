@@ -6,6 +6,7 @@ local Export = require("wtop.export")
 local Report = require("wtop.report")
 local TUI = require("wtop.tui")
 local I18n = require("wtop.i18n")
+local Common = require("wtop.collectors.common")
 local function near(a, b) assert(type(a) == "number" and math.abs(a - b) < 1e-8, tostring(a) .. " != " .. b) end
 local function zone(watts, at, interval)
     return { id = "intel-rapl:0", name = "package-0", source_kind = "intel-rapl",
@@ -59,6 +60,24 @@ end
 local future = step(zone(999, 40, 1), recovered, 39)
 assert(future.zones[1].power_session.samples == 3)
 local _, backwards = step(zone(4, 2, 1), recovered, 2); assert(backwards.samples == 1)
+-- More than 104 days of nanoseconds: absolute-clock float conversion used to
+-- turn a 1000000001ns gap into 1000000002ns and discard the second window.
+local large_start = 9007199254740993
+local large_middle, large_end = large_start + 1000000000, large_start + 2000000001
+assert(Common.elapsed_ns(large_end, large_middle) == 1000000001)
+assert(Common.elapsed_ns(math.maxinteger, math.maxinteger - 5) == 5)
+local function large_zone(at, before)
+    local z = zone(10, 1, 1)
+    z.observed_at_ns, z.power_interval_ns = at, Common.elapsed_ns(at, before)
+    return z
+end
+local large_first = { zones = { large_zone(large_middle, large_start) } }
+Session.attach(large_first.zones, nil, large_middle)
+local large_second = { zones = { large_zone(large_end, large_middle) } }
+Session.attach(large_second.zones, large_first, large_end)
+assert(large_second.zones[1].power_session.samples == 2, "long-uptime windows were mistaken for overlap")
+assert(large_second.zones[1].power_session.first_timestamp_ns == large_start)
+assert(large_second.zones[1].power_session.covered_time_ns == 2000000001)
 local reused = { zones = { zone(10, 2, 1) } }; Session.attach(reused.zones, nil, 2e9)
 Session.attach(reused.zones, reused, 2e9); assert(reused.zones[1].power_session.samples == 1)
 

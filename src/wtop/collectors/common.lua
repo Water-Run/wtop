@@ -30,6 +30,12 @@ function Common.elapsed_ns(current, previous)
   if not finite_number(current) or not finite_number(previous) or current < previous then
     return nil
   end
+  -- Subtract nonnegative integer clocks before conversion. At long uptimes,
+  -- converting absolute nanoseconds first loses ticks and invents overlap
+  -- between adjacent measurement windows. This difference cannot overflow.
+  if math.type(current) == "integer" and math.type(previous) == "integer" and previous >= 0 then
+    return current - previous
+  end
   local elapsed = (current + 0.0) - previous
   return finite_number(elapsed) and elapsed or nil
 end
