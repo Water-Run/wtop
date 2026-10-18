@@ -1216,6 +1216,36 @@ local function export_port_connectors(ports)
     return result
 end
 
+local function export_platform_firmware(firmware, maximum)
+    maximum = math.min(maximum or 16, 16)
+    local result = copy_fields(firmware, { "source", "major", "minor", "docrev", "partial", "truncated", "structure_count" })
+    for _, spec in ipairs({ { "firmwares", { "id", "handle", "structure_type", "vendor", "version", "release_date",
+        "runtime_segment", "runtime_area_bytes", "rom_size_raw", "rom_size_bytes", "rom_size_minimum_bytes",
+        "rom_size_extended_raw", "characteristics_hex", "characteristics_known", "vendor_characteristics_present",
+        "extension_1", "extension_2", "targeted_content_enabled", "virtual_machine_reported",
+        "manufacturing_mode_supported", "manufacturing_mode_enabled", "firmware_revision", "controller_revision",
+        "source", "quality", "ambiguous" } }, { "systems", { "id", "handle", "structure_type", "manufacturer",
+        "product", "version", "sku", "family", "serial_present", "uuid_present", "wake_type_code", "wake_type",
+        "source", "quality", "ambiguous" } } }) do
+        local list = firmware and firmware[spec[1]] or {}
+        result[spec[1]], result[spec[1] .. "_total"] = json.array({}), #list
+        for index, device in ipairs(list) do
+            if index > maximum then result.truncated = true break end
+            local record = copy_fields(device, spec[2])
+            if spec[1] == "firmwares" then
+                record.features = json.object({})
+                for _, feature in ipairs(require("wtop.format.smbios").PLATFORM_FEATURES) do
+                    local value = device.features and device.features[feature[1]]
+                    if type(value) == "boolean" then record.features[feature[1]] = value end
+                end
+            end
+            result[spec[1]][index] = record
+        end
+    end
+    result.issues = export_issues(firmware and firmware.issues)
+    return result
+end
+
 local function export_firmware_enclosures(firmware, maximum)
     maximum = math.min(maximum or 64, 64)
     local result = copy_fields(firmware, { "source", "major", "minor", "docrev",
@@ -2106,6 +2136,7 @@ function M.snapshot(snapshot, options)
         onboard_devices = export_onboard_devices(snapshot.onboard_devices),
         firmware_batteries = export_firmware_batteries(snapshot.firmware_batteries),
         firmware_enclosures = export_firmware_enclosures(snapshot.firmware_enclosures),
+        platform_firmware = export_platform_firmware(snapshot.platform_firmware),
         firmware_power_supplies = export_firmware_power_supplies(snapshot.firmware_power_supplies),
         firmware_bmcs = export_firmware_bmcs(snapshot.firmware_bmcs),
         firmware_tpms = export_firmware_tpms(snapshot.firmware_tpms),
@@ -2859,6 +2890,7 @@ function M.agent(snapshot, options)
                 closest_to_critical = closest_critical,
             }),
             firmware_enclosures = export_firmware_enclosures(full.firmware_enclosures, device_limit),
+            platform_firmware = export_platform_firmware(full.platform_firmware, device_limit),
             processes = json.object({ total = full.processes and full.processes.total }),
         }),
         signals = signals,

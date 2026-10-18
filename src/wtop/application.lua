@@ -13,6 +13,7 @@ local REPORT_COLLECTORS = {
     onboard_devices = true,
     firmware_batteries = true, firmware_power_supplies = true,
     firmware_enclosures = true,
+    platform_firmware = true,
     firmware_bmcs = true,
     firmware_tpms = true,
     firmware_components = true,

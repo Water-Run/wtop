@@ -283,6 +283,15 @@ Type 45 的句柄引用只有在 Type 10 结构恰含一个设备、记录完整
 不按名称猜测 PCI、USB 或网络接口的关系。
 前台下限与后台间隔为 60 秒 / 5 分钟。
 
+`collectors/platform_firmware.lua` 使用同一共享输入采集 Type 0 平台固件和
+Type 1 系统公开声明，每类最多 16 条。ROM 的旧编码以 64 KiB 为单位，
+扩展编码区分 MiB/GiB；旧 FF 哨兵缺少可用扩展时只给出 16 MiB 下限。
+传统运行时 BIOS 区域与 ROM 容量分开，起始段为零时不推算运行时区域。
+功能位与修订号按记录长度读取，厂商保留的高 32 位只给存在性；Type 1
+序列号与 UUID 值不进入结果。UEFI 支持不推断当前启动方式或安全启动，
+未设置虚拟机标志也不推断物理机。Type 2/45 的明确句柄可以关联这些节点，
+不按厂商或名称猜测归属，静态声明不产生实时健康告警。
+
 `collectors/firmware_enclosures.lua` 共用固件输入，采集 Type 2 主板与 Type 3
 机箱各最多 64 条记录。按 [DMTF SMBIOS 3.9](https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_3.9.0.pdf)
 保留公开型号、功能位、机箱位置、机架 U/OU 高度、供电线数量及可变长度部件声明；
@@ -598,7 +607,7 @@ CLI/配置中的主题值只接受五个确切的内置名称。未知的 CLI �
 
 ## 10. 当前测试边界
 
-- 现有的 159 个 Lua 单元/夹具测试文件覆盖：平台门控、procfs、sysfs、连接、cgroup v2、DRM fdinfo、GPU 频率/hwmon 连接、磁盘/挂载与 hwmon 的设备拓扑联接、异构 CPU 清单、powercap、SMART、PMU、布局、i18n、输入、渲染器、Runner 隔离、资源预检、权限处理、pidfd 操作、JSON 边界、导出隐私、无硬件环境下的驱动树、离线检查器重放、进程采集的规模限制、sudo 文件访问策略、主机或显卡必须提供的最小 GPU 能力、Lua 代码树内的版本收敛、原生模块与 SBOM、内存带宽能力声明、Insights 的 Collectors 表中采集器与槽位的对应关系、`truncated` 结果质量及其原因，以及发布证据——glibc 基线、内嵌 ELF 下限、构建身份和发布 SBOM。
+- 现有的 160 个 Lua 单元/夹具测试文件覆盖：平台门控、procfs、sysfs、连接、cgroup v2、DRM fdinfo、GPU 频率/hwmon 连接、磁盘/挂载与 hwmon 的设备拓扑联接、异构 CPU 清单、powercap、SMART、PMU、布局、i18n、输入、渲染器、Runner 隔离、资源预检、权限处理、pidfd 操作、JSON 边界、导出隐私、无硬件环境下的驱动树、离线检查器重放、进程采集的规模限制、sudo 文件访问策略、主机或显卡必须提供的最小 GPU 能力、Lua 代码树内的版本收敛、原生模块与 SBOM、内存带宽能力声明、Insights 的 Collectors 表中采集器与槽位的对应关系、`truncated` 结果质量及其原因，以及发布证据——glibc 基线、内嵌 ELF 下限、构建身份和发布 SBOM。
 - PTY 冒烟测试覆盖 `40×10`、`60×20`、`80×24/25`、`80×50`、`160×24`、`200×22`、`180×45`、窗口缩放、CJK、按键路径、备用屏幕恢复和布局持久化。
 - onedir/onefile 构建后有针对 CLI、快照和 PTY 的目标。
 - `tests/support/` 下三个共享测试辅助模块各有自己的测试，因为一个被十几个调用方使用、自身却没有测试的辅助模块，其正确性只是碰巧由哪些调用方使用它而决定的意外。`test_makefile_readers.lua` 在一个合成本地 Makefile 上固定了 Makefile 读取器的行为，该 Makefile 带有本项目并不使用的形态——本项目的 Makefile 正是那些它所钉住的缺陷处于蛰伏状态的原因。`test_fixture_fs.lua` 钉住的是“合并不得改变夹具所声明的内容”这一性质，而不是声明种类的清单，因为清单会成为同一事实的第三份副本；`merge` 曾经把 `errors` 整个丢掉，于是一个回答 `ENODATA` 的驱动被变成了一份“文件不存在”的记录。`test_hardware_fixtures.lua` 是第三个，它那里的缺口更糟：另外两个模块是在构建东西，而这个模块本身*就是*证据——每个需要本项目没有的硬件的采集器测试都从它那里取一棵树并采信它，因此一个自相矛盾的夹具不会让测试失败，反而会让读到它的测试通过。它按性质审计全部十二个夹具，并且不点名任何路径。

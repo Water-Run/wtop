@@ -52,6 +52,8 @@ local interface_reasons = {
   "firmware_batteries_incomplete",
   "no_firmware_enclosures",
   "firmware_enclosures_incomplete",
+  "no_platform_firmware",
+  "platform_firmware_incomplete",
   "no_firmware_power_supplies",
   "firmware_power_supplies_incomplete",
   "no_firmware_bmcs",

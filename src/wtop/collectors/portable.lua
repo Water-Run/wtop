@@ -824,6 +824,12 @@ function M.new_all(options)
   enclosure_options.platform = options.platform or "portable"
   result.firmware_enclosures = require("wtop.collectors.firmware_enclosures")
     .new(enclosure_options)
+  local platform_options = {}
+  for key, value in pairs(options.platform_firmware or options.common or {}) do
+    platform_options[key] = value
+  end
+  platform_options.platform = options.platform or "portable"
+  result.platform_firmware = require("wtop.collectors.platform_firmware").new(platform_options)
   local supply_options = {}
   for key, value in pairs(options.firmware_power_supplies or options.common or {}) do
     supply_options[key] = value

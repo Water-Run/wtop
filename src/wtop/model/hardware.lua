@@ -92,6 +92,8 @@ local KIND_LABELS = {
     firmware_battery = { "firmware_battery.device", "Firmware battery {id}" },
     baseboard = { "enclosure.board", "Baseboard {id}" },
     enclosure = { "enclosure.chassis", "Enclosure {id}" },
+    platform_firmware = { "firmware_platform.device", "Platform firmware {id}" },
+    firmware_system = { "firmware_platform.system", "Firmware system {id}" },
     firmware_power_supply = { "firmware_psu.device", "Firmware power supply {id}" },
     firmware_bmc = { "firmware_bmc.device", "Firmware BMC interface {id}" },
     firmware_tpm = { "firmware_tpm.device", "Firmware TPM {id}" },
@@ -124,6 +126,10 @@ function M.label(node, i18n)
   end
   if node.kind == "onboard_device" and identifier(device.designation) then return device.designation end
   if node.kind == "baseboard" and identifier(device.product) then return device.product end
+  if node.kind == "firmware_system" and identifier(device.product) then return device.product end
+  if node.kind == "platform_firmware" and identifier(device.version) then
+    return (identifier(device.vendor) and device.vendor .. " " or "") .. device.version
+  end
   if node.kind == "firmware_battery" then
     local label = identifier(device.name) or identifier(device.location)
     if label then return label end
@@ -995,6 +1001,20 @@ function M.build(snapshot)
       end
     end
   end
+  local platform = type(snapshot.platform_firmware) == "table" and snapshot.platform_firmware or {}
+  result.truncated = result.truncated or platform.truncated == true
+  result.partial = result.partial or platform.partial == true
+  for _, spec in ipairs({ { "firmwares", "platform-firmware:", "platform_firmware" },
+                         { "systems", "firmware-system:", "firmware_system" } }) do
+    for index, device in ipairs(type(platform[spec[1]]) == "table" and platform[spec[1]] or {}) do
+      if index > 16 then result.truncated = true break end
+      if type(device) == "table" and identifier(device.id) then
+        local node = add_node("firmware", device.product or ("0x" .. device.id), device,
+          spec[2] .. device.id, nil, "platform_firmware", device.id)
+        if node then node.kind, node.ambiguous = spec[3], device.ambiguous == true end
+      else result.partial = true end
+    end
+  end
   local enclosures = type(snapshot.firmware_enclosures) == "table"
     and snapshot.firmware_enclosures or {}
   result.truncated = result.truncated or enclosures.truncated == true
@@ -1260,6 +1280,7 @@ function M.build(snapshot)
       port_connectors = true, onboard_devices = true, firmware_batteries = true,
       firmware_power_supplies = true, firmware_bmcs = true, firmware_tpms = true,
       firmware_components = true, host_interfaces = true, firmware_enclosures = true,
+      platform_firmware = true,
       processor_firmware = true }
   local by_handle = {}
   for _, node in ipairs(unsorted) do

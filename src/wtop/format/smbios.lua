@@ -1,4 +1,4 @@
--- Bounded SMBIOS 2.x/3.x hardware inventory (DSP0134, types 2, 3, 4, 7, 8, 9, 10,
+-- Bounded SMBIOS 2.x/3.x hardware inventory (DSP0134, types 0, 1, 2, 3, 4, 7, 8, 9, 10,
 -- 16, 17, 19, 20, 22, 37, 38, 39, 41, 42, 43 and 45).
 -- Only named public fields are copied out. Serial numbers, asset tags, UUIDs
 -- and raw firmware bytes are not retained in the parsed result.
@@ -157,6 +157,30 @@ local CHASSIS_STATES = { [1] = "Other", [2] = "Unknown", [3] = "Safe", [4] = "Wa
   [5] = "Critical", [6] = "Non-recoverable" }
 local CHASSIS_SECURITY = { [1] = "Other", [2] = "Unknown", [3] = "None",
   [4] = "External interface locked out", [5] = "External interface enabled" }
+local WAKE_TYPES = { [1] = "Other", [2] = "Unknown", [3] = "APM timer", [4] = "Modem ring",
+  [5] = "LAN remote", [6] = "Power switch", [7] = "PCI PME#", [8] = "AC power restored" }
+-- Only specification-assigned fields are public. The vendor half of the
+-- characteristics QWORD is kept as a presence bit, never a raw identifier.
+M.PLATFORM_FEATURES = {
+  { "isa", 10, 4, "ISA" }, { "mca", 10, 5, "MCA" }, { "eisa", 10, 6, "EISA" },
+  { "pci", 10, 7, "PCI" }, { "pcmcia", 10, 8, "PCMCIA" }, { "pnp", 10, 9, "Plug and Play" },
+  { "apm", 10, 10, "APM" }, { "upgradeable", 10, 11, "Flash upgrade" },
+  { "shadowing", 10, 12, "ROM shadowing" }, { "vl_vesa", 10, 13, "VL-VESA" },
+  { "escd", 10, 14, "ESCD" }, { "cd_boot", 10, 15, "CD boot" },
+  { "selectable_boot", 10, 16, "Selectable boot" }, { "rom_socketed", 10, 17, "Socketed ROM" },
+  { "pcmcia_boot", 10, 18, "PCMCIA boot" }, { "edd", 10, 19, "EDD" },
+  { "nec9800_floppy", 10, 20, "Int 13h NEC 9800" }, { "toshiba_floppy", 10, 21, "Int 13h Toshiba" },
+  { "floppy_525_360", 10, 22, "Int 13h 5.25/360K" }, { "floppy_525_1200", 10, 23, "Int 13h 5.25/1.2M" },
+  { "floppy_35_720", 10, 24, "Int 13h 3.5/720K" }, { "floppy_35_2880", 10, 25, "Int 13h 3.5/2.88M" },
+  { "print_screen", 10, 26, "Int 5h" }, { "keyboard_8042", 10, 27, "Int 9h/8042" },
+  { "serial", 10, 28, "Int 14h" }, { "printer", 10, 29, "Int 17h" },
+  { "cga_mono", 10, 30, "Int 10h CGA/mono" }, { "pc98", 10, 31, "PC-98" },
+  { "acpi", 18, 0, "ACPI" }, { "usb_legacy", 18, 1, "USB legacy" }, { "agp", 18, 2, "AGP" },
+  { "i2o_boot", 18, 3, "I2O boot" }, { "ls120_boot", 18, 4, "LS-120 boot" },
+  { "zip_boot", 18, 5, "ATAPI ZIP boot" }, { "ieee1394_boot", 18, 6, "IEEE 1394 boot" },
+  { "smart_battery", 18, 7, "Smart Battery" }, { "bios_boot_spec", 19, 0, "BIOS Boot Specification" },
+  { "network_service_boot", 19, 1, "Network service boot" }, { "uefi", 19, 3, "UEFI" },
+}
 local PLACEHOLDERS = { ["unknown"] = true, ["not specified"] = true, ["not provided"] = true,
   ["none"] = true, ["default string"] = true, ["to be filled by o.e.m."] = true }
 
@@ -179,6 +203,8 @@ function M.parse(data, metadata, options)
     "max_firmware_batteries", options.max_firmware_batteries, 64, 64)
   local max_baseboards = Common.positive_integer("max_baseboards", options.max_baseboards, 64, 64)
   local max_enclosures = Common.positive_integer("max_enclosures", options.max_enclosures, 64, 64)
+  local max_platform_firmwares = Common.positive_integer("max_platform_firmwares", options.max_platform_firmwares, 16, 16)
+  local max_firmware_systems = Common.positive_integer("max_firmware_systems", options.max_firmware_systems, 16, 16)
   local max_firmware_bmcs = Common.positive_integer(
     "max_firmware_bmcs", options.max_firmware_bmcs, 64, 64)
   local max_firmware_tpms = Common.positive_integer(
@@ -189,6 +215,7 @@ function M.parse(data, metadata, options)
     "max_host_interfaces", options.max_host_interfaces, 64, 64)
   local result = { arrays = {}, devices = {}, slots = {}, ports = {}, onboard_devices = {},
     baseboards = {}, enclosures = {},
+    platform_firmwares = {}, firmware_systems = {},
     processors = {}, caches = {},
     array_ranges = {}, device_ranges = {}, channels = {}, firmware_power_supplies = {},
     firmware_batteries = {}, firmware_bmcs = {}, firmware_tpms = {},
@@ -224,7 +251,7 @@ function M.parse(data, metadata, options)
     result.structure_count = result.structure_count + 1
     if kind == 127 then ended = true; break end
     local record, members
-    if kind == 2 or kind == 3 or kind == 4 or kind == 7 or kind == 8 or kind == 9 or kind == 10 or kind == 16 or kind == 17
+    if kind == 0 or kind == 1 or kind == 2 or kind == 3 or kind == 4 or kind == 7 or kind == 8 or kind == 9 or kind == 10 or kind == 16 or kind == 17
         or kind == 19 or kind == 20 or kind == 22 or kind == 37
         or kind == 38 or kind == 39 or kind == 41 or kind == 42 or kind == 43
         or kind == 45 then
@@ -274,7 +301,74 @@ function M.parse(data, metadata, options)
           record.address_span_bytes = end_bytes - start_bytes + 1
         else issue("mapped_address_span", position - 1, record) end
       end
-      if kind == 2 and length >= 8 then
+      if kind == 0 and length >= 18 then
+        record.structure_type = 0
+        record.vendor, record.version, record.release_date = read_string(4), read_string(5), read_string(8)
+        local segment, size = uint(fields, 6, 2), uint(fields, 9, 1)
+        if segment and segment > 0 then
+          record.runtime_segment = segment
+          record.runtime_area_bytes = (0x10000 - segment) * 16
+        end
+        record.rom_size_raw = size
+        if size ~= 255 then record.rom_size_bytes = (size + 1) * 65536
+        else
+          record.rom_size_minimum_bytes = 16 * 1024 * 1024
+          local extended = uint(fields, 24, 2)
+          if extended then
+            local unit, amount = extended >> 14, extended & 0x3fff
+            record.rom_size_extended_raw = extended
+            if unit <= 1 and amount > 0 then
+              record.rom_size_bytes = amount * (unit == 0 and 1024 * 1024 or 1024 * 1024 * 1024)
+              if record.rom_size_bytes < record.rom_size_minimum_bytes then
+                record.rom_size_bytes = nil; issue("firmware_rom_size", position - 1, record)
+              end
+            else issue("firmware_rom_size", position - 1, record) end
+          end
+        end
+        local mask = uint(fields, 10, 4)
+        record.characteristics_hex = string.format("0x%08x", mask)
+        record.characteristics_known = mask & 12 == 0
+        record.vendor_characteristics_present = uint(fields, 14, 4) ~= 0
+        if mask & 3 ~= 0 then issue("firmware_reserved_flags", position - 1, record) end
+        record.extension_1, record.extension_2 = uint(fields, 18, 1), uint(fields, 19, 1)
+        record.features = {}
+        for _, feature in ipairs(M.PLATFORM_FEATURES) do
+          local bits = feature[2] == 10 and mask or uint(fields, feature[2], 1)
+          if bits ~= nil and (feature[2] ~= 10 or record.characteristics_known) then
+            record.features[feature[1]] = bits & (1 << feature[3]) ~= 0
+          end
+        end
+        if record.extension_2 then
+          record.targeted_content_enabled = record.extension_2 & 4 ~= 0
+          record.virtual_machine_reported = record.extension_2 & 16 ~= 0
+          record.manufacturing_mode_supported = record.extension_2 & 32 ~= 0
+          record.manufacturing_mode_enabled = record.extension_2 & 64 ~= 0
+          if record.extension_2 & 128 ~= 0 then issue("firmware_reserved_flags", position - 1, record) end
+        end
+        for _, spec in ipairs({ { 20, "firmware_revision" }, { 22, "controller_revision" } }) do
+          local major, minor = uint(fields, spec[1], 1), uint(fields, spec[1] + 1, 1)
+          if major and minor and major ~= 255 and minor ~= 255 then
+            record[spec[2]] = tostring(major) .. "." .. tostring(minor)
+          end
+        end
+        if #result.platform_firmwares < max_platform_firmwares then
+          result.platform_firmwares[#result.platform_firmwares + 1] = record
+        else result.truncated = true; issue("platform_firmware_limit", position - 1) end
+      elseif kind == 1 and length >= 8 then
+        record.structure_type = 1
+        record.manufacturer, record.product, record.version = read_string(4), read_string(5), read_string(6)
+        record.serial_present = read_string(7) ~= nil
+        if length >= 24 then
+          local uuid = fields:sub(9, 24)
+          record.uuid_present = uuid ~= string.rep("\0", 16) and uuid ~= string.rep("\255", 16)
+        end
+        record.wake_type_code = uint(fields, 24, 1)
+        record.wake_type = WAKE_TYPES[record.wake_type_code]
+        record.sku, record.family = read_string(25), read_string(26)
+        if #result.firmware_systems < max_firmware_systems then
+          result.firmware_systems[#result.firmware_systems + 1] = record
+        else result.truncated = true; issue("firmware_system_limit", position - 1) end
+      elseif kind == 2 and length >= 8 then
         record.manufacturer, record.product, record.version = read_string(4), read_string(5), read_string(6)
         record.serial_present, record.asset_tag_present = read_string(7) ~= nil, read_string(8) ~= nil
         record.structure_type = 2
@@ -979,6 +1073,7 @@ function M.parse(data, metadata, options)
   end
   if #result.arrays == 0 and #result.devices == 0 and #result.slots == 0
       and #result.baseboards == 0 and #result.enclosures == 0
+      and #result.platform_firmwares == 0 and #result.firmware_systems == 0
       and #result.ports == 0
       and #result.onboard_devices == 0
       and #result.channels == 0

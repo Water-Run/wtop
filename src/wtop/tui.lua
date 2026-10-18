@@ -3334,6 +3334,48 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         end
         lines[#lines + 1] = translated(i18n, "cooling_device.note",
             "Cooling states are device-specific; they are not fan speed or percent.")
+    elseif node.kind == "platform_firmware" then
+        add("memory_hw.manufacturer", "Manufacturer", device.vendor)
+        add("firmware_component.version", "Version", device.version)
+        add("firmware_component.release_date", "Release date", device.release_date)
+        add("firmware_platform.revision", "Firmware revision", device.firmware_revision)
+        add("firmware_platform.controller", "Embedded controller revision", device.controller_revision)
+        add("firmware_platform.rom", "Firmware ROM capacity", device.rom_size_bytes, "bytes")
+        if not device.rom_size_bytes and device.rom_size_minimum_bytes then
+            add("firmware_platform.rom_minimum", "Firmware ROM lower bound", device.rom_size_minimum_bytes, "bytes")
+        end
+        add("firmware_platform.runtime", "Legacy runtime BIOS area", device.runtime_area_bytes, "bytes")
+        add("firmware_platform.mask", "Standard characteristics", device.characteristics_hex)
+        add("firmware_platform.known", "Base characteristics known", device.characteristics_known)
+        local features = device.features or {}
+        for _, feature in ipairs({ { "pci", "PCI" }, { "acpi", "ACPI" }, { "uefi", "UEFI" } }) do
+            add("firmware_platform.support", "Declared support",
+                feature[2] .. " · " .. format_value(features[feature[1]], i18n))
+        end
+        add("firmware_platform.flash", "Firmware upgrade supported", features.upgradeable)
+        add("firmware_platform.socketed", "Firmware ROM socketed", features.rom_socketed)
+        add("firmware_platform.usb", "Legacy USB supported", features.usb_legacy)
+        add("firmware_platform.vm", "Virtual machine reported", device.virtual_machine_reported)
+        add("firmware_platform.manufacturing_support", "Manufacturing mode supported", device.manufacturing_mode_supported)
+        add("firmware_platform.manufacturing_enabled", "Manufacturing mode reported enabled", device.manufacturing_mode_enabled)
+        local names = {}
+        for _, feature in ipairs(require("wtop.format.smbios").PLATFORM_FEATURES) do
+            if features[feature[1]] then names[#names + 1] = feature[4] end
+        end
+        add_list("firmware_platform.features", "Declared supported interfaces", names)
+        lines[#lines + 1] = translated(i18n, "firmware_platform.note",
+            "Firmware declarations; UEFI support is not the current boot method or Secure Boot state.")
+        lines[#lines + 1] = translated(i18n, "firmware_platform.vm_note",
+            "An unset VM flag does not establish that this is a physical machine.")
+    elseif node.kind == "firmware_system" then
+        add("memory_hw.manufacturer", "Manufacturer", device.manufacturer)
+        add("metrics.model", "Model", device.product)
+        add("firmware_component.version", "Version", device.version)
+        add("enclosure.sku", "SKU", device.sku)
+        add("firmware_platform.family", "Product family", device.family)
+        add("firmware_platform.wake", "Firmware-reported wake-up type", device.wake_type or device.wake_type_code)
+        lines[#lines + 1] = translated(i18n, "firmware_platform.system_note",
+            "SMBIOS system declarations; serial numbers and UUID values are omitted.")
     elseif node.kind == "baseboard" then
         add("memory_hw.manufacturer", "Manufacturer", device.manufacturer)
         add("metrics.model", "Model", device.product)

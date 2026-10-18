@@ -16,7 +16,7 @@ for id in pairs(Worker.sources) do
     assert(scheduler:add(shared:wrap(require("wtop.collectors."..id).new())))
     count=count+1
 end
-assert(count==12 and Worker.sources.firmware_enclosures)
+assert(count==13 and Worker.sources.firmware_enclosures and Worker.sources.platform_firmware)
 local function tick()
     for _, id in ipairs(scheduler.order) do scheduler:task(id).next_due_ns=0 end
     local start=Native.monotonic_ns();local results=scheduler:tick(context)
@@ -80,4 +80,4 @@ assert(recovered.onboard_devices.value_timestamp_ns>observed
 pids={};for pid in contents(count_file):gmatch("%d+") do pids[#pids+1]=pid end
 assert(#pids==3 and pids[1]==pids[2] and pids[3]~=pids[1],"raw source duplication or wrong recovery epoch")
 scheduler:stop(context);shared:close();independent:close()
-print("ok: twelve firmware views, one raw read/parse epoch, real timestamps, timeout/reap, independent source and shared recovery")
+print("ok: thirteen firmware views, one raw read/parse epoch, real timestamps, timeout/reap, independent source and shared recovery")

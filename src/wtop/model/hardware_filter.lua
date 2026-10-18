@@ -20,12 +20,14 @@ local function field_values(node, row, field)
   if field == "name" then return { row.device } end
   if field == "class" then return { row.class } end
   if field == "driver" then return { device.driver, identity.driver } end
-  if field == "vendor" then return { device.vendor_name, device.manufacturer } end
+  if field == "vendor" then return { device.vendor_name, device.manufacturer,
+    node.kind == "platform_firmware" and device.vendor or nil } end
   if field == "model" then
     return { device.device_name, device.product, device.part_number, identity.model }
   end
   return { row.bus, row.id, node.id, node.identifier, row.device, row.class,
     device.driver, identity.driver, device.vendor_name, device.manufacturer,
+    node.kind == "platform_firmware" and device.vendor or nil,
     device.device_name, device.product, device.part_number, identity.model }
 end
 

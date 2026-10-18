@@ -550,6 +550,31 @@ function M.render(snapshot)
         lines[#lines + 1] = "Ratios compare sampled power with configured caps; they do not establish throttling."
         lines[#lines + 1] = ""
     end
+    local platform = object(snapshot.platform_firmware)
+    table_section(lines, "Platform firmware", { "Handle", "Vendor", "Version", "Release date", "ROM capacity", "ROM lower bound", "Revision", "Controller revision" },
+        platform.firmwares, function(firmware)
+            return { firmware.id, firmware.vendor, firmware.version, firmware.release_date,
+                bytes(firmware.rom_size_bytes), not firmware.rom_size_bytes and bytes(firmware.rom_size_minimum_bytes) or nil,
+                firmware.firmware_revision, firmware.controller_revision }
+        end, platform)
+    table_section(lines, "Firmware-supported interfaces", { "Handle", "Declared support", "VM reported", "Manufacturing mode reported enabled" },
+        platform.firmwares, function(firmware)
+            local names = {}
+            for _, feature in ipairs(require("wtop.format.smbios").PLATFORM_FEATURES) do
+                if (firmware.features or {})[feature[1]] then names[#names + 1] = feature[4] end
+            end
+            return { firmware.id, table.concat(names, ", "), firmware.virtual_machine_reported, firmware.manufacturing_mode_enabled }
+        end, platform)
+    table_section(lines, "Firmware system declarations", { "Handle", "Manufacturer", "Product", "Version", "SKU", "Family", "Wake-up type" },
+        platform.systems, function(system)
+            return { system.id, system.manufacturer, system.product, system.version, system.sku, system.family,
+                system.wake_type or system.wake_type_code }
+        end, platform)
+    if #(platform.firmwares or {}) > 0 then
+        lines[#lines + 1] = "Firmware declarations; UEFI support is not the current boot method or Secure Boot state."
+        lines[#lines + 1] = "An unset VM flag does not establish that this is a physical machine."
+        lines[#lines + 1] = ""
+    end
     local enclosures = object(snapshot.firmware_enclosures)
     table_section(lines, "Baseboards", { "Handle", "Manufacturer", "Product", "Version", "Type", "Location", "Chassis handle" },
         enclosures.baseboards, function(board)
