@@ -629,7 +629,7 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
-### 2026-10-18：hwmon 能量区间功率（验证中）
+### 2026-10-18：hwmon 能量区间功率
 
 hwmon 的累计微焦耳计数现在可形成相邻观察间的平均功率，逐项保留读取
 时间，整数求差后换算瓦数。首次读取、缺测、禁用、计数下降、身份变化、
@@ -644,9 +644,25 @@ GPU 优先直接功率，缺少时使用能量区间平均；详情、Snapshot�
 
 依据 [hwmon 能量接口](https://docs.kernel.org/hwmon/sysfs-interface.html) 和
 [Xe hwmon ABI](https://www.kernel.org/doc/Documentation/ABI/testing/sysfs-driver-intel-xe-hwmon)。
-定向回归进行中，证据保存在 `build/hardware-hwmon-energy-20261018/`。
-本机没有 hwmon `energyN_input` 通道，软件回放不计作正向硬件测量；
-既有 RAPL 路径独立保留。完整回归、产物与跨平台验收尚待完成。
+提交 `ddd687f` 的 [主 CI](https://github.com/Water-Run/wtop/actions/runs/39111382588) 16 个作业和
+[Windows CI](https://github.com/Water-Run/wtop/actions/runs/39111382515) 两个作业全部成功。
+四类归档、Linux/M4/Windows/静态/rootless 五项精确产物验收通过；原生
+检查、Lua 5.5/5.4 各 158 文件、完整终端矩阵，以及三主机各 20 个共享
+文件通过。十语言各 1837 条消息；735 个非文档文件与冻结/共享包一致。
+
+正常应用的软件回放完成三种 CLI、64 个流式快照和九种有确认的状态，
+包括权限、缺测恢复、重置、禁用、零限制和通用驱动。卡级约 40 W、
+封装级约 18 W 的计数器分别核对时间窗口、能量差、统计与各自功耗墙，
+不相加或混用。三种本机终端尺寸的功耗/传感器详情、滚动与退出通过；
+冻结源码搭配对应包原生模块在 M4 和两台 Windows 完成七次终端检查，
+含 Server 2008 经典控制台。这些是软件状态回放，不是正向物理瓦数测量。
+
+本机没有 hwmon `energyN_input` 通道；普通/root 实际快照及既有 RAPL、
+厂商读数状态、健康、无线、图形域与 rootless 路径通过。本轮原始证据
+保存在 `build/hardware-hwmon-energy-20261018/`。初版 40 行软件流只覆盖
+前八个状态，原记录保留为 `before-count-*`；增加至 64 行后九个状态
+全部确认，条件保持。真实能量硬件、更广旧系统、资源预算与完整交付
+目标继续推进。
 
 ### 2026-10-18：Xe GPU 当前限制原因
 
