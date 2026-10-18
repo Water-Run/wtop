@@ -477,6 +477,7 @@ for _, name in ipairs({ "LICENSE",
                         ".luai/licenses/AMD-SMI-MIT.txt",
                         ".luai/licenses/NVML-NVIDIA.txt",
                         ".luai/licenses/Level-Zero-MIT.txt",
+                        ".luai/licenses/DRM-EDID-MIT.txt",
                         ".luai/licenses/LGPL-3.0-or-later.txt" }) do
     local path = scratch .. "/bundle/" .. name
     local directory = name:match("^(.*)/[^/]+$")
