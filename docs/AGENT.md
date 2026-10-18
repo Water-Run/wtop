@@ -66,6 +66,29 @@ Snapshot 的 `power.zones[].power_session` 与 Agent 的
 改变或计数器重置后重新统计。重复与重叠窗口不会重复计入，读取器重启也
 建立新会话。缺少有效统计时省略该对象。
 
+Snapshot 的 `gpus.devices[].power_sessions` 和 Agent 的
+`top.gpus[].power_sessions` 是每个厂商、每种功耗读数分别维护的统计。
+`id` 在设备内由 `source:metric` 组成，最多 16 项；提供报告值以外的专用
+即时/平均通道时不重复发布选择别名。ASIC、板卡、封装等范围分别保留，
+`scope=unspecified` 表示来源没有明确给出物理覆盖范围。
+
+每项使用 `average_kind=samples`，以瓦特给出 `minimum_watts`、
+`average_watts`、`maximum_watts`，以 `samples` 给出接受的 API 读数数目。
+`current_watts` 仅在该读数当前可用时出现；失效时保留的统计仍携带自己的
+`first_timestamp_ns`、`last_timestamp_ns`。`measurement`、`method`、
+`quality` 和 `observed_at_ns` 保留来源的测量语义与查询捕获时间。
+`minimum_interval_ns`/`maximum_interval_ns` 为已接受读数的平均窗口范围，
+不当作互不重叠的时间覆盖，也不积分能量。
+
+`sample_time_basis=provider_timestamp` 时，`provider_timestamp_us` 保留
+提供方的原始微秒时间戳，用于排除同一提供方读数；它不是宿主单调时钟，
+不能与 `captured_monotonic_ns` 相减。`query_capture` 表示只确认了查询
+捕获时间，不据此声称硬件采样时刻已知。缺少可信捕获时间和提供方时间戳
+时不建立新统计。缓存、倒序捕获、同一提供方时间戳不重复计入；提供方
+时钟倒退或身份/范围/测量方法改变后建立新范围。平均窗口可重叠，API
+读数的采样平均不代表对这些窗口积分后的平均功耗。关联仍遵循唯一 PCI/
+UUID 与原生设备身份边界，不将 RAPL 图形域归入某块显卡。
+
 `metrics.cpu.frequency` 按各策略已知的在线 CPU 数加权给出平均 Hz；缺少成员列表的策略按一个读数计。它携带来源与 measured/estimated/partial 质量，混用来源时标为 `mixed`。CPUFreq 采集失败或数据过期时不把保留值作为当前频率输出。
 
 `data_quality.value_timestamp_ns` 是该资源当前所持值的单调时钟时间；

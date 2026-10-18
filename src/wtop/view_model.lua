@@ -9,6 +9,7 @@ local Quality = require("wtop.model.quality")
 local Power = require("wtop.model.power")
 local PowerDomains = require("wtop.model.power_domains")
 local PowerSession = require("wtop.model.power_session")
+local GPUPowerSession = require("wtop.model.gpu_power_session")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
@@ -1284,6 +1285,7 @@ local function gpu_rows(snapshot, format, i18n)
             power_interval_ns = not power_from_sensor and metrics.power_interval_ns or nil,
             power_age_ns = power_age_ns,
             power_reason = power_observation and power_observation.retained and power_observation.reason or nil,
+            power_sessions = GPUPowerSession.public(gpu, snapshot.timestamp_ns, snapshot.quality and snapshot.quality.gpus),
             limits = limit_text,
             -- The channel the figures came from, so a reader can tell a
             -- package power from a rail and an edge sensor from a hot spot.

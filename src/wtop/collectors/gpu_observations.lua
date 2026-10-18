@@ -4,6 +4,7 @@ local NVML = require("wtop.collectors.nvml")
 local AMD = require("wtop.collectors.amdsmi")
 local ZE = require("wtop.collectors.levelzero")
 local ADL = require("wtop.collectors.adl")
+local PowerSession = require("wtop.model.gpu_power_session")
 local M = {}
 M.__index = M
 
@@ -138,6 +139,10 @@ function M:observe(source,data,anchors,now)
   elseif source=="amdsmi" then AMD.merge(devices,lookup,limited,options)
   elseif source=="adl" then ADL.merge(devices,limited,lookup,options)
   else ZE.merge(devices,limited,lookup,options) end
+  local previous=self.sources[source]
+  local old_devices={}
+  for _,record in ipairs(previous and previous.records or {})do old_devices[#old_devices+1]=record.device end
+  PowerSession.attach(devices,old_devices,source,data,now,anchors)
   local state={records={},data={sample_started_ns=data.sample_started_ns,
     sample_finished_ns=data.sample_finished_ns,transport=data.transport},truncated=#data.devices>64}
   local budget={nodes=65536,bytes=1048576}
@@ -154,7 +159,6 @@ function M:observe(source,data,anchors,now)
     state.records[#state.records+1]={device=template,anchor=device.pci_bdf and anchors[device.pci_bdf],
       data=state.data,observed_at_ns=observed(data,now),received_at_ns=now,generation=self.generation}
   end
-  local previous=self.sources[source]
   if previous and (data.status=="partial" or data.truncated) then
     for _,record in ipairs(previous.records) do
       local d=record.device
@@ -170,6 +174,45 @@ function M:observe(source,data,anchors,now)
     end
   end
   self.sources[source]=state
+end
+
+local function same_pci_id(left,right)
+  if left==nil or right==nil then return true end
+  local a,b=tonumber(left),tonumber(right)
+  if a and b then return a==b end
+  return tostring(left):lower()==tostring(right):lower()
+end
+function M:publish_power_sessions(devices,anchors,now)
+  local bdfs,uuids={},{}
+  for _,device in ipairs(devices)do
+    if device.pci_bdf then bdfs[device.pci_bdf]=bdfs[device.pci_bdf]==nil and device or false end
+    if device.vendor_uuid then uuids[device.vendor_uuid]=uuids[device.vendor_uuid]==nil and device or false end
+    device.power_sessions={}
+  end
+  for _,source in ipairs(PowerSession.SOURCES)do
+    for _,record in ipairs(self.sources[source]and self.sources[source].records or {})do
+      local template=record.device;local bdf=template.pci_bdf
+      local anchor=bdf and anchors[bdf]
+      local valid=(record.anchor and record.anchor==anchor)or(record.anchor==nil and anchor==nil)
+      if valid then
+        local pci=bdf and bdfs[bdf]
+        local uuid=template.vendor_uuid and uuids[template.vendor_uuid]
+        local device=pci or uuid
+        if type(device)=="table"and not(pci and uuid and pci~=uuid)then
+          local observation=device.observations and device.observations[source]
+          local contradictory=template.vendor_uuid and device.vendor_uuid and template.vendor_uuid~=device.vendor_uuid
+            or bdf and device.pci_bdf and bdf~=device.pci_bdf
+            or not same_pci_id(template.vendor_id,device.vendor_id)
+            or not same_pci_id(template.device_id,device.device_id)
+          if observation and not contradictory then
+            for _,row in ipairs(PowerSession.rows(template,source,now,observation))do
+              if #device.power_sessions<16 then device.power_sessions[#device.power_sessions+1]=row end
+            end
+          end
+        end
+      end
+    end
+  end
 end
 
 local function stale(device)

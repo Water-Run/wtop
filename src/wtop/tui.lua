@@ -710,6 +710,48 @@ local function power_detail_lines(snapshot, i18n)
         field("power.limit", "Power cap", row.power_limit)
         field("power.of_limit", "% of cap", row.power_usage)
         field("metrics.source", "Source", row.power_budget_source)
+        if #(row.power_sessions or {}) > 0 then
+            lines[#lines + 1] = translated(i18n, "power.api_statistics", "API power statistics")
+            local labels = { power_watts = {"power.reading.reported", "Reported power"},
+                power_instant_watts = {"power.reading.instant", "Instantaneous power"},
+                power_average_watts = {"power.reading.average", "Driver average power"},
+                board_power_watts = {"power.reading.board", "Board power"} }
+            local brands = { nvml = "NVML", amdsmi = "AMD SMI", levelzero = "Level Zero", adl = "AMD ADL" }
+            for _, session in ipairs(row.power_sessions) do
+                local label = labels[session.metric]
+                lines[#lines + 1] = "  " .. brands[session.source] .. " · " .. translated(i18n, label[1], label[2])
+                field("metrics.power", "Power", format_value(session.current_watts, i18n, "watts"))
+                field("sensor.session_range", "Session min / avg / max",
+                    format_value(session.minimum_watts, i18n, "watts") .. " / "
+                    .. format_value(session.average_watts, i18n, "watts") .. " / "
+                    .. format_value(session.maximum_watts, i18n, "watts"))
+                field("power.session_average", "Average method", translated(i18n, "power.session_sampled", "By sample count"))
+                field("power.session_samples", "Accepted readings", session.samples)
+                field("inspector.quality", "Quality", Technical.state(i18n, session.quality))
+                local scopes = { asic={"power.scope.asic","GPU chip (ASIC)"}, card={"power.scope.card","Card"},
+                    package={"power.scope.package","Package"}, stack={"power.scope.stack","Stack"}, memory={"metrics.memory","Memory"} }
+                local scope = scopes[session.scope]
+                field("limits.scope", "Scope", scope and translated(i18n, scope[1], scope[2])
+                    or session.scope == "gpu" and "GPU" or Technical.state(i18n, "unknown"))
+                if ({ current=true, average=true, device_sample=true, driver_snapshot=true })[session.measurement] then
+                    field("power.measurement", "Measurement", translated(i18n, "power.measurement." .. session.measurement, session.measurement))
+                end
+                local basis = session.sample_time_basis == "provider_timestamp"
+                field("metrics.source", "Source", translated(i18n,
+                    basis and "power.sample.provider_timestamp" or "power.sample.query_capture",
+                    basis and "Provider timestamp" or "Query capture time"))
+                if session.minimum_interval_ns then
+                    field("power.interval", "Sample window", format_value(session.minimum_interval_ns / 1e9, i18n, "seconds")
+                        .. " / " .. format_value(session.maximum_interval_ns / 1e9, i18n, "seconds"))
+                end
+                if snapshot.timestamp_ns then
+                    field("power.session_last", "Last accepted reading",
+                        format_value((snapshot.timestamp_ns - session.last_timestamp_ns) / 1e9, i18n, "seconds"))
+                end
+            end
+            lines[#lines + 1] = translated(i18n, "power.api_sample_note", "Statistics summarize accepted API readings.")
+            lines[#lines + 1] = translated(i18n, "power.api_average_note", "Driver averages may overlap; no energy is integrated.")
+        end
     end
     local has_history = false
     for _, row in ipairs(limit_rows) do

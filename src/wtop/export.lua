@@ -7,6 +7,7 @@ local Quality = require("wtop.model.quality")
 local Power = require("wtop.model.power")
 local PowerDomains = require("wtop.model.power_domains")
 local PowerSession = require("wtop.model.power_session")
+local GPUPowerSession = require("wtop.model.gpu_power_session")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
@@ -920,7 +921,7 @@ local function export_gpu_providers(providers)
     return result
 end
 
-local function export_gpus(gpus, quality)
+local function export_gpus(gpus, quality, now_ns)
     local result = json.object({
         schema = gpus and gpus.schema,
         truncated = gpus and gpus.truncated == true or false,
@@ -948,6 +949,7 @@ local function export_gpus(gpus, quality)
         exported.metrics = copy_object(device.metrics)
         exported.observations = export_gpu_observations(device.observations)
         exported.metric_observations = export_gpu_observations(device.metric_observations)
+        exported.power_sessions = json.array(GPUPowerSession.public(device, now_ns, quality))
         exported.performance_limits = export_performance_limits(device.performance_limits, nil, false, quality)
         local power_budget = Power.gpu(device.metrics, nil,
             Power.unusable(device.quality) and device.quality or quality)
@@ -2039,7 +2041,7 @@ function M.snapshot(snapshot, options)
         connections = export_connections(snapshot.connections, options.connection_limit,
             options.include_remote_addresses == true),
         processes = export_processes(snapshot.processes, options.process_limit),
-        gpus = export_gpus(snapshot.gpus, snapshot.quality and snapshot.quality.gpus),
+        gpus = export_gpus(snapshot.gpus, snapshot.quality and snapshot.quality.gpus, snapshot.timestamp_ns),
         cpu_frequency = export_cpu_frequency(snapshot.cpu_frequency),
         thermal_throttle = export_thermal_throttle(snapshot.thermal_throttle),
         cpuidle = export_cpuidle(snapshot.cpuidle),
@@ -2466,6 +2468,7 @@ function M.agent(snapshot, options)
         output.performance_limits = export_performance_limits(device.performance_limits, device_limit, true)
         output.observations = export_gpu_observations(device.observations)
         output.metric_observations = export_gpu_observations(device.metric_observations)
+        output.power_sessions = json.array(GPUPowerSession.public(device, snapshot.timestamp_ns, snapshot.quality and snapshot.quality.gpus))
         output.adl = copy_object(device.adl)
         -- The full clock set, in the same shape the snapshot uses.  This
         -- summary is what an agent or an insight reads, and it is also the

@@ -1944,6 +1944,7 @@ function GPU:sample(context, previous)
 
   local finished = Common.now_ns(context)
   local current = drm_cards > 0 and drm.status == "ok" and not drm.retained
+  self._observations:publish_power_sessions(devices,anchors,finished)
   for _, data in pairs(vendor_data) do current = current or #data.devices > 0 end
   local source_reason, retry = GPUWorker.retry(nvml_reason, amdsmi_reason, levelzero_reason)
   source_reason = source_reason or (drm.status ~= "ok" and drm.reason)

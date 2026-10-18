@@ -196,6 +196,7 @@ function M:sample(context)
     sample_started_ns=self.raw and self.raw.sample_started_ns,
     sample_finished_ns=self.raw and self.raw.sample_finished_ns,transport=self.raw and self.raw.transport}
   data.by_id={};local processes=0
+  self.observations:publish_power_sessions(data.devices,anchors,Common.now_ns(context))
   for _,device in ipairs(data.devices) do
     data.by_id[device.id]=device;processes=processes+#(device.processes and device.processes.list or {})
   end

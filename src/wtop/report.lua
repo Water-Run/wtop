@@ -432,6 +432,25 @@ function M.render(snapshot)
                 device.driver, device.pci_bdf, device.identity_quality }
         end, gpus)
 
+    local gpu_power_sessions = {}
+    for _, device in ipairs(list(gpus.devices)) do
+        for _, session in ipairs(list(device.power_sessions)) do
+            gpu_power_sessions[#gpu_power_sessions + 1] = { device = device, session = session }
+        end
+    end
+    if #gpu_power_sessions > 0 then
+        table_section(lines, "GPU API power statistics",
+            { "GPU", "Source", "Reading", "Scope", "Measurement", "Current", "Minimum", "Average", "Maximum", "Readings", "Quality", "Sample identity" },
+            gpu_power_sessions, function(entry)
+                local s = entry.session
+                return { entry.device.card or entry.device.id, s.source, s.metric, s.scope, s.measurement, quantity(s.current_watts, 1, " W", 2),
+                    quantity(s.minimum_watts, 1, " W", 2), quantity(s.average_watts, 1, " W", 2),
+                    quantity(s.maximum_watts, 1, " W", 2), s.samples, s.quality, s.sample_time_basis }
+            end, gpus)
+        lines[#lines + 1] = "Statistics summarize accepted API readings by sample count; driver averaging windows may overlap. No energy is integrated."
+        lines[#lines + 1] = ""
+    end
+
     local power = object(snapshot.power_supplies)
     local performance_limits, limits_truncated = {}, false
     local function add_limits(owner, limits)

@@ -130,6 +130,26 @@ local gpu_device = { card = "card0", model_name = "NVIDIA GeForce RTX 4090",
     { id = "memory", name = "memory", current_hz = 10500000000, actual_hz = 10500000000,
       minimum_hz = 405000000, maximum_hz = 10500000000, quality = "estimated",
       source_kind = "requested", states = { active = true } } } } }
+local function api_power_session(source, metric, scope, measurement, basis)
+  return { id = source .. ":" .. metric, source = source, metric = metric,
+    scope = scope, measurement = measurement, quality = "fresh", current_watts = 30,
+    minimum_watts = 10, average_watts = 20, maximum_watts = 30, samples = 2,
+    average_kind = "samples", first_timestamp_ns = 0, last_timestamp_ns = 1000000000,
+    observed_at_ns = 1000000000, sample_time_basis = basis,
+    provider_timestamp_us = basis == "provider_timestamp" and 100 or nil,
+    minimum_interval_ns = measurement == "average" and 1000000000 or nil,
+    maximum_interval_ns = measurement == "average" and 2000000000 or nil }
+end
+gpu_device.power_sessions = {
+  api_power_session("nvml", "power_instant_watts", "unspecified", "current", "provider_timestamp"),
+  api_power_session("nvml", "power_average_watts", "unspecified", "average", "provider_timestamp"),
+}
+local gpu_intel_power = { id = "card1", card = "card1", model_name = "Intel GPU",
+  metrics = { power_watts = 30, power_source = "levelzero", power_scope = "card" },
+  power_sessions = { api_power_session("levelzero", "board_power_watts", "card", "average", "query_capture") } }
+local gpu_amd_power = { id = "card2", card = "card2", model_name = "AMD GPU",
+  metrics = { power_watts = 30, power_source = "adl", power_scope = "asic", power_measurement = "driver_snapshot" },
+  power_sessions = { api_power_session("adl", "power_watts", "asic", "driver_snapshot", "query_capture") } }
 local inspector_result = { status = "partial", reason = "gpu_identity_inferred",
   source = "/sys/bus/pci/devices/" .. string.rep("0", 30), issues = { "one", "two" },
   items = { { name = "engine0", value = 42 } },
@@ -219,7 +239,7 @@ local function build(i18n, name)
         enabled = false, controls_enabled = false, power_watts = .04, power_quality = "measured",
         observed_at_ns = 1000000000, power_interval_ns = 1000000000 },
       { id = LONG, name = LONG, source_kind = LONG, power_quality = "denied" },
-    }, denied_zones = 1 }, gpus = { devices = { gpu_device } } }, i18n)
+    }, denied_zones = 1 }, gpus = { devices = { gpu_device, gpu_intel_power, gpu_amd_power } } }, i18n)
   elseif name == "hardware_detail_lines" then
     return TUI.hardware_detail_lines({ inventory = { pci = { devices = {
       { address = "0000:01:00.0", vendor_name = LONG, device_name = LONG,
