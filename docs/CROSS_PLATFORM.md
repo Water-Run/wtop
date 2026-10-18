@@ -629,21 +629,54 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
-### 2026-10-18：RAPL 图形域与逐域计时（验证中）
+### 2026-10-18：RAPL 图形域与逐域计时
 
 Linux intel_rapl 公共驱动将 PP1 命名为 `uncore`，语义为 graphics uncore。
-仅按已核对的驱动命名与父子关系解释域类型，未知后端不按名字推断。图形域
-独立列出，PCI 显卡归属保持未知，不覆盖厂商提供的整卡功耗，不将子域加入
-CPU 包总量，也不把并行 MSR/MMIO 后端相加。GPU 页和功耗详情显示同一数据。
-依据为 [内核 RAPL 类型](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/refs/tags/v6.17/include/linux/intel_rapl.h) 与
+类型只按已核对的驱动、规范 ID、唯一父子关系与域名称解释；未知后端、
+重复身份与不匹配的父节点不作图形域推断。依据为
+[内核 RAPL 类型](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/refs/tags/v6.17/include/linux/intel_rapl.h) 和
 [域命名实现](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/refs/tags/v6.17/drivers/powercap/intel_rapl_common.c)。
 
-能量差值现按各域自己的读取捕获时间计算，较晚的属性不会刷新先前读数；
-陈旧域不作为当前总功耗或占比的依据。夹具复现不同读取延迟下的间隔和
-二十秒慢批次；关闭的域控制不意味着能量计数器停止。实际源码 root 快照
-读到 PP1 约 0.043 W、约 0.825 秒窗口，CPU 包约 20.39 W；普通用户保留
-明确的拒绝状态。完整回归、终端、跨平台与精确包验证仍在推进。
-证据位于 `build/hardware-rapl-graphics-20261018/`。
+GPU 页直接显示独立的 RAPL PP1 图形域读数，多个域只显示数量，不将并行
+MSR/MMIO 来源相加或分配给某块 PCI 显卡。`p` 详情保留原始域 ID、类型、
+窗口、控制状态与来源，图形域另说明 PCI 归属未知。Snapshot、Agent 和
+报告使用相同范围与质量，厂商显卡功耗保持自己的来源与数值。CPU 包总量
+不叠加任何子域。控制关闭仍可保留有效能量读数，缺少有效上限时不生成
+占比。十种语言共 1806 条消息。
+
+能量差值现按各域自己的读取捕获时间计算，直接功率与能量各保留对应时间；
+较晚的属性不会刷新先前读数。陈旧或未知域不作为当前总功耗、当前上限
+占比或图形域数字的依据。来源失败与质量字段冲突时，以失败状态为准。
+一秒错开读取的夹具确认两个域分别使用自己的间隔；二十秒慢批次确认较早
+的读数仍陈旧。相同的比较策略用于概览、详情与导出。
+
+实际源码 root 快照读到 PP1 约 0.043 W、约 0.825 秒窗口，CPU 包约 20.39 W；
+普通用户保留明确的拒绝状态。普通/root 在 80×24、200×60 完成 GPU 摘要、
+功耗详情滚动、范围/控制说明、切到进程页和退出。700 页静默截断检查、
+27 个浮层构建器的十语言完整内容与滚动可达性通过；三台主机各十个共享
+文件通过。没有额外加载 GPU 负载或修改功率限制。
+
+提交 `013bd57` 的 [主 CI](https://github.com/Water-Run/wtop/actions/runs/39080864282) 16 个作业与
+[Windows CI](https://github.com/Water-Run/wtop/actions/runs/39080864278) 两个作业全部通过。
+四类开发归档核对外层、内层摘要与包内内容；Linux、M4、两台 Windows、
+静态归档和 rootless 五项产物验收通过。正式原生检查、Lua 5.5/5.4 各 152
+文件与完整终端矩阵通过，冻结源码在三台主机各十个共享文件通过。
+
+Linux 两种实际包以普通/root 完成八次图形域界面检查及十二项 CLI，同时
+保留八次无线详情、八次健康详情、八次 NVMe 警告与十二次功耗墙检查。
+包内原生模块的 Wi-Fi 固定协议/描述符/阻塞/回收和 NVMe 固定命令/阻塞验证
+通过。rootless 两个 UID 的十项 CLI、四次终端通过，容器回收。M4 与两台
+Windows 两种形态的原有硬件、功耗和导航验收通过。
+
+实际目录包的同一 root 快照中，MSR 包功耗约 25.83 W、持续限制 26 W，
+MMIO 包功耗约 25.90 W、持续限制 20 W。两路各按自己的限制计算，MMIO
+约 129.48% 与负余量照实保留；窗口功耗与限制的比较不替代硬件限制标志。
+该快照的 PP1 约 0.047 W，观察记录与原始快照摘要保存在
+`device-power-observation.json`。
+
+图形域与具体显卡的可信对应、多包/多图形域和旧 RAPL 主机仍缺物理验证。
+完整厂商硬件、XP 与性能预算目标继续开放。证据位于
+`build/hardware-rapl-graphics-20261018/`，范围收据为 `ACCEPTANCE.json`。
 
 ### 2026-10-18：Linux Wi-Fi 原生链路信息
 
