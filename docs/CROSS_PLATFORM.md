@@ -5337,6 +5337,14 @@ CPU 百分比，或用脱离原始采样的相同端点计数生成零占用。�
 复现与逐文件摘要见
 `build/performance-budget-observation-binding-20261019/proof.json`。
 
+提交 `f88ef79` 的本地 `make check`、针对性 Python 回归与 Python 3.6
+语法检查通过。[主 CI 的 16 个作业](https://github.com/Water-Run/wtop/actions/runs/39168459177)
+及 [Windows 的两个作业](https://github.com/Water-Run/wtop/actions/runs/39168459183)
+全部成功，包含两个 Linux 架构的下载后完整验证。运行时代码、原生后端、
+语言资源、Makefile 和版本文件共 309 个文件与已验收的 CTA 源码逐字节一致；
+本轮不重复既有手动硬件产物门禁，也不增加物理平台覆盖声明。验收收据为
+`build/performance-budget-observation-binding-20261019/ACCEPTANCE.json`。
+
 ### 2026-10-19：cgroup 目录元数据候选尚未合入
 
 在本机 i7-13620H 上，以普通用户运行源码程序，特权观察器记录进程族，
@@ -5364,6 +5372,17 @@ cgroup 采集，Processes 包含两次，单次约消耗 0.1 秒 CPU；后台周
 10 秒。这说明短窗对采集次数敏感，不能证明此前 ABBA 变体间的次数不同，
 也未解释全部波动。八次首帧诊断均没有在第一次显示前运行 cgroup 采集。
 完整目标和最低硬件的资源预算仍未验收；候选试验不作为发布性能承诺。
+
+### 2026-10-19：本机当前功耗墙观察
+
+用此前已验收的 Linux 单文件包在本机以 root 采集三个连续快照。最后一份
+选择的 RAPL CPU 封装功耗为约 18.80 W，来自约 1.61 秒的能量差值窗口；
+当时生效的 PL1、PL2 均为 26 W，占比约 72.30%，余量约 7.20 W。
+最大功率属性另报 45 W，不作为当时的功耗墙。核心域约 13.50 W、图形域
+约 0.046 W 是分项，不与封装重复相加，也不当作整机功耗。占比不等于
+限频触发状态。筛选后的读数与来源摘要见
+`build/performance-budget-observation-binding-20261019/power-public.json`；
+这是已有功能的当次实机观察，不是新功能或新的性能预算验收。
 
 ### 2026-10-11：源码与 onedir 同机短基准
 
