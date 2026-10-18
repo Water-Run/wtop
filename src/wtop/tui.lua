@@ -2689,14 +2689,34 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
             add("display.os_present", "Present in OS device list", device.os_present)
             lines[#lines + 1] = translated(i18n, "display.os_note",
                 "OS presence does not establish a physical connection or an active desktop mode.")
+        elseif device.backend == "coregraphics" then
+            add("display.online", "Online OS display", device.online)
+            add("display.active", "Drawable", device.active)
+            add("display.asleep", "Asleep", device.asleep)
+            add("display.builtin", "Built-in", device.builtin)
+            add("display.main", "Main display", device.main)
+            add("display.os_vendor", "OS vendor number", hardware_hex(device.vendor_number, 8))
+            add("display.os_model", "OS model number", hardware_hex(device.model_number, 8))
+            add("display.current_mode", "Current mode status", Technical.state(i18n, device.current_mode_status))
+            local mode = device.current_mode
+            if type(mode) == "table" then
+                add("display.mode_points", "Mode size (points)", tostring(mode.width_points) .. " x " .. tostring(mode.height_points))
+                add("display.mode_pixels", "Backing size (pixels)", tostring(mode.pixel_width) .. " x " .. tostring(mode.pixel_height))
+                add("display.nominal_refresh", "Nominal mode refresh", mode.refresh_hz, "hertz")
+            end
+            lines[#lines + 1] = translated(i18n, "display.coregraphics_note",
+                "OS displays can be virtual. Refresh is nominal, not measured; physical size, color depth and HDR are not determined.")
         else
             add("display.connection", "Connection", Technical.state(i18n, device.connection))
             add("display.enabled", "Encoder enabled", device.enabled)
             add("display.dpms", "Driver DPMS", device.dpms)
             add("display.connector_id", "DRM connector ID", device.connector_id)
         end
-        add("display.edid_status", "Cached EDID status", Technical.state(i18n, device.edid_status))
-        add("inspector.quality", "Quality", Technical.state(i18n, device.quality))
+        if device.backend ~= "coregraphics" then
+            add("display.edid_status", "Cached EDID status", Technical.state(i18n, device.edid_status))
+        end
+        add("inspector.quality", "Quality", Technical.state(i18n,
+            Quality.current_source(snapshot.quality, "displays") and device.quality or "stale"))
         if device.reason then add("inspector.reason", "Reason", Technical.reason(i18n, device.reason)) end
         if device.edid_reason then add("inspector.reason", "Reason", Technical.reason(i18n, device.edid_reason)) end
         if type(now_ns) == "number" and type(device.observed_at_ns) == "number" then
@@ -2731,8 +2751,10 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         end
         add_list("display.modes", "Driver mode names", device.modes or {})
         if device.modes_truncated then add("inspector.quality", "Quality", Technical.state(i18n, "truncated")) end
-        lines[#lines + 1] = translated(i18n, "display.note",
-            "Cached declarations, not active resolution, refresh, color depth or HDR. Interlaced lines are not expanded; extensions are not decoded.")
+        if device.backend ~= "coregraphics" then
+            lines[#lines + 1] = translated(i18n, "display.note",
+                "Cached declarations, not active resolution, refresh, color depth or HDR. Interlaced lines are not expanded; extensions are not decoded.")
+        end
     elseif node.kind == "numa" then
         add("widgets.logical_cpus", "Logical CPUs", device.cpu_ids and #device.cpu_ids)
     end

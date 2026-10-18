@@ -39,7 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Native hardware collector regressions
-        run: make test-native-inventory test-native-disk test-native-network test-native-smc test-native-hid test-native-gpu test-native-ioreport test-native-cpu test-native-worker test-native-terminal-signals
+        run: make test-native-inventory test-native-disk test-native-network test-native-displays test-native-smc test-native-hid test-native-gpu test-native-ioreport test-native-cpu test-native-worker test-native-terminal-signals
       - name: Native build, both bundles, CLI, PTY and deployment floors
         run: make test-bundles
       - name: Archive the complete development packages

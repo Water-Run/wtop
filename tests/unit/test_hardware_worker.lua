@@ -203,8 +203,9 @@ assert(cleanup.first and cleanup.second,"one failed input cleanup prevented anot
 -- without calling a synchronous native API on pending/error paths.
 local Portable = require("wtop.collectors.portable")
 local slots, portable_closes, pending_energy = {}, 0, false
-local transport = {available=true,hardware_worker_sources={powercap=true,cpufreq=true,gpu=true,hwmon=true,network=true}}
-for _,id in ipairs({"powercap","cpufreq","gpu","hwmon","network"}) do
+local portable_names = {"powercap","cpufreq","gpu","hwmon","network","displays"}
+local transport = {available=true,hardware_worker_sources={powercap=true,cpufreq=true,gpu=true,hwmon=true,network=true,displays=true}}
+for _,id in ipairs(portable_names) do
     transport["collect_"..id]=function() error("parent entered a synchronous hardware API") end
 end
 transport.hardware_worker_open=function(id,configuration)
@@ -222,7 +223,7 @@ transport.hardware_worker_close=function(slot,wait)
     assert(wait==0 and slots[slot.id]==slot);portable_closes=portable_closes+1
 end
 local portable_readers={};now=100
-for _,id in ipairs({"powercap","cpufreq","gpu","hwmon","network"}) do
+for _,id in ipairs(portable_names) do
     local collector=Portable.new(id,{native=transport});portable_readers[id]=collector
     assert(collector:probe(context).available)
     local result=collector:sample(context)
@@ -233,7 +234,7 @@ assert(portable_readers.powercap:sample(context).sampling_pending)
 assert(portable_readers.cpufreq:sample(context).data.source=="cpufreq")
 assert(portable_readers.gpu:sample(context).data.source=="gpu")
 for _,collector in pairs(portable_readers) do collector:close() end
-assert(portable_closes==5)
+assert(portable_closes==6)
 local direct_calls=0
 local direct=Portable.new("powercap",{native={collect_powercap=function()
     direct_calls=direct_calls+1;return {zones={}}

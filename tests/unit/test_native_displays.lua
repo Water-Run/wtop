@@ -158,4 +158,109 @@ for _, locale in ipairs({ "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "fr-FR", 
   assert(text:find("FixturePanel", 1, true) and text:find(i18n:t("display.os_note"), 1, true))
   assert(not text:find("DRM", 1, true) and not text:find("PRIVATE", 1, true))
 end
+
+-- CoreGraphics OS displays are not EDID declarations. Points and backing
+-- pixels remain distinct, and nominal Hz is never a measured refresh rate.
+local function mac_sample(overrides)
+  local raw = { id = "monitor0", _identity_verified = true, observed_at_ns = 999,
+    quality = "fresh", _display_identity = string.rep("a", 32), online = true,
+    active = true, asleep = false, builtin = false, main = true,
+    vendor_number = 1970170734, model_number = 1986622068,
+    current_mode_status = "ok", current_mode = { width_points = 1920, height_points = 1080,
+      pixel_width = 3840, pixel_height = 2160, refresh_hz = 59.94,
+      _serial = "PRIVATE-MODE-SERIAL" }, _serial = "PRIVATE-MAC-SERIAL",
+    width_mm = 677, _edid = Fixtures.edid() }
+  for k, v in pairs(overrides or {}) do raw[k] = v end
+  return { backend = "coregraphics", status = "ok", quality = "fresh", total = 1,
+    total_is_lower_bound = false, truncated = false, devices = { raw } }
+end
+local mac_result = NativeDisplays.result(mac_sample(), 1000)
+assert(mac_result.status == "ok" and mac_result.quality == "fresh" and mac_result.capability.available)
+local mac = mac_result.data.devices[1]
+assert(mac.backend == "coregraphics" and mac.os_present and mac.connection == "unknown")
+assert(mac.online and mac.active and not mac.asleep and not mac.builtin and mac.main)
+assert(mac.enabled == nil and mac.dpms == nil and mac.edid == nil and mac.width_mm == nil)
+assert(mac.vendor_number == 1970170734 and mac.model_number == 1986622068)
+assert(mac.current_mode.width_points == 1920 and mac.current_mode.pixel_width == 3840)
+assert(mac.current_mode.refresh_hz == 59.94 and mac.current_mode.refresh_kind == "nominal")
+assert(not Wire.encode(mac_result):find("PRIVATE", 1, true), "unknown native/EDID data crossed the normalization boundary")
+for _, field in ipairs({ "active", "asleep", "builtin", "main" }) do
+  local raw = mac_sample();raw.devices[1][field] = nil
+  assert(NativeDisplays.result(raw, 1000).data.devices[1].quality == "gap")
+end
+for _, bad in ipairs({ { _identity_verified = false }, { observed_at_ns = 1001 },
+    { online = false }, { _display_identity = "invalid" }, { quality = "stale" } }) do
+  local r = NativeDisplays.result(mac_sample(bad), 1000).data.devices[1]
+  assert(r.quality == "gap" and r.current_mode == nil and r.online == nil)
+end
+for _, field in ipairs({ "width_points", "height_points", "pixel_width", "pixel_height", "refresh_hz" }) do
+  for _, value in ipairs({ -1, 0 / 0, math.huge, "1920" }) do
+    local raw = mac_sample();raw.devices[1].current_mode[field] = value
+    local r = NativeDisplays.result(raw, 1000).data.devices[1]
+    assert(r.quality == "partial" and r.current_mode == nil and r.online
+      and r.reason == "display_current_mode_unavailable")
+  end
+end
+local unspecified = mac_sample();unspecified.devices[1].current_mode.refresh_hz = 0
+local unspecified_mode = NativeDisplays.result(unspecified, 1000).data.devices[1].current_mode
+assert(unspecified_mode.refresh_hz == nil and unspecified_mode.refresh_kind == "nominal")
+local missing = NativeDisplays.result(mac_sample({ current_mode = false, current_mode_status = "unavailable" }), 1000)
+assert(missing.data.devices[1].online and missing.data.devices[1].current_mode_status == "unavailable")
+assert(missing.quality == "partial")
+local duplicate_mac = mac_sample();duplicate_mac.devices[2] = mac_sample({ id = "monitor1" }).devices[1]
+local duplicates = NativeDisplays.result(duplicate_mac, 1000)
+assert(duplicates.data.devices[1].quality == "gap" and duplicates.data.devices[2].quality == "gap")
+local mac_state = {}
+local function mac_publication(keys, now, partial)
+  local input = mac_sample();input.devices = {};input.total = #keys
+  input.total_is_lower_bound = partial or false
+  for i, key in ipairs(keys) do
+    input.devices[i] = mac_sample({ id = "monitor" .. i, _display_identity = string.rep(key, 32) }).devices[1]
+  end
+  return NativeDisplays.publish(NativeDisplays.result(input, now), mac_state)
+end
+local mac_first = mac_publication({ "a", "b" }, 1200)
+local mac_a, mac_b = mac_first.data.devices[1].id, mac_first.data.devices[2].id
+assert(mac_first.data.devices[1]._display_identity == nil and mac_first.data.identity_session)
+local mac_reordered = mac_publication({ "b", "a" }, 1300)
+assert(mac_reordered.data.devices[1].id == mac_b and mac_reordered.data.devices[2].id == mac_a)
+mac_publication({ "b" }, 1400, true)
+assert(mac_publication({ "a", "b" }, 1500).data.devices[1].id == mac_a)
+mac_publication({ "b" }, 1600)
+assert(mac_publication({ "a", "b" }, 1700).data.devices[1].id ~= mac_a)
+local empty_mac = { backend = "coregraphics", status = "unavailable", quality = "fresh", devices = {}, total = 0 }
+local empty_result = NativeDisplays.result(empty_mac, 1800)
+assert(empty_result.status == "unavailable" and empty_result.reason == "no_macos_displays")
+NativeDisplays.publish(empty_result, mac_state)
+assert(mac_publication({ "b" }, 1900).data.devices[1].id ~= mac_b)
+empty_mac.quality = "partial"
+assert(NativeDisplays.result(empty_mac, 2000).status == "error", "a racing empty enumeration retired known identities")
+for _, status in ipairs({ "denied", "error" }) do
+  local raw = mac_sample();raw.status = status;raw.devices = {};raw.total = 0
+  assert(NativeDisplays.result(raw, 1000).status == status)
+end
+local mac_snapshot = Snapshot.merge(Snapshot.new(0, 0), { displays = mac_first }, 1, 1200)
+local mac_graph = Hardware.build(mac_snapshot)
+local mac_node = assert(mac_graph.by_id["display:" .. mac_first.data.devices[1].id])
+assert(mac_node.parent_id == nil, "a CoreGraphics display was attached to a guessed GPU")
+local mac_full, mac_agent = Export.snapshot(mac_snapshot), Export.agent(mac_snapshot)
+local mac_export = mac_full.displays.devices[1]
+assert(mac_export.current_mode.pixel_width == 3840 and mac_export.current_mode.refresh_kind == "nominal")
+assert(mac_agent.metrics.displays.devices[1].online and mac_agent.metrics.displays.devices[1].current_mode.height_points == 1080)
+assert(not JSON.encode(mac_full):find(string.rep("a", 32), 1, true)
+  and not JSON.encode(mac_agent):find("_display_identity", 1, true))
+local mac_report = Report.render(mac_full)
+assert(mac_report:find("Current display modes", 1, true) and mac_report:find("59.940 Hz", 1, true)
+  and not mac_report:find("Windows display IDs", 1, true))
+mac_snapshot.quality.displays = { status = "error", quality = "stale" }
+local stale_mode = Export.snapshot(mac_snapshot).displays.devices[1]
+assert(stale_mode.quality == "stale" and stale_mode.current_mode.quality == "stale")
+mac_snapshot.quality.displays = nil
+for _, locale in ipairs({ "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "fr-FR", "de-DE", "es-ES", "pt-BR", "ru-RU" }) do
+  local i18n = assert(I18n.new({ locale = locale }))
+  local detail = table.concat(TUI.hardware_detail_lines(mac_snapshot, mac_node.id, i18n, 1300), "\n")
+  assert(i18n:has("display.nominal_refresh") and detail:find(i18n:t("display.coregraphics_note"), 1, true))
+  assert(detail:find("1920 x 1080", 1, true) and detail:find("3840 x 2160", 1, true))
+  assert(not detail:find("DRM", 1, true) and not detail:find("EDID", 1, true) and not detail:find("PRIVATE", 1, true))
+end
 return true

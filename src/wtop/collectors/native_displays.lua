@@ -11,7 +11,7 @@ local function integer(value, maximum)
     and value >= 0 and value <= maximum and value or nil
 end
 
-function M.result(input, now)
+local function setupapi_result(input, now)
   local source = "native:collect_displays"
   if type(input) ~= "table" or input.backend ~= "setupapi"
       or type(input.devices) ~= "table" then
@@ -106,7 +106,101 @@ function M.result(input, now)
   return result
 end
 
--- The reader is stateless; the parent owns continuity. Private PnP identities
+local function coregraphics_result(input, now)
+  local source = "native:collect_displays"
+  local function failure(status, reason)
+    local result = Common.result(status, now, nil, { source = source, reason = reason })
+    result.capability = status == "denied" and Capability.denied(reason, { source = source })
+      or status == "unavailable" and Capability.unavailable(reason, { source = source })
+      or Capability.error(reason, { source = source })
+    return result
+  end
+  if type(input.devices) ~= "table" then return failure("error", "display_native_data_invalid") end
+  if input.status == "unavailable" then
+    if #input.devices ~= 0 or input.total ~= 0 or input.truncated == true
+        or input.total_is_lower_bound == true or input.quality ~= "fresh" then
+      return failure("error", "display_native_data_invalid")
+    end
+    return failure("unavailable", "no_macos_displays")
+  end
+  if input.status == "denied" then return failure("denied", "display_inventory_denied") end
+  if input.status == "error" then return failure("error", "display_inventory_incomplete") end
+  if input.status ~= "ok" or #input.devices == 0 then return failure("error", "display_native_data_invalid") end
+  local data = { devices = {}, source = "CoreGraphics:online/current-mode",
+    total = integer(input.total, 2147483647) or #input.devices,
+    total_is_lower_bound = input.total_is_lower_bound == true,
+    truncated = input.truncated == true or #input.devices > MAX_DEVICES }
+  local seen, counts, identities, partial = {}, {}, {}, input.quality == "partial"
+  for index = 1, math.min(#input.devices, MAX_DEVICES) do
+    local r = input.devices[index]
+    if type(r) == "table" then
+      if type(r.id) == "string" then counts[r.id] = (counts[r.id] or 0) + 1 end
+      if type(r._display_identity) == "string" then
+        local key = r._display_identity:lower()
+        identities[key] = (identities[key] or 0) + 1
+      end
+    end
+  end
+  for index = 1, math.min(#input.devices, MAX_DEVICES) do
+    local raw = input.devices[index]
+    local id = type(raw) == "table" and type(raw.id) == "string" and raw.id:match("^monitor%d+$")
+    if id and #id <= 32 and not seen[id] then
+      seen[id] = true
+      local row = { id = id, backend = "coregraphics", source = data.source, modes = {} }
+      local observed = integer(raw.observed_at_ns, math.maxinteger)
+      local key = type(raw._display_identity) == "string" and raw._display_identity:lower()
+      local valid = raw._identity_verified == true and counts[id] == 1 and observed and observed > 0 and observed <= now
+        and key and #key == 32 and key:match("^[0-9a-f]+$") and not key:match("^0+$") and identities[key] == 1
+        and (raw.quality == "fresh" or raw.quality == "partial") and raw.online == true
+        and type(raw.active) == "boolean" and type(raw.asleep) == "boolean"
+        and type(raw.builtin) == "boolean" and type(raw.main) == "boolean"
+      if valid then
+        row._display_identity, row.identity_scope = key, "session"
+        row.observed_at_ns, row.quality = observed, raw.quality
+        row.os_present, row.connection = true, "unknown"
+        row.online, row.active, row.asleep, row.builtin, row.main = true, raw.active, raw.asleep, raw.builtin, raw.main
+        row.vendor_number, row.model_number = integer(raw.vendor_number, 0xffffffff), integer(raw.model_number, 0xffffffff)
+        local m = raw.current_mode
+        local refresh = type(m) == "table" and m.refresh_hz or nil
+        local mode_valid = raw.current_mode_status == "ok" and type(m) == "table"
+          and integer(m.width_points, 2147483647) and m.width_points > 0
+          and integer(m.height_points, 2147483647) and m.height_points > 0
+          and integer(m.pixel_width, 2147483647) and m.pixel_width > 0
+          and integer(m.pixel_height, 2147483647) and m.pixel_height > 0
+          and (refresh == nil or type(refresh) == "number" and refresh >= 0 and refresh <= 10000)
+        if mode_valid then
+          row.current_mode_status = "ok"
+          row.current_mode = { width_points = m.width_points, height_points = m.height_points,
+            pixel_width = m.pixel_width, pixel_height = m.pixel_height, refresh_kind = "nominal" }
+          if refresh and refresh > 0 then row.current_mode.refresh_hz = refresh end
+        else
+          row.current_mode_status = raw.current_mode_status == "unavailable" and "unavailable" or "error"
+          row.quality = "partial"
+          row.reason = "display_current_mode_unavailable"
+        end
+      else
+        row.quality, row.current_mode_status = "gap", "gap"
+        row.reason = raw.reason == "display_identity_unavailable" and raw.reason or "display_changed_during_read"
+      end
+      if row.quality ~= "fresh" then partial = true end
+      data.devices[#data.devices + 1] = row
+    else partial = true end
+  end
+  if #data.devices < #input.devices then data.truncated = true end
+  data.total = math.max(data.total, #input.devices)
+  local quality = partial and "partial" or data.truncated and "truncated" or "fresh"
+  local reason = partial and "display_inventory_incomplete" or data.truncated and "device_enumeration_truncated" or nil
+  local result = Common.result("ok", now, data, { source = source, quality = quality, reason = reason })
+  result.capability = Capability.available({ source = source })
+  return result
+end
+
+function M.result(input, now)
+  if type(input) == "table" and input.backend == "coregraphics" then return coregraphics_result(input, now) end
+  return setupapi_result(input, now)
+end
+
+-- The reader is stateless; the parent owns continuity. Private OS identities
 -- become opaque IDs for this sampling session, so enumeration order cannot
 -- rebind a selected device. Complete disappearance retires the old identity.
 function M.publish(result, state)
@@ -115,15 +209,17 @@ function M.publish(result, state)
   local now = result.timestamp_ns
   if state.last_ns and now < state.last_ns then state.entries = {} end
   state.last_ns = now
-  if result.status == "unavailable" and result.reason == "no_windows_displays" then
+  if result.status == "unavailable" and (result.reason == "no_windows_displays" or result.reason == "no_macos_displays") then
     state.entries = {}
     return result
   end
   local data = result.data
   if result.status ~= "ok" or type(data) ~= "table" then return result end
-  local setupapi = false
-  for _, row in ipairs(data.devices or {}) do if row.backend == "setupapi" then setupapi = true break end end
-  if not setupapi then return result end
+  local native = false
+  for _, row in ipairs(data.devices or {}) do
+    if row.backend == "setupapi" or row.backend == "coregraphics" then native = true break end
+  end
+  if not native then return result end
   if not state.session then
     local ok, pid = pcall(require("wtop.native").pid)
     state.session = tostring(ok and pid or 0) .. ":" .. tostring(now)
@@ -132,10 +228,11 @@ function M.publish(result, state)
   local complete = not data.truncated and not data.total_is_lower_bound and data.total == #(data.devices or {})
   local seen = {}
   for _, row in ipairs(data.devices or {}) do
-    local key = row._pnp_instance_id
-    row._pnp_instance_id = nil
+    local key = row.backend == "coregraphics" and row._display_identity or row._pnp_instance_id
+    row._pnp_instance_id, row._display_identity = nil, nil
     if type(key) == "string" and row.quality ~= "gap" then
       key = key:gsub("[a-z]", function(c) return string.char(c:byte() - 32) end)
+      key = row.backend .. ":" .. key
       local identity = state.entries[key]
       if not identity then
         identity = { id = "monitor" .. state.next_id }

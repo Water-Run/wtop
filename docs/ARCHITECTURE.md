@@ -29,6 +29,9 @@ Linux /proc · /sys / macOS / Windows native APIs
 Linux 显示连接器由独立的 `displays` 读取进程取得缓存 sysfs 属性与 EDID；
 一次回复后释放进程。Windows 的 SetupAPI 显示清单也在独立读取器中获取；
 父进程以私有 PnP 身份维护有界会话 ID，防止枚举重排或替换重定向设备详情。
+macOS 的第六个读取器使用 CoreGraphics 在线显示清单和当前模式；私有系统
+身份在父进程转换为会话 ID。读取前后核对身份、状态、模式和清单；变化的
+记录不携带旧模式。所有 CF 对象在 Lua 输出分配前释放，进程隔离限制阻塞。
 共享 EDID 解析器只输出公开基础块声明，序列号原值与
 原始块不进入 Snapshot、Agent 或界面。连接器与 PCI 的关系使用稳定读取的
 内核设备链接，读取期间变化的状态不用于关联。

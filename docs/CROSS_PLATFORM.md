@@ -629,6 +629,35 @@ Windows 11 和 Server 2008 的默认入口均启动三个不同 PID，保留八/
 旧 Intel Mac 和未提供的厂商功耗硬件仍未
 新增实测证据。
 
+### 2026-10-19：macOS 在线显示设备与当前模式
+
+macOS 的 `displays` 原生来源读取 CoreGraphics 在线显示清单和当前模式，
+作为第六个独立读取器追加，保留原有来源编号。两次读取核对系统身份、
+在线与可绘制状态、模式参数及枚举清单；发生变化时不发布旧模式，清单
+未稳定时不据此退休其他会话身份。所有 CF UUID/模式对象在 Lua 输出分配
+前释放；原始 UUID 不进入 Snapshot、Agent、报告或界面。
+
+模式点数和背后像素尺寸分别提供。刷新率只表示当前模式的名义值，零值
+保持未指定；不从系统尺寸接口推断物理面板大小，也不解释 32 位系统厂商
+与型号编号为 EDID EISA 代码。当前模式字段遵循原有过期质量，系统显示
+设备可能是虚拟设备，色深、HDR、实际面板刷新率和 GPU 归属仍未确定。
+
+候选在 M4 实机读取一个 1920×1080、名义 60 Hz 的在线可绘制系统显示设备，
+三种 CLI 的十三项公开字段与前后独立 CoreGraphics 读取一致。八个流式快照
+覆盖两次观察和读取器退出，保留同一会话 ID。真实终端覆盖 80×24、200×60
+英文、80×24 中文和 100×30 ASCII，详情、滚动、进程页及退出通过。
+实机核对发现 Mach 绝对时钟与进程帧时钟存在约 47 秒偏移，已统一为
+`CLOCK_MONOTONIC`，并核对每条观察位于其进程采样范围内。
+
+生产采集代码的 API 夹具覆盖重排、替换、模式/状态变化、读取间新增或消失、
+重复、容量、错误、Retina 和未指定刷新率，以及 Lua OOM 前 CF 对象已释放。
+六读取器的功耗、传感器、网络与显示挂起路径、独立恢复、回收及三次独立
+VM 退出通过。完整源码、CI 与精确包验收仍在进行；证据位于
+`build/hardware-macos-displays-20261019/`。API 语义参考 Apple 的
+[显示状态与当前模式](https://developer.apple.com/library/archive/documentation/GraphicsImaging/Conceptual/QuartzDisplayServicesConceptual/Articles/DisplayInfo.html)
+和所用 SDK 的 `CGDirectDisplay.h`、`CGDisplayConfiguration.h`、`ColorSyncDevice.h`。
+物理热插拔、多显示器真机、旧 Intel Mac、EDID 扩展和资源预算仍需继续验证。
+
 ### 2026-10-19：Windows 原生显示清单与会话身份
 
 提交 `21c7a50` 的 [主 CI](https://github.com/Water-Run/wtop/actions/runs/39143263087)

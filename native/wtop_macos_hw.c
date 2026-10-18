@@ -523,6 +523,7 @@ static const luaL_Reg hardware_functions[] = {
     {"collect_connections", l_collect_connections},
     {"collect_cgroup", l_collect_cgroup},
     {"collect_inventory", wtop_collect_inventory},
+    {"collect_displays", wtop_collect_displays},
     {NULL, NULL},
 };
 

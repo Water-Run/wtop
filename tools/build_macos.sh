@@ -53,6 +53,7 @@ set -- "$project_dir/native/wtop_macos.c" \
     "$project_dir/native/wtop_macos_inventory.c" \
     "$project_dir/native/wtop_macos_disk.c" \
     "$project_dir/native/wtop_macos_net.c" \
+    "$project_dir/native/wtop_macos_displays.c" \
     "$project_dir/native/wtop_macos_smc.c" \
     "$project_dir/native/wtop_macos_sensors.c"
 "$project_dir/.tools/lua-5.5.1/bin/lua" "$project_dir/tools/embed_hardware_lua.lua" \
@@ -62,7 +63,7 @@ cc -std=c17 -O2 -Wall -Wextra -Werror -pthread \
     -I"$work_dir/lua-5.5.1/src" -I"$work_dir" -I"$project_dir/build/native" \
     -o "$work_dir/wtop_hardware_worker" "$project_dir/native/wtop_hardware_worker.c" \
     "$@" "$work_dir/lua-5.5.1/src/liblua.a" \
-    -framework IOKit -framework CoreFoundation
+    -framework IOKit -framework CoreFoundation -framework CoreGraphics -framework ColorSync
 sh "$project_dir/tools/embed_gpu_worker.sh" "$work_dir/wtop_hardware_worker" \
     "$work_dir/wtop_hardware_worker_image.h" wtop_hardware_worker_image
 cc -std=c17 -O2 -Wall -Wextra -Werror -pthread \
@@ -70,7 +71,7 @@ cc -std=c17 -O2 -Wall -Wextra -Werror -pthread \
     -install_name @rpath/wtop_native.so \
     -I"$work_dir/lua-5.5.1/src" -I"$work_dir" -I"$project_dir/build/native" \
     -o "$output_dir/wtop_native.so" "$@" "$project_dir/native/wtop_worker_client.c" \
-    -framework IOKit -framework CoreFoundation
+    -framework IOKit -framework CoreFoundation -framework CoreGraphics -framework ColorSync
 cp "$work_dir/lua-5.5.1/src/lua" "$output_dir/lua"
 cp -R "$project_dir/src" "$output_dir/"
 cat > "$output_dir/wtop" <<'EOF'

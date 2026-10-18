@@ -1990,8 +1990,14 @@ local function export_displays(source, limit, state)
         local device = devices[index]
         local row = copy_fields(device, { "id", "card", "connector", "connector_id", "connection", "backend", "os_present", "driver", "win32_error", "identity_scope",
             "enabled", "dpms", "pci_address", "source", "status", "quality", "reason",
-            "edid_status", "edid_reason", "observed_at_ns", "modes_status", "modes_truncated" })
+            "edid_status", "edid_reason", "observed_at_ns", "modes_status", "modes_truncated",
+            "online", "active", "asleep", "builtin", "main", "vendor_number", "model_number", "current_mode_status" })
         if not current then row.quality = "stale" end
+        if type(device.current_mode) == "table" then
+            row.current_mode = copy_fields(device.current_mode, { "width_points", "height_points",
+                "pixel_width", "pixel_height", "refresh_hz", "refresh_kind" })
+            row.current_mode.quality = current and device.quality or "stale"
+        end
         row.modes = json.array({})
         for position, mode in ipairs(device.modes or {}) do
             if position > 128 then row.modes_truncated = true break end

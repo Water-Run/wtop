@@ -850,8 +850,15 @@ function M.render(snapshot)
         displays.devices, function(device)
             return { device.id, device.connection, device.os_present, device.enabled, device.dpms, device.pci_address, device.quality }
         end, displays)
-    local display_specs, display_timings = {}, {}
+    local display_specs, display_timings, display_modes, os_displays = {}, {}, {}, {}
+    local windows_displays, cached_displays = false, false
     for _, device in ipairs(list(displays.devices)) do
+        if device.backend == "setupapi" then windows_displays = true end
+        if device.backend ~= "coregraphics" then cached_displays = true end
+        if device.backend == "coregraphics" then os_displays[#os_displays + 1] = device end
+        if type(device.current_mode) == "table" then
+            display_modes[#display_modes + 1] = { device = device.id, mode = device.current_mode }
+        end
         if type(device.edid) == "table" then
             display_specs[#display_specs + 1] = { device = device.id, edid = device.edid }
             for _, value in ipairs(list(device.edid.detailed_timings)) do
@@ -873,10 +880,24 @@ function M.render(snapshot)
                 quantity(t.pixel_clock_hz, 1e6, " MHz", 3), quantity(t.refresh_hz, 1, " Hz", 3),
                 t.interlaced, t.preferred }
         end, displays)
-    if #list(displays.devices) > 0 then
+    table_section(lines, "OS display state", { "Display", "Online", "Drawable", "Asleep", "Built-in", "Main", "OS vendor number", "OS model number", "Mode status", "Quality" },
+        os_displays, function(d)
+            return { d.id, d.online, d.active, d.asleep, d.builtin, d.main, d.vendor_number, d.model_number, d.current_mode_status, d.quality }
+        end, displays)
+    table_section(lines, "Current display modes", { "Display", "Width (points)", "Height (points)", "Backing width (pixels)", "Backing height (pixels)", "Nominal refresh", "Quality" },
+        display_modes, function(item)
+            local m = item.mode
+            return { item.device, m.width_points, m.height_points, m.pixel_width, m.pixel_height,
+                quantity(m.refresh_hz, 1, " Hz", 3), m.quality }
+        end, displays)
+    if #os_displays > 0 then
+        lines[#lines + 1] = "CoreGraphics describes OS displays, including virtual displays. Refresh is nominal, not measured; zero means unspecified and is omitted. Physical size, color depth and HDR are not determined. Display IDs apply only within this sampling session."
+        lines[#lines + 1] = ""
+    end
+    if cached_displays then
         lines[#lines + 1] = "Cached EDID declarations and driver mode names are not the active resolution, refresh rate, color depth or HDR state. Interlaced timings retain encoded lines; extensions are not decoded. Serial values are omitted."
         lines[#lines + 1] = ""
-        if displays.identity_session then
+        if windows_displays and displays.identity_session then
             lines[#lines + 1] = "Windows display IDs identify devices within this sampling session. OS presence does not establish a physical connection or an active desktop mode."
             lines[#lines + 1] = ""
         end

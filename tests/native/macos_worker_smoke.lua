@@ -3,9 +3,9 @@ package.path=root.."/src/?.lua;"..root.."/src/?/init.lua;"..package.path
 local Native=require("wtop.native")
 local Wire=require("wtop.core.worker_wire")
 local Json=require("wtop.format.json")
-local names={"cpufreq","powercap","gpu","hwmon","network"}
+local names={"cpufreq","powercap","gpu","hwmon","network","displays"}
 local suspended=arg[2]or "powercap"
-assert(suspended=="powercap"or suspended=="hwmon"or suspended=="network")
+assert(suspended=="powercap"or suspended=="hwmon"or suspended=="network"or suspended=="displays")
 local sessions,pids,counts={},{},{}
 local function emit(value)print(Json.encode(value));io.stdout:flush()end
 local function now()return Native.monotonic_ns()end
@@ -18,6 +18,15 @@ local function query(id)
     assert(metadata.sample_started_ns<=decoded.result.timestamp_ns
         and decoded.result.timestamp_ns<=metadata.sample_finished_ns
         and metadata.sample_finished_ns<=now())
+    if id=="displays" and decoded.result.data then
+        for _,device in ipairs(decoded.result.data.devices or {})do
+            if device.observed_at_ns then
+                assert(metadata.sample_started_ns<=device.observed_at_ns
+                    and device.observed_at_ns<=metadata.sample_finished_ns,
+                    "display observation is outside its process frame clock")
+            end
+        end
+    end
     pids[id]=metadata.worker_pid;counts[id]=(counts[id]or 0)+1
     return decoded,metadata
 end
@@ -29,8 +38,8 @@ local deadline=now()+4e9
 repeat
     for _,id in ipairs(names)do if not pids[id]then query(id)end end
     Native.sleep_ms(10)
-until (pids.cpufreq and pids.powercap and pids.gpu and pids.hwmon and pids.network)or now()>deadline
-assert(pids.cpufreq and pids.powercap and pids.gpu and pids.hwmon and pids.network,"initial reader frames unavailable")
+until (pids.cpufreq and pids.powercap and pids.gpu and pids.hwmon and pids.network and pids.displays)or now()>deadline
+assert(pids.cpufreq and pids.powercap and pids.gpu and pids.hwmon and pids.network and pids.displays,"initial reader frames unavailable")
 local old_pid=pids[suspended]
 emit({event="ready",pids=pids})
 assert(io.read("l")=="stopped")
