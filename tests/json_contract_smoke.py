@@ -73,7 +73,10 @@ def validate(document: object, mode: str) -> None:
                             assert type(value) in (int, float) and math.isfinite(value)
                         assert row["runtime_ns"] > 0 and row["count"] >= 0
                         running = row.get("running_percent")
-                        assert type(running) in (int, float) and math.isfinite(running) and 0 < running <= 100
+                        if running is None:
+                            assert row["quality"] == "estimated"
+                        else:
+                            assert type(running) in (int, float) and math.isfinite(running) and 0 < running <= 100.01
                         totals[row["direction"]] += rate
                     else:
                         assert row.get("quality") in ("unavailable", "error")

@@ -43,6 +43,18 @@ class BandwidthContractTests(unittest.TestCase):
         document["result"]["status"] = "unavailable"
         validate(document, "memory-bandwidth")
 
+    def test_missing_running_percentage_stays_estimated(self):
+        document = measurement()
+        row = document["result"]["entity"]["metrics"]["counter_samples"]["value"][0]
+        row.pop("running_percent")
+        with self.assertRaises(AssertionError):
+            validate(document, "memory-bandwidth")
+        row["quality"] = "estimated"
+        validate(document, "memory-bandwidth")
+        row["running_percent"] = 100.005
+        row["quality"] = "fresh"
+        validate(document, "memory-bandwidth")
+
     def test_bad_records_and_aggregate_are_rejected(self):
         for field, value in (("bytes_per_second", -1), ("bytes_per_second", float("nan")),
                              ("bytes_per_second", True), ("runtime_ns", 0),
