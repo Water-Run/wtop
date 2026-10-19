@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """A requested overlay must reach the terminal before the next collector tick.
 
-The application uses the real native terminal and engine. Only the tick after
-the selected input is held behind a pipe, so the observation does not depend
-on the machine being fast enough to win a timing threshold.
+The application uses the real native terminal and engine, in safe mode. A
+fixed discovery list makes RAM interactions available on machines without
+memory PMUs. Only the tick after the selected input is held behind a pipe,
+so the observation does not depend on a machine timing threshold.
 """
 import argparse
 import json
@@ -26,6 +27,10 @@ package.path = root.."/src/?.lua;"..root.."/src/?/init.lua;"..package.path
 if arg and arg[1] == "--wtop-hardware-reader" then dofile(root.."/src/wtop.lua");return end
 local Backend = require("wtop.ui.backend")
 local Engine = require("wtop.engine")
+require("wtop.inspectors.ram_bandwidth").enumerate = function()
+    return { { id = "system-memory", name = "System aggregate", measurement_scope = "system" },
+        { id = "uncore_imc_0", name = "Test controller", type = 6, measurement_scope = "controller_pmu" } }
+end
 local original_new, original_tick = Backend.new, Engine.tick
 local armed, used = false, false
 Backend.new = function(...)
@@ -75,7 +80,7 @@ def run_case(work, name, key, marker, expect_blocked, lua, native):
                  'WTOP_INPUT_TEST_READY': str(ready),
                  'LUA_CPATH': str(native/'?.so')+';;'}
     command = '#!/bin/sh\n'+''.join('export '+k+'='+shlex.quote(v)+'\n'for k,v in variables.items())
-    command += 'exec '+shlex.join([str(lua),str(work/'entry.lua')])+' "$@"\n'
+    command += 'exec '+shlex.join([str(lua),str(work/'entry.lua')])+' "$@" --safe-mode\n'
     launcher = work/'wtop-input-test'
     launcher.write_text(command);launcher.chmod(0o700)
     bench.EXECUTABLE = str(launcher)
