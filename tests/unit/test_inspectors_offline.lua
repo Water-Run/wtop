@@ -209,11 +209,11 @@ local PERF_STDERR = table.concat({
 -- The PMU inventory the collector would normally have discovered under
 -- /sys/bus/event_source/devices.
 local PMUS = {
-  { name = "uncore_imc_0", events = {
+  { name = "uncore_imc_0", cpus = { 0 }, events = {
     cas_count_read = { unit = "MiB", scale = 6.103515625e-05 },
     cas_count_write = { unit = "MiB", scale = 6.103515625e-05 },
   } },
-  { name = "uncore_imc_1", events = {
+  { name = "uncore_imc_1", cpus = { 1 }, events = {
     cas_count_read = { unit = "MiB", scale = 6.103515625e-05 },
     cas_count_write = { unit = "MiB", scale = 6.103515625e-05 },
   } },

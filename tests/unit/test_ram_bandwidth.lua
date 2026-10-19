@@ -375,4 +375,94 @@ print('RAM bandwidth scopes: system aggregate, selected-only counters/source, st
 
 end
 
+do
+  local Perf = require("wtop.inspectors.perf_bandwidth")
+  local Json = require("wtop.format.json")
+  local Fixture = require("support.fixture_fs")
+  local TUI = require("wtop.tui")
+  local I18n = require("wtop.i18n")
+  local root = "/sys/bus/event_source/devices"
+  local name = "uncore_imc_0"
+  local path = root .. "/" .. name
+  local files = { [path .. "/type"] = "8", [path .. "/cpumask"] = "0,24",
+    [path .. "/events/cas_count_read"] = "event=0x04,umask=0x03",
+    [path .. "/events/cas_count_write"] = "event=0x04,umask=0x0c" }
+  local fs = Fixture.new({ files = files, dirs = { [root] = { name },
+    [path .. "/events"] = { "cas_count_read", "cas_count_write" } } })
+  local csv = {
+    "CPU0;1000;;uncore_imc_0/cas_count_read/;1000000000;100.00;;",
+    "CPU24;2000;;uncore_imc_0/cas_count_read/;1000000000;100.00;;",
+    "CPU0;500;;uncore_imc_0/cas_count_write/;1000000000;100.00;;",
+    "CPU24;0;;uncore_imc_0/cas_count_write/;1000000000;100.00;;",
+  }
+  local perf = Perf.new({ clock = stepping_clock(), runner = { run = function()
+    return { status = "ok", exit_code = 0, stderr = table.concat(csv, "\n") }
+  end } })
+  local provided
+  local inspector = Bandwidth.new({ fs = fs, clock = stepping_clock(), perf_reader = function(request)
+    provided = perf:read(request); return provided
+  end })
+  local context = { fs = fs, now_ns = function() return 2e9 end }
+  local result = inspector:inspect(context, { id = name, type = 8, measurement_scope = "controller_pmu" })
+  assert(result.status == "ok" and result.quality == "fresh")
+  local samples = result.entity.metrics.counter_samples.value
+  assert(#samples == 4 and result.details.counter_samples_total == 4 and not result.details.counter_samples_truncated)
+  local read, write = 0, 0
+  for _, row in ipairs(samples) do
+    assert(row.source == path and row.quality == "fresh" and row.instance_expected)
+    assert(row.runtime_ns == 1e9 and row.running_percent == 100)
+    if row.direction == "read" then read = read + row.bytes_per_second else write = write + row.bytes_per_second end
+  end
+  assert(read == result.entity.metrics.read_bandwidth.value and write == result.entity.metrics.write_bandwidth.value)
+  assert(samples[4].bytes_per_second == 0, "a measured zero instance disappeared")
+  provided.counter_samples[1].bytes_per_second = 999
+  assert(samples[1].bytes_per_second == 64000, "a provider mutated published evidence")
+  assert(type(Json.encode(result)) == "string")
+  for _, locale in ipairs({ "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "fr-FR", "de-DE", "es-ES", "pt-BR", "ru-RU" }) do
+    local tr = assert(I18n.new({ locale = locale }))
+    local lines = table.concat(TUI.inspector_lines("RAM bandwidth", result, tr), "\n")
+    for _, key in ipairs({ "bandwidth_instances", "bandwidth_control_note", "bandwidth_runtime", "bandwidth_running", "bandwidth_expected" }) do
+      assert(lines:find(tr:t("inspector." .. key), 1, true), locale .. " " .. key)
+    end
+    assert(lines:find("CPU24", 1, true) and lines:find("cas_count_write", 1, true))
+    assert(not lines:find("inspector.bandwidth_", 1, true), locale)
+  end
+  csv = { "CPU0;<not supported>;;uncore_imc_0/cas_count_read/;;;;",
+          "CPU0;<not counted>;;uncore_imc_0/cas_count_write/;;;;" }
+  local unavailable = inspector:inspect(context, { id = "system-memory" })
+  assert(unavailable.status == "unavailable" and #unavailable.entity.metrics.counter_samples.value == 4)
+  assert(unavailable.entity.metrics.read_bandwidth.value == nil and unavailable.entity.metrics.write_bandwidth.value == nil)
+  assert(unavailable.details.reader_error.counter_samples == nil, "unbounded raw records escaped the public reducer")
+  local legacy = Bandwidth.new({ fs = fs, perf_reader = function()
+    return { status = "ok", read_bytes_per_second = 10, write_bytes_per_second = 20 }
+  end }):inspect(context, {})
+  assert(legacy.entity.metrics.counter_samples == nil and legacy.entity.metrics.total_bandwidth.value == 30)
+  -- A provider cannot attach foreign PMUs, invented events or the opposite
+  -- direction to the selected source's instance evidence.
+  local valid = { pmu = name, event = "cas_count_read", instance = "CPU0", direction = "read",
+    bytes_per_second = 64, count = 1, runtime_ns = 1e9, running_percent = 100, quality = "fresh" }
+  local input = { valid }
+  for _, change in ipairs({ { pmu = "uncore_imc_other" }, { event = "unknown" }, { direction = "write" } }) do
+    local row = {}; for k, v in pairs(valid) do row[k] = v end
+    for k, v in pairs(change) do row[k] = v end
+    input[#input + 1] = row
+  end
+  local filtered = Bandwidth.new({ fs = fs, perf_reader = function()
+    return { status = "ok", read_bytes_per_second = 64, counter_samples = input }
+  end }):inspect(context, { id = name, type = 8, measurement_scope = "controller_pmu" })
+  assert(#filtered.entity.metrics.counter_samples.value == 1 and filtered.details.counter_samples_total == 4)
+  assert(filtered.details.counter_samples_truncated and filtered.entity.metrics.counter_samples.quality == "truncated")
+  files[path .. "/cpumask"] = "0-1279"
+  csv = { "CPU0;1;;uncore_imc_0/cas_count_read/;1000000000;100.00;;",
+          "CPU0;0;;uncore_imc_0/cas_count_write/;1000000000;100.00;;" }
+  local bounded = inspector:inspect(context, {})
+  assert(#bounded.entity.metrics.counter_samples.value == 1024 and bounded.details.counter_samples_total == 2560)
+  local tr = assert(I18n.new({ locale = "en-US" }))
+  local lines = TUI.inspector_lines("RAM bandwidth", bounded, tr)
+  local text = table.concat(lines, "\n")
+  assert(text:find(tr:t("inspector.bandwidth_instances_count", { shown = 128, total = 2560 }), 1, true))
+  assert(not text:find("CPU127", 1, true) and #lines < 1400, "instance expansion ignored its view bound")
+  print("ok: PMU instance evidence end-to-end, metadata/source isolation, no-zero-fill, legacy readers, JSON and10locale bounded UI")
+end
+
 return true

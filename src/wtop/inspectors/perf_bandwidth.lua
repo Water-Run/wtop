@@ -1,11 +1,14 @@
 local Clock = require("wtop.core.clock")
 local Runner = require("wtop.core.runner")
+local CounterSamples = require("wtop.inspectors.bandwidth_samples")
 
 local PerfBandwidth = {}
 PerfBandwidth.__index = PerfBandwidth
 
 local MAX_PMUS = 256
 local MAX_EVENTS_PER_PMU = 512
+local MAX_COUNTER_SAMPLES = CounterSamples.LIMIT
+local MAX_CPU_ID = 1048575
 
 local function safe_identifier(value)
   return type(value) == "string"
@@ -60,18 +63,7 @@ local function unit_bytes(unit)
   return nil
 end
 
-local function direction_for(name)
-  name = tostring(name or ""):lower()
-  if name == "data_read" or name == "cas_count_read"
-      or name:find("rdcas", 1, true) or name:find("cas_count_rd", 1, true) then
-    return "read"
-  end
-  if name == "data_write" or name == "cas_count_write"
-      or name:find("wrcas", 1, true) or name:find("cas_count_wr", 1, true) then
-    return "write"
-  end
-  return nil
-end
+local direction_for = CounterSamples.direction_for
 
 local function bytes_per_count(event)
   local multiplier = unit_bytes(event and event.unit)
@@ -83,6 +75,7 @@ local function bytes_per_count(event)
     if bytes == math.huge or bytes ~= bytes then return nil end
     return bytes
   end
+  if event and event.unit ~= nil and trim(event.unit) ~= "" then return nil end
   -- CAS/DRAM data events count cache-line transfers.  Unknown event names
   -- are filtered before reaching this fallback.
   return 64
@@ -140,13 +133,14 @@ end
 local function parse_stat(text, specifications, delimiter)
   if type(delimiter) ~= "string" or delimiter == "" then delimiter = ";" end
   local counts, unsupported, samples, issues = {}, {}, {}, {}
-  local by_label, seen_instances = {}, {}
+  local by_label, seen_instances, observations = {}, {}, {}
   local specification_list = type(specifications) == "table" and specifications or {}
   for _, specification in ipairs(specification_list) do
     if type(specification) == "table" and type(specification.label) == "string" then
       by_label[specification.label] = specification
       samples[specification.label] = {}
       seen_instances[specification.label] = {}
+      observations[specification.label] = {}
     end
   end
   for line in tostring(text or ""):gmatch("[^\r\n]+") do
@@ -165,15 +159,19 @@ local function parse_stat(text, specifications, delimiter)
         issues[label] = "invalid_instance"
       elseif previous then
         previous.invalid = true
+        previous.issue = "duplicate_event"
         issues[label] = "duplicate_event"
       else
-        local marker = {}
+        local marker = { instance = instance }
         instances[instance] = marker
+        observations[label][#observations[label] + 1] = marker
         local raw_count = trim(fields[2])
         if raw_count == "<not supported>" then
           unsupported[label] = true
+          marker.issue = "not_supported"
         elseif raw_count:sub(1, 1) == "<" then
           issues[label] = raw_count == "<not counted>" and "not_counted" or "invalid_count"
+          marker.issue = issues[label]
         else
           local count = normalized_count(raw_count)
           if count then
@@ -181,6 +179,7 @@ local function parse_stat(text, specifications, delimiter)
             local running_percent = finite_number(trim(fields[6]))
             if not runtime_ns or runtime_ns <= 0 then
               issues[label] = "invalid_runtime"
+              marker.issue = "invalid_runtime"
             else
               marker.count = count
               marker.unit = trim(fields[3])
@@ -191,6 +190,7 @@ local function parse_stat(text, specifications, delimiter)
             end
           else
             issues[label] = "invalid_count"
+            marker.issue = "invalid_count"
           end
         end
       end
@@ -206,7 +206,25 @@ local function parse_stat(text, specifications, delimiter)
     end
     if valid > 0 then counts[label] = total end
   end
-  return counts, unsupported, samples, issues
+  return counts, unsupported, samples, issues, observations
+end
+
+local function cpu_id(instance)
+  local value = type(instance) == "string" and instance:match("^CPU(%d+)$")
+  value = value and tonumber(value)
+  return value and value <= MAX_CPU_ID and "CPU" .. value == instance and value or nil
+end
+
+local function expected_cpus(cpus)
+  if type(cpus) ~= "table" or #cpus == 0 or #cpus > 8192 then return nil end
+  local ids, seen = {}, {}
+  for _, value in ipairs(cpus) do
+    if type(value) ~= "number" or value ~= value or value < 0 or value > MAX_CPU_ID
+        or value % 1 ~= 0 or seen[value] then return nil end
+    ids[#ids + 1], seen[value] = value, true
+  end
+  table.sort(ids)
+  return ids, seen
 end
 
 local function permission_error(message)
@@ -327,10 +345,11 @@ function PerfBandwidth:_events(pmus)
               or groups.other
             add_candidate(group, {
                 label = label,
+                pmu = pmu_name,
+                event = name,
                 direction = direction,
                 bytes_per_count = factor,
-                expected_instance_count = type(pmu.cpus) == "table" and #pmu.cpus > 0
-                  and #pmu.cpus or nil,
+                expected_cpus = expected_cpus(pmu.cpus),
               })
           else
             -- Multiple sysfs aliases for the same PMU encoding are one
@@ -498,7 +517,7 @@ function PerfBandwidth:read(request)
   end
   -- perf stat writes its own CSV stream to stderr.  The workload's stdout is
   -- deliberately excluded so it cannot spoof counter rows.
-  local _, unsupported, samples, issues = parse_stat(stderr, specifications, ";")
+  local _, unsupported, samples, issues, observations = parse_stat(stderr, specifications, ";")
   local wall_duration_ns = finite_number(run.duration_ns)
   if not wall_duration_ns or wall_duration_ns <= 0 then
     wall_duration_ns = finished >= started and finite_number((finished + 0.0) - started)
@@ -508,10 +527,32 @@ function PerfBandwidth:read(request)
   local read_bps, write_bps, supported, instance_count = 0.0, 0.0, 0, 0
   local read_events, write_events, duration_ns = 0, 0, 0
   local multiplexed, running_percent_missing, incomplete_instances = false, false, false
+  local counter_samples, counter_samples_total, missing_sources = {}, 0, {}
+  local function add_sample(record)
+    counter_samples_total = counter_samples_total + 1
+    if #counter_samples < MAX_COUNTER_SAMPLES then counter_samples[#counter_samples + 1] = record end
+  end
   for _, specification in ipairs(specifications) do
     local valid_instances = 0
+    local expected, expected_set = expected_cpus(specification.expected_cpus)
+    local observed_expected = {}
+    local rows = observations[specification.label] or {}
+    table.sort(rows, function(a, b)
+      local left, right = cpu_id(a.instance), cpu_id(b.instance)
+      if left and right then return left < right end
+      if (left ~= nil) ~= (right ~= nil) then return left ~= nil end
+      return a.instance < b.instance
+    end)
+    for _, sample in ipairs(rows) do
+      local id = cpu_id(sample.instance)
+      if expected_set and expected_set[id] then observed_expected[id] = true end
+    end
+    local rates = {}
     for _, sample in ipairs(samples[specification.label] or {}) do
-      if not sample.invalid then
+      local id = cpu_id(sample.instance)
+      if expected_set and not expected_set[id] then
+        issues[specification.label] = "unexpected_instance"
+      elseif not sample.invalid then
         local multiplier = unit_bytes(sample.unit)
         if sample.unit ~= "" and not multiplier then
           issues[specification.label] = "unsupported_perf_unit"
@@ -538,11 +579,43 @@ function PerfBandwidth:read(request)
               valid_instances = valid_instances + 1
               instance_count = instance_count + 1
               duration_ns = math.max(duration_ns, runtime_ns)
+              rates[sample] = bps
             else
               issues[specification.label] = "counter_value_out_of_range"
             end
           end
         end
+      end
+    end
+    if not expected then incomplete_instances = true end
+    for _, sample in ipairs(rows) do
+      local id = cpu_id(sample.instance)
+      local instance_expected
+      if expected_set then instance_expected = expected_set[id] == true end
+      if expected_set and not instance_expected then incomplete_instances = true end
+      local rate = rates[sample]
+      local percent = sample.running_percent
+      local quality = rate ~= nil and (not expected_set or not instance_expected or percent == nil
+        or percent < 99.995) and "estimated" or rate ~= nil and "fresh" or "unavailable"
+      local reason = sample.issue == "not_supported" and "memory_events_not_supported"
+        or sample.issue == "not_counted" and "memory_events_not_counted"
+        or rate == nil and "perf_stat_invalid_counts"
+        or quality == "estimated" and "perf_reader_partial_bandwidth" or nil
+      add_sample({ pmu = specification.pmu, event = specification.event,
+        direction = specification.direction, instance = sample.instance, cpu_id = id,
+        instance_expected = instance_expected,
+        bytes_per_second = rate, count = rate ~= nil and sample.count or nil,
+        unit = rate ~= nil and sample.unit or nil,
+        runtime_ns = rate ~= nil and sample.runtime_ns or nil,
+        running_percent = rate ~= nil and percent or nil, quality = quality, reason = reason })
+    end
+    if expected then
+      local missing = #expected
+      for _ in pairs(observed_expected) do missing = missing - 1 end
+      if missing > 0 then
+        incomplete_instances = true
+        missing_sources[#missing_sources + 1] = {
+          specification = specification, expected = expected, observed = observed_expected, count = missing }
       end
     end
     if valid_instances > 0 then
@@ -552,12 +625,26 @@ function PerfBandwidth:read(request)
       else
         write_events = write_events + 1
       end
-      local expected = specification.expected_instance_count
-      if (expected and valid_instances ~= expected)
+      if (expected and valid_instances ~= #expected)
           or unsupported[specification.label] or issues[specification.label] then
         incomplete_instances = true
       end
     end
+  end
+  -- Keep actual observations before placeholders so a large absent CPU mask
+  -- cannot hide all of the other event's valid evidence at the detail bound.
+  for _, pending in ipairs(missing_sources) do
+    local specification, missing = pending.specification, pending.count
+    for _, id in ipairs(pending.expected) do
+      if #counter_samples >= MAX_COUNTER_SAMPLES then break end
+      if not pending.observed[id] then
+        add_sample({ pmu = specification.pmu, event = specification.event,
+          direction = specification.direction, instance = "CPU" .. id, cpu_id = id,
+          instance_expected = true, quality = "unavailable", reason = "perf_reader_partial_bandwidth" })
+        missing = missing - 1
+      end
+    end
+    counter_samples_total = counter_samples_total + missing
   end
   if supported == 0 then
     local reason = next(unsupported) and "memory_events_not_supported" or nil
@@ -573,6 +660,8 @@ function PerfBandwidth:read(request)
     return {
       status = "unavailable",
       reason = reason or "perf_stat_missing_counts",
+      counter_samples = counter_samples, counter_samples_total = counter_samples_total,
+      counter_samples_truncated = counter_samples_total > #counter_samples,
     }
   end
   duration_ns = math.max(1, duration_ns)
@@ -593,7 +682,10 @@ function PerfBandwidth:read(request)
     write_bytes_per_second = measured_write_bps,
     duration_ns = duration_ns,
     wall_duration_ns = wall_duration_ns,
-    formula_version = "perf-stat-csv-no-aggr-v4",
+    formula_version = "perf-stat-csv-no-aggr-v5",
+    counter_samples = counter_samples,
+    counter_samples_total = counter_samples_total,
+    counter_samples_truncated = counter_samples_total > #counter_samples,
     event_count = supported,
     instance_count = instance_count,
     read_event_count = read_events,

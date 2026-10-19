@@ -57,7 +57,7 @@ assert(math.abs(result.read_bytes_per_second - (64 * 1024 * 1024 * 5)) < 0.001)
 assert(math.abs(result.write_bytes_per_second - 128000) < 0.001)
 assert(result.duration_ns == 250000000, "perf event runtime must win over process wall time")
 assert(result.wall_duration_ns == 400000000)
-assert(result.formula_version == "perf-stat-csv-no-aggr-v4")
+assert(result.formula_version == "perf-stat-csv-no-aggr-v5")
 assert(result.estimated == true, "multiplexed samples must be labelled estimated")
 assert(result.read_event_count == 1 and result.write_event_count == 1)
 assert(result.selected_event_family == "intel_free_running")
@@ -410,5 +410,99 @@ local no_events = reader:read({ pmus = {
 } })
 assert(no_events.status == "unavailable")
 assert(reader:read({ pmus = "not-a-table", duration_ms = 0 / 0 }).status == "unavailable")
+
+do
+  local function near(a, b) assert(type(a) == "number" and math.abs(a - b) < 1e-7, tostring(a) .. " != " .. b) end
+  local function sum(records, direction)
+    local value = 0
+    for _, row in ipairs(records) do
+      if row.direction == direction and row.bytes_per_second ~= nil then value = value + row.bytes_per_second end
+    end
+    return value
+  end
+  assert(#result.counter_samples == 2 and result.counter_samples_total == 2 and not result.counter_samples_truncated)
+  near(result.counter_samples[1].runtime_ns, 200000000)
+  assert(result.counter_samples[1].quality == "estimated" and result.counter_samples[1].instance == "CPU0")
+  near(sum(result.counter_samples, "read"), result.read_bytes_per_second)
+  near(sum(result.counter_samples, "write"), result.write_bytes_per_second)
+  assert(#multi_instance.counter_samples == 4 and multi_instance.counter_samples_total == 4)
+  for _, row in ipairs(multi_instance.counter_samples) do
+    assert(row.pmu == "uncore_imc_0" and row.instance_expected == true and row.quality == "fresh")
+    assert(row.runtime_ns == 1000000000 and row.running_percent == 100)
+  end
+  near(sum(multi_instance.counter_samples, "read"), multi_instance.read_bytes_per_second)
+  near(sum(multi_instance.counter_samples, "write"), multi_instance.write_bytes_per_second)
+  assert(#missing_instance.counter_samples == 4)
+  local missing = 0
+  for _, row in ipairs(missing_instance.counter_samples) do
+    if row.instance == "CPU24" then
+      assert(row.bytes_per_second == nil and row.runtime_ns == nil and row.count == nil)
+      assert(row.quality == "unavailable" and row.instance_expected and row.reason == "perf_reader_partial_bandwidth")
+      missing = missing + 1
+    end
+  end
+  assert(missing == 2, "absent instances disappeared instead of retaining missing values")
+  local function read_rows(rows, cpus)
+    return PerfBandwidth.new({ clock = clock_with_step(1000000000), runner = { run = function()
+      return { status = "ok", exit_code = 0, stderr = table.concat(rows, "\n") }
+    end } }):read({ pmus = { { name = "uncore_imc_0", cpus = cpus,
+      events = { cas_count_read = {}, cas_count_write = {} } } } })
+  end
+  -- Two returned instances is insufficient: one belongs to a different
+  -- control CPU. It must not replace CPU24 or enter its PMU's numerator.
+  local foreign = read_rows({
+    "CPU0;1000;;uncore_imc_0/cas_count_read/;1000000000;100.00;;",
+    "CPU48;99999;;uncore_imc_0/cas_count_read/;1000000000;100.00;;",
+    "CPU0;500;;uncore_imc_0/cas_count_write/;1000000000;100.00;;",
+    "CPU48;99999;;uncore_imc_0/cas_count_write/;1000000000;100.00;;",
+  }, { 0, 24 })
+  assert(foreign.status == "ok" and foreign.estimated)
+  near(foreign.read_bytes_per_second, 64000); near(foreign.write_bytes_per_second, 32000)
+  assert(#foreign.counter_samples == 6)
+  local rejected = 0
+  for _, row in ipairs(foreign.counter_samples) do
+    if row.instance == "CPU48" then
+      assert(row.instance_expected == false and row.bytes_per_second == nil and row.quality == "unavailable")
+      rejected = rejected + 1
+    end
+  end
+  assert(rejected == 2)
+  local invalid = read_rows({
+    "CPU0;1;;uncore_imc_0/cas_count_read/;1000000000;100.00;;",
+    "CPU0;2;;uncore_imc_0/cas_count_read/;1000000000;100.00;;",
+    "CPU0;<not supported>;;uncore_imc_0/cas_count_write/;;;;",
+  }, { 0 })
+  assert(invalid.status == "unavailable" and #invalid.counter_samples == 2)
+  for _, row in ipairs(invalid.counter_samples) do assert(row.bytes_per_second == nil and row.quality == "unavailable") end
+  local not_counted = read_rows({
+    "CPU0;<not counted>;;uncore_imc_0/cas_count_read/;;;;",
+    "CPU0;<not counted>;;uncore_imc_0/cas_count_write/;;;;",
+  }, { 0 })
+  assert(not_counted.reason == "memory_events_not_counted" and #not_counted.counter_samples == 2)
+  for _, row in ipairs(not_counted.counter_samples) do assert(row.reason == "memory_events_not_counted") end
+  local bad_percent = read_rows({
+    "CPU0;1;;uncore_imc_0/cas_count_read/;1000000000;101.00;;",
+    "CPU0;0;;uncore_imc_0/cas_count_write/;1000000000;100.00;;",
+  }, { 0 })
+  assert(bad_percent.status == "ok" and bad_percent.read_bytes_per_second == nil and bad_percent.write_bytes_per_second == 0)
+  assert(bad_percent.counter_samples[1].quality == "unavailable" and bad_percent.counter_samples[2].bytes_per_second == 0)
+  local unknown_coverage = read_rows({
+    "CPU0;1;;uncore_imc_0/cas_count_read/;1000000000;100.00;;",
+    "CPU0;0;;uncore_imc_0/cas_count_write/;1000000000;100.00;;",
+  })
+  assert(unknown_coverage.estimated and unknown_coverage.counter_samples[1].quality == "estimated")
+  local cpus = {}; for id = 0, 1279 do cpus[#cpus + 1] = id end
+  local bounded = read_rows({
+    "CPU0;1;;uncore_imc_0/cas_count_read/;1000000000;100.00;;",
+    "CPU0;0;;uncore_imc_0/cas_count_write/;1000000000;100.00;;",
+  }, cpus)
+  assert(#bounded.counter_samples == 1024 and bounded.counter_samples_total == 2560 and bounded.counter_samples_truncated)
+  assert(bounded.counter_samples[1].bytes_per_second == 64 and bounded.counter_samples[2].bytes_per_second == 0,
+    "missing-instance placeholders hid real observations at the detail bound")
+  assert(bounded.read_bytes_per_second == 64 and bounded.write_bytes_per_second == 0)
+  assert(PerfBandwidth.bytes_per_count({ unit = "cycles" }) == nil,
+    "an explicit non-byte unit was silently converted into 64-byte transfers")
+  print("ok: per-event PMU instances, rates/runtime/coverage, foreign CPUs, duplicates, missing/unsupported rows and bounded evidence")
+end
 
 return true

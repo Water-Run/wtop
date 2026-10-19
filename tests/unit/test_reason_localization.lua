@@ -305,6 +305,7 @@ local interface_reasons = {
   "perf_reader_bandwidth_out_of_range",
   "perf_reader_exception",
   "perf_reader_missing_bandwidth",
+  "perf_reader_partial_bandwidth",
   "perf_reader_timeout",
   "perf_reader_unavailable",
   "perf_runner_exception",

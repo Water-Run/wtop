@@ -8,6 +8,14 @@ _meta:
   catalog_version: 1
 
 messages:
+  inspector.bandwidth_control_note: "CPU labels identify counter control instances, not DIMM channels."
+  inspector.bandwidth_count: "Reported count"
+  inspector.bandwidth_event: "Event"
+  inspector.bandwidth_expected: "Expected control CPU"
+  inspector.bandwidth_instances: "Counter instances"
+  inspector.bandwidth_instances_count: "{shown} shown / {total}"
+  inspector.bandwidth_running: "Counter running"
+  inspector.bandwidth_runtime: "Counter runtime"
   inspector.bandwidth_scope: "Measurement scope"
   inspector.bandwidth_scope_controller: "Selected controller PMU"
   inspector.bandwidth_scope_system: "System aggregate"

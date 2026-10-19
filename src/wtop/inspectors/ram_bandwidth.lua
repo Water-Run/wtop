@@ -3,6 +3,8 @@ local Clock = require("wtop.core.clock")
 local FS = require("wtop.linux.fs")
 local Common = require("wtop.collectors.common")
 local Model = require("wtop.inspectors.model")
+local CounterSamples = require("wtop.inspectors.bandwidth_samples")
+local Json = require("wtop.format.json")
 
 local Bandwidth = {}
 Bandwidth.__index = Bandwidth
@@ -489,6 +491,17 @@ function Bandwidth:inspect(context, entity)
   local write_quality = write_bps ~= nil and quality or missing_quality
   local partial_reason = total_bps ~= nil and (read_bps == nil or write_bps == nil)
     and "perf_reader_partial_bandwidth" or nil
+  local counter_samples, counter_samples_total, counter_samples_truncated
+  if reader_metadata then
+    counter_samples, counter_samples_total, counter_samples_truncated = CounterSamples.copy(
+      reader_metadata.counter_samples, reader_metadata.counter_samples_total,
+      reader_metadata.counter_samples_truncated, pmus)
+  end
+  if reader_error then
+    -- Publish only the bounded, source-checked form below, including when
+    -- an unsuccessful reader returns per-instance diagnostics.
+    reader_error.counter_samples, reader_error.counter_samples_total, reader_error.counter_samples_truncated = nil, nil, nil
+  end
   local fields = {
     measurement_scope = Model.field(measurement_scope, nil, {
       quality = "fresh", source = source, timestamp_ns = finished, provider = "pmu_sysfs",
@@ -540,7 +553,17 @@ function Bandwidth:inspect(context, entity)
       reason = utilization and nil or "credible_theoretical_limit_required",
     }),
   }
+  if counter_samples then
+    fields.counter_samples = Model.field(counter_samples, nil, {
+      quality = counter_samples_truncated and "truncated" or quality,
+      source = source, timestamp_ns = finished, provider = reader_provider,
+      provider_version = reader_metadata and reader_metadata.formula_version,
+      permission = reader_permission,
+    })
+  end
   local entity_id = safe_text(entity.id, 4096) or "system-memory"
+  local public_pmus = Json.array({})
+  for index, pmu in ipairs(pmus or {}) do public_pmus[index] = pmu end
   local normalized_entity = Model.entity(entity_id, "memory", {
     name = safe_text(entity.name) or (measurement_scope == "controller_pmu" and safe_text(entity.id))
       or "System aggregate",
@@ -548,8 +571,11 @@ function Bandwidth:inspect(context, entity)
     evidence = {
       source = source,
       timestamp_ns = finished,
-      pmus = pmus,
+      pmus = public_pmus,
+      pmus_truncated = pmus and pmus.truncated == true or false,
       measurement_scope = measurement_scope,
+      counter_samples_total = counter_samples_total,
+      counter_samples_truncated = counter_samples_truncated,
       reader_error = reader_error,
     },
   })
@@ -592,7 +618,8 @@ function Bandwidth:inspect(context, entity)
     permission = result_permission,
     provider = result_provider,
     provider_version = result_provider_version,
-    details = { pmu_count = pmus and #pmus or 0, reader_error = reader_error },
+    details = { pmu_count = pmus and #pmus or 0, reader_error = reader_error,
+      counter_samples_total = counter_samples_total, counter_samples_truncated = counter_samples_truncated },
   })
 end
 

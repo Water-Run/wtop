@@ -285,6 +285,35 @@ local function inspector_collection_lines(value, field_key, i18n)
     return lines
 end
 
+local function bandwidth_counter_lines(samples, i18n)
+    local lines = { "    " .. translated(i18n, "inspector.bandwidth_control_note",
+        "CPU labels identify counter control instances, not DIMM channels.") }
+    local function field(id, fallback, value, unit)
+        lines[#lines + 1] = inspector_text("      " .. translated(i18n, id, fallback)
+            .. ": " .. format_value(value, i18n, unit), INSPECTOR_ROW_WIDTH)
+    end
+    for index = 1, math.min(#samples, INSPECTOR_LIST_LIMIT) do
+        local row = samples[index]
+        local read = row.direction == "read"
+        local direction = translated(i18n, read and "metrics.read" or "metrics.write", read and "Read" or "Write")
+        lines[#lines + 1] = inspector_text("    " .. index .. ". " .. tostring(row.pmu)
+            .. " · " .. tostring(row.instance) .. " · " .. direction
+            .. " [" .. Technical.state(i18n, row.quality) .. "]", INSPECTOR_ROW_WIDTH)
+        field("inspector.bandwidth_event", "Event", row.event)
+        field(read and "metrics.read" or "metrics.write", direction, row.bytes_per_second, "bytes_per_second")
+        field("inspector.bandwidth_runtime", "Counter runtime", row.runtime_ns, "nanoseconds")
+        field("inspector.bandwidth_running", "Counter running", row.running_percent, "percent")
+        local count = row.count ~= nil and format_value(row.count, i18n)
+            .. (row.unit and row.unit ~= "" and " " .. row.unit or "") or "—"
+        field("inspector.bandwidth_count", "Reported count", count)
+        field("inspector.bandwidth_expected", "Expected control CPU", row.instance_expected == nil
+            and Technical.state(i18n, "unknown") or translated(i18n,
+            row.instance_expected and "ui.yes" or "ui.no", row.instance_expected and "yes" or "no"))
+        if row.reason then field("inspector.reason", "Reason", Technical.reason(i18n, row.reason)) end
+    end
+    return lines
+end
+
 local function inspector_lines(title, result, i18n)
     local lines = { title, "" }
     if not result then
@@ -314,6 +343,9 @@ local function inspector_lines(title, result, i18n)
         local priority = nvme and { critical_warning = 1, percentage_used = 2,
             available_spare_percent = 3, temperature_celsius = 4, scope = 5,
             media_errors = 6, power_on_hours = 7, data_units_read = 8, data_units_written = 9 }
+            or section.id == "bandwidth" and { measurement_scope = 1, read_bandwidth = 2,
+                write_bandwidth = 3, total_bandwidth = 4, theoretical_bandwidth = 5,
+                utilization = 6, counter_samples = 7 }
         table.sort(keys, function(a, b)
             if priority then
                 local left, right = priority[a] or 100, priority[b] or 100
@@ -326,7 +358,9 @@ local function inspector_lines(title, result, i18n)
             local field = section.fields[key]
             local bandwidth_scope = section.id == "bandwidth" and key == "measurement_scope"
             local label = nvme and translated(i18n, "nvme.health_" .. key, key)
-                or bandwidth_scope and translated(i18n, "inspector.bandwidth_scope", "Measurement scope") or key
+                or bandwidth_scope and translated(i18n, "inspector.bandwidth_scope", "Measurement scope")
+                or section.id == "bandwidth" and key == "counter_samples"
+                    and translated(i18n, "inspector.bandwidth_instances", "Counter instances") or key
             local value = field and field.value
             if nvme and key == "scope" and value == "controller" then
                 value = translated(i18n, "nvme.health_controller", "Controller")
@@ -334,10 +368,14 @@ local function inspector_lines(title, result, i18n)
                 value = translated(i18n, "inspector.bandwidth_scope_system", "System aggregate")
             elseif bandwidth_scope and value == "controller_pmu" then
                 value = translated(i18n, "inspector.bandwidth_scope_controller", "Selected controller PMU")
+            elseif section.id == "bandwidth" and key == "counter_samples" and type(value) == "table" then
+                local total = result.details and result.details.counter_samples_total or #value
+                value = translated(i18n, "inspector.bandwidth_instances_count", "{shown} shown / {total}",
+                    { shown = math.min(#value, INSPECTOR_LIST_LIMIT), total = total })
             end
             rows[#rows + 1] = { label, format_value(value, i18n,
                 field and field.unit)
-                .. "  [" .. tostring(nvme and Technical.state(i18n, field and field.quality or "unknown")
+                .. "  [" .. tostring((nvme or section.id == "bandwidth") and Technical.state(i18n, field and field.quality or "unknown")
                     or field and field.quality or "unknown") .. "]" }
         end
         local field_lines = aligned_pairs(rows)
@@ -359,6 +397,9 @@ local function inspector_lines(title, result, i18n)
                 end
             end
             local expanded = INSPECTOR_EXPAND_FIELDS[section.id]
+            if section.id == "bandwidth" and key == "counter_samples" and field and type(field.value) == "table" then
+                for _, line in ipairs(bandwidth_counter_lines(field.value, i18n)) do lines[#lines + 1] = line end
+            end
             if field and type(field.value) == "table" and expanded and expanded[key] then
                 for _, line in ipairs(inspector_collection_lines(field.value, key, i18n)) do
                     lines[#lines + 1] = line
