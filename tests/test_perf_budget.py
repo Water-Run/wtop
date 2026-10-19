@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import os
+from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -74,7 +75,41 @@ def rejects(result, budget, fragment):
     assert any(fragment in failure for failure in failures), failures
 
 
+def check_pump_deadline():
+    # Advancing clocks make the deadline property deterministic even on a
+    # loaded runner. Exercise idle waits, sampler cost and repeated ready data.
+    for sample_cost, ready in [(0, False), (0.004, False), (0.006, False),
+                               (0, True), (0, "one_frame")]:
+        clock, timeouts, reads = [0.0], [], []
+        session = benchmark.Session.__new__(benchmark.Session)
+        session.master, session.output = 123, bytearray()
+        session.first_frame, session.started = None, 0.0
+        class Sampler:
+            def sample(self):
+                clock[0] += sample_cost
+        session.resources = Sampler()
+        def select(readers, writers, errors, timeout):
+            timeouts.append(timeout)
+            assert 0 <= timeout <= max(0, 0.005-clock[0])+1e-12
+            available = ready is True or ready == "one_frame" and not reads
+            clock[0] += min(0.001, timeout) if available else timeout
+            return ([123], [], []) if available else ([], [], [])
+        def read(fd, limit):
+            reads.append(fd)
+            return b"wtop\x1b[0m"
+        with patch.object(benchmark.time, "monotonic", lambda: clock[0]), \
+             patch.object(benchmark.select, "select", select), \
+             patch.object(benchmark.os, "read", read):
+            session.pump(0.005)
+        assert clock[0] <= max(0.005, sample_cost)+1e-12
+        if sample_cost > 0.005:
+            assert not timeouts
+        if ready:
+            assert reads and session.first_frame is not None
+
+
 def main():
+    check_pump_deadline()
     from test_perf_process_family import main as check_family
     check_family()
     # A visible tab label is not a completed page. The encoder emits its

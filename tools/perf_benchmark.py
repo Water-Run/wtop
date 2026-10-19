@@ -323,7 +323,12 @@ class Session:
         deadline = time.monotonic() + duration
         while time.monotonic() < deadline:
             self.resources.sample()
-            ready, _, _ = select.select([self.master], [], [], 0.05)
+            # Sampling also consumes this call's time budget. A fixed 50 ms
+            # wait inflated short input observations after a frame had arrived.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            ready, _, _ = select.select([self.master], [], [], min(0.05, remaining))
             if ready:
                 try:
                     chunk = os.read(self.master, 65536)
