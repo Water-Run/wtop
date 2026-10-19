@@ -1330,7 +1330,7 @@ failed:
     return push_errno(L, "atomic write");
 }
 
-static int l_listdir(lua_State *L) {
+static int list_directory(lua_State *L, int with_hints) {
     const char *path = check_path(L, 1, NULL);
     int limited = !lua_isnoneornil(L, 2);
     lua_Integer limit = limited ? luaL_checkinteger(L, 2) : 0;
@@ -1338,6 +1338,7 @@ static int l_listdir(lua_State *L) {
     struct dirent *entry;
     lua_Integer index = 1;
     int truncated = 0;
+    luaL_Buffer hints;
 
     if (limited) {
         luaL_argcheck(L, limit >= 1 && limit <= INT_MAX, 2,
@@ -1351,8 +1352,16 @@ static int l_listdir(lua_State *L) {
     /* Keep at most limit names and read one extra name solely to report that
        the directory was truncated.  Success is table, nil, boolean. */
     lua_createtable(L, 32, 0);
-    errno = 0;
-    while ((entry = readdir(guard->directory)) != NULL) {
+    int names = lua_gettop(L);
+    if (with_hints) luaL_buffinit(L, &hints);
+    for (;;) {
+        /* Lua allocations may change errno between successful readdir calls. */
+        errno = 0;
+        entry = readdir(guard->directory);
+        if (!entry) {
+            if (errno != 0) return push_errno(L, "readdir");
+            break;
+        }
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
             continue;
         }
@@ -1361,18 +1370,36 @@ static int l_listdir(lua_State *L) {
             break;
         }
         lua_pushstring(L, entry->d_name);
-        lua_rawseti(L, -2, index++);
+        lua_rawseti(L, names, index++);
+        if (with_hints) {
+            char hint = '?';
+#ifdef _DIRENT_HAVE_D_TYPE
+            if (entry->d_type == DT_REG) hint = 'f';
+#endif
+            luaL_addchar(&hints, hint);
+        }
     }
-    if (errno != 0) {
-        int saved_errno = errno;
-        lua_pop(L, 1);
-        errno = saved_errno;
-        return push_errno(L, "readdir");
+    /* No directory remains live while allocating the final result string. */
+    DIR *directory = guard->directory;
+    guard->directory = NULL;
+    if (closedir(directory) != 0) return push_errno(L, "closedir");
+    int hint_index = 0;
+    if (with_hints) {
+        luaL_pushresult(&hints);
+        hint_index = lua_gettop(L);
     }
+    lua_pushvalue(L, names);
     lua_pushnil(L);
     lua_pushboolean(L, truncated);
+    if (with_hints) {
+        lua_pushvalue(L, hint_index);
+        return 4;
+    }
     return 3;
 }
+
+static int l_listdir(lua_State *L) { return list_directory(L, 0); }
+static int l_listdir_hints(lua_State *L) { return list_directory(L, 1); }
 
 static int l_readlink(lua_State *L) {
     const char *path = check_path(L, 1, NULL);
@@ -2330,6 +2357,7 @@ static const luaL_Reg functions[] = {
     {"mkdir", l_mkdir},
     {"atomic_write", l_atomic_write},
     {"listdir", l_listdir},
+    {"listdir_hints", l_listdir_hints},
     {"readfile", l_readfile},
     {"readfile_at", l_readfile_at},
     {"read_cpu_perf_limits", l_read_cpu_perf_limits},

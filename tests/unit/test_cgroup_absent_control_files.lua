@@ -404,3 +404,68 @@ equal(scope.io.totals.counters.rios, 2794,
   "and their values, with nothing standing in for the device that has none")
 
 print("ok: cgroup absent control files")
+
+-- Compact native hints must preserve the full metric inventory, all child
+-- identities, diagnostic accounting and conservative traversal boundaries.
+do
+  local Json = require("wtop.format.json")
+  local contents, dirs = {}, {}
+  local entries = populate(contents, dirs, "/cg", files_for(ALL))
+  populate(contents, dirs, "/cg/child", files_for(ALL))
+  for _, name in ipairs({ "child", "link", ".hidden", "bad/name" }) do
+    entries[#entries + 1] = name
+  end
+  for index = 1, 100 do
+    local name = "unused." .. index
+    entries[#entries + 1] = name
+    contents["/cg/" .. name] = "unused\n"
+  end
+  local function filesystem(hints)
+    local fs = fake_fs(contents, dirs)
+    local kind, readlink = fs.kind, fs.readlink
+    fs.kind_calls = 0
+    function fs:kind(path)
+      self.kind_calls = self.kind_calls + 1
+      if contents[path] then return "file" end
+      return kind(self, path)
+    end
+    function fs:readlink(path)
+      if path == "/cg/link" then return "outside" end
+      return readlink(self, path)
+    end
+    if hints ~= false then
+      function fs:list_hints(path, limit)
+        local names, err, cut = self:list(path, limit)
+        if not names then return names, err, cut end
+        local types = {}
+        for index, name in ipairs(names) do
+          types[index] = contents[path .. "/" .. name] and "f" or "?"
+        end
+        return names, nil, cut, hints == true and table.concat(types) or hints
+      end
+    end
+    return fs
+  end
+  local function compare(hints, max_nodes, max_depth)
+    local plain, hinted = filesystem(false), filesystem(hints)
+    local old = Cgroup.new({ fs = plain, mount_path = "/cg", max_nodes = max_nodes, max_depth = max_depth })
+    local new = Cgroup.new({ fs = hinted, mount_path = "/cg", max_nodes = max_nodes, max_depth = max_depth })
+    local context = { now_ns = function() return 1000000000 end }
+    local left, right = old:sample(context), new:sample(context)
+    equal(Json.encode(right), Json.encode(left), "hinted fields and diagnostics")
+    context.now_ns = function() return 2000000000 end
+    equal(Json.encode(new:sample(context, right)), Json.encode(old:sample(context, left)),
+      "hinted rate and missing-value semantics")
+    return plain.kind_calls, hinted.kind_calls
+  end
+  local plain, hinted = compare(true, 64, 4)
+  check(plain > 100 and hinted == 2, "only the child needs a metadata lookup in each sample")
+  for _, limits in ipairs({ {1, 4}, {2, 4}, {64, 0}, {64, 1} }) do
+    compare(true, limits[1], limits[2])
+  end
+  for _, malformed in ipairs({ "", "x", string.rep("f", 10000), {} }) do
+    local before, after = compare(malformed, 64, 4)
+    equal(after, before, "malformed hint fallback")
+  end
+  print("ok: compact cgroup hints preserve metrics, rates, diagnostics, bounds and fallback")
+end

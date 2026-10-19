@@ -283,6 +283,34 @@ function FS:list(path, limit)
   return self.list_impl(self:path(path), limit)
 end
 
+-- The fresh names table can be compacted by its caller. Unlike list(), names
+-- retain native enumeration order so hints[i] belongs
+-- to names[i]. Only a known regular file is marked; everything else needs the
+-- caller's normal no-follow checks. Custom filesystems keep their own methods.
+function FS:list_hints(path, limit)
+  if self.list ~= FS.list or self.kind ~= FS.kind or self.readlink ~= FS.readlink
+      or self.kind_nofollow ~= FS.kind_nofollow
+      or self.read_impl ~= default_read_file
+      or self.list_impl ~= default_list_dir or self.path_type_impl ~= default_path_type
+      or self.readlink_impl ~= default_read_link
+      or not (ok_native and native and native.available
+        and type(native.listdir_hints) == "function") then
+    return self:list(path, limit)
+  end
+  local actual = self:path(path)
+  if limit ~= nil and (type(limit) ~= "number" or limit ~= limit or limit < 1
+      or limit > 2147483647 or limit % 1 ~= 0) then
+    return nil, { kind = "invalid", message = "invalid_list_limit", path = actual }
+  end
+  local called, entries, message, detail, hints = pcall(native.listdir_hints, actual, limit)
+  if not called then
+    return nil, { kind = "io_error", message = tostring(entries), path = actual }
+  end
+  if entries then return entries, nil, detail == true, hints end
+  return nil, { kind = classify_error(message, detail), message = tostring(message),
+    path = actual, errno = detail }
+end
+
 function FS:readlink(path)
   return self.readlink_impl(self:path(path))
 end

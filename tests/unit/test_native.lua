@@ -62,7 +62,39 @@ assert(listed_path == "/fixture/items" and listed_limit == 2)
 assert(FS.classify_error("localized", 13) == "denied")
 assert(FS.classify_error("localized", 2) == "missing")
 assert(injected_fs:list("/items", 0) == nil)
+local hinted_entries, hinted_error, hinted_cut, injected_hints = injected_fs:list_hints("/items", 2)
+assert(#hinted_entries == 2 and hinted_error == nil and hinted_cut and injected_hints == nil)
+assert(listed_path == "/fixture/items" and listed_limit == 2,
+  "hint requests must preserve custom filesystem methods")
 assert(not pcall(FS.new, { read_file = "invalid" }))
+
+do
+    local original = native.listdir_hints
+    if native.available and type(original) == "function" then
+        local calls = 0
+        native.listdir_hints = function()
+            calls = calls + 1
+            return { "regular", "unknown" }, nil, true, "f?"
+        end
+        local names, err, cut, hints = FS.new():list_hints("/items", 2)
+        assert(names[1] == "regular" and not err and cut and hints == "f?" and calls == 1)
+        for _, option in ipairs({ "path_type", "read_link", "read_file" }) do
+            calls = 0
+            local custom = FS.new({ [option] = function() error("custom method must not be used") end,
+                list_dir = function() return { "custom" } end })
+            local entries, _, _, metadata = custom:list_hints("/items", 2)
+            assert(entries[1] == "custom" and metadata == nil and calls == 0)
+        end
+        calls = 0
+        local overridden = FS.new()
+        function overridden:list() return { "overridden" } end
+        assert(overridden:list_hints("/items")[1] == "overridden" and calls == 0)
+        native.listdir_hints = nil
+        local older = FS.new({ list_dir = function() return { "older" } end })
+        assert(older:list_hints("/items")[1] == "older")
+        native.listdir_hints = original
+    end
+end
 
 -- An option `FS.new` does not know.  It used to ignore one, and the cost was
 -- measured in a test file rather than in a report: two doubles spelled their
@@ -161,6 +193,16 @@ assert(one_entry and #one_entry == 1 and one_entry_error == nil and one_entry_tr
 assert(not pcall(native.listdir, "/proc/self", 0))
 assert(not pcall(native.listdir, "/proc/self", -1))
 assert(not pcall(native.listdir, "/proc/self", 2147483648))
+if type(native.listdir_hints) == "function" then
+    local names, err, cut, hints = native.listdir_hints("/proc/self", 2)
+    assert(names and #names == 2 and err == nil and cut and #hints == #names)
+    assert(not hints:find("[^f?]"))
+    local one, _, _, one_hint = native.listdir_hints("/proc/self", 1)
+    assert(#one == 1 and #one_hint == 1)
+    assert(not pcall(native.listdir_hints, "/proc/self", 0))
+    assert(not pcall(native.listdir_hints, "/proc/self", -1))
+    assert(not pcall(native.listdir_hints, "/proc/self", 2147483648))
+end
 local fs_entry, fs_error, fs_truncated = FS.default:list("/proc/self", 1)
 assert(fs_entry and #fs_entry == 1 and fs_error == nil and fs_truncated == true)
 assert(type(assert(native.readlink("/proc/self/exe"))) == "string")

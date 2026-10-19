@@ -673,8 +673,45 @@ local function is_not_directory(err)
   )
 end
 
+local function list_hints(fs, path, limit)
+  if type(fs.list_hints) == "function" then return fs:list_hints(path, limit) end
+  return fs:list(path, limit)
+end
+
+local function directory_candidate(hints, index, entry)
+  return hints:byte(index) ~= 102 or type(entry) ~= "string"
+    or entry:sub(1, 1) == "." or not is_safe_entry(entry)
+end
+
 local function discover_children(fs, item, node, queue, scan, max_depth, max_nodes)
   local entries = item.entries
+  local hints = item.regular_hints
+  item.regular_hints = nil
+  if item.depth < max_depth and type(hints) == "string" and #hints == #entries and hints:find("f", 1, true)
+      and not hints:find("[^f?]") then
+    local size, count = #entries, #entries
+    -- Usually even the unfiltered list fits the remaining node budget. Only
+    -- count candidates separately when that upper bound reaches the limit.
+    if max_nodes - scan.discovered_nodes <= size then
+      count = 0
+      for index, entry in ipairs(entries) do
+        if directory_candidate(hints, index, entry) then count = count + 1 end
+      end
+    end
+    -- Preserve the existing conservative accounting near traversal limits.
+    -- Metric presence was read from the full listing before this compaction.
+    if max_nodes - scan.discovered_nodes > count then
+      local kept = 0
+      for index = 1, size do
+        local entry = entries[index]
+        if directory_candidate(hints, index, entry) then
+          kept = kept + 1
+          entries[kept] = entry
+        end
+      end
+      for index = kept + 1, size do entries[index] = nil end
+    end
+  end
   if item.entries_truncated then
     scan.node_limited = true
     node.truncated = true
@@ -900,7 +937,7 @@ end
 function Cgroup:sample(context, previous)
   local started = Common.now_ns(context)
   local fs = Common.fs(context, self.fs)
-  local root_entries, root_error, root_entries_truncated = fs:list(
+  local root_entries, root_error, root_entries_truncated, root_hints = list_hints(fs,
     self.root_path, directory_entry_limit(self.max_nodes))
   if not root_entries then
     return Common.error_result(root_error, Common.now_ns(context), self.root_path)
@@ -929,12 +966,13 @@ function Cgroup:sample(context, previous)
       depth = 0,
       path = self.root_path,
       entries = root_entries,
+      regular_hints = root_hints,
       entries_truncated = root_entries_truncated == true,
     },
   }
   -- The queue owns the root listing until that item is processed.  Do not
   -- keep a second function-local reference alive for the whole traversal.
-  root_entries = nil
+  root_entries, root_hints = nil, nil
 
   local head = 1
   while head <= #queue do
@@ -946,7 +984,7 @@ function Cgroup:sample(context, previous)
       -- Every queued child was admitted only after the parent checked both
       -- depth and node budgets.  Its directory is opened exactly once, when
       -- dequeued, and bounded by the slots still available for descendants.
-      item.entries, list_error, item.entries_truncated = fs:list(
+      item.entries, list_error, item.entries_truncated, item.regular_hints = list_hints(fs,
         item.path, directory_entry_limit(self.max_nodes - scan.discovered_nodes))
       item.entries_truncated = item.entries_truncated == true
       if not item.entries and list_error and list_error.kind == "denied" then
