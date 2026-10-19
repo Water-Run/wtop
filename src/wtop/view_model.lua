@@ -1848,9 +1848,22 @@ local function power_rows(snapshot, format, i18n)
                 return assert(format:number(zone.energy_joules, { precision = 1 }))
             end) .. " J" or "—"
         local session = PowerSession.public(zone, snapshot.timestamp_ns)
+        local power_state = snapshot.quality and snapshot.quality.power
+        local age = Power.reading(zone.power_watts) ~= nil
+            and Power.zone_age(zone, power_state, snapshot.timestamp_ns) or nil
+        local reading_issues = {}
+        for _, issue in ipairs(zone.issues or {}) do
+            -- A failed optional cap attribute does not explain a missing
+            -- watt reading. Keep these diagnostics tied to the inputs used.
+            if issue.field == "energy" or issue.field == "power" then
+                reading_issues[#reading_issues + 1] = {
+                    field = issue.field, status = issue.status, source = issue.source,
+                }
+                if #reading_issues == 8 then break end
+            end
+        end
         for _, constraint in ipairs(constraints) do
             if #rows >= TABLE_ROW_LIMIT then break end
-            local power_state = snapshot.quality and snapshot.quality.power
             local comparison = Power.zone(zone, constraint, power_state, snapshot.timestamp_ns)
             local limit = Power.limit(constraint.power_limit_watts)
                 and formatted(function()
@@ -1873,6 +1886,9 @@ local function power_rows(snapshot, format, i18n)
                 window = seconds(constraint.time_window_seconds),
                 interval = seconds(zone.power_interval_ns and zone.power_interval_ns / 1e9),
                 source = zone.power_source or zone.power_quality or "—",
+                power_source_path = zone.source,
+                power_age_ns = age,
+                power_reading_issues = reading_issues,
                 state = Power.zone_state(zone, power_state, snapshot.timestamp_ns) or "—",
                 power_session = session,
                 controls = (zone.enabled == false or zone.control_enabled == false

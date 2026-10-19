@@ -40,16 +40,24 @@ function M.unusable(quality)
     return unusable[M.state(quality)] == true
 end
 
+function M.zone_age(zone, quality, now_ns)
+    local observed = zone.observed_at_ns
+        or type(quality) == "table" and quality.value_timestamp_ns
+    if M.reading(now_ns) == nil or M.reading(observed) == nil or observed > now_ns then return nil end
+    -- Subtract before converting: long uptimes can exceed exact float
+    -- nanoseconds even while the interval is still a small integer.
+    return now_ns - observed
+end
+
 function M.zone_state(zone, quality, now_ns)
     local state = M.state(quality)
     if M.unusable(state) then return state end
     if M.unusable(zone.power_quality) then return zone.power_quality end
     if M.unusable(zone.quality) then return zone.quality end
     if now_ns ~= nil then
-        local observed = zone.observed_at_ns
-            or type(quality) == "table" and quality.value_timestamp_ns
-        if not M.reading(now_ns) or not M.reading(observed) or observed > now_ns then return "unknown" end
-        if now_ns - observed > 15000000000 then return "stale" end
+        local age = M.zone_age(zone, quality, now_ns)
+        if age == nil then return "unknown" end
+        if age > 15000000000 then return "stale" end
     end
     return zone.power_quality or zone.quality or state
 end

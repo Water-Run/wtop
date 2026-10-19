@@ -80,6 +80,73 @@ assert(report:find("97.6%", 1, true) and report:find("0.002440 s", 1, true))
 local detail = table.concat(TUI.power_detail_lines(snap, en), "\n")
 assert(detail:find("Power and limits", 1, true) and detail:find("97.6%", 1, true))
 assert(detail:find("114 W", 1, true) and detail:find("2.44 ms", 1, true))
+
+-- The panel reports each domain's own observation time and failed read
+-- inputs. An optional cap failure cannot masquerade as a watt-read failure.
+local observed = zone("intel-rapl:9", "intel-rapl", 20)
+observed.source = "/sys/class/powercap/intel-rapl:9"
+observed.observed_at_ns = 19e9
+local observed_snapshot = { timestamp_ns = 20e9, power = { zones = { observed } },
+    quality = { power = { status = "ok", quality = "fresh", value_timestamp_ns = 20e9 } } }
+local function observed_row()
+    return ViewModel.power_detail_rows(observed_snapshot, en)[1]
+end
+near(observed_row().power_age_ns, 1e9)
+assert(observed_row().power_source_path == observed.source)
+observed.power_watts = 0
+near(observed_row().power_age_ns, 1e9)
+observed.observed_at_ns = 20e9
+near(observed_row().power_age_ns, 0)
+observed.observed_at_ns = nil
+near(observed_row().power_age_ns, 0) -- older native providers use collector timestamps
+observed.observed_at_ns = 21e9
+assert(observed_row().power_age_ns == nil and observed_row().state == "unknown")
+assert(observed_row().power_percent == nil)
+observed.observed_at_ns = 1e9
+near(observed_row().power_age_ns, 19e9)
+assert(observed_row().state == "stale" and observed_row().power_percent == nil)
+observed_snapshot.timestamp_ns = 9007199254740994
+observed.observed_at_ns = 9007199254740993
+assert(observed_row().power_age_ns == 1, "float conversion corrupted a long-uptime age")
+for _, bad in ipairs({ -1, math.huge, 0/0 }) do
+    observed.observed_at_ns = bad
+    assert(observed_row().power_age_ns == nil and observed_row().state == "unknown")
+end
+observed_snapshot.timestamp_ns, observed.observed_at_ns = 20e9, 19e9
+observed.power_watts, observed.power_quality = nil, "denied"
+observed.issues = {
+    { field = "constraint.time_window", status = "error", source = "CAP-ONLY-PATH" },
+    { field = "energy", status = "denied", source = observed.source .. "/energy_uj",
+      reason = "RAW-ERROR-SHOULD-NOT-BE-A-LABEL" },
+    { field = "power", status = "error", source = observed.source .. "/power_uw" },
+}
+local denied_row = observed_row()
+assert(denied_row.power_age_ns == nil and denied_row.power_percent == nil)
+assert(#denied_row.power_reading_issues == 2 and denied_row.power_reading_issues[1] ~= observed.issues[2])
+for _, locale in ipairs({ "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR",
+    "fr-FR", "de-DE", "es-ES", "pt-BR", "ru-RU" }) do
+    local tr = assert(I18n.new({ locale = locale }))
+    local lines = table.concat(TUI.power_detail_lines(observed_snapshot, tr), "\n")
+    assert(lines:find(tr:t("inspector.reason") .. ": " .. tr:t("metrics.energy")
+        .. ": " .. tr:t("status.denied"), 1, true), locale)
+    assert(lines:find(observed.source .. "/energy_uj", 1, true), locale)
+    assert(not lines:find("RAW-ERROR-SHOULD-NOT-BE-A-LABEL", 1, true))
+    assert(not lines:find("CAP-ONLY-PATH", 1, true))
+    assert(not lines:find(tr:t("systemd.sample_age") .. ":", 1, true), locale)
+    observed.power_watts, observed.power_quality = 0, "measured"
+    local measured_lines = table.concat(TUI.power_detail_lines(observed_snapshot, tr), "\n")
+    assert(measured_lines:find(tr:t("systemd.sample_age") .. ":", 1, true), locale)
+    observed.power_watts, observed.power_quality = nil, "denied"
+end
+observed.issues = {}
+for index = 1, 20 do
+    observed.issues[index] = { field = "energy", status = "denied", source = "READ-" .. index .. "-PATH" }
+end
+assert(#observed_row().power_reading_issues == 8)
+local bounded_detail = table.concat(TUI.power_detail_lines(observed_snapshot, en), "\n")
+assert(bounded_detail:find("READ-8-PATH", 1, true) and not bounded_detail:find("READ-9-PATH", 1, true))
+assert(select(2, bounded_detail:gsub("READ%-8%-PATH", "")) == 1, "each cap repeated its domain's diagnostics")
+
 snap.quality = { power = { status = "error", quality = "stale" } }
 assert(model(snap).rows[4].usage == "—" and model(snap).rows[4].state == "stale")
 assert(Export.snapshot(snap).power.zones[1].constraints[2].usage_percent == nil)

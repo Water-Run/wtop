@@ -661,10 +661,21 @@ local function power_detail_lines(snapshot, i18n)
                     "RAPL graphics-domain reading; PCI adapter ownership is unknown.")
             end
             field("metrics.source", "Source", row.domain .. " · " .. row.source)
+            if row.power_source_path then field("metrics.source", "Source", row.power_source_path) end
             field("metrics.power", "Power", row.power .. " · "
                 .. translated(i18n, "power.interval", "Sample window") .. ": " .. row.interval)
+            if row.power_age_ns ~= nil then
+                field("systemd.sample_age", "Sample age", format_value(row.power_age_ns, i18n, "nanoseconds"))
+            end
             field("power.controls", "Controls", Technical.state(i18n, row.controls)
                 .. " · " .. Technical.state(i18n, row.state))
+            for _, issue in ipairs(row.power_reading_issues or {}) do
+                local energy = issue.field == "energy"
+                field("inspector.reason", "Reason", translated(i18n,
+                    energy and "metrics.energy" or "metrics.power", energy and "Energy" or "Power")
+                    .. ": " .. tostring(Technical.state(i18n, issue.status)))
+                if issue.source then field("metrics.source", "Source", issue.source) end
+            end
             local session = row.power_session
             if session then
                 field("sensor.session_range", "Session min / avg / max",
