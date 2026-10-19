@@ -1,5 +1,5 @@
 /* Exercise production affinity/error/allocation behavior with independent
- * syscall outcomes. CPUID instruction contents remain real on x86. */
+ * syscall and instruction outcomes. Real CPUID runs in the worker checks. */
 #define _GNU_SOURCE
 #include <lua.h>
 #include <lauxlib.h>
@@ -16,11 +16,12 @@
 #include <time.h>
 #include <errno.h>
 #if defined(__i386__) || defined(__x86_64__)
+#include <cpuid.h>
 static unsigned char current_mask[131072],initial_mask[131072];
-static int mode,pins,restores,current_cpu,getcpu_calls,gets,allocations,blocks,fail_at;
+static int mode,pins,restores,current_cpu,getcpu_calls,gets,allocations,blocks,fail_at,identity_reads;
 static uint64_t ticks;
 static void reset(int value){
- mode=value;pins=restores=getcpu_calls=gets=allocations=0;current_cpu=0;ticks=1000000000;
+ mode=value;pins=restores=getcpu_calls=gets=allocations=identity_reads=0;current_cpu=0;ticks=1000000000;
  memset(initial_mask,0,sizeof(initial_mask));
  unsigned ids[]={0,65,4096,1048575};for(unsigned i=0;i<4;++i)initial_mask[ids[i]/8]|=1u<<(ids[i]%8);
  memcpy(current_mask,initial_mask,sizeof(current_mask));assert(!blocks);
@@ -49,6 +50,25 @@ static int fake_getcpu(void){++getcpu_calls;return current_cpu+((mode==4||(mode=
 static int fake_clock(clockid_t clock,struct timespec *out){assert(clock==CLOCK_MONOTONIC);out->tv_sec=ticks/1000000000;out->tv_nsec=ticks%1000000000;if(mode==9)ticks+=400000000;return 0;}
 static void *counted_calloc(size_t n,size_t size){if(++allocations==fail_at)return NULL;void *p=calloc(n,size);if(p)++blocks;return p;}
 static void counted_free(void *p){if(p){assert(blocks>0);--blocks;free(p);}}
+/* A fake affinity change cannot pin the real thread. Real instructions here
+ * could therefore report a different APIC ID after a scheduler migration.
+ * Keep this fixture independent of host scheduling and optional instructions. */
+static unsigned fixture_cpuid_max(unsigned leaf,unsigned *vendor){
+ (void)leaf;*vendor=0x756e6547u;return 0x1f;
+}
+static void fixture_cpuid(unsigned leaf,unsigned sub,unsigned *a,unsigned *b,unsigned *c,unsigned *d){
+ (void)sub;*a=*b=*c=*d=0;
+ if(leaf==0){*a=0x1f;*b=0x756e6547u;*d=0x49656e69u;*c=0x6c65746eu;}
+ else if(leaf==0x80000000u)*a=0x80000008u;
+ else if(leaf==1){
+  ++identity_reads;*a=0x906a3u;*b=7u<<24;
+  if(mode==13&&identity_reads%2==0)++*a;
+  if(mode==14&&identity_reads%2==0)*b=8u<<24;
+ }
+}
+#undef __cpuid_count
+#define __get_cpuid_max fixture_cpuid_max
+#define __cpuid_count(leaf,sub,a,b,c,d) fixture_cpuid(leaf,sub,&(a),&(b),&(c),&(d))
 #define syscall fake_syscall
 #define sched_getcpu fake_getcpu
 #define clock_gettime fake_clock
@@ -60,6 +80,8 @@ static void counted_free(void *p){if(p){assert(blocks>0);--blocks;free(p);}}
 #undef clock_gettime
 #undef calloc
 #undef free
+#undef __get_cpuid_max
+#undef __cpuid_count
 struct allocation {size_t calls,fail;};
 static void *lua_allocate(void *opaque,void *old,size_t old_size,size_t size){
  struct allocation *a=opaque;(void)old_size;
@@ -77,12 +99,14 @@ static void packet(lua_State *L,int count,unsigned status){
  size_t at=32;unsigned ids[]={0,65,4096,1048575};
  for(int i=0;i<count;++i){struct wtop_cpuid_cpu cpu;memcpy(&cpu,raw+at,sizeof(cpu));assert(cpu.id==ids[i]&&cpu.index==ids[i]&&cpu.group==0&&cpu.status==status);
   if(!status)assert(cpu.count>0&&(cpu.flags&WTOP_CPUID_FLAG_RESTORED)&&(cpu.flags&WTOP_CPUID_FLAG_OS_ID));
+  if(mode==13)assert(cpu.signature_after==0x906a4u&&cpu.initial_apic_after==7);
+  if(mode==14)assert(cpu.signature_after==0x906a3u&&cpu.initial_apic_after==8);
   at+=sizeof(cpu)+cpu.count*sizeof(struct wtop_cpuid_leaf);}
  assert(at==size);
 }
 int main(void){
  lua_State *L=luaL_newstate();assert(L);
- for(int value=0;value<=12;++value){
+ for(int value=0;value<=14;++value){
   if(value==1||value==10||value==11)continue;
   reset(value);assert(call(L,value==9?2:4)==LUA_OK);assert(!blocks);
   const char *reason=lua_tostring(L,-1);
@@ -90,7 +114,7 @@ int main(void){
    assert(lua_isnil(L,-2)&&reason);
    assert(!strcmp(reason,value==2?"cpuid_affinity_unavailable":value==8?"cpuid_disabled":value==9?"cpuid_probe_timeout":"cpuid_affinity_restore_failed"));
    if(value==8)assert(!gets&&!pins);
-  }else packet(L,4,value==3?1:value==4?3:value==5?5:0);
+  }else packet(L,4,value==3?1:value==4?3:(value==5||value==13||value==14)?5:0);
   if(value!=6&&value!=7)assert(!memcmp(current_mask,initial_mask,sizeof(current_mask)));
  }
  for(int point=1;point<=3;++point){reset(0);fail_at=point;assert(call(L,4)==LUA_OK&&lua_isnil(L,-2));assert(!strcmp(lua_tostring(L,-1),"cpuid_allocation_failed"));fail_at=0;assert(!blocks&&!pins);}
@@ -130,7 +154,7 @@ int main(void){
   assert(!blocks&&!memcmp(current_mask,initial_mask,sizeof(current_mask)));lua_close(L);
  }
  assert(failures&&successes);
- printf("Linux CPUID native: sparse CPU IDs,mask growth,pin/restore/identity/disabled/timeout,3 allocation sites and%u Lua OOM/%u successes passed\n",failures,successes);
+ printf("Linux CPUID native: sparse CPU IDs,mask growth,pin/restore/identity/signature/APIC/disabled/timeout,3 allocation sites and%u Lua OOM/%u successes passed\n",failures,successes);
  return 0;
 }
 #else
