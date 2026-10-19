@@ -231,6 +231,7 @@ local interface_reasons = {
   "memory_event_open_failed",
   "memory_events_not_counted",
   "memory_events_not_supported",
+  "memory_pmu_identity_changed",
   "native_collection_failed",
   "nvme_health_unavailable",
   "wifi_link_unavailable",

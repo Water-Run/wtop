@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise real descendant accounting, old procfs and incomplete observations."""
 import importlib.util
+import errno
 import json
 import os
 import pathlib
@@ -62,6 +63,45 @@ def main():
             assert sample['cpu_status'] == 'observed' and sample['memory_status'] != 'observed'
             assert 'pss_kib' not in sample
         (proc/'1/smaps').write_text(original)
+        # A startup memory-interface race can leave stat identity readable.
+        # Recover only through a new complete sample, without carrying the
+        # other member's earlier partial memory total into the result.
+        memory = family.memory
+        calls = []
+        def transient_memory(*args, **kwargs):
+            calls.append(args[0])
+            if len(calls) == 1:
+                raise ProcessLookupError(errno.ESRCH, 'fixture startup memory race')
+            result = memory(*args, **kwargs)
+            if len(calls) == 2:
+                result['pss_kib'] = 999
+            return result
+        family.memory = transient_memory
+        try:
+            recovered = family.snapshot(1, 111, proc)
+            assert recovered['status'] == 'observed' and recovered['attempts'] == 2
+            assert recovered['pss_kib'] == 16 and len(calls) == 4, recovered
+        finally:
+            family.memory = memory
+        # A persistent unavailable interface is still unknown after the
+        # bounded retries. Permission failures do not trigger this retry.
+        for exception, expected_status, expected_calls in [
+            (ProcessLookupError(errno.ESRCH, 'fixture persistent race'), 'unavailable', 6),
+            (FileNotFoundError(errno.ENOENT, 'fixture missing interface'), 'unavailable', 6),
+            (PermissionError(errno.EACCES, 'fixture denied interface'), 'denied', 2),
+        ]:
+            calls = []
+            def unavailable_memory(*args, **kwargs):
+                calls.append(args[0])
+                raise exception
+            family.memory = unavailable_memory
+            try:
+                unavailable = family.snapshot(1, 111, proc)
+                assert unavailable['cpu_status'] == 'observed'
+                assert unavailable['memory_status'] == expected_status and 'pss_kib' not in unavailable
+                assert len(calls) == expected_calls, calls
+            finally:
+                family.memory = memory
         # Reap races must not turn overlapping parent/child counters into a
         # normal sample. Retry is bounded and reports no invented zero.
         discover = family.discover

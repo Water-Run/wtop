@@ -4,6 +4,7 @@ CPU covers observed descendants and waited-for children. Memory uses sampled
 PSS, with RSS and private resident memory kept as separate diagnostics.
 Snapshots bracket identity, membership and reap counters; they do not claim
 that escaped or unobserved daemon descendants have been measured."""
+import errno
 import os
 import pathlib
 import re
@@ -147,16 +148,19 @@ def memory(pid, proc=pathlib.Path('/proc')):
 
 def snapshot(root, birth, proc=pathlib.Path('/proc'), attempts=3):
     last = None
-    for _ in range(attempts):
+    for attempt in range(attempts):
         began = time.monotonic()
         try:
             before = discover(root, birth, proc)
             resident, memory_errors = {}, []
+            transient_memory = False
             for pid, record in before.items():
                 try:
                     resident[pid] = None if record['state'] in ['Z', 'X'] else memory(pid, proc)
                 except (OSError, ValueError, Incomplete) as error:
                     memory_errors.append({'status':'denied'if isinstance(error,PermissionError)else'unavailable','reason':str(error)})
+                    transient_memory = transient_memory or (isinstance(error, OSError)
+                        and error.errno in (errno.ESRCH, errno.ENOENT))
             after = discover(root, birth, proc)
             if set(before) != set(after):
                 raise Incomplete('family roster changed')
@@ -168,6 +172,11 @@ def snapshot(root, birth, proc=pathlib.Path('/proc'), attempts=3):
                     raise Incomplete('process exited during memory sample')
                 if newer['own'] < row['own']:
                     raise Incomplete('process CPU counter decreased')
+            # A task can keep its PID/start time while its memory interface
+            # briefly disappears during startup. Retry the entire validated
+            # sample, never reuse another attempt's partial memory totals.
+            if transient_memory and attempt + 1 < attempts:
+                continue
             # Each member contributes its own CPU and only the children it has
             # already waited for. Live members are separate, so no recursive
             # subtree total or per-process high-water memory is summed here.
@@ -177,6 +186,7 @@ def snapshot(root, birth, proc=pathlib.Path('/proc'), attempts=3):
                       'family_ticks': sum(row['own'] + row['waited'] for row in after.values()),
                       'discovery_source':after[root]['discovery_source'],
                       'processes': len(after), 'sample_started': began,
+                      'attempts': attempt + 1,
                       'sample_finished': time.monotonic(),
                       'scope': 'currently observed descendants plus their waited-for CPU; no escaped-process proof'}
             if memory_errors:

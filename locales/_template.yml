@@ -8,7 +8,6 @@ _meta:
   catalog_version: 1
 
 messages:
-  reason.memory_pmu_identity_changed: "The memory-controller PMU changed or disappeared; select it again"
   inspector.bandwidth_scope: "Measurement scope"
   inspector.bandwidth_scope_controller: "Selected controller PMU"
   inspector.bandwidth_scope_system: "System aggregate"
@@ -176,6 +175,7 @@ messages:
   reason.edid_too_large: "EDID exceeds the size limit"
   reason.edid_unsupported_extension: "This EDID extension type is not decoded"
   reason.edid_unsupported_version: "EDID version is unsupported"
+  reason.memory_pmu_identity_changed: "The memory-controller PMU changed or disappeared; select it again"
   reason.no_display_connectors: "No DRM display connectors found"
   reason.no_macos_displays: "No online macOS displays found"
   reason.no_windows_displays: "No OS-present Windows display devices found"
