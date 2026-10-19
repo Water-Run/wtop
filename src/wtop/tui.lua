@@ -7005,7 +7005,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             width_fn = native.available and width_function or nil,
             ascii_unit_width = native.available,
             console_cells = console_cells,
-        })
+        }, renderer.canvas)
         if thread_selection and thread_selection.mode == "picker" then
             refresh_thread_picker()
         end
@@ -7025,7 +7025,13 @@ local function run_loop(options, backend, renderer, engine, translator)
             overlay_offset = math.min(overlay_offset, overlay_max_offset(rows, columns, overlay))
             draw_overlay(grid, metadata.theme, overlay, overlay_offset, terminal_capabilities)
         end
-        local presented, present_error = renderer:present(grid, force)
+        local presented, present_error
+        if type(renderer.present_owned) == "function" then
+            presented, present_error, renderer.canvas = renderer:present_owned(grid, force)
+        else
+            presented, present_error = renderer:present(grid, force)
+            renderer.canvas = nil
+        end
         if not presented then
             error("terminal render failed: " .. tostring(present_error))
         end

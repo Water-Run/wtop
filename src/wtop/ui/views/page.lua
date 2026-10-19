@@ -45,7 +45,7 @@ local function normalise_render_arguments(columns, rows, state)
     assert(tonumber(rows), "render rows are required"), state or {}
 end
 
-function Page:render(columns, rows, state)
+function Page:render(columns, rows, state, canvas)
   columns, rows, state = normalise_render_arguments(columns, rows, state)
   columns, rows = math.max(1, math.floor(columns)), math.max(1, math.floor(rows))
   local capabilities = state.capabilities or (state.session and state.session.terminal) or {}
@@ -61,14 +61,19 @@ function Page:render(columns, rows, state)
     chart_column_ns = state.chart_column_ns,
   })
   local background = theme:style("text.primary", "surface.base")
-  local grid = Grid.new(columns, rows, {
+  local grid_options = {
     default_style = background,
     width_fn = state.width_fn,
     ascii_unit_width = state.ascii_unit_width,
     console_cells = state.console_cells,
     ambiguous_is_wide = state.ambiguous_is_wide,
     unicode = capabilities.unicode,
-  })
+  }
+  if canvas ~= nil and getmetatable(canvas) ~= Grid then
+    error("page canvas must be a grid", 2)
+  end
+  local grid = canvas and canvas.width == columns and canvas.height == rows
+    and canvas:reset(grid_options) or Grid.new(columns, rows, grid_options)
 
   local header_height = self.header and 1 or 0
   local footer_height = self.footer and 1 or 0

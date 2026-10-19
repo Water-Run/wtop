@@ -1106,7 +1106,7 @@ function Workspace:toggle_edit()
     return self.edit_mode
 end
 
-function Workspace:render(columns, rows, state)
+function Workspace:render(columns, rows, state, canvas)
     state = state or {}
     state.tabs = self.tabs
     state.active_tab = self.active
@@ -1145,7 +1145,7 @@ function Workspace:render(columns, rows, state)
             },
         }
     end
-    return self.pages[self.active]:render(columns, rows, state)
+    return self.pages[self.active]:render(columns, rows, state, canvas)
 end
 
 --- Declare which widgets have nothing to show in the current snapshot.

@@ -227,6 +227,68 @@ local retried_runs = assert(retry_renderer:present(retry_grid))
 assert(#retried_runs > 0 and retry_metadata.full == true,
   "retry after a failed write must resend the complete frame")
 
+-- An explicitly transferred frame stays renderer-owned until a later
+-- successful presentation releases it. Failed writes transfer nothing.
+local owned_fail = false
+local owned = Renderer.new({ present = function()
+  if owned_fail then return nil, "temporary write failure" end
+  return true
+end })
+local frame_a, frame_b = Grid.new(12, 2), Grid.new(12, 2)
+frame_a:write(1, 1, "中文")
+frame_a.clone = function() error("owned presentation must not clone") end
+local owned_runs, _, released = owned:present_owned(frame_a)
+assert(owned_runs and released == nil and owned.previous == frame_a)
+assert(not owned:present_owned(frame_a), "a transferred frame was accepted for mutation again")
+frame_b:write(1, 1, "second")
+owned_runs, _, released = owned:present_owned(frame_b)
+assert(owned_runs and released == frame_a and owned.previous == frame_b)
+local displayed = frame_b:row_text(1)
+released:reset({ unicode = false })
+released:write(1, 1, "third")
+assert(frame_b:row_text(1) == displayed, "repainting a released frame changed the displayed frame")
+owned_fail = true
+local before_frames = owned:stats().frames
+local failed_owned, owned_reason, returned = owned:present_owned(released)
+assert(failed_owned == nil and owned_reason == "temporary write failure" and returned == released)
+assert(owned.previous == frame_b and owned:stats().frames == before_frames)
+assert(released:is_dirty(1, 1), "failed input frame was marked clean")
+owned_fail = false
+owned_runs, _, returned = owned:present_owned(released)
+assert(owned_runs and returned == frame_b and owned.previous == frame_a)
+returned:reset()
+returned:write(1, 1, "third")
+local frames_before_equal, skipped_before_equal = owned:stats().frames, owned:stats().skipped
+owned_runs, _, released = owned:present_owned(returned)
+assert(#owned_runs == 0 and released == frame_a and owned.previous == frame_b)
+assert(owned:stats().frames == frames_before_equal and owned:stats().skipped == skipped_before_equal + 1)
+owned:invalidate()
+assert(owned.previous == nil)
+released:reset()
+released:write(1, 1, "after invalidation")
+owned_runs, retry_metadata, returned = owned:present_owned(released)
+assert(owned_runs and retry_metadata.full and returned == nil,
+  "invalidation must force a full owned frame")
+
+local reset_grid = Grid.new(6, 1, { unicode = true, default_style = { bold = true } })
+reset_grid:write(1, 1, "中文")
+local reset_cell, reset_snapshot = reset_grid:get(1, 1), reset_grid:clone()
+local snapshot_options = reset_snapshot.width_options
+reset_grid:reset({ unicode = false, ascii_unit_width = true })
+assert(reset_grid:get(1, 1) == reset_cell, "canvas reset rebuilt cell storage")
+assert(reset_grid.width_options ~= snapshot_options and snapshot_options.unicode == true)
+assert(reset_snapshot:row_text(1):find("中文", 1, true), "reset mutated an independent snapshot")
+for _, cell in ipairs(reset_grid.cells) do
+  assert(cell.char == " " and cell.width == 1 and cell.style == nil)
+  assert(cell.continuation == nil and cell.lead_x == nil)
+end
+reset_grid:write(1, 1, "中")
+assert(reset_grid:get(1, 1).char == "?")
+local reset_options = reset_grid.width_options
+assert(not pcall(reset_grid.reset, reset_grid, { width_fn = false }))
+assert(reset_grid.width_options == reset_options and reset_grid:get(1, 1).char == "?",
+  "invalid reset options changed the canvas")
+
 -- The application-owned terminal adapter uses the same point-call contract.
 -- This integration also proves that backend-neutral runs become terminal ANSI.
 local terminal_writes = {}
@@ -332,6 +394,7 @@ local repaint = Grid.new(12, 2)
 local first_style, second_style = { bold = true }, { dim = true }
 repaint:write(1, 1, "中文ABC", first_style)
 local saved = repaint:clone()
+assert(saved:get(1, 1) ~= repaint:get(1, 1), "cloned cells must have independent storage")
 repaint:fill({ x = 2, y = 1, width = 5, height = 1 }, " ", second_style)
 repaint:write(1, 1, "status", second_style)
 repaint:assert_valid()
@@ -358,5 +421,13 @@ for _, write in ipairs({
   write()
   assert(repaint:get(1, 1).continuation == nil and repaint:get(1, 1).lead_x == nil)
 end
+
+-- Explicit false metadata stays distinct from absence in a snapshot.
+local flags = Grid.new(1, 1)
+flags:get(1, 1).continuation, flags:get(1, 1).lead_x = false, 0
+local copied_flags = flags:clone()
+assert(copied_flags:get(1, 1).continuation == false and copied_flags:get(1, 1).lead_x == 0)
+flags:get(1, 1).continuation, flags:get(1, 1).lead_x = nil, nil
+assert(copied_flags:get(1, 1).continuation == false and copied_flags:get(1, 1).lead_x == 0)
 
 print("test_ui_renderer: ok")

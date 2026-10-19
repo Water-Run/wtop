@@ -42,6 +42,20 @@ assert(focused_visible, "focused widget must survive responsive overflow")
 assert(#metadata.layout.placements + #metadata.layout.hidden == #workspace:orders().overview)
 grid:assert_valid()
 
+-- Canvas reuse is explicit; callers that omit it still receive independent
+-- frames. A resize allocates a replacement without touching the old canvas.
+local Diff = require("wtop.ui.renderer.diff")
+local expected = workspace:render(60, 20, { capabilities = { colors = 0, unicode = true }, widgets = {} })
+assert(expected ~= grid and expected.cells[1] ~= grid.cells[1])
+grid:write(1, 1, "旧帧")
+local reused = workspace:render(60, 20, { capabilities = { colors = 0, unicode = true }, widgets = {} }, grid)
+assert(reused == grid and #Diff.runs(expected, reused) == 0)
+local previous_line = reused:row_text(1)
+local resized = workspace:render(80, 24, { capabilities = { colors = 0, unicode = false }, widgets = {} }, reused)
+assert(resized ~= reused and reused:row_text(1) == previous_line)
+resized:assert_valid()
+assert(not pcall(workspace.render, workspace, 60, 20, {}, "invalid canvas"))
+
 for _, tab in ipairs({ "overview", "processes", "compute", "storage", "network", "gpu", "workloads", "insights" }) do
     local compact = Workspace.new({ active_tab = tab })
     local _, compact_metadata = compact:render(60, 20, {

@@ -11,12 +11,21 @@ local function blank(style)
 end
 
 local function copy_cell(cell)
+  if cell.continuation ~= nil or cell.lead_x ~= nil then
+    return {
+      char = cell.char,
+      width = cell.width,
+      style = cell.style,
+      continuation = cell.continuation,
+      lead_x = cell.lead_x,
+    }
+  end
+  -- Reserve only the fields present in ordinary cells. Wide continuations
+  -- keep their larger record without growing a small table after creation.
   return {
     char = cell.char,
     width = cell.width,
     style = cell.style,
-    continuation = cell.continuation,
-    lead_x = cell.lead_x,
   }
 end
 
@@ -29,7 +38,7 @@ local function valid_dimension(value, name)
   return value
 end
 
-function Grid.new(width, height, options)
+local function checked_options(options)
   if options ~= nil and type(options) ~= "table" then
     error("grid options must be a table", 2)
   end
@@ -47,6 +56,21 @@ function Grid.new(width, height, options)
   if options.default_style ~= nil and type(options.default_style) ~= "table" then
     error("grid default_style must be a table", 2)
   end
+  return options
+end
+
+local function width_options(options)
+  return {
+    width_fn = options.width_fn,
+    console_cells = options.console_cells,
+    ambiguous_is_wide = options.ambiguous_is_wide,
+    unicode = options.unicode,
+    ascii_unit_width = options.ascii_unit_width,
+  }
+end
+
+function Grid.new(width, height, options)
+  options = checked_options(options)
   width = valid_dimension(width, "grid width")
   height = valid_dimension(height, "grid height")
   if width > MAX_CELLS // height then
@@ -55,13 +79,7 @@ function Grid.new(width, height, options)
   local self = setmetatable({
     width = width,
     height = height,
-    width_options = {
-      width_fn = options.width_fn,
-      console_cells = options.console_cells,
-      ambiguous_is_wide = options.ambiguous_is_wide,
-      unicode = options.unicode,
-      ascii_unit_width = options.ascii_unit_width,
-    },
+    width_options = width_options(options),
     default_style = options.default_style,
     cells = {},
     dirty = {},
@@ -306,6 +324,16 @@ function Grid:clear(style)
   end
   self.dirty_all = true
   self.dirty = {}
+  return self
+end
+
+-- Reset a caller-owned canvas. Replace options rather than mutating the
+-- options table that an independent snapshot can still reference.
+function Grid:reset(options)
+  options = checked_options(options)
+  self.width_options = width_options(options)
+  self.default_style = options.default_style
+  self:clear()
   return self
 end
 
