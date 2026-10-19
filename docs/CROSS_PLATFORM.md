@@ -67,6 +67,38 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 ## 验证矩阵
 
+### 2026-10-19：内存带宽的逐实例读数与覆盖
+
+公式 v5 在同一次按需采样中保留逐 PMU／事件／控制 CPU 实例的速率、报告
+计数、运行时间、计数器运行占比与状态。系统汇总按有效实例的速率相加。
+预期掩码同时核对数量与成员，范围外的 CPU 记录不会代替缺失实例，也不会
+进入汇总；缺失、重复、无效或不支持的记录保留不可用状态，正常的零值保留。
+掩码未知或计数覆盖不完整时标为估算，明确的非字节单位不套用 64 字节转换。
+
+[perf 的 CSV 约定](https://raw.githubusercontent.com/torvalds/linux/master/tools/perf/Documentation/perf-stat.txt)
+分别提供计数值、单位、运行时间和计数器运行占比。运行占比说明计数覆盖，
+带宽利用率仍需要可信理论峰值。[PMU 单位与倍率 ABI](https://raw.githubusercontent.com/torvalds/linux/master/Documentation/ABI/testing/sysfs-bus-event_source-devices-events)
+用于解释字节转换；[内核 PMU 文档](https://www.kernel.org/doc/html/latest/admin-guide/perf/hisi-pmu.html)
+说明 `cpumask` 是打开计数器的控制 CPU。界面明确区分控制实例与 DIMM 通道，
+不据此推断物理内存通道归属。CPU 型号事件映射、持续图表与跨硬件绝对精度
+标定仍未完成。
+
+结构化明细最多保留 1024 项，界面最多展开 128 项并显示总数，真实观察记录
+优先于缺失占位。Inspector 只接纳本次 PMU 与事件的有界明细，复制数值后
+发布，未规范化的错误载荷不会重复携带原始明细。PMU 清单的截断位移到
+独立字段，避免数组与字典混用导致结果无法编码成 JSON。旧读数提供方可以
+继续只提供汇总。十种语言覆盖新字段和覆盖不足提示，现有按需采样频率保持。
+
+本地 Lua 5.5 与 5.4 各十个相关文件、五项终端冒烟通过。M4、Windows 11
+和 Server 2008 各十个共享文件通过，788 个仓库文件与传输 ZIP 逐字节一致。
+本机普通用户的实际读取被正确拒绝；root 的系统汇总四条、单 PMU 两条记录
+与原始 perf CSV 的计数、单位、时间、占比和速率经独立 Python 算法核对，
+无事件 PMU 保持不可用。两种尺寸、普通用户／root 共四次源码终端检查通过，
+实例速率与计数／时间、以及汇总之间的关系均按显示精度核对；自有进程调用
+追踪确认系统范围只成功打开预期的两个 IMC 类型，观察到的进程均已回收。
+原始夹具、目录清单与测试错误保留在
+`build/memory-bandwidth-instances-20261019/`，修正后的结果独立记录。
+
 ### 2026-10-19：功耗读数年龄与读取诊断
 
 功耗窗口现在显示各域的数据来源与读数年龄，能量和直接功率读取失败时显示
@@ -609,7 +641,7 @@ Server 2008 两形态通过五 CLI、无 ANSI 经典控制台、CPUID/缓存、�
 2026-10-16 核对：硬件 I/O 隔离提交 `9b3f43b` 的
 [主 CI](https://github.com/Water-Run/wtop/actions/runs/38824471534) 16 个作业与
 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/38824471536) 两个作业
-全部通过，包括两个 Linux 架构的 140 个 Lua 测试文件、消毒器、完整终端
+全部通过，包括 `9b3f43b` 当时的 140 个 Lua 文件在两个 Linux 架构的运行、消毒器、完整终端
 矩阵，以及下载最终归档后的原生运行。x86_64 归档 `4649b611` 两形态在本机
 另验五 CLI、quick PTY、七类硬件读取和三个 GPU SDK 的预热后故障、独立
 恢复与退出；普通权限拒绝、root 当前 MSR 限制、功耗条和三个功耗入口、
@@ -627,7 +659,7 @@ Mach CPU 与当前网卡父设备导航。Windows 归档 `c57fa968` 在 Windows 
 2026-10-16 核对：混合 GPU 连续观测提交 `de92b1e` 的
 [主 CI](https://github.com/Water-Run/wtop/actions/runs/38813098799) 16 个作业与
 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/38813098741) 两个作业
-全部通过，包括两个 Linux 架构的 139 个 Lua 测试文件、GCC ASan/UBSan、
+全部通过，包括 `de92b1e` 当时的 139 个 Lua 文件在两个 Linux 架构的运行、GCC ASan/UBSan、
 三轮计时敏感终端回归和最终归档下载后的完整 PTY。
 Linux x86_64 精确归档 `acb29dd1` 在本机另验两形态五 CLI、quick PTY、
 三个 SDK 的功耗/占比与预热后挂死的六组真实 PTY；两个程序均通过普通权限
@@ -647,7 +679,7 @@ XP、旧 macOS、AMD SMI 真机和 Sysman 功耗域硬件仍缺少本轮运行�
 2026-10-16 核对：三个 GPU SDK 隔离与 Sysman 修复提交 `6702c31` 的
 [主 CI](https://github.com/Water-Run/wtop/actions/runs/38794231258) 16 个作业与
 [Windows CI](https://github.com/Water-Run/wtop/actions/runs/38794231138) 两个作业
-全部通过，包括两个 Linux 架构的 139 个 Lua 测试文件、GCC ASan/UBSan、
+全部通过，包括 `6702c31` 当时的 139 个 Lua 文件在两个 Linux 架构的运行、GCC ASan/UBSan、
 三轮计时敏感终端回归和下载最终归档后的完整 PTY。
 Linux x86_64 精确归档 `12c47f48` 在本机另验两形态五 CLI、quick PTY、
 三个隔离 SDK 的测试驱动功耗/占比，以及各驱动挂死时的页面导航和退出。
