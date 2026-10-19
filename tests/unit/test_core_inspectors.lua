@@ -117,7 +117,13 @@ local bandwidth_fs = fake_fs({
 local bandwidth = Bandwidth.new({ fs = bandwidth_fs, clock = clock })
 local bandwidth_capability = bandwidth:probe({ fs = bandwidth_fs, perf_reader = function() end })
 assert(bandwidth_capability.available)
-local pmus = assert(bandwidth:enumerate({ fs = bandwidth_fs }))
+local entities = assert(bandwidth:enumerate({ fs = bandwidth_fs }))
+assert(entities[1].id == "system-memory" and entities[1].measurement_scope == "system")
+local pmus = {}
+for _, entity in ipairs(entities) do
+  if entity.measurement_scope == "controller_pmu" then pmus[#pmus + 1] = entity end
+end
+pmus.truncated = entities.truncated
 assert(#pmus == 1 and pmus[1].type == 12 and pmus[1].cpus[2] == 4)
 assert(pmus[1].events.cas_count_read.event == 4)
 local theoretical = assert(Bandwidth.theoretical_bytes_per_second(3200, 2, 64))

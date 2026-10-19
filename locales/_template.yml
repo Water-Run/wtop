@@ -8,6 +8,10 @@ _meta:
   catalog_version: 1
 
 messages:
+  reason.memory_pmu_identity_changed: "The memory-controller PMU changed or disappeared; select it again"
+  inspector.bandwidth_scope: "Measurement scope"
+  inspector.bandwidth_scope_controller: "Selected controller PMU"
+  inspector.bandwidth_scope_system: "System aggregate"
   display.cta_y444: "YCbCr 4:4:4 declared"
   display.cta_y422: "YCbCr 4:2:2 declared"
   display.cta_repetition: "Declared pixel repetition"

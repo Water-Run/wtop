@@ -309,7 +309,17 @@ end
 function Bandwidth:enumerate(context)
   context = type(context) == "table" and context or nil
   local fs = context and context.fs or self.fs
-  return self:_enumerate_pmus(fs)
+  local pmus, err = self:_enumerate_pmus(fs)
+  if not pmus then return nil, err end
+  if #pmus == 0 then return pmus end
+  local entities = { { id = "system-memory", name = "System aggregate",
+    measurement_scope = "system", source = self.event_source_path } }
+  for _, pmu in ipairs(pmus) do
+    pmu.measurement_scope = "controller_pmu"
+    entities[#entities + 1] = pmu
+  end
+  entities.truncated = pmus.truncated
+  return entities
 end
 
 function Bandwidth:inspect(context, entity)
@@ -318,11 +328,37 @@ function Bandwidth:inspect(context, entity)
   local started = Common.now_ns(context, self.clock)
   local fs = context.fs or self.fs
   local pmus, enumerate_error = self:_enumerate_pmus(fs)
+  local measurement_scope, selected_source = "system", self.event_source_path
+  local selected_pmu
+  if entity.measurement_scope == "controller_pmu" or matches_pmu(entity.id) then
+    measurement_scope = "controller_pmu"
+    local selected
+    if matches_pmu(entity.id) and pmus then
+      selected_source = self.event_source_path .. "/" .. entity.id
+      for _, pmu in ipairs(pmus) do
+        if pmu.id == entity.id and pmu.type ~= nil and (entity.type == nil or entity.type == pmu.type)
+            and (entity.source == nil or entity.source == pmu.source) then
+          selected = pmu
+          break
+        end
+      end
+      local truncated = pmus.truncated
+      pmus = selected and { selected } or {}
+      pmus.truncated = truncated
+      selected_pmu = selected
+    elseif pmus then
+      pmus = {}
+    end
+  end
   local theoretical, theoretical_error = theoretical_bytes_per_second(
     entity.data_rate_mt_s,
     entity.channels,
     entity.bus_width_bits
   )
+
+  if measurement_scope == "controller_pmu" then
+    theoretical, theoretical_error = nil, "credible_theoretical_limit_required"
+  end
 
   local measured
   local reader_error
@@ -338,6 +374,18 @@ function Bandwidth:inspect(context, entity)
     })
     if ok and type(result) == "table" then
       measured = result
+      if selected_pmu and (result.status == "ok" or result.status == nil) then
+        local current_type, err = fs:read_number(selected_source .. "/type")
+        if current_type ~= selected_pmu.type then
+          measured = nil
+          reader_error = {
+            status = err and FS.error_status(err) or "unavailable",
+            reason = err and err.kind == "denied" and err.message or "memory_pmu_identity_changed",
+            provider = "pmu_sysfs",
+            permission = err and err.kind == "denied" and "sysfs_read_access_required" or "user",
+          }
+        end
+      end
     elseif ok then
       reader_error = { status = "error", reason = "invalid_perf_reader_result" }
     else
@@ -354,7 +402,8 @@ function Bandwidth:inspect(context, entity)
   elseif #pmus == 0 then
     reader_error = {
       status = "unavailable",
-      reason = "memory_controller_pmu_not_found",
+      reason = measurement_scope == "controller_pmu" and "memory_pmu_identity_changed"
+        or "memory_controller_pmu_not_found",
       provider = "pmu_sysfs",
       permission = "user",
     }
@@ -368,7 +417,7 @@ function Bandwidth:inspect(context, entity)
   end
 
   local finished = Common.now_ns(context, self.clock)
-  local source = self.event_source_path
+  local source = selected_source
   local reader_metadata = measured or reader_error
   local reader_provider = reader_metadata and type(reader_metadata.provider) == "string"
     and reader_metadata.provider ~= "" and reader_metadata.provider or "perf_stat"
@@ -441,6 +490,9 @@ function Bandwidth:inspect(context, entity)
   local partial_reason = total_bps ~= nil and (read_bps == nil or write_bps == nil)
     and "perf_reader_partial_bandwidth" or nil
   local fields = {
+    measurement_scope = Model.field(measurement_scope, nil, {
+      quality = "fresh", source = source, timestamp_ns = finished, provider = "pmu_sysfs",
+    }),
     read_bandwidth = Model.field(read_bps, "bytes_per_second", {
       source = source,
       timestamp_ns = finished,
@@ -490,12 +542,14 @@ function Bandwidth:inspect(context, entity)
   }
   local entity_id = safe_text(entity.id, 4096) or "system-memory"
   local normalized_entity = Model.entity(entity_id, "memory", {
-    name = safe_text(entity.name) or "System RAM",
+    name = safe_text(entity.name) or (measurement_scope == "controller_pmu" and safe_text(entity.id))
+      or "System aggregate",
     metrics = fields,
     evidence = {
       source = source,
       timestamp_ns = finished,
       pmus = pmus,
+      measurement_scope = measurement_scope,
       reader_error = reader_error,
     },
   })

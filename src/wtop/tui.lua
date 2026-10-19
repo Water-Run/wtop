@@ -324,10 +324,16 @@ local function inspector_lines(title, result, i18n)
         local rows = {}
         for _, key in ipairs(keys) do
             local field = section.fields[key]
-            local label = nvme and translated(i18n, "nvme.health_" .. key, key) or key
+            local bandwidth_scope = section.id == "bandwidth" and key == "measurement_scope"
+            local label = nvme and translated(i18n, "nvme.health_" .. key, key)
+                or bandwidth_scope and translated(i18n, "inspector.bandwidth_scope", "Measurement scope") or key
             local value = field and field.value
             if nvme and key == "scope" and value == "controller" then
                 value = translated(i18n, "nvme.health_controller", "Controller")
+            elseif bandwidth_scope and value == "system" then
+                value = translated(i18n, "inspector.bandwidth_scope_system", "System aggregate")
+            elseif bandwidth_scope and value == "controller_pmu" then
+                value = translated(i18n, "inspector.bandwidth_scope_controller", "Selected controller PMU")
             end
             rows[#rows + 1] = { label, format_value(value, i18n,
                 field and field.unit)
@@ -6508,6 +6514,13 @@ local function run_loop(options, backend, renderer, engine, translator)
                 translated(translator, "inspector.close_hint", "Esc/Enter closes"),
             })
             return
+        end
+        if inspector_id == "memory.bandwidth" then
+            for _, entity in ipairs(entities) do
+                if entity.measurement_scope == "system" then
+                    entity.name = translated(translator, "inspector.bandwidth_scope_system", "System aggregate")
+                end
+            end
         end
         if #entities == 1 and not (inspector_id == "session.logind" and entities.partial) then
             inspect_entity(entities[1], inspector_id, title)
