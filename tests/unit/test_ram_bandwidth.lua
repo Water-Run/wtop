@@ -465,4 +465,56 @@ do
   print("ok: PMU instance evidence end-to-end, metadata/source isolation, no-zero-fill, legacy readers, JSON and10locale bounded UI")
 end
 
+
+-- Live history never blocks on a pending reader, mixes identities or fills gaps.
+do
+  local Live = require("wtop.inspectors.live_bandwidth")
+  local Model = require("wtop.inspectors.model")
+  local function result(timestamp, id, status)
+    status = status or "ok"
+    local fields = {
+      read_bandwidth = Model.field(status=="ok" and 64 or nil,"bytes_per_second"),
+      write_bandwidth = Model.field(status=="ok" and 32 or nil,"bytes_per_second") }
+    return Model.result(status, Model.entity("system-memory","memory",{metrics=fields,
+      evidence={measurement_scope="system",pmus={{name=id,type=8}}}}),{}, {timestamp_ns=timestamp})
+  end
+  assert(not pcall(Live.new,{measurement_scope="controller_pmu"},{}))
+  local calls, closes = 0, 0
+  local worker={sample=function()
+    calls=calls+1
+    if calls==1 then return {sampling_pending=true}end
+    return {data={inspection=result(200000000,"uncore_imc_0")}}
+  end,close=function()closes=closes+1 end}
+  local live=Live.new({id="system-memory"},{worker=worker})
+  assert(not live:poll({},0)and calls==1)
+  assert(not live:poll({},1000)and calls==1)
+  assert(live:poll({},250000000)and calls==2 and live.history:len()==1)
+  assert(not live:record(result(200000000,"uncore_imc_0"),500000000))
+  assert(not live:record(result(600000000,"uncore_imc_0"),500000000))
+  assert(live:record(result(2000000000,"uncore_imc_1"),2000000000))
+  assert(live.history:len()==1 and live.epoch==2)
+  assert(live:current(6000000000).quality=="stale")
+  assert(live:record(result(3000000000,"uncore_imc_1","denied"),3000000000))
+  local values,peak=live:series("read",3000000000)
+  assert(#values==2 and values[1]==64 and values[2]==false and peak==64)
+  assert(live:current(9000000000).status=="denied")
+  for index=1,200 do local now=10000000000+index*1000000000;assert(live:record(result(now,"uncore_imc_1"),now))end
+  assert(live.history:len()==128)
+  local _,empty=live:series("read",999000000000);assert(empty==0)
+  live:close();live:close();assert(closes==1 and live.history:len()==0 and not live:poll({},999000000000))
+  local safe=Live.new({id="system-memory"},{worker=worker})
+  assert(safe:poll({safe_mode=true},0)and calls==2 and safe:current(0).reason=="safe_mode")
+  safe:close()
+  local pause_closes,pause_opens=0,0
+  local paused=Live.new({id="system-memory"},{create_worker=function()
+    pause_opens=pause_opens+1
+    return {sample=function()return {sampling_pending=true}end,close=function()pause_closes=pause_closes+1 end}
+  end})
+  paused:set_paused(true,100);assert(pause_closes==1 and not paused:poll({},1000))
+  paused:set_paused(true,200);assert(pause_closes==1 and paused.paused_at==100)
+  paused:set_paused(false,300);assert(not paused:poll({},300)and pause_opens==2)
+  paused:close();assert(pause_closes==2)
+  print("ok: live RAM nonblocking polling, source epochs, stale values, gap preservation, bounded history and idempotent close")
+end
+
 return true

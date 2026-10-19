@@ -302,6 +302,8 @@ local function bandwidth_counter_lines(samples, i18n)
         field("inspector.bandwidth_event", "Event", row.event)
         field(read and "metrics.read" or "metrics.write", direction, row.bytes_per_second, "bytes_per_second")
         field("inspector.bandwidth_runtime", "Counter runtime", row.runtime_ns, "nanoseconds")
+        if row.enabled_ns then field("inspector.bandwidth_enabled", "Counter enabled time", row.enabled_ns, "nanoseconds") end
+        if row.bytes_per_count then field("inspector.bandwidth_bytes_per_count", "Bytes per count", row.bytes_per_count) end
         field("inspector.bandwidth_running", "Counter running", row.running_percent, "percent")
         local count = row.count ~= nil and format_value(row.count, i18n)
             .. (row.unit and row.unit ~= "" and " " .. row.unit or "") or "—"
@@ -5580,8 +5582,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             return node and "numa:" .. node.id
         end
         if hardware_query ~= "" then
-            local table_model = models and models.system_devices
-            return table_model and table_model.ids[table_model.selected or 1] or nil
+            return ViewModel.system_device_selection(engine.snapshot, translator, hardware_query)
         end
         local node = Hardware.build(engine.snapshot).nodes[1]
         return node and node.id
@@ -6603,6 +6604,38 @@ local function run_loop(options, backend, renderer, engine, translator)
         local inspector_id = explicit_inspector or selection and selection.inspector or "storage.smart"
         local title = explicit_title or selection and selection.title
             or { key = "inspector.smart", fallback = "SMART / NVMe" }
+        if inspector_id == "memory.bandwidth" then
+            local Live = require("wtop.inspectors.live_bandwidth")
+            if Live.available(native) then
+                if engine._bandwidth_live then engine._bandwidth_live:close() end
+                local view = Live.new(entity)
+                engine._bandwidth_live = view
+                view.builder = function()
+                    local now = view.paused_at or engine.clock:now_ns()
+                    local current = view:current(now)
+                    local lines = inspector_lines(translated(translator, title.key, title.fallback)
+                        .. " · " .. tostring(entity.name or entity.id), current, translator)
+                    local read, read_peak = view:series("read", now)
+                    local write, write_peak = view:series("write", now)
+                    local maximum = math.max(read_peak, write_peak, 1)
+                    local Spark = require("wtop.ui.widgets.sparkline")
+                    local chart = { min = 0, max = maximum, mode = "ascii", gap = " " }
+                    table.insert(lines, 3, translated(translator, "inspector.bandwidth_live", "Live · 60 s · 1 s/column"))
+                    if view.paused_at then lines[3] = translated(translator, "status.paused", "Paused") .. " · " .. lines[3] end
+                    table.insert(lines, 4, translated(translator, "inspector.bandwidth_read", "Read")
+                        .. " [" .. Spark.render(read, 60, chart) .. "]")
+                    table.insert(lines, 5, translated(translator, "inspector.bandwidth_write", "Write")
+                        .. " [" .. Spark.render(write, 60, chart) .. "]")
+                    table.insert(lines, 6, translated(translator, "inspector.bandwidth_scale", "Scale maximum: {value}",
+                        { value = format_value(maximum, translator, "bytes_per_second") }))
+                    return lines
+                end
+                view:set_paused(paused, engine.clock:now_ns())
+                view:poll(engine.context, engine.clock:now_ns())
+                show_overlay(view.builder)
+                return
+            end
+        end
         local result = inspector_registry:inspect(inspector_id,
             inspector_context(engine), entity, "summary")
         if inspector_id == "service.systemd" then
@@ -8357,6 +8390,14 @@ local function run_loop(options, backend, renderer, engine, translator)
                 dirty = true
                 return
             end
+            if engine._bandwidth_live and overlay_builder == engine._bandwidth_live.builder
+                and event.type == "key" and event.key == "space" then
+                paused = not paused
+                engine:set_paused(paused)
+                engine._bandwidth_live:set_paused(paused, engine.clock:now_ns())
+                dirty = true
+                return
+            end
             local maximum = overlay_max_offset(rows, columns, overlay)
             if hardware_detail and hardware_detail.references then
                 local selection = hardware_detail.references
@@ -8703,6 +8744,10 @@ local function run_loop(options, backend, renderer, engine, translator)
             move_hardware_selection(key == "j" and 1 or -1)
             dirty = true
         elseif key == "enter" and hardware_page() then
+            if workspace:content_page() == "system" and hardware_query ~= "" then
+                hardware_selected_id = ViewModel.system_device_selection(
+                    engine.snapshot, translator, hardware_query, hardware_selected_id)
+            end
             if workspace:content_page() == "memory" and hardware_selected_id
                 and not hardware_selected_id:match(hardware_widget_id() == "dimm_table" and "^dimm:" or "^numa:") then
                 hardware_selected_id = nil
@@ -9305,6 +9350,11 @@ local function run_loop(options, backend, renderer, engine, translator)
     end
 
     while running do
+        if engine._bandwidth_live and overlay_builder ~= engine._bandwidth_live.builder then
+            engine._bandwidth_live:close()
+            engine._bandwidth_live = nil
+        end
+        if engine._bandwidth_live then engine._bandwidth_live:set_paused(paused, engine.clock:now_ns()) end
         if storage_overlay_builder and overlay_builder ~= storage_overlay_builder then
             engine._storage_inspector:close()
             storage_overlay_builder = nil
@@ -9353,6 +9403,8 @@ local function run_loop(options, backend, renderer, engine, translator)
             last_presented_ns = native.monotonic_ns()
         end
         local _, completed = engine:tick(false)
+        if engine._bandwidth_live and running
+            and engine._bandwidth_live:poll(engine.context, engine.clock:now_ns()) then dirty = true end
         if next(completed) then
             dirty = true
         end
@@ -9483,6 +9535,7 @@ function M.run(options)
         return run_loop(options, backend, renderer, engine, translator)
     end, debug.traceback)
     if engine._storage_inspector then engine._storage_inspector:close() end
+    if engine._bandwidth_live then engine._bandwidth_live:close() end
     engine:stop()
     if started then
         backend.stop()

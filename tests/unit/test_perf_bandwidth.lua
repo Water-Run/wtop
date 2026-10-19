@@ -1,4 +1,4 @@
-package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
+package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 
 local PerfBandwidth = require("wtop.inspectors.perf_bandwidth")
 
@@ -503,6 +503,77 @@ do
   assert(PerfBandwidth.bytes_per_count({ unit = "cycles" }) == nil,
     "an explicit non-byte unit was silently converted into 64-byte transfers")
   print("ok: per-event PMU instances, rates/runtime/coverage, foreign CPUs, duplicates, missing/unsupported rows and bounded evidence")
+end
+
+
+-- The direct kernel path reuses event selection but executes no helpers.
+do
+  local Direct = require("wtop.inspectors.native_bandwidth")
+  local Fixture = require("support.fixture_fs")
+  assert(Direct.encode("event=0xff,umask=0x20", {event="config:0-7",umask="config:8-15"}).config == 0x20ff)
+  assert(Direct.encode("event=7", {event="config1:1,6-7"}).config1 == 194)
+  assert(Direct.encode("event=3", {event="config2:6,1"}).config2 == 66)
+  assert(Direct.encode("a=3,b=1", {a="config:0-1",b="config:0"}).config == 3)
+  assert(Direct.encode("a=3,b=0", {a="config:0-1",b="config:0"}) == nil)
+  assert(Direct.encode("event=0xffffffffffffffff", {event="config:0-63"}).config == -1)
+  assert(Direct.encode("event=0x000000000000000000ff", {event="config:0-7"}).config == 255)
+  for _, case in ipairs({
+    {"event=256", {event="config:0-7"}}, {"event=1,event=2",{event="config:0-7"}},
+    {"event=1,",{event="config:0-7"}}, {"event=1,,umask=2",{event="config:0-7",umask="config:8-15"}},
+    {"event=1",{event="config3:0-7"}}, {"event=1",{event="config:0-64"}},
+    {"event=1",{event="config:1-0"}}, {"event=1",{event="config:0,0"}},
+    {"event=18446744073709551616",{event="config:0-63"}}, {"event=$(id)",{event="config:0-7"}},
+  }) do assert(Direct.encode(case[1],case[2]) == nil,case[1]) end
+  local base="/sys/bus/event_source/devices/uncore_imc_0"
+  local files={ [base.."/type"]="8", [base.."/cpumask"]="0",
+    [base.."/events/cas_count_read"]="event=4,umask=3",
+    [base.."/events/cas_count_write"]="event=4,umask=12",
+    [base.."/format/event"]="config:0-7", [base.."/format/umask"]="config:8-15" }
+  local fs=Fixture.new({files=files})
+  local pmus={{name="uncore_imc_0",id="uncore_imc_0",source=base,type=8,cpus={0},events={
+    cas_count_read={event=4,umask=3},cas_count_write={event=4,umask=12}}}}
+  local calls, running, errno, changed=0,1000000000,nil,false
+  local native={read_perf_counts=function(events,duration)
+    calls=calls+1; assert(duration==250 and #events==2)
+    assert(events[1].type==8 and events[1].cpu==0 and events[1].config==0x304)
+    assert(events[2].config==0xc04)
+    return {started_ns=1000000000,finished_ns=3000000000,samples={
+      errno and {errno=errno} or {count=100,enabled_ns=1000000000,running_ns=running},
+      errno and {errno=errno} or {count=50,enabled_ns=1000000000,running_ns=running}}}
+  end}
+  local direct=Direct.new({fs=fs,native=native})
+  assert(direct:read({pmus=pmus,safe_mode=true}).reason=="safe_mode" and calls==0)
+  local result=direct:read({pmus=pmus})
+  assert(result.status=="ok" and result.read_bytes_per_second==6400 and result.write_bytes_per_second==3200)
+  assert(#result.counter_samples==2 and result.counter_samples[1].count==100)
+  assert(result.counter_samples[1].bytes_per_count==64 and result.counter_samples[1].enabled_ns==1000000000)
+  running=500000000;result=direct:read({pmus=pmus})
+  assert(result.estimated and result.counter_samples[1].quality=="estimated" and result.counter_samples[1].running_percent==50)
+  errno=13;result=direct:read({pmus=pmus});assert(result.status=="denied" and result.reason=="perf_event_permission_denied")
+  errno=5;assert(direct:read({pmus=pmus}).status=="error")
+  errno=nil;running=0;assert(direct:read({pmus=pmus}).status=="unavailable")
+  running=1000000000
+  local partial_native={read_perf_counts=function(events,duration)
+    local r=native.read_perf_counts(events,duration);r.samples[2]={errno=13};return r
+  end}
+  local partial=Direct.new({fs=fs,native=partial_native}):read({pmus=pmus})
+  assert(partial.status=="ok" and partial.estimated and partial.read_bytes_per_second==6400
+    and partial.write_bytes_per_second==nil,"missing write counter was filled with zero")
+  local duplicate=direct:read({pmus={pmus[1],pmus[1]}})
+  assert(duplicate.reason=="memory_pmu_identity_changed")
+  local malformed=Direct.new({fs=fs,native={read_perf_counts=function()
+    return {started_ns=1,finished_ns=2,samples={false,false}}
+  end}}):read({pmus=pmus})
+  assert(malformed.status=="error" and malformed.reason=="invalid_perf_reader_result")
+  local old=native.read_perf_counts
+  native.read_perf_counts=function(...) local r=old(...);changed=true;return r end
+  local changing={read=function(_,path,limit)
+    if changed and path==base.."/type"then return "9"end
+    return fs:read(path,limit)
+  end}
+  local invalid=Direct.new({fs=changing,native=native}):read({pmus=pmus})
+  assert(invalid.reason=="memory_pmu_identity_changed" and invalid.read_bytes_per_second==nil)
+  print("ok: direct kernel encoding, overlapping masks, native count/running conversion, permissions, safe mode and identity changes")
 end
 
 return true

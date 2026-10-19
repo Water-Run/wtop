@@ -6,6 +6,7 @@ local Native = require("wtop.native")
 -- directory and onefile bundles without running platform-specific readers.
 local constructors = {
     hwmon = function(o) return require("wtop.collectors.hwmon").new(o) end,
+    ram_bandwidth = function(o) return require("wtop.collectors.ram_bandwidth").new(o) end,
     spd = function(o) return require("wtop.collectors.spd").new(o) end,
     cpufreq = function(o) return require("wtop.collectors.cpufreq").new(o) end,
     powercap = function(o) return require("wtop.collectors.powercap").new(o) end,

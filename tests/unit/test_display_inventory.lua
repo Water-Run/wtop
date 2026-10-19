@@ -190,6 +190,12 @@ end
 local model = ViewModel.build({ history_values = function() return {} end }, snap,
   assert(I18n.new({ locale = "en-US" })), {}, "system", nil, nil, { system_query = "vendor:sam" })
 assert(#model.system_devices.ids == 2 and model.system_devices.ids[2] == node.id)
+assert(ViewModel.system_device_selection(snap, assert(I18n.new({locale="en-US"})),
+  "id:"..node.id, "disk:zram0") == node.id,
+  "detail selection used the previous frame's unfiltered device")
+assert(ViewModel.system_device_selection(snap, assert(I18n.new({locale="en-US"})),
+  "id:display:missing", node.id) == nil,
+  "a query without matches opened an old selected device")
 snap.quality.displays = { status = "error", quality = "stale" }
 assert(Hardware.build(snap).by_id[node.id].parent_id == nil)
 assert(Export.agent(snap).metrics.displays.devices[3].quality == "stale")

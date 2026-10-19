@@ -70,6 +70,7 @@ vraie machine XP.
 - Les versions Windows en développement affichent la température NVMe et les limites indiquées par le disque. Appuyez sur `s` pour consulter son état en lecture seule ; les données SMART ATA sont lues après sélection du disque.
 - Des inspections approfondies facultatives (SMART/NVMe, bande passante
   mémoire, unités systemd, sshd) quand les outils sont présents sur la machine.
+- Sous Linux, `b` ouvre le débit mémoire en direct avec les courbes de lecture et d’écriture. Espace met la mesure en pause ; fermer le panneau l’arrête. Les compteurs peuvent nécessiter des droits supplémentaires.
 - Une mesure qui a échoué ou qui est incomplète est signalée comme telle
   (par exemple `denied` ou `partial`) au lieu d'apparaître vide ou à zéro.
 - Dix langues d'interface, à changer en cours de route avec `L`, et cinq

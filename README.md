@@ -65,6 +65,7 @@ build target but hasn't been tested on a real XP machine yet.
 - Windows development builds show NVMe temperature and reported limits in Storage. Press `s` for read-only drive health; ATA SMART is read after selecting a drive.
 - Optional deep checks (SMART/NVMe, memory bandwidth, systemd units, sshd) when the host
   tools are available.
+- On Linux, `b` opens live memory bandwidth with read/write charts. Space pauses sampling; closing the panel stops it. Access to the counters may require elevated privileges.
 - Readings that failed or are incomplete are labeled as such (for example
   `denied` or `partial`) instead of showing up as blank or zero.
 - Ten interface languages, switchable at runtime with `L`, and five color

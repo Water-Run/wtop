@@ -74,6 +74,8 @@ function M.copy(input, reported_total, truncated, pmus)
           direction = raw.direction, instance_expected = expected, source = pmu.source,
           bytes_per_second = valid and rate or nil, count = valid and raw.count or nil,
           runtime_ns = valid and raw.runtime_ns or nil,
+          enabled_ns = valid and finite(raw.enabled_ns) and raw.enabled_ns >= raw.runtime_ns and raw.enabled_ns or nil,
+          bytes_per_count = valid and finite(raw.bytes_per_count) and raw.bytes_per_count > 0 and raw.bytes_per_count or nil,
           running_percent = valid and raw.running_percent or nil,
           unit = valid and type(raw.unit) == "string" and #raw.unit <= 64
             and not raw.unit:find("[%c]") and raw.unit or nil,

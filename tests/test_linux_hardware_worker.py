@@ -70,12 +70,15 @@ def verify_cta_application(args, env, work):
             environment = {'TERM':'dumb', 'COLORTERM':None, 'LANG':'C', 'LC_ALL':'C', 'LC_CTYPE':'C'} if ascii_mode else None
             raw = pty.run_session(columns, rows, exercise=False, cli_options=('--lang', locale, '--no-color'),
                                   terminal_environment=environment, script=script)
+            # Preserve the exact failed screen too; an assertion before saving
+            # otherwise leaves no evidence of which detail the scroll reached.
+            stem = 'cta-'+str(columns)+'-'+locale+('-ascii' if ascii_mode else '')
+            path = work/(stem+'.pty');path.write_bytes(raw);path.chmod(0o600)
+            path = work/(stem+'-screens.json');path.write_text(json.dumps(screens));path.chmod(0o600)
             normalized = ' '.join(' '.join(screens.values()).split())
             for text in ['CTA-861', 'VIC 97', 'VIC 193', 'Linear PCM', 'PQ', '400', '40 - 120 Hz']:
                 assert text in normalized, (locale, text)
             if ascii_mode:assert all(byte < 128 for byte in raw)
-            stem = 'cta-'+str(columns)+'-'+locale+('-ascii' if ascii_mode else '')
-            path = work/(stem+'.pty');path.write_bytes(raw);path.chmod(0o600)
             hashes = {}
             for index, (digest, text) in enumerate(screens.items()):
                 path = work/(stem+'-screen-'+str(index)+'.txt');path.write_text(text);path.chmod(0o600);hashes[path.name] = digest

@@ -29,7 +29,7 @@ wtop --memory-bandwidth --memory-pmu uncore_imc_free_running_0
 模式为 `dev.waterrun.wtop.memory-bandwidth/v1`，契约见
 [memory-bandwidth-v1.schema.json](memory-bandwidth-v1.schema.json)。
 `mode=list` 返回有界 PMU 清单，不打开性能计数器；`mode=measure` 使用
-内存详情相同的读取器执行一次有界测量。默认汇总系统事件，指定 PMU 时
+共享内存检查器和 perf 助手执行一次有界测量。默认汇总系统事件，指定 PMU 时
 只请求该项，`result.entity.metrics.measurement_scope.value` 分别为
 `system` 或 `controller_pmu`。PMU 实例不等于内存插槽或 DIMM 通道。
 
@@ -50,6 +50,19 @@ CPU 或 DIMM。`details.counter_samples_total` 与
 测量窗口和各字段时间仍以 `result` 中的证据为准。
 `make check` 分别对本机的测量与清单输出应用 schema；安装烟测也检查
 清单、安全模式、普通测量与平台状态。
+
+Linux 的实时 RAM 详情另由隔离读取器直接读取内核计数接口，不执行
+perf/sleep 助手。它只在面板打开时按一秒间隔申请约 250 毫秒窗口，
+以 60 秒读写图表显示最近记录，空格暂停并关闭读取器，恢复时重新申请。
+来源身份改变会清空历史；拒绝或失败保留缺口，不填成零。
+该历史目前属于交互会话，不会自动加入 Snapshot、Agent 或上述一次性命令。
+
+原生计数明细的 `count` 保留内核原始计数，`bytes_per_count` 是依据同一
+PMU 的事件单位、倍率和 format ABI 得到的转换因子。速率为
+`count * bytes_per_count * 1e9 / runtime_ns`；`enabled_ns` 与
+`runtime_ns` 保留计数器启用、运行纳秒，二者之比给出运行占比。
+多路复用时标为估算，这个占比不是内存带宽利用率。未知配置不猜测，
+PMU 类型、事件、CPU 掩码、单位或倍率变化后丢弃该次读数。
 
 ## 数据结构
 

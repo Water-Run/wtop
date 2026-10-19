@@ -86,6 +86,7 @@
 #include "wtop_linux_drm_lua.h"
 #include "wtop_linux_usb.h"
 #include "wtop_linux_process_status.h"
+#include "wtop_linux_perf.h"
 
 #ifndef NS_PER_SECOND
 #define NS_PER_SECOND 1000000000LL
@@ -2319,6 +2320,7 @@ static const luaL_Reg functions[] = {
     {"poll", l_poll},
     {"write", l_write},
     {"run", l_run},
+    {"read_perf_counts", wtop_linux_read_perf_counts},
     {"execve", l_execve},
     {"monotonic_ns", l_monotonic_ns},
     {"realtime_ns", l_realtime_ns},

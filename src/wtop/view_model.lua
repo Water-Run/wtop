@@ -2354,6 +2354,14 @@ local function system_device_rows(snapshot, i18n, query)
         ids, total, direct_count, first_match_index
 end
 
+-- Resolve against the current query even when a confirmation and detail key
+-- arrive before another frame. The last rendered table can still be unfiltered.
+function M.system_device_selection(snapshot, i18n, query, preferred)
+    local _, _, _, _, ids, _, _, first = system_device_rows(snapshot, i18n, query)
+    for _, id in ipairs(ids) do if id == preferred then return id end end
+    return ids[first or 1]
+end
+
 local function system_limits_entries(snapshot, format, i18n)
     local system = snapshot.system or {}
     local limits = system.limits or {}
