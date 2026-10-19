@@ -118,6 +118,7 @@ static locale_t g_wcwidth_locale = (locale_t)0;
 typedef struct io_guard {
     DIR *directory;
     int descriptor;
+    void *allocation;
 } io_guard;
 
 static void restore_handlers(void);
@@ -208,9 +209,16 @@ static int push_timespec_ns(lua_State *L, const struct timespec *value) {
 }
 
 /* Lua errors use longjmp, so ordinary C cleanup after a potentially allocating
- * API call is not reliable.  Keep live descriptors in a to-be-closed userdata;
+ * API call is not reliable. Keep descriptors and owned C memory in a userdata;
  * Lua invokes this close method both on a regular C return and while unwinding
  * an allocation error.  __gc is a second, idempotent safety net. */
+static void release_io_allocation(io_guard *guard) {
+    if (guard->allocation) {
+        free(guard->allocation);
+        guard->allocation = NULL;
+    }
+}
+
 static int l_io_guard_close(lua_State *L) {
     io_guard *guard = (io_guard *)lua_touserdata(L, 1);
     if (!guard) return 0;
@@ -222,6 +230,7 @@ static int l_io_guard_close(lua_State *L) {
         (void)close(guard->descriptor);
         guard->descriptor = -1;
     }
+    release_io_allocation(guard);
     return 0;
 }
 
@@ -229,6 +238,7 @@ static io_guard *push_io_guard(lua_State *L) {
     io_guard *guard = (io_guard *)lua_newuserdatauv(L, sizeof(*guard), 0);
     guard->directory = NULL;
     guard->descriptor = -1;
+    guard->allocation = NULL;
     luaL_setmetatable(L, IO_GUARD_METATABLE);
     lua_toclose(L, -1);
     return guard;
@@ -732,11 +742,16 @@ static int l_run(lua_State *L) {
         return luaL_argerror(L, 2, "max_output_bytes must be in 1..16777216");
     }
 
+    io_guard *argument_guard = push_io_guard(L);
+    io_guard *stdout_guard = push_io_guard(L);
+    io_guard *stderr_guard = push_io_guard(L);
+
     started_ns = monotonic_now_ns();
     if (started_ns < 0) return push_errno(L, "clock_gettime(CLOCK_MONOTONIC)");
 
     arguments = (char **)calloc(argument_count + 1, sizeof(char *));
     if (!arguments) return luaL_error(L, "calloc: out of memory");
+    argument_guard->allocation = arguments;
     for (size_t index = 0; index < argument_count; ++index) {
         size_t length;
         const char *value;
@@ -744,20 +759,20 @@ static int l_run(lua_State *L) {
         luaL_checktype(L, -1, LUA_TSTRING);
         value = luaL_checklstring(L, -1, &length);
         if (strlen(value) != length) {
-            free(arguments);
+            release_io_allocation(argument_guard);
             return luaL_argerror(L, 1, "argv strings cannot contain NUL bytes");
         }
         arguments[index] = (char *)value;
         lua_pop(L, 1);
     }
     if (arguments[0][0] != '/') {
-        free(arguments);
+        release_io_allocation(argument_guard);
         return luaL_argerror(L, 1, "argv[1] must be an absolute path");
     }
 
     if (make_pipe(stdout_pipe) != 0) {
         int saved_errno = errno;
-        free(arguments);
+        release_io_allocation(argument_guard);
         errno = saved_errno;
         return push_errno(L, "pipe");
     }
@@ -765,7 +780,7 @@ static int l_run(lua_State *L) {
         int saved_errno = errno;
         close_fd(&stdout_pipe[0]);
         close_fd(&stdout_pipe[1]);
-        free(arguments);
+        release_io_allocation(argument_guard);
         errno = saved_errno;
         return push_errno(L, "pipe");
     }
@@ -775,19 +790,23 @@ static int l_run(lua_State *L) {
         close_fd(&stdout_pipe[1]);
         close_fd(&stderr_pipe[0]);
         close_fd(&stderr_pipe[1]);
-        free(arguments);
+        release_io_allocation(argument_guard);
         errno = saved_errno;
         return push_errno(L, "fcntl");
     }
-    if (capture_init(&stdout_capture, stdout_pipe[0], (size_t)max_output_value) != 0 ||
-        capture_init(&stderr_capture, stderr_pipe[0], (size_t)max_output_value) != 0) {
+    int capture_error = capture_init(&stdout_capture, stdout_pipe[0], (size_t)max_output_value);
+    if (!capture_error)
+        capture_error = capture_init(&stderr_capture, stderr_pipe[0], (size_t)max_output_value);
+    stdout_guard->allocation = stdout_capture.data;
+    stderr_guard->allocation = stderr_capture.data;
+    if (capture_error) {
         close_fd(&stdout_pipe[0]);
         close_fd(&stdout_pipe[1]);
         close_fd(&stderr_pipe[0]);
         close_fd(&stderr_pipe[1]);
-        free(stdout_capture.data);
-        free(stderr_capture.data);
-        free(arguments);
+        release_io_allocation(stdout_guard);
+        release_io_allocation(stderr_guard);
+        release_io_allocation(argument_guard);
         return luaL_error(L, "malloc: out of memory");
     }
 
@@ -800,9 +819,9 @@ static int l_run(lua_State *L) {
         close_fd(&stdout_pipe[1]);
         close_fd(&stderr_pipe[0]);
         close_fd(&stderr_pipe[1]);
-        free(stdout_capture.data);
-        free(stderr_capture.data);
-        free(arguments);
+        release_io_allocation(stdout_guard);
+        release_io_allocation(stderr_guard);
+        release_io_allocation(argument_guard);
         free(lang_assignment);
         free(lc_all_assignment);
         free(runtime_dir_assignment);
@@ -820,9 +839,9 @@ static int l_run(lua_State *L) {
         close_fd(&stdout_pipe[1]);
         close_fd(&stderr_pipe[0]);
         close_fd(&stderr_pipe[1]);
-        free(stdout_capture.data);
-        free(stderr_capture.data);
-        free(arguments);
+        release_io_allocation(stdout_guard);
+        release_io_allocation(stderr_guard);
+        release_io_allocation(argument_guard);
         free(lang_assignment);
         free(lc_all_assignment);
         free(runtime_dir_assignment);
@@ -867,16 +886,16 @@ static int l_run(lua_State *L) {
         close_fd(&stdout_pipe[1]);
         close_fd(&stderr_pipe[0]);
         close_fd(&stderr_pipe[1]);
-        free(stdout_capture.data);
-        free(stderr_capture.data);
-        free(arguments);
+        release_io_allocation(stdout_guard);
+        release_io_allocation(stderr_guard);
+        release_io_allocation(argument_guard);
         free(lang_assignment);
         free(lc_all_assignment);
         free(runtime_dir_assignment);
         errno = saved_errno;
         return push_errno(L, "setpgid");
     }
-    free(arguments);
+    release_io_allocation(argument_guard);
     free(lang_assignment);
     free(lc_all_assignment);
     free(runtime_dir_assignment);
@@ -1038,8 +1057,8 @@ static int l_run(lua_State *L) {
         lua_setfield(L, -2, "duration_ns");
     }
 
-    free(stdout_capture.data);
-    free(stderr_capture.data);
+    release_io_allocation(stdout_guard);
+    release_io_allocation(stderr_guard);
     return 1;
 }
 
@@ -1802,6 +1821,7 @@ static int l_proc_batch(lua_State *L) {
         errno = ENOMEM;
         return push_errno(L, "proc_batch_alloc");
     }
+    guard->allocation = buffer;
     /* Absolute stack slots from here on: guard, contents, denied. */
     int guard_index = lua_gettop(L);
     lua_createtable(L, (int)count, 0);
@@ -1867,7 +1887,7 @@ static int l_proc_batch(lua_State *L) {
             lua_rawseti(L, guard_index + 2, entry);
         }
     }
-    free(buffer);
+    release_io_allocation(guard);
     /* The to-be-closed guard stays below the results; the call machinery
      * closes it when the frame unwinds, on every path including errors. */
     return 2;
