@@ -272,4 +272,95 @@ for _, locale in ipairs({ "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "fr-FR", 
   assert(detail:find("1920 x 1080", 1, true) and detail:find("3840 x 2160", 1, true))
   assert(not detail:find("DRM", 1, true) and not detail:find("EDID", 1, true) and not detail:find("PRIVATE", 1, true))
 end
+-- GDI describes a source in the current desktop. Its documented interface
+-- association is independent of cached EDID presence and declaration values.
+local function desktop_sample(overrides)
+  local raw = sample().devices[1]
+  raw.desktop_status, raw._desktop_identity_verified = "ok", true
+  raw.desktop_active, raw.desktop_primary = true, false
+  raw.current_mode_status = "ok"
+  raw.current_mode = { pixel_width = 2560, pixel_height = 1440, refresh_hz = 144,
+    position_x = -2560, position_y = -120, orientation_degrees = 90, bits_per_pixel = 32,
+    interlaced = false, observed_at_ns = 1000, _private = "PRIVATE-GDI-ID", hdr = true }
+  for key, value in pairs(overrides or {}) do raw[key] = value end
+  local input = sample();input.devices[1] = raw;return input
+end
+local desktop = NativeDisplays.result(desktop_sample(), 1000)
+local d = desktop.data.devices[1]
+assert(desktop.quality == "fresh" and d.desktop_status == "ok" and d.desktop_active and not d.desktop_primary)
+assert(d.connection == "unknown" and d.enabled == nil and d.current_mode.width_points == nil)
+assert(d.current_mode.pixel_width == 2560 and d.current_mode.position_x == -2560
+  and d.current_mode.position_y == -120 and d.current_mode.orientation_degrees == 90)
+assert(d.current_mode.bits_per_pixel == 32 and d.current_mode.interlaced == false
+  and d.current_mode.refresh_hz == 144 and d.current_mode.scope == "windows_desktop_source")
+assert(d.current_mode._private == nil and d.current_mode.hdr == nil and d._desktop_identity_verified == nil)
+for _, status in ipairs({ "unavailable", "error", "gap", "stale", "bogus" }) do
+  local r = NativeDisplays.result(desktop_sample({ desktop_status = status }), 1000).data.devices[1]
+  assert(r.current_mode == nil and r.desktop_active == nil and r.edid and r.os_present)
+  if status == "unavailable" then assert(r.desktop_status == status and r.quality == "fresh")
+  else assert(r.quality == "partial" and r.desktop_status == (status == "gap" and "gap" or "error")) end
+end
+for _, field in ipairs({ "_desktop_identity_verified", "desktop_active", "desktop_primary" }) do
+  local raw = desktop_sample();raw.devices[1][field] = nil
+  local r = NativeDisplays.result(raw, 1000).data.devices[1]
+  assert(r.desktop_status == "gap" and r.desktop_active == nil and r.current_mode == nil and r.edid)
+end
+local bad_modes = {
+  { "pixel_width", 0 }, { "pixel_height", -1 }, { "pixel_width", 0 / 0 },
+  { "pixel_height", 1440.5 }, { "refresh_hz", math.huge }, { "refresh_hz", "144" },
+  { "refresh_hz", 144.5 }, { "bits_per_pixel", 0 }, { "bits_per_pixel", 129 },
+  { "orientation_degrees", 360 }, { "orientation_degrees", 45 },
+  { "position_x", -2147483649 }, { "position_y", 2147483648 }, { "position_x", false },
+  { "interlaced", 0 }, { "observed_at_ns", 998 }, { "observed_at_ns", 1001 },
+}
+for _, invalid in ipairs(bad_modes) do
+  local raw = desktop_sample();raw.devices[1].current_mode[invalid[1]] = invalid[2]
+  local r = NativeDisplays.result(raw, 1000).data.devices[1]
+  assert(r.current_mode == nil and r.current_mode_status == "error" and r.quality == "partial"
+    and r.desktop_active and r.edid, invalid[1])
+end
+local incomplete_position = desktop_sample();incomplete_position.devices[1].current_mode.position_y = nil
+assert(NativeDisplays.result(incomplete_position, 1000).data.devices[1].current_mode == nil)
+for _, frequency in ipairs({ 0, 1 }) do
+  local raw = desktop_sample();raw.devices[1].current_mode.refresh_hz = frequency
+  local m = NativeDisplays.result(raw, 1000).data.devices[1].current_mode
+  assert(m and m.refresh_hz == nil and m.refresh_kind == "nominal")
+end
+local inactive = NativeDisplays.result(desktop_sample({ desktop_active = false }), 1000).data.devices[1]
+assert(inactive.desktop_active == false and inactive.current_mode == nil and inactive.current_mode_status == "unavailable")
+local unmeasured = NativeDisplays.result(desktop_sample({ current_mode = false, current_mode_status = "unavailable" }), 1000)
+assert(unmeasured.quality == "partial" and unmeasured.data.devices[1].desktop_active)
+local no_optional = desktop_sample()
+for _, key in ipairs({ "position_x", "position_y", "orientation_degrees", "refresh_hz", "bits_per_pixel", "interlaced" }) do
+  no_optional.devices[1].current_mode[key] = nil
+end
+assert(NativeDisplays.result(no_optional, 1000).data.devices[1].current_mode.pixel_width == 2560)
+local desktop_result = NativeDisplays.publish(desktop, {})
+local desktop_snapshot = Snapshot.merge(Snapshot.new(0, 0), { displays = desktop_result }, 1, 1000)
+local desktop_node = assert(Hardware.build(desktop_snapshot).by_id["display:" .. desktop_result.data.devices[1].id])
+local desktop_full, desktop_agent = Export.snapshot(desktop_snapshot), Export.agent(desktop_snapshot)
+local public_mode = desktop_full.displays.devices[1].current_mode
+assert(public_mode.position_x == -2560 and public_mode.bits_per_pixel == 32 and public_mode.orientation_degrees == 90)
+assert(desktop_agent.metrics.displays.devices[1].current_mode.position_y == -120)
+assert(desktop_agent.metrics.displays.devices[1].desktop_primary == false)
+for _, exported in ipairs({ desktop_full, desktop_agent }) do
+  local text = JSON.encode(exported)
+  assert(not text:find("PRIVATE", 1, true) and not text:find("_desktop_identity", 1, true))
+end
+local desktop_report = Report.render(desktop_full)
+assert(desktop_report:find("Windows desktop association", 1, true) and desktop_report:find("144.000 Hz", 1, true)
+  and desktop_report:find("Framebuffer bits per pixel", 1, true) and desktop_report:find("-2560", 1, true))
+for _, locale in ipairs({ "en-US", "zh-CN", "zh-TW", "ja-JP", "ko-KR", "fr-FR", "de-DE", "es-ES", "pt-BR", "ru-RU" }) do
+  local i18n = assert(I18n.new({ locale = locale }))
+  local detail = table.concat(TUI.hardware_detail_lines(desktop_snapshot, desktop_node.id, i18n, 1100), "\n")
+  for _, name in ipairs({ "status", "active", "primary", "pixels", "position", "orientation", "bpp", "note" }) do
+    assert(i18n:has("display.desktop_" .. name) and detail:find(i18n:t("display.desktop_" .. name), 1, true), locale .. name)
+  end
+  assert(detail:find("2560 x 1440", 1, true) and detail:find("-2560, -120", 1, true)
+    and not detail:find("PRIVATE", 1, true))
+end
+desktop_snapshot.quality.displays = { status = "error", quality = "stale" }
+local stale_desktop = Export.snapshot(desktop_snapshot).displays.devices[1]
+assert(stale_desktop.desktop_status == "stale" and stale_desktop.current_mode_status == "stale"
+  and stale_desktop.current_mode.quality == "stale")
 return true

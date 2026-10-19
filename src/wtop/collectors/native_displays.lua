@@ -11,6 +11,57 @@ local function integer(value, maximum)
     and value >= 0 and value <= maximum and value or nil
 end
 
+local function signed_coordinate(value)
+  return type(value) == "number" and math.type(value) == "integer"
+    and value >= -2147483648 and value <= 2147483647
+end
+
+local function windows_desktop(row, raw, now)
+  if raw.desktop_status == nil then return end -- Older readers have no GDI observation.
+  local status = raw.desktop_status
+  if status ~= "ok" then
+    row.desktop_status = status == "gap" and "gap" or status == "unavailable" and "unavailable" or "error"
+    if row.desktop_status ~= "unavailable" then row.quality = "partial" end
+    return
+  end
+  if raw._desktop_identity_verified ~= true or type(raw.desktop_active) ~= "boolean"
+      or type(raw.desktop_primary) ~= "boolean" then
+    row.desktop_status, row.quality = "gap", "partial"
+    return
+  end
+  row.desktop_status = "ok"
+  row.desktop_active, row.desktop_primary = raw.desktop_active, raw.desktop_primary
+  local mode = raw.current_mode
+  if not raw.desktop_active then
+    row.current_mode_status = "unavailable"
+    return
+  end
+  local valid = raw.current_mode_status == "ok" and type(mode) == "table"
+    and integer(mode.pixel_width, 2147483647) and mode.pixel_width > 0
+    and integer(mode.pixel_height, 2147483647) and mode.pixel_height > 0
+    and integer(mode.observed_at_ns, math.maxinteger) and mode.observed_at_ns >= row.observed_at_ns
+    and mode.observed_at_ns <= now
+    and (mode.refresh_hz == nil or integer(mode.refresh_hz, 10000))
+    and (mode.bits_per_pixel == nil or integer(mode.bits_per_pixel, 128) and mode.bits_per_pixel > 0)
+    and ((mode.position_x == nil and mode.position_y == nil)
+      or signed_coordinate(mode.position_x) and signed_coordinate(mode.position_y))
+    and (mode.orientation_degrees == nil or integer(mode.orientation_degrees, 270)
+      and mode.orientation_degrees % 90 == 0)
+    and (mode.interlaced == nil or type(mode.interlaced) == "boolean")
+  if not valid then
+    row.current_mode_status = raw.current_mode_status == "unavailable" and "unavailable" or "error"
+    row.quality = "partial"
+    return
+  end
+  row.current_mode_status, row.current_mode_observed_at_ns = "ok", mode.observed_at_ns
+  row.current_mode = { pixel_width = mode.pixel_width, pixel_height = mode.pixel_height,
+    bits_per_pixel = mode.bits_per_pixel, position_x = mode.position_x, position_y = mode.position_y,
+    orientation_degrees = mode.orientation_degrees, interlaced = mode.interlaced,
+    observed_at_ns = mode.observed_at_ns, refresh_kind = "nominal", scope = "windows_desktop_source",
+    source = "GDI:EnumDisplaySettingsExW", quality = "fresh" }
+  if mode.refresh_hz and mode.refresh_hz > 1 then row.current_mode.refresh_hz = mode.refresh_hz end
+end
+
 local function setupapi_result(input, now)
   local source = "native:collect_displays"
   if type(input) ~= "table" or input.backend ~= "setupapi"
@@ -85,6 +136,7 @@ local function setupapi_result(input, now)
             row.reason = row.reason or "display_edid_unavailable"
           end
         end
+        windows_desktop(row, raw, now)
       else
         row.quality = "gap"
         if raw.reason == "display_identity_unavailable" then row.reason = raw.reason

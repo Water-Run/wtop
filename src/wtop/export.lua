@@ -1993,14 +1993,17 @@ local function export_displays(source, limit, state)
             "enabled", "dpms", "pci_address", "source", "status", "quality", "reason",
             "edid_status", "edid_reason", "observed_at_ns", "modes_status", "modes_truncated",
             "online", "active", "asleep", "builtin", "main", "vendor_number", "model_number", "current_mode_status",
+            "desktop_status", "desktop_active", "desktop_primary",
             "current_mode_reason", "current_mode_errno", "current_mode_configured", "current_mode_observed_at_ns" })
         if not current then row.quality = "stale" end
         if not current and row.current_mode_status then row.current_mode_status = "stale" end
+        if not current and row.desktop_status then row.desktop_status = "stale" end
         if type(device.current_mode) == "table" then
             row.current_mode = copy_fields(device.current_mode, { "width_points", "height_points",
                 "pixel_width", "pixel_height", "refresh_hz", "refresh_kind", "scope", "source",
                 "pixel_clock_hz", "horizontal_total", "vertical_total", "vscan", "flags",
-                "interlaced", "double_scan", "approx_refresh_hz", "observed_at_ns" })
+                "interlaced", "double_scan", "approx_refresh_hz", "observed_at_ns",
+                "position_x", "position_y", "orientation_degrees", "bits_per_pixel" })
             row.current_mode.quality = current and (device.current_mode.quality or device.quality) or "stale"
         end
         row.modes = json.array({})

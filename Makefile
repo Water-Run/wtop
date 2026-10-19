@@ -104,6 +104,7 @@ HARDWARE_LUA_HEADER := $(NATIVE_DIR)/wtop_hardware_lua.h
 HARDWARE_LUA_INPUTS := $(shell find src/wtop -name '*.lua')
 NATIVE_HEADERS += native/wtop_terminal_signal.h native/wtop_hardware_worker.h native/wtop_cpuid_protocol.h native/wtop_cpuid_capture.h native/wtop_linux_nvme.h native/wtop_linux_wifi.h native/wtop_linux_drm.h native/wtop_linux_drm_lua.h
 NATIVE_HEADERS += native/wtop_linux_usb.h
+NATIVE_HEADERS += native/wtop_windows_display_mode.h
 NATIVE_REVISION_HEADER := $(NATIVE_DIR)/build_revision.h
 NATIVE_VERSION_HEADER := $(NATIVE_DIR)/build_version.h
 LUA_PATH_DEV := $(CURDIR)/src/?.lua;$(CURDIR)/src/?/init.lua;;

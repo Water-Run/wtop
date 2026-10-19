@@ -851,12 +851,13 @@ function M.render(snapshot)
             return { device.id, device.connection, device.os_present, device.enabled, device.dpms, device.pci_address,
                 device.current_mode_status, device.current_mode_configured, device.quality }
         end, displays)
-    local display_specs, display_timings, display_modes, os_displays = {}, {}, {}, {}
+    local display_specs, display_timings, display_modes, os_displays, desktop_displays = {}, {}, {}, {}, {}
     local windows_displays, cached_displays = false, false
     for _, device in ipairs(list(displays.devices)) do
         if device.backend == "setupapi" then windows_displays = true end
         if device.backend ~= "coregraphics" then cached_displays = true end
         if device.backend == "coregraphics" then os_displays[#os_displays + 1] = device end
+        if device.backend == "setupapi" and device.desktop_status then desktop_displays[#desktop_displays + 1] = device end
         if type(device.current_mode) == "table" then
             display_modes[#display_modes + 1] = { device = device.id, mode = device.current_mode }
         end
@@ -886,12 +887,18 @@ function M.render(snapshot)
         os_displays, function(d)
             return { d.id, d.online, d.active, d.asleep, d.builtin, d.main, d.vendor_number, d.model_number, d.current_mode_status, d.quality }
         end, displays)
-    table_section(lines, "Current display modes", { "Display", "Width (points)", "Height (points)", "Mode width (pixels)", "Mode height (pixels)", "Nominal refresh", "Mode clock", "Interlaced", "Double scan", "Scope", "Quality" },
+    table_section(lines, "Windows desktop association", { "Display", "Association", "Active in desktop", "Primary desktop source", "Mode status", "Quality" },
+        desktop_displays, function(d)
+            return { d.id, d.desktop_status, d.desktop_active, d.desktop_primary, d.current_mode_status, d.quality }
+        end, displays)
+    table_section(lines, "Current display modes", { "Display", "Width (points)", "Height (points)", "Mode width (pixels)", "Mode height (pixels)", "Nominal refresh", "Mode clock", "Interlaced", "Double scan", "Desktop X", "Desktop Y", "Rotation (degrees)", "Framebuffer bits per pixel", "Scope", "Quality" },
         display_modes, function(item)
             local m = item.mode
             return { item.device, m.width_points, m.height_points, m.pixel_width, m.pixel_height,
                 quantity(m.refresh_hz, 1, " Hz", 3), quantity(m.pixel_clock_hz, 1e6, " MHz", 3),
-                m.interlaced, m.double_scan, m.scope == "configured_crtc" and "Kernel configuration" or "OS display mode", m.quality }
+                m.interlaced, m.double_scan, m.position_x, m.position_y, m.orientation_degrees, m.bits_per_pixel,
+                m.scope == "configured_crtc" and "Kernel configuration" or m.scope == "windows_desktop_source"
+                    and "Windows desktop source" or "OS display mode", m.quality }
         end, displays)
     for _, item in ipairs(display_modes) do
         if item.mode.scope == "configured_crtc" then
@@ -902,6 +909,10 @@ function M.render(snapshot)
     end
     if #os_displays > 0 then
         lines[#lines + 1] = "CoreGraphics describes OS displays, including virtual displays. Refresh is nominal, not measured; zero means unspecified and is omitted. Physical size, color depth and HDR are not determined. Display IDs apply only within this sampling session."
+        lines[#lines + 1] = ""
+    end
+    if #desktop_displays > 0 then
+        lines[#lines + 1] = "GDI modes describe the current session desktop source in pixels. Refresh is nominal; 0/1 defaults are omitted. Framebuffer bits per pixel do not establish panel color depth or HDR. Physical signal timing and desktop scaling are not determined."
         lines[#lines + 1] = ""
     end
     if cached_displays then

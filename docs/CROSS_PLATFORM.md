@@ -67,6 +67,42 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 ## 验证矩阵
 
+### 2026-10-19：Windows 当前桌面源模式候选
+
+`EnumDisplayDevicesW` 的设备接口名称通过 SetupAPI 对应到已复核的 PnP
+实例，不解析接口路径，也不按 EDID、名字或枚举序号猜测关联。
+读取器前后两轮核对关联、活动标志和有效模式字段；重复映射、变化和预算
+耗尽保留为缺口或错误。每轮最多 512 次 GDI 枚举与 128 条映射，沿用隔离
+读取器的超时和清理，不修改显示设置。GDI API 从系统目录按需加载，缺失时
+保留原来的设备清单。构建的 11 个 PE、947 个具名导入通过当前 XP 目标静态
+检查；这不是 XP 运行证据。
+
+详情、Snapshot、Agent 与报告保留桌面源像素、名义整数刷新率、带符号位置、
+旋转、帧缓冲每像素位数及当前会话的活动/主源标志。默认刷新值 0/1 省略，
+未返回的可选字段保持未知。帧缓冲位数不代表面板每色位数或 HDR；桌面源
+也不代表物理链路时序或缩放。OS 存在、桌面关联、当前模式和缓存 EDID
+各自保留状态。八项新标签已补齐十种语言。
+
+候选证据位于 `build/hardware-windows-desktop-mode-20261019/`。
+实际原生读取器的 17 类桌面场景覆盖关联/模式变化、重复映射、负坐标、
+旋转、默认刷新率、字段缺失、可选 API 缺失和枚举预算；256 个 Lua 分配
+失败位置中 67 次内存不足、189 次成功，全部在 Lua 分配前关闭设备句柄。
+Wine 与 Windows 11／Server 2008 的原生运行均通过。两台 Windows 各通过
+十八个共享测试文件、三项实际 CLI、三项软件模式 CLI，以及实际/软件模式各一次
+经典控制台；软件模式的 2560×1440、144 Hz、负坐标和旋转不是物理测量。
+
+两台主机的 SSH 会话 0 都有一条 OS 监视器接口，但没有 GDI 监视器。
+Windows 11 的现有断开登录会话 2 也得到同样结果，独立探针与候选一致。
+这证明不可用状态，尚不证明活动桌面模式的正向结果。该会话的三项 CLI 与
+四个流式快照按 UTF-8 读取后可解析；原始错误解码记录保留。临时只读任务
+已在完成状态、退出结果、结果时间和进程记录复核后删除。未登录或重新连接
+会话，未修改显示设置。
+
+接口依据：[GDI 枚举与设备接口关联](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumdisplaydevicesw)、
+[当前模式与返回字段](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumdisplaysettingsexw)、
+[SetupAPI 接口详情](https://learn.microsoft.com/en-us/windows/win32/api/setupapi/nf-setupapi-setupdigetdeviceinterfacedetailw)。
+活动桌面、物理热插拔、更广显卡/旧系统、资源目标与正式交付仍未完成。
+
 ### 2026-10-19：USB 缓存端点与总线来源状态
 
 Linux USB 接口详情已接入端点地址、方向、传输类型、最大包字节数、间隔

@@ -2689,6 +2689,32 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
             add("display.os_present", "Present in OS device list", device.os_present)
             lines[#lines + 1] = translated(i18n, "display.os_note",
                 "OS presence does not establish a physical connection or an active desktop mode.")
+            if device.desktop_status then
+                local current = Quality.current_source(snapshot.quality, "displays")
+                add("display.desktop_status", "Desktop association", Technical.state(i18n,
+                    current and device.desktop_status or "stale"))
+                add("display.desktop_active", "Active in this desktop", device.desktop_active)
+                add("display.desktop_primary", "Primary desktop source", device.desktop_primary)
+                if device.current_mode_status then
+                    add("display.current_mode", "Current mode status", Technical.state(i18n,
+                        current and device.current_mode_status or "stale"))
+                end
+                local mode = device.current_mode
+                if type(mode) == "table" then
+                    add("display.desktop_pixels", "Desktop source size (pixels)",
+                        tostring(mode.pixel_width) .. " x " .. tostring(mode.pixel_height))
+                    add("display.nominal_refresh", "Nominal mode refresh", mode.refresh_hz, "hertz")
+                    if mode.position_x ~= nil and mode.position_y ~= nil then
+                        add("display.desktop_position", "Desktop position (pixels)",
+                            tostring(mode.position_x) .. ", " .. tostring(mode.position_y))
+                    end
+                    add("display.desktop_orientation", "Desktop rotation (degrees)", mode.orientation_degrees)
+                    add("display.desktop_bpp", "Framebuffer bits per pixel", mode.bits_per_pixel)
+                    add("display.mode_interlaced", "Interlaced mode", mode.interlaced)
+                end
+                lines[#lines + 1] = translated(i18n, "display.desktop_note",
+                    "Current session desktop source; refresh is nominal. Framebuffer depth is not panel color depth or HDR. Physical signal timing and desktop scaling are not determined.")
+            end
         elseif device.backend == "coregraphics" then
             add("display.online", "Online OS display", device.online)
             add("display.active", "Drawable", device.active)

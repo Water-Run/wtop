@@ -1764,9 +1764,10 @@ static int l_read_smbios(lua_State *L) {
     return 1;
 }
 
-/* Cached monitor declarations are available through SetupAPI even when this
- * session has no GDI desktop. DIGCF_PRESENT is OS presence, not an active mode
- * or a measured physical connection. All APIs used here predate XP. */
+/* Cached monitor declarations remain available without a GDI desktop. Session
+ * desktop source modes are observed independently, through monitor interfaces.
+ * OS presence and GDI activity are not measured physical connections. */
+#include "wtop_windows_display_mode.h"
 #define MAX_DISPLAY_DEVICES 128u
 #define MAX_DISPLAY_EDID 32768u
 #define MAX_DISPLAY_EDID_TOTAL (1024u * 1024u)
@@ -1784,9 +1785,63 @@ typedef struct {
 } display_record;
 typedef struct {
     display_record records[MAX_DISPLAY_DEVICES];
+    wtop_desktop_sample desktop_before, desktop_after;
     BYTE first[MAX_DISPLAY_EDID], second[MAX_DISPLAY_EDID];
     BYTE edid[MAX_DISPLAY_EDID_TOTAL];
 } display_sample;
+
+static int display_desktop_fields(lua_State *L, const display_sample *sample,
+        const WCHAR *instance, uint64_t observed_at_ns) {
+    unsigned before_matches, after_matches;
+    const wtop_desktop_row *before = wtop_desktop_find(&sample->desktop_before, instance, &before_matches);
+    const wtop_desktop_row *after = wtop_desktop_find(&sample->desktop_after, instance, &after_matches);
+    const char *status = "unavailable";
+    if (!sample->desktop_before.complete || !sample->desktop_after.complete) status = "error";
+    else if (before_matches > 1 || after_matches > 1) status = "gap";
+    else if ((before || after) && !wtop_desktop_same(before, after)) status = "gap";
+    else if (before && after) status = "ok";
+    string_field(L, "desktop_status", status);
+    if (strcmp(status, "ok")) return strcmp(status, "unavailable") != 0;
+    boolean_field(L, "_desktop_identity_verified", 1);
+    int active = (after->adapter_flags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)
+        && (after->monitor_flags & DISPLAY_DEVICE_ACTIVE);
+    boolean_field(L, "desktop_active", active);
+    boolean_field(L, "desktop_primary", (after->adapter_flags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0);
+    const DEVMODEW *m = &after->mode;
+    const DWORD size_fields = DM_PELSWIDTH | DM_PELSHEIGHT;
+    if (!active || !after->mode_read) {
+        string_field(L, "current_mode_status", "unavailable");
+        return active;
+    }
+    if ((m->dmFields & size_fields) != size_fields || !m->dmPelsWidth || !m->dmPelsHeight
+            || m->dmPelsWidth > INT32_MAX || m->dmPelsHeight > INT32_MAX
+            || ((m->dmFields & DM_DISPLAYFREQUENCY) && m->dmDisplayFrequency > 10000)
+            || ((m->dmFields & DM_BITSPERPEL) && (!m->dmBitsPerPel || m->dmBitsPerPel > 128))
+            || ((m->dmFields & DM_DISPLAYORIENTATION) && m->dmDisplayOrientation > DMDO_270)) {
+        string_field(L, "current_mode_status", "error");
+        return 1;
+    }
+    string_field(L, "current_mode_status", "ok");
+    lua_createtable(L, 0, 12);
+    integer_field(L, "pixel_width", m->dmPelsWidth);
+    integer_field(L, "pixel_height", m->dmPelsHeight);
+    if ((m->dmFields & DM_DISPLAYFREQUENCY) && m->dmDisplayFrequency > 1)
+        integer_field(L, "refresh_hz", m->dmDisplayFrequency);
+    if (m->dmFields & DM_BITSPERPEL) integer_field(L, "bits_per_pixel", m->dmBitsPerPel);
+    if (m->dmFields & DM_POSITION) {
+        integer_field(L, "position_x", m->dmPosition.x);
+        integer_field(L, "position_y", m->dmPosition.y);
+    }
+    if (m->dmFields & DM_DISPLAYORIENTATION)
+        integer_field(L, "orientation_degrees", m->dmDisplayOrientation * 90);
+    if (m->dmFields & DM_DISPLAYFLAGS) boolean_field(L, "interlaced", (m->dmDisplayFlags & DM_INTERLACED) != 0);
+    string_field(L, "scope", "windows_desktop_source");
+    string_field(L, "source", "GDI:EnumDisplaySettingsExW");
+    string_field(L, "refresh_kind", "nominal");
+    if (observed_at_ns) integer_field(L, "observed_at_ns", (lua_Integer)observed_at_ns);
+    lua_setfield(L, -2, "current_mode");
+    return 0;
+}
 
 static uint64_t display_now_ns(void) {
     LARGE_INTEGER counter, frequency;
@@ -1838,6 +1893,7 @@ static int l_collect_displays(lua_State *L) {
      * device set or registry key is live. Lua owns the sample across OOM. */
     display_sample *sample = (display_sample *)lua_newuserdatauv(L, sizeof(*sample), 0);
     memset(sample->records, 0, sizeof(sample->records));
+    wtop_desktop_capture(&sample->desktop_before);
     DWORD count = 0, total = 0, used = 0, enumeration_error = ERROR_SUCCESS;
     int truncated = 0, partial = 0;
     HDEVINFO set = SetupDiGetClassDevsW(&display_class, NULL, NULL, DIGCF_PRESENT);
@@ -1882,6 +1938,7 @@ static int l_collect_displays(lua_State *L) {
         }
         SetupDiDestroyDeviceInfoList(set);
     } else enumeration_error = GetLastError();
+    wtop_desktop_capture(&sample->desktop_after);
     for (DWORD i = 0; i < count; ++i) {
         for (DWORD j = i + 1; j < count; ++j) {
             if (sample->records[i].instance[0] && sample->records[j].instance[0]
@@ -1937,6 +1994,10 @@ static int l_collect_displays(lua_State *L) {
             } else if (row->edid_state == DISPLAY_EDID_OVERSIZE) string_field(L, "edid_reason", "edid_too_large");
             else if (row->edid_state == DISPLAY_EDID_BUDGET) string_field(L, "edid_reason", "display_edid_budget_exhausted");
             if (row->error) integer_field(L, "win32_error", row->error);
+            if (display_desktop_fields(L, sample, row->instance, display_now_ns())) {
+                string_field(L, "quality", "partial");
+                partial = 1;
+            }
         } else {
             string_field(L, "quality", "gap");
             string_field(L, "reason", row->initial_identity ? "display_changed_during_read" : "display_identity_unavailable");
@@ -1945,6 +2006,10 @@ static int l_collect_displays(lua_State *L) {
         lua_rawseti(L, -2, (lua_Integer)i + 1);
     }
     lua_setfield(L, -2, "devices");
+    if (partial) {
+        string_field(L, "quality", "partial");
+        if (count) string_field(L, "reason", "display_inventory_incomplete");
+    }
     return 1;
 }
 
