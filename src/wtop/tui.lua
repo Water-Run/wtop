@@ -9393,12 +9393,11 @@ local function run_loop(options, backend, renderer, engine, translator)
             dirty = true
         end
         if dirty then sync_engine_visibility() end
-        if dirty and running and input_activity and last_rendered_page ~= workspace.active then
-            -- An activated page already has a bounded background snapshot.
-            -- Paint the navigation result before synchronous hardware reads:
-            -- an ACPI-backed hwmon attribute can take longer than a keypress
-            -- should wait. Freshly completed collectors then update this
-            -- frame in the same loop, even at a slow selected refresh rate.
+        if dirty and running and input_activity then
+            -- Paint requested interaction from the current snapshot before
+            -- synchronous collectors run. Opening, closing and scrolling an
+            -- overlay need the same immediate response as a page switch.
+            -- Newly completed readings can update it after this first frame.
             models = render_frame()
             last_presented_ns = native.monotonic_ns()
         end

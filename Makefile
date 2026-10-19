@@ -472,7 +472,7 @@ test-native-nvml-worker-sanitized: sanitize-native $(LUA_STAMP)
 		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' \
 		--output build/native-nvml-worker-san --native-only
 
-.PHONY: test-native-gpu-worker test-native-gpu-worker-sanitized test-native-hardware-worker test-native-hardware-worker-sanitized test-native-drm-worker test-native-drm-worker-sanitized test-native-cpu-clocks test-native-cpu-clocks-sanitized
+.PHONY: test-native-gpu-worker test-native-gpu-worker-sanitized test-native-hardware-worker test-native-hardware-worker-sanitized test-native-drm-worker test-native-drm-worker-sanitized test-native-cpu-clocks test-native-cpu-clocks-sanitized test-native-tui-input
 test-native-cpu-clocks: native $(LUA_STAMP)
 	@python3 tests/test_linux_cpu_clocks.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)'
 
@@ -506,6 +506,9 @@ test-native-process-status-sanitized: sanitize-native $(LUA_STAMP)
 test-native-hardware-worker: native $(LUA_STAMP)
 	@python3 tests/test_linux_hardware_worker.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)'
 
+test-native-tui-input: native $(LUA_STAMP)
+	@python3 tests/test_tui_input_before_sampling.py --lua-prefix '$(LUA_PREFIX)'
+
 test-native-hardware-worker-sanitized: sanitize-native $(LUA_STAMP)
 	@$(SAN_RUN_ENV) python3 tests/test_linux_hardware_worker.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)' \
 		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' \
@@ -519,7 +522,7 @@ test-native-gpu-worker-sanitized: sanitize-native $(LUA_STAMP)
 		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' \
 		--output build/native-gpu-worker-san --native-only
 
-check: resource-check native locales test-native-terminal-signals test-native-cpu-limits test-native-io-oom test-native-nvme-health test-native-wifi test-native-drm-modes test-native-usb-endpoints test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid test-native-process-status test-native-perf-counts
+check: resource-check native locales test-native-terminal-signals test-native-cpu-limits test-native-io-oom test-native-nvme-health test-native-wifi test-native-drm-modes test-native-usb-endpoints test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid test-native-process-status test-native-perf-counts test-native-tui-input
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAC) -p $$(find src tools tests -type f -name '*.lua' -print)
 	@sh -n tools/*.sh
 	@python3 -c 'import pathlib; [compile(path.read_bytes(), str(path), "exec") for path in pathlib.Path("tests").rglob("*.py")]'
