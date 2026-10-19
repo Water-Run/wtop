@@ -85,6 +85,7 @@
 #include "wtop_linux_wifi.h"
 #include "wtop_linux_drm_lua.h"
 #include "wtop_linux_usb.h"
+#include "wtop_linux_process_status.h"
 
 #ifndef NS_PER_SECOND
 #define NS_PER_SECOND 1000000000LL
@@ -2338,6 +2339,7 @@ static const luaL_Reg functions[] = {
     {"proc_batch", l_proc_batch},
     {"process_stat_fields", l_process_stat_fields},
     {"process_stat_row_fields", l_process_stat_row_fields},
+    {"process_status_metadata_input", wtop_linux_process_status_input},
     {"readlink", l_readlink},
     {"path_type", l_path_type},
     {"statvfs", l_statvfs},

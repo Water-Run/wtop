@@ -21,6 +21,7 @@ for _, provider in ipairs({ Native, { available = false }, {
     local now, flags, start = 1e9, 0x200000, 1000
     local command, reads, stat_reads = "", 0, 0
     local uid, present, change_after_status, change_after_command = 0, true, false, false
+    local status_reads = 0
     local fs = { list = function() return present and { "100" } or {} end }
     function fs:read(path)
         if path == "/proc/uptime" then return "100.0 0.0\n" end
@@ -31,6 +32,7 @@ for _, provider in ipairs({ Native, { available = false }, {
             return command
         end
         if path == "/proc/100/status" then
+            status_reads = status_reads + 1
             if change_after_status then flags=0 end
             return "Uid:\t" .. uid .. "\t0\t0\t0\nVmRSS:\t8192 kB\n"
         end
@@ -51,7 +53,7 @@ for _, provider in ipairs({ Native, { available = false }, {
         assert(row.name=="worker" and row.resident_bytes==(index==1 and 8388608 or 2097152))
     end
     assert(reads==0, "kernel-thread polling performed command-line I/O")
-    assert(stat_reads==7, "stat or supplemental-status identity validation changed")
+    assert(stat_reads==6+status_reads, "each periodic or initial status read requires a full identity readback")
     assert(sample(true).command==nil and reads==1, "explicit details did not query cmdline")
     assert(sample().command==nil and reads==1)
 

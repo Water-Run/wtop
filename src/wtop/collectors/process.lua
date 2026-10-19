@@ -18,6 +18,25 @@ local function process_stat(provider, content)
   return Parsers.process_stat(content)
 end
 
+-- A native reducer may avoid parsing unused status fields. It only selects
+-- input; the existing Lua parser still validates all published values.
+local function process_metadata(provider, content)
+  if type(content) == "string" and provider.available == true
+      and type(provider.process_status_metadata_input) == "function" then
+    local reduced = provider.process_status_metadata_input(content)
+    if type(reduced) == "string" then content = reduced end
+  end
+  return Parsers.process_status(content)
+end
+
+local STATUS_REFRESH_NS = 5 * 1000000000
+local function next_status_refresh(now, pid, starttime)
+  -- Stable identity phases distribute refreshes across a five-second period.
+  local phase = ((pid * 1103515245 + starttime % 5000) % 5000) * 1000000
+  local delta = (phase - now % STATUS_REFRESH_NS) % STATUS_REFRESH_NS
+  return now + (delta == 0 and STATUS_REFRESH_NS or delta)
+end
+
 local DEFAULT_MAX_PROCESSES = 8192
 local HARD_MAX_PROCESSES = 65536
 local DIRECTORY_ENTRY_SLACK = 256
@@ -817,14 +836,23 @@ function Process:sample(context, previous)
             process.affinity = cached.affinity
             process.namespaces = cached.namespaces
           end
-          if self.read_status and (detail or not cached) then
-            process.namespaces = nil
+          local status_requested = self.read_status and (detail or not cached
+            or type(cached.status_attempt_ns) ~= "number"
+            or type(cached.status_next_ns) ~= "number"
+            or now < cached.status_attempt_ns or now >= cached.status_next_ns)
+          if status_requested then
+            process.uid, process.user, process.affinity, process.namespaces = nil, nil, nil, nil
             local status_content, status_error = fs:read(base .. "/status", 256 * 1024)
             if status_content then
-              local status = Parsers.process_status(status_content)
+              local status = process_metadata(self.native, status_content)
               if status then
                 process.uid = status.uid
-                process.resident_bytes = status.rss_bytes or process.resident_bytes
+                if cached and cached.uid == status.uid then process.user = cached.user end
+                -- Periodic metadata refresh must not alternate the table's
+                -- ordinary RSS source between stat and status.
+                if detail or not cached then
+                  process.resident_bytes = status.rss_bytes or process.resident_bytes
+                end
                 process.affinity = status.affinity
                 if process.affinity then process.affinity.observed_ns = now end
                 process.context_switches = {
@@ -1210,8 +1238,7 @@ function Process:sample(context, previous)
           -- Only a pass that actually opened supplemental files has a
           -- reuse window to re-verify; a fully cached row re-reads nothing,
           -- so the second stat fetch would be pure I/O for the same answer.
-          supplemental_read = supplemental_read
-            or (self.read_status and (detail or not cached))
+          supplemental_read = supplemental_read or status_requested
           local generation_matches = true
           if supplemental_read then
             local final_content = fs:read(base .. "/stat", 65536)
@@ -1258,6 +1285,13 @@ function Process:sample(context, previous)
               entry.command_read = false
               entry.command = nil
               live_cache[process.id] = entry
+            end
+            if status_requested then
+              entry.status_attempt_ns = now
+              entry.status_next_ns = next_status_refresh(now, process.pid, process.starttime_ticks)
+            elseif cached then
+              entry.status_attempt_ns = cached.status_attempt_ns
+              entry.status_next_ns = cached.status_next_ns
             end
             entry.uid = process.uid
             entry.kernel_thread = is_kernel_thread

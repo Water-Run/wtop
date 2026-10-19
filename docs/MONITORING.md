@@ -107,6 +107,10 @@ macOS/Windows 原生采集器、设备和通道均标为 fresh 的直接输入�
 
 Linux 批量读取器对常规 `/proc/<pid>/stat` 行在原生模块中解析，解析不了的原文仍交给 Lua 解析器判定错误原因。旧原生模块与纯 Lua 5.4 路径继续使用字符串解析。
 
+进程的 UID、亲和性和命名空间身份在常规采样时按五秒周期分批刷新，打开详情
+会立即读取。读取失败时相关值留空，CPU 利用率仍可继续更新。补充读取后发现
+进程身份变化时，这一行的混合读数会被丢弃。
+
 Linux 进程详情显示线程组首线程的允许 CPU 和内存节点列表；选中线程的详情显示该线程自己的列表，两者可能不同。读数来自各自的 `/proc/.../status` 中的 `Cpus_allowed_list` 和 `Mems_allowed_list`，表示内核报告的允许集合，不是当前运行的 CPU 或实际内存页位置。普通进程扫描复用上次状态读取的结果，JSON 同时给出 `observed_ns`；打开进程详情会重新读取。缺少字段时不推断为 CPU 0，单个列表损坏时保留另一个并标为 `partial`。参见 [proc_pid_status(5)](https://man7.org/linux/man-pages/man5/proc_pid_status.5.html) 和 [sched_setaffinity(2)](https://www.man7.org/linux/man-pages/man2/sched_setaffinity.2.html)。
 
 所选进程详情还会有界枚举 `/proc/<pid>/fd`，给出首线程观察到的打开文件描述符数，并从 `/proc/<pid>/limits` 读取软/硬上限。线程可拥有不同的描述符表，因此这不是所有线程的合计。条目超过 4096 项时显示下界 `>=4096`；目录不可读和上限不可读各自报告状态，不填零。普通进程列表不做这次目录扫描，快照 JSON 也不附带只在详情模式采集的 FD 读数。参见 [proc_pid_fd(5)](https://www.man7.org/linux/man-pages/man5/proc_pid_fd.5.html)、[proc_pid_limits(5)](https://www.man7.org/linux/man-pages/man5/proc_pid_limits.5.html) 和 [unshare(2)](https://man7.org/linux/man-pages/man2/unshare.2.html)。

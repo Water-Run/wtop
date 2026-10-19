@@ -182,3 +182,74 @@ end, debug.traceback)
 FS.default.list, FS.default.read = prior_list, prior_read
 assert(ok, failure)
 print("ok: process text bytes, PID ordering, scan and I/O caps, batch failures, fallback and duplicate boundary")
+
+-- Credential and affinity metadata must refresh without requiring details.
+do
+  local Native=require("wtop.native")
+  for _,provider in ipairs({{available=false},Native}) do
+    local f=assert(io.open('tests/fixtures/proc/100.stat.1','rb'));local body=f:read('*a');f:close()
+    local uid,mask,now,status_reads,stat_reads=1000,'0-1',1e9,0,0
+    local start,denied,race=1000,false,false
+    local fs={list=function()return{'100'}end}
+    function fs:read(path)
+     if path=='/proc/uptime'then return'100 0\n'end
+     if path=='/proc/100/stat'then stat_reads=stat_reads+1;return body:gsub(' 1000 10485760 ',' '..start..' 10485760 ')end
+     if path=='/proc/100/status'then
+      status_reads=status_reads+1
+      if race then start=2000 end
+      if denied then return nil,{kind='denied'}end
+      return ('Uid:\t%d\t%d\t%d\t%d\nCpus_allowed_list:\t%s\nNSpid:\t100\n'):format(uid,uid,uid,uid,mask)
+     end
+     return nil,{kind='missing'}
+    end
+    local c=Process.new({fs=fs,native=provider,clock_ticks_per_second=100,page_size_bytes=4096})
+    local previous
+    local function sample(detail,resolver)
+     local ctx={fs=fs,now_ns=function()return now end,resolve_username=resolver}
+     if detail then ctx.selected_process_ids={['100:'..start]=true}end
+     previous=c:sample(ctx,previous)
+     return previous.data.by_id['100:'..start]
+    end
+    local first=assert(sample(false,function(v)return'user'..v end));assert(first.uid==1000 and first.user=='user1000'and status_reads==1 and stat_reads==2)
+    uid,mask=2000,'2-3';now=now+1000000
+    assert(sample().uid==1000 and status_reads==1,'ordinary sub-period sample reread status')
+    now=now+5e9;local changed=assert(sample());assert(changed.uid==2000 and changed.user==nil and changed.affinity.cpus_allowed_list=='2-3')
+    assert(first.uid==1000 and first.user=='user1000'and first.affinity.cpus_allowed_list=='0-1','old snapshot mutated')
+    assert(stat_reads==5,'periodic status refresh lost complete final-stat readback')
+    now=now+6e9;denied=true;local missing=assert(sample());assert(missing.uid==nil and missing.user==nil and missing.affinity==nil and missing.namespaces==nil and missing.partial_reason=='status_denied')
+    local n=status_reads;now=now+1e6;sample();assert(status_reads==n,'failed refresh retried on every tick')
+    now=1;denied=false;uid=3000;assert(sample().uid==3000 and status_reads==n+1,'clock reversal retained old metadata')
+    now=now+1e6;uid=4000;assert(sample(true).uid==4000,'selected details did not override refresh cadence')
+    local cache=c.identity_cache['100:1000'];local saved_uid=cache.uid;now=now+6e9;race=true
+    assert(sample()==nil and previous.data.races==1 and next(c.identity_cache)==nil)
+    assert(cache.uid==saved_uid,'failed identity validation mutated the prior cache')
+    race=false;start=1000;local off=Process.new({fs=fs,native={available=false},read_status=false});local n=status_reads
+    off:sample({fs=fs,now_ns=function()return now end});assert(status_reads==n)
+  end
+end
+
+-- Stable phases distribute this sequential thousand-identity fixture.
+do
+  local f=assert(io.open('tests/fixtures/proc/100.stat.1','rb'));local body=f:read('*a');f:close()
+  local entries,bodies={},{}
+  for pid=1,1000 do entries[pid]=tostring(pid);bodies[pid]=body:gsub('^100 ',pid..' ')end
+  local uid,reads,now=1000,0,1e9
+  local fs={list=function()return entries end}
+  function fs:read(path)
+   if path=='/proc/uptime'then return'100 0\n'end
+   local pid=tonumber(path:match('^/proc/(%d+)/stat$'));if pid then return bodies[pid]end
+   pid=tonumber(path:match('^/proc/(%d+)/status$'))
+   if pid then reads=reads+1;return('Uid:\t%d\t%d\t%d\t%d\nCpus_allowed_list:\t0-1\nNSpid:\t%d\n'):format(uid,uid,uid,uid,pid)end
+   return nil,{kind='missing'}
+  end
+  local c=Process.new({fs=fs,native={available=false},clock_ticks_per_second=100,page_size_bytes=4096})
+  local previous=c:sample({fs=fs,now_ns=function()return now end});assert(reads==1000 and #previous.data.list==1000)
+  uid=2000;local counts={}
+  for step=1,10 do
+   reads=0;now=now+1e9;previous=c:sample({fs=fs,now_ns=function()return now end},previous)
+   counts[step]=reads;assert(reads<=300,'too many metadata refreshes in one tick')
+   if step>=5 then for _,row in ipairs(previous.data.list)do assert(row.uid==2000)end end
+  end
+end
+
+print("ok: periodic process metadata, old-module fallback, immutable snapshots, denied/backoff, clock reversal, full identity readback and thousand-identity phases")

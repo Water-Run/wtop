@@ -104,6 +104,7 @@ HARDWARE_LUA_HEADER := $(NATIVE_DIR)/wtop_hardware_lua.h
 HARDWARE_LUA_INPUTS := $(shell find src/wtop -name '*.lua')
 NATIVE_HEADERS += native/wtop_terminal_signal.h native/wtop_hardware_worker.h native/wtop_cpuid_protocol.h native/wtop_cpuid_capture.h native/wtop_linux_nvme.h native/wtop_linux_wifi.h native/wtop_linux_drm.h native/wtop_linux_drm_lua.h
 NATIVE_HEADERS += native/wtop_linux_usb.h
+NATIVE_HEADERS += native/wtop_linux_process_status.h
 NATIVE_HEADERS += native/wtop_windows_display_mode.h
 NATIVE_REVISION_HEADER := $(NATIVE_DIR)/build_revision.h
 NATIVE_VERSION_HEADER := $(NATIVE_DIR)/build_version.h
@@ -380,7 +381,7 @@ SAN_RUN_ENV = ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
 SANITIZER_EXCLUDED := tests/unit/test_benchmark_record.lua
 
 test-sanitized: resource-check $(LUA_STAMP) $(NATIVE_REVISION_HEADER) \
-		$(NATIVE_VERSION_HEADER) sanitize-native test-native-amdsmi-sanitized test-native-levelzero-sanitized test-native-nvml-sanitized test-native-nvml-worker-sanitized test-native-gpu-worker-sanitized test-native-hardware-worker-sanitized test-native-drm-worker-sanitized test-native-cpu-clocks-sanitized test-native-cpuid-sanitized test-native-usb-endpoints-sanitized test-native-io-oom-sanitized
+		$(NATIVE_VERSION_HEADER) sanitize-native test-native-amdsmi-sanitized test-native-levelzero-sanitized test-native-nvml-sanitized test-native-nvml-worker-sanitized test-native-gpu-worker-sanitized test-native-hardware-worker-sanitized test-native-drm-worker-sanitized test-native-cpu-clocks-sanitized test-native-cpuid-sanitized test-native-process-status-sanitized test-native-usb-endpoints-sanitized test-native-io-oom-sanitized
 	@if [ -z '$(SAN_ASAN_RUNTIME)' ]; then echo "wtop: the sanitized module names no ASan runtime to preload, so the suite cannot run on the uninstrumented interpreter"; exit 1; fi
 	@for mode in --snapshot --agent --diagnose; do \
 		echo "wtop: sanitized $$mode"; \
@@ -493,6 +494,14 @@ test-native-cpuid-sanitized: sanitize-native $(LUA_STAMP)
 	@$(SAN_RUN_ENV) python3 tests/test_linux_cpuid.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)' \
 		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' --output build/native-cpuid-san --native-only
 
+.PHONY: test-native-process-status test-native-process-status-sanitized
+test-native-process-status: native $(LUA_STAMP)
+	@python3 tests/test_linux_process_status.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)'
+
+test-native-process-status-sanitized: sanitize-native $(LUA_STAMP)
+	@$(SAN_RUN_ENV) python3 tests/test_linux_process_status.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)' \
+		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' --output build/native-process-status-san
+
 test-native-hardware-worker: native $(LUA_STAMP)
 	@python3 tests/test_linux_hardware_worker.py --cc '$(CC)' --lua-prefix '$(LUA_PREFIX)'
 
@@ -509,7 +518,7 @@ test-native-gpu-worker-sanitized: sanitize-native $(LUA_STAMP)
 		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' \
 		--output build/native-gpu-worker-san --native-only
 
-check: resource-check native locales test-native-terminal-signals test-native-cpu-limits test-native-io-oom test-native-nvme-health test-native-wifi test-native-drm-modes test-native-usb-endpoints test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid
+check: resource-check native locales test-native-terminal-signals test-native-cpu-limits test-native-io-oom test-native-nvme-health test-native-wifi test-native-drm-modes test-native-usb-endpoints test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid test-native-process-status
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAC) -p $$(find src tools tests -type f -name '*.lua' -print)
 	@sh -n tools/*.sh
 	@python3 -c 'import pathlib; [compile(path.read_bytes(), str(path), "exec") for path in pathlib.Path("tests").rglob("*.py")]'
