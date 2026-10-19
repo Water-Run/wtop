@@ -40,16 +40,15 @@ end
 
 -- 1. The mapping itself.  ENODATA is the kernel declining to state a figure, so
 --    it joins the word the optional-attribute readers already treat as "not
---    published".  A read that really did fail is untouched by that.  ENOSPC is
---    the witness here rather than EIO, because errno 5 is deliberately mapped to
---    `denied` in this table for Win32's ERROR_ACCESS_DENIED and has been since
---    before this change.
+--    published". A real I/O failure must remain distinct from access denial.
 equal(FS.classify_error("read: No data available", 61), "unavailable",
   "ENODATA is not an I/O error")
 equal(FS.error_status({ kind = FS.classify_error("read: No data available", 61) }),
   "unavailable", "ENODATA does not report as an error status")
 equal(FS.classify_error("read: No space left on device", 28), "io_error",
   "a read that failed for a real reason is still an I/O error")
+equal(FS.classify_error("read: Input/output error", 5), "io_error",
+  "Linux EIO must not acquire Win32 ERROR_ACCESS_DENIED semantics")
 equal(FS.classify_error("open: Permission denied", 13), "denied",
   "EACCES is still denied")
 equal(FS.classify_error("no such file", 2), "missing", "ENOENT is still missing")
@@ -405,3 +404,188 @@ assert(declared == removed,
     .. "change with it rather than the two drifting apart again.")
 
 print("ok: ENODATA is a value the driver declined to state, not a failed read")
+
+-- Native/stdio error domains alongside the optional-attribute contract.
+do
+  local package = _G.package
+  package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
+
+  local Native = require("wtop.native")
+  local Fixture = require("support.fixture_fs")
+  local Hardware = require("support.hardware_fixtures")
+  local Powercap = require("wtop.collectors.powercap")
+
+  local function with_native(adapter, callback)
+    local original = package.loaded["wtop.native"]
+    package.loaded["wtop.native"] = adapter
+    local ok, err = xpcall(function()
+      callback(assert(loadfile("src/wtop/linux/fs.lua"))())
+    end, debug.traceback)
+    package.loaded["wtop.native"] = original
+    assert(ok, err)
+  end
+
+  local function failure(value, err, code, kind)
+    assert(value == nil and type(err) == "table", "expected a structured read failure")
+    assert(err.kind == kind, tostring(code) .. ": expected " .. kind .. ", got " .. tostring(err.kind))
+    assert(err.errno == code and err.message == "opaque localized error")
+    assert(err.path == "/test")
+  end
+
+  local function check_adapter(system, exported, cases, reads, links)
+    local code, probes = 0, 0
+    local function fail() return nil, "opaque localized error", code end
+    local adapter = { available = true, file_errors = exported,
+      uname = function() probes = probes + 1; return { sysname = system } end,
+      readfile = fail, readfile_at = fail, listdir = fail, listdir_hints = fail,
+      path_type = fail, readlink = fail, read_usb_interface = fail }
+    with_native(adapter, function(FS)
+      local fs = FS.new()
+      local accessors = {
+        function() return fs:list("/test") end,
+        function() return fs:list_hints("/test") end,
+        function() return fs:kind("/test") end,
+        function() return fs:kind_nofollow("/test") end,
+      }
+      for _, entry in ipairs(cases) do
+        code = entry[1]
+        for _, accessor in ipairs(accessors) do
+          local value, err = accessor()
+          failure(value, err, code, entry[2])
+        end
+        local usb, usb_error = fs:usb_interface("/test", 16)
+        assert(usb == nil and usb_error.kind == entry[2] and usb_error.errno == code
+          and usb_error.path == "/test")
+        local value, err = fs:read("/test", 16)
+        failure(value, err, code, entry[2])
+        value, err = fs:read_at("/test", 0, 16)
+        failure(value, err, code, entry[2])
+        value, err = fs:readlink("/test")
+        failure(value, err, code, entry[2])
+      end
+      for _, entry in ipairs(reads) do
+        code = entry[1]
+        local value, err = fs:read("/test", 16)
+        failure(value, err, code, entry[2])
+        value, err = fs:read_at("/test", 0, 16)
+        failure(value, err, code, entry[2])
+      end
+      for _, entry in ipairs(links) do
+        code = entry[1]
+        local value, err = fs:readlink("/test")
+        failure(value, err, code, entry[2])
+      end
+      -- Linux fixtures retain their declared Linux errno on every host.
+      assert(FS.classify_error("opaque", 5) == "io_error")
+      assert(FS.classify_error("opaque", 61) == "unavailable")
+      assert(FS.classify_error("permission denied", 5) == "io_error",
+        "a translated/message hint must not override a numeric error")
+      assert(FS.classify_error("permission denied") == "denied")
+      assert(FS.classify_error("no such file") == "missing")
+    end)
+    assert(probes == (exported and 0 or 1), "resolve legacy domain once, not for every read")
+  end
+
+  check_adapter("Linux", nil,
+    { {1,"denied"}, {2,"missing"}, {3,"io_error"}, {5,"io_error"}, {13,"denied"},
+      {20,"missing"}, {61,"unavailable"}, {96,"io_error"}, {999,"io_error"} },
+    { {22,"not_regular"}, {27,"too_large"}, {40,"symlink"}, {62,"io_error"} },
+    { {22,"not_link"}, {87,"io_error"} })
+  check_adapter("Darwin", nil,
+    { {1,"denied"}, {2,"missing"}, {3,"io_error"}, {5,"io_error"}, {13,"denied"},
+      {20,"missing"}, {61,"io_error"}, {96,"unavailable"}, {999,"io_error"} },
+    { {22,"not_regular"}, {27,"too_large"}, {40,"io_error"}, {62,"symlink"} },
+    { {22,"not_link"}, {87,"io_error"} })
+  check_adapter("Windows", nil,
+    { {1,"io_error"}, {2,"missing"}, {3,"missing"}, {5,"denied"}, {13,"io_error"},
+      {20,"io_error"}, {61,"io_error"}, {267,"missing"}, {999,"io_error"} },
+    { {22,"io_error"}, {27,"io_error"}, {40,"io_error"}, {87,"not_regular"}, {223,"too_large"} },
+    { {22,"io_error"}, {87,"io_error"} })
+
+  -- Compiler-provided values take precedence over platform guesses, including
+  -- a different Unix architecture and a module without uname.
+  local arbitrary = { general = { [701] = "denied", [702] = "missing", [703] = "unavailable" },
+    readfile = { [704] = "symlink", [705] = "not_regular", [706] = "too_large" },
+    readlink = { [707] = "not_link" }, stdio = { [801] = "denied", [802] = "missing" } }
+  check_adapter("Unknown", arbitrary,
+    { {5,"io_error"}, {13,"io_error"}, {61,"io_error"}, {701,"denied"},
+      {702,"missing"}, {703,"unavailable"} },
+    { {704,"symlink"}, {705,"not_regular"}, {706,"too_large"} }, { {707,"not_link"} })
+
+  -- Lua io.* returns CRT errno even on Windows. Exercise open, read, seek and
+  -- close independently, always closing an opened stream after a failed read.
+  for _, exported in ipairs({ false, arbitrary }) do
+    with_native({ available = false, file_errors = exported or nil }, function(FS)
+      local original_open = io.open
+      local ok, err = xpcall(function()
+        for _, stage in ipairs({ "open", "read", "seek", "close" }) do
+          for _, case in ipairs(exported and { {801,"denied"}, {802,"missing"}, {5,"io_error"} }
+              or { {13,"denied"}, {2,"missing"}, {5,"io_error"} }) do
+            local closed = 0
+            local function fail() return nil, "opaque localized error", case[1] end
+            io.open = function()
+              if stage == "open" then return fail() end
+              return {
+                read = function() if stage == "read" then return fail() end return "" end,
+                seek = function() if stage == "seek" then return fail() end return 0 end,
+                close = function() closed = closed + 1
+                  if stage == "close" then return fail() end return true end,
+              }
+            end
+            local value, read_error
+            if stage ~= "seek" then
+              value, read_error = FS.new():read("/test", 16)
+              failure(value, read_error, case[1], case[2])
+              assert(closed == (stage == "open" and 0 or 1))
+            end
+            closed = 0
+            value, read_error = FS.new():read_at("/test", 0, 16)
+            failure(value, read_error, case[1], case[2])
+            assert(closed == (stage == "open" and 0 or 1))
+          end
+        end
+        io.open = function() return { read = function() return nil end,
+          close = function() return true end, seek = function() return 0 end } end
+        assert(FS.new():read("/test", 16) == "")
+        assert(FS.new():read_at("/test", 0, 16) == "")
+      end, debug.traceback)
+      io.open = original_open
+      assert(ok, err)
+    end)
+  end
+
+  -- A sensor failure reaches the powercap diagnostics as an I/O fault. It must
+  -- not suggest elevating privileges, supply watts, or conceal the fault as an
+  -- absent attribute. The same fixture still samples the readable power limit.
+  local spec = Hardware.powercap_intel_rapl_no_data()
+  local path = "/sys/class/powercap/intel-rapl:0/energy_uj"
+  spec.files[path] = nil
+  spec.errors[path] = { errno = 5, message = "opaque localized error" }
+  local sample = Powercap.new({ fs = Fixture.new(spec) }):sample({})
+  local package_zone = assert(sample.data.by_id["intel-rapl:0"])
+  assert(package_zone.energy_joules == nil and package_zone.power_watts == nil)
+  local found
+  for _, issue in ipairs(package_zone.issues) do
+    if issue.source == path then
+      assert(issue.status == "error" and issue.reason == "opaque localized error")
+      found = true
+    end
+  end
+  assert(found, "powercap must retain the hardware read failure")
+  assert(package_zone.constraints[1].power_limit_watts ~= nil)
+
+  if Native.available then
+    assert(type(Native.file_errors) == "table", "native platform must export compiled error values")
+    for _, name in ipairs({ "general", "readfile", "readlink", "stdio" }) do
+      assert(type(Native.file_errors[name]) == "table")
+    end
+    local fs = require("wtop.linux.fs").new()
+    local value, err = fs:read("VERSION", 1)
+    assert(value == nil and err.kind == "too_large", "actual native read-size classification")
+    value, err = fs:list("VERSION")
+    assert(value == nil and err.kind == "missing", "actual native non-directory classification")
+    value, err = fs:read("VERSION/nonexistent", 16)
+    assert(value == nil and err.kind == "missing", "actual native path classification")
+  end
+  print("filesystem error domains: native constants, legacy platforms, CRT and sensor diagnostics")
+end

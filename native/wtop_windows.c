@@ -21,6 +21,7 @@
 #include <lauxlib.h>
 #include "wtop_edid_license.h"
 #include "wtop_build.h"
+#include "wtop_fs_errors.h"
 
 #include "wtop_windows.h"
 
@@ -2242,6 +2243,7 @@ static const luaL_Reg functions[] = {
 
 int __declspec(dllexport) luaopen_wtop_native(lua_State *L) {
     luaL_newlib(L, functions);
+    wtop_register_file_errors(L);
     wtop_register_hardware(L);
     lua_createtable(L,0,3);lua_pushboolean(L,1);lua_setfield(L,-2,"nvml");lua_pushboolean(L,1);lua_setfield(L,-2,"levelzero");lua_pushboolean(L,1);lua_setfield(L,-2,"adl");lua_setfield(L,-2,"gpu_worker_sources");
     string_field(L, "VERSION", WTOP_VERSION);

@@ -106,6 +106,7 @@ NATIVE_HEADERS += native/wtop_terminal_signal.h native/wtop_hardware_worker.h na
 NATIVE_HEADERS += native/wtop_linux_usb.h
 NATIVE_HEADERS += native/wtop_linux_process_status.h
 NATIVE_HEADERS += native/wtop_linux_perf.h
+NATIVE_HEADERS += native/wtop_fs_errors.h
 NATIVE_HEADERS += native/wtop_windows_display_mode.h
 NATIVE_REVISION_HEADER := $(NATIVE_DIR)/build_revision.h
 NATIVE_VERSION_HEADER := $(NATIVE_DIR)/build_version.h

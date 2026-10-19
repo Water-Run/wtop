@@ -15,6 +15,7 @@
 #include <IOKit/storage/IOStorageProtocolCharacteristics.h>
 
 #include <errno.h>
+#include "wtop_fs_errors.h"
 #include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -833,6 +834,7 @@ static const luaL_Reg functions[] = {
 
 int luaopen_wtop_native(lua_State *L) {
     luaL_newlib(L, functions);
+    wtop_register_file_errors(L);
     wtop_register_hardware(L);
     string_field(L, "VERSION", WTOP_VERSION);
     return 1;

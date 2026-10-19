@@ -6,8 +6,6 @@ FS.__index = FS
 local ERRNO_KIND = {
   [1] = "denied",       -- EPERM
   [2] = "missing",      -- ENOENT
-  [3] = "missing",      -- Win32 ERROR_PATH_NOT_FOUND
-  [5] = "denied",       -- Win32 ERROR_ACCESS_DENIED
   [13] = "denied",      -- EACCES
   [20] = "missing",     -- ENOTDIR
   -- ENODATA is the attribute existing and holding no value, which is the
@@ -22,8 +20,12 @@ local ERRNO_KIND = {
   [61] = "unavailable",  -- ENODATA
 }
 
-local function classify_error(message, errno)
-  if ERRNO_KIND[errno] then return ERRNO_KIND[errno] end
+-- Synthetic sysfs fixtures use Linux errno, independent of the test host.
+-- Actual accessors below select the native API or the C stdio error domain.
+local function classify_error(message, errno, kinds)
+  if type(errno) == "number" then
+    return (kinds or ERRNO_KIND)[errno] or "io_error"
+  end
   message = tostring(message or "io_error")
   local lower = message:lower()
   if lower:find("permission denied", 1, true) then
@@ -35,6 +37,53 @@ local function classify_error(message, errno)
   return "io_error"
 end
 
+local function platform_errors()
+  if ok_native and native and type(native.file_errors) == "table" then
+    local errors = native.file_errors
+    if type(errors.general) == "table" and type(errors.readfile) == "table"
+        and type(errors.readlink) == "table" and type(errors.stdio) == "table" then
+      return errors
+    end
+  end
+  -- Older modules do not export constants. Their existing uname API selects
+  -- legacy values without launching a helper or inspecting translated text.
+  local system
+  if ok_native and native and native.available and type(native.uname) == "function" then
+    local called, value = pcall(native.uname)
+    if called and type(value) == "table" then system = value.sysname end
+  end
+  local common = { [1] = "denied", [2] = "missing", [13] = "denied", [20] = "missing" }
+  if system == "Windows" then
+    return { general = { [2] = "missing", [3] = "missing", [5] = "denied",
+        [267] = "missing" },
+      readfile = { [87] = "not_regular", [223] = "too_large" },
+      readlink = {}, stdio = common }
+  end
+  local errors = { general = common, stdio = common,
+    readfile = { [22] = "not_regular", [27] = "too_large" },
+    readlink = { [22] = "not_link" } }
+  if system == "Linux" then
+    errors.general, errors.stdio = ERRNO_KIND, ERRNO_KIND
+    errors.readfile[40] = "symlink"
+  elseif system == "Darwin" then
+    common[96] = "unavailable"
+    errors.readfile[62] = "symlink"
+  else
+    -- An unknown native API does not acquire Linux numeric meanings. The
+    -- common CRT values still handle io.open without native support.
+    errors.general, errors.readfile, errors.readlink = {}, {}, {}
+  end
+  return errors
+end
+
+local FILE_ERRORS = platform_errors()
+
+local function classify_native_error(message, errno, operation)
+  local kinds = operation and FILE_ERRORS[operation]
+  if kinds and kinds[errno] then return kinds[errno] end
+  return classify_error(message, errno, FILE_ERRORS.general)
+end
+
 local function default_read_file(path, limit)
   if ok_native and native and native.available and type(native.readfile) == "function" then
     local called, content, err, errno = pcall(
@@ -43,28 +92,27 @@ local function default_read_file(path, limit)
       return nil, { kind = "io_error", message = tostring(content), path = path }
     end
     if content ~= nil then return content end
-    local kind = classify_error(err, errno)
-    if errno == 40 then kind = "symlink" end
-    if errno == 22 then kind = "not_regular" end
-    if errno == 27 then kind = "too_large" end
+    local kind = classify_native_error(err, errno, "readfile")
     return nil, { kind = kind, message = tostring(err), path = path, errno = errno }
   end
-  local file, open_error = io.open(path, "rb")
+  local file, open_error, open_errno = io.open(path, "rb")
   if not file then
-    return nil, { kind = classify_error(open_error), message = tostring(open_error), path = path }
+    return nil, { kind = classify_error(open_error, open_errno, FILE_ERRORS.stdio),
+      message = tostring(open_error), path = path, errno = open_errno }
   end
-  local content, read_error
+  local content, read_error, read_errno
   if limit then
-    content, read_error = file:read(limit + 1)
+    content, read_error, read_errno = file:read(limit + 1)
   else
-    content, read_error = file:read("*a")
+    content, read_error, read_errno = file:read("*a")
   end
-  local close_ok, close_error = file:close()
+  local close_ok, close_error, close_errno = file:close()
   if content == nil then
     -- Lua returns nil (without an error string) when a fixed-size read starts
     -- at EOF.  That is a valid empty regular file, not an I/O failure.
     if read_error ~= nil then
-      return nil, { kind = "io_error", message = tostring(read_error), path = path }
+      return nil, { kind = classify_error(read_error, read_errno, FILE_ERRORS.stdio),
+        message = tostring(read_error), path = path, errno = read_errno }
     end
     content = ""
   end
@@ -72,7 +120,8 @@ local function default_read_file(path, limit)
     return nil, { kind = "too_large", message = "file_exceeds_limit", path = path, limit = limit }
   end
   if close_ok == nil then
-    return nil, { kind = "io_error", message = tostring(close_error), path = path }
+    return nil, { kind = classify_error(close_error, close_errno, FILE_ERRORS.stdio),
+      message = tostring(close_error), path = path, errno = close_errno }
   end
   return content
 end
@@ -84,23 +133,27 @@ local function default_read_file_at(path, offset, length)
       return nil, { kind = "io_error", message = tostring(content), path = path }
     end
     if content ~= nil then return content end
-    return nil, { kind = classify_error(err, errno), message = tostring(err),
+    return nil, { kind = classify_native_error(err, errno, "readfile"), message = tostring(err),
       path = path, errno = errno }
   end
-  local file, open_error = io.open(path, "rb")
+  local file, open_error, open_errno = io.open(path, "rb")
   if not file then
-    return nil, { kind = classify_error(open_error), message = tostring(open_error), path = path }
+    return nil, { kind = classify_error(open_error, open_errno, FILE_ERRORS.stdio),
+      message = tostring(open_error), path = path, errno = open_errno }
   end
-  local position, seek_error = file:seek("set", offset)
+  local position, seek_error, seek_errno = file:seek("set", offset)
   if not position then file:close(); return nil,
-    { kind = "io_error", message = tostring(seek_error), path = path } end
-  local content, read_error = file:read(length)
-  local close_ok, close_error = file:close()
+    { kind = classify_error(seek_error, seek_errno, FILE_ERRORS.stdio),
+      message = tostring(seek_error), path = path, errno = seek_errno } end
+  local content, read_error, read_errno = file:read(length)
+  local close_ok, close_error, close_errno = file:close()
   if not content and read_error then
-    return nil, { kind = "io_error", message = tostring(read_error), path = path }
+    return nil, { kind = classify_error(read_error, read_errno, FILE_ERRORS.stdio),
+      message = tostring(read_error), path = path, errno = read_errno }
   end
   if close_ok == nil then
-    return nil, { kind = "io_error", message = tostring(close_error), path = path }
+    return nil, { kind = classify_error(close_error, close_errno, FILE_ERRORS.stdio),
+      message = tostring(close_error), path = path, errno = close_errno }
   end
   return content or ""
 end
@@ -116,7 +169,7 @@ local function default_list_dir(path, limit)
       return entries, nil, detail == true
     end
     return nil, {
-      kind = classify_error(err, detail), message = tostring(err), path = path, errno = detail,
+      kind = classify_native_error(err, detail), message = tostring(err), path = path, errno = detail,
     }
   end
   return nil, {
@@ -135,8 +188,7 @@ local function default_read_link(path)
     if target then
       return target
     end
-    local kind = classify_error(err, errno)
-    if errno == 22 then kind = "not_link" end
+    local kind = classify_native_error(err, errno, "readlink")
     return nil, { kind = kind, message = tostring(err), path = path, errno = errno }
   end
   return nil, {
@@ -154,7 +206,7 @@ local function default_path_type(path)
     end
     if kind then return kind end
     return nil, {
-      kind = classify_error(err, errno), message = tostring(err), path = path, errno = errno,
+      kind = classify_native_error(err, errno), message = tostring(err), path = path, errno = errno,
     }
   end
   return nil, {
@@ -307,7 +359,7 @@ function FS:list_hints(path, limit)
     return nil, { kind = "io_error", message = tostring(entries), path = actual }
   end
   if entries then return entries, nil, detail == true, hints end
-  return nil, { kind = classify_error(message, detail), message = tostring(message),
+  return nil, { kind = classify_native_error(message, detail), message = tostring(message),
     path = actual, errno = detail }
 end
 
@@ -331,7 +383,7 @@ function FS:usb_interface(path, limit)
   local called, value, message, errno, category = pcall(native.read_usb_interface, actual, limit)
   if not called then return nil, { kind = "io_error", path = actual } end
   if type(value) == "table" then return value end
-  return nil, { kind = category == "changed" and "changed" or classify_error(message, errno),
+  return nil, { kind = category == "changed" and "changed" or classify_native_error(message, errno),
     path = actual, errno = errno }
 end
 

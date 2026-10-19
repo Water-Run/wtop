@@ -54,6 +54,7 @@
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
+#include "wtop_fs_errors.h"
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include <locale.h>
@@ -2421,6 +2422,7 @@ int luaopen_wtop_native(lua_State *L) {
     }
     lua_pop(L, 1);
     luaL_newlib(L, functions);
+    wtop_register_file_errors(L);
     lua_pushliteral(L, WTOP_VERSION);
     lua_setfield(L, -2, "VERSION");
     static const char *const hardware_sources[]={WTOP_HARDWARE_NAMES};
