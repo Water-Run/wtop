@@ -5054,17 +5054,11 @@ local function make_inspectors(engine)
     local smartctl = system.find_executable("smartctl") or "/usr/sbin/smartctl"
     local systemctl = system.find_executable("systemctl") or "/usr/bin/systemctl"
     local loginctl = system.find_executable("loginctl") or "/usr/bin/loginctl"
-    local perf_reader = PerfBandwidth.new({
-        runner = engine.context.runner,
-        clock = engine.clock,
-        executable = system.find_executable("perf") or "/usr/bin/perf",
-        sleep_executable = system.find_executable("sleep") or "/usr/bin/sleep",
-    })
     local registry = Inspectors.new_default({
         smart = { runner = engine.context.runner, clock = engine.clock, executable = smartctl },
         ram_bandwidth = {
             clock = engine.clock,
-            perf_reader = function(request) return perf_reader:read(request) end,
+            perf_reader = PerfBandwidth.for_context(engine.context),
         },
         sshd = { runner = engine.context.runner, clock = engine.clock, systemctl = systemctl, loginctl = loginctl,
             sshd = system.find_executable("sshd") or "/usr/sbin/sshd",

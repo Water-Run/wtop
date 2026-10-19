@@ -20,8 +20,11 @@ def run_checks(executable: Path, version: str, platform: str) -> None:
         if name.startswith(("LUA_PATH", "LUA_CPATH", "LUA_INIT")):
             environment.pop(name)
     with tempfile.TemporaryDirectory(prefix="wtop-installed-") as directory:
-        for mode in ("--version", "--diagnose", "--snapshot", "--agent", "--report"):
-            result = subprocess.run([str(executable), mode], cwd=directory,
+        for arguments in (("--version",), ("--diagnose",), ("--snapshot",), ("--agent",), ("--report",),
+                          ("--memory-bandwidth", "--memory-pmu", "list"),
+                          ("--memory-bandwidth", "--safe-mode"), ("--memory-bandwidth",)):
+            mode = arguments[0]
+            result = subprocess.run([str(executable), *arguments], cwd=directory,
                                     env=environment, capture_output=True, timeout=30)
             assert result.returncode == 0, "%s exited %d: %s" % (
                 mode, result.returncode, result.stderr.decode(errors="replace")[:500])
@@ -36,9 +39,15 @@ def run_checks(executable: Path, version: str, platform: str) -> None:
                                  output, re.MULTILINE), "missing or mismatched native version"
             elif mode in ("--snapshot", "--agent"):
                 validate(json.loads(output), mode[2:])
+            elif mode == "--memory-bandwidth":
+                document = json.loads(output)
+                validate(document, "memory-bandwidth")
+                assert document["platform"] == platform
+                if "--safe-mode" in arguments and platform == "Linux":
+                    assert document["status"] != "ok"
             else:
                 assert output.startswith("# "), "hardware report has no title"
-            print("installed %s: ok" % mode)
+            print("installed %s: ok" % " ".join(arguments))
 
 
 def main() -> None:

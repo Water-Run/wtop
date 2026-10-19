@@ -17,6 +17,7 @@ wtop                # moniteur interactif
 wtop --snapshot     # un instantané JSON, pour les scripts
 wtop --stream --count 60 > samples.jsonl  # 60 instantanés JSON
 wtop --report       # résumé matériel Markdown en anglais
+wtop --memory-bandwidth  # bande passante mémoire en JSON, à la demande (Linux)
 wtop --diagnose     # ce que wtop peut lire sur cette machine
 ```
 
@@ -154,6 +155,8 @@ unique dans `dist/macos-bundle/`.
 | `--stream` | Émet des instantanés JSON ligne par ligne jusqu'à l'interruption |
 | `--count N` | Avec `--stream`, s'arrête après N instantanés |
 | `--report` | Affiche un résumé matériel Markdown en anglais |
+| `--memory-bandwidth` | Mesure une fois la bande passante mémoire en JSON (Linux ; accès à perf requis) |
+| `--memory-pmu NAME` | Avec `--memory-bandwidth`, choisit un PMU ou les liste avec `list` |
 | `--unmask-remote-addresses` | Avec `--snapshot` ou `--stream` : exporte les adresses de socket distantes complètes |
 | `--agent` | JSON compact pour les scripts et les agents LLM |
 | `--diagnose` | Indique quelles sources de données fonctionnent ici |

@@ -22,6 +22,8 @@ Options:
       --stream           Print snapshots as JSON Lines until stopped
       --count N          With --stream: stop after N records (1..1000000)
       --report           Print a readable hardware report in Markdown
+      --memory-bandwidth Print one on-demand memory bandwidth measurement as JSON
+      --memory-pmu NAME  With --memory-bandwidth: select a PMU, or list available PMUs
       --unmask-remote-addresses
                          With --snapshot or --stream: export full remote socket addresses
       --agent            Print compact LLM/agent context JSON and exit
@@ -106,6 +108,19 @@ function M.parse(argv)
         elseif item == "--report" then
             local ok, command_error = select_command("report", item)
             if not ok then return nil, command_error end
+        elseif item == "--memory-bandwidth" then
+            local ok, command_error = select_command("memory_bandwidth", item)
+            if not ok then return nil, command_error end
+        elseif item == "--memory-pmu" then
+            if options.memory_pmu ~= nil then return nil, "--memory-pmu cannot be repeated" end
+            local value, next_index, parse_error = option_value(argv, index, item)
+            if parse_error then return nil, parse_error end
+            if #value == 0 or #value > 255 or not value:match("^[A-Za-z0-9_][A-Za-z0-9_.%-]*$")
+                or value == "." or value == ".." then
+                return nil, "--memory-pmu must be a PMU name or list"
+            end
+            options.memory_pmu = value
+            index = next_index
         elseif item == "--unmask-remote-addresses" then
             if options.include_remote_addresses then
                 return nil, "--unmask-remote-addresses cannot be repeated"
@@ -182,6 +197,9 @@ function M.parse(argv)
     end
     if options.stream_count and options.command ~= "stream" then
         return nil, "--count requires --stream"
+    end
+    if options.memory_pmu and options.command ~= "memory_bandwidth" then
+        return nil, "--memory-pmu requires --memory-bandwidth"
     end
     return options
 end
@@ -308,6 +326,8 @@ function M.run(argv, dependencies)
         return run_stream(options)
     elseif options.command == "report" then
         return run_report(options)
+    elseif options.command == "memory_bandwidth" then
+        return require("wtop.application").memory_bandwidth(options)
     elseif options.command == "agent" then
         return run_agent(options)
     elseif options.command == "export_layout" then

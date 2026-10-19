@@ -1,4 +1,4 @@
-package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
+package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 
 local cli = require("wtop.cli")
 
@@ -51,6 +51,16 @@ assert(cli.parse({ "--stream", "--count", "0" }) == nil)
 assert(cli.parse({ "--stream", "--count", "1000001" }) == nil)
 assert(cli.parse({ "--stream", "--count", "2", "--count", "3" }) == nil)
 assert(assert(cli.parse({ "--report" })).command == "report")
+assert(assert(cli.parse({ "--memory-bandwidth" })).command == "memory_bandwidth")
+assert(assert(cli.parse({ "--memory-bandwidth", "--memory-pmu", "list" })).memory_pmu == "list")
+assert(assert(cli.parse({ "--memory-pmu", "uncore_imc_free_running_0", "--memory-bandwidth" })).memory_pmu == "uncore_imc_free_running_0")
+assert(cli.parse({ "--memory-pmu", "uncore_imc_0" }) == nil)
+assert(cli.parse({ "--memory-bandwidth", "--snapshot" }) == nil)
+assert(cli.parse({ "--memory-bandwidth", "--memory-pmu", "../uncore_imc_0" }) == nil)
+assert(cli.parse({ "--memory-bandwidth", "--memory-pmu", "uncore_imc_0,other" }) == nil)
+assert(cli.parse({ "--memory-bandwidth", "--memory-pmu", string.rep("x", 256) }) == nil)
+assert(cli.parse({ "--memory-bandwidth", "--memory-pmu", "list", "--memory-pmu", "list" }) == nil)
+assert(cli.parse({ "--memory-bandwidth", "--unmask-remote-addresses" }) == nil)
 assert(assert(cli.parse({ "--agent" })).command == "agent")
 assert(cli.parse({ "--report", "--snapshot" }) == nil)
 assert(cli.parse({ "--stream", "--snapshot" }) == nil)
@@ -276,6 +286,121 @@ do
         assert(entry_mode("generational", reader) == "generational",
             "standalone execution must keep its collector mode")
     end
+end
+
+do
+    local Application = require("wtop.application")
+    local Bandwidth = require("wtop.inspectors.ram_bandwidth")
+    local Native = require("wtop.native")
+    local Clock = require("wtop.core.clock")
+    local Config = require("wtop.config")
+    local Engine = require("wtop.engine")
+    local System = require("wtop.system")
+    local Fixture = require("support.fixture_fs")
+    local Decode = require("wtop.core.json")
+    local base = "/sys/bus/event_source/devices"
+    local pmu = base .. "/uncore_imc_0"
+    local fs = Fixture.new({ files = {
+        [pmu .. "/type"] = "8", [pmu .. "/cpumask"] = "0",
+        [pmu .. "/events/cas_count_read"] = "event=4,umask=3",
+        [pmu .. "/events/cas_count_write"] = "event=4,umask=12",
+    }, dirs = { [base] = { "uncore_imc_0" }, [pmu .. "/events"] = { "cas_count_read", "cas_count_write" } } })
+    local before = { uname = Native.uname, run = Native.run, clock = Clock.default,
+        load = Config.load, engine = Engine.new, constructor = Bandwidth.new,
+        find = System.find_executable, write = io.write, command = Application.memory_bandwidth }
+    local host, calls, encoded = "Linux", 0, nil
+    local Validator = assert(loadfile("tools/agent_schema.lua"))()
+    local schema_file = assert(io.open("docs/memory-bandwidth-v1.schema.json", "rb"))
+    local schema = assert(Decode.decode(schema_file:read("*a")))
+    schema_file:close()
+    local ok, why = xpcall(function()
+        Engine.new = function() error("bandwidth CLI started unrelated collectors") end
+        Native.uname = function() return { sysname = host } end
+        Clock.default = { now_ns = function() return 2e9 end, wall_ns = function() return 3e9 end }
+        Config.load = function() return Config.defaults(), { state = "default" } end
+        System.find_executable = function(name) return "/fixed/" .. name end
+        Bandwidth.new = function(options) options.fs = fs; return before.constructor(options) end
+        Native.run = function(argv)
+            calls = calls + 1
+            assert(argv[1] == "/fixed/perf" and table.concat(argv, " "):find("/fixed/sleep", 1, true))
+            return { status = "ok", exit_code = 0, stdout = "", duration_ns = 250000000,
+                stderr = "CPU0;100;;uncore_imc_0/cas_count_read/;1000000000;100.00;;\n"
+                    .. "CPU0;50;;uncore_imc_0/cas_count_write/;1000000000;100.00;;\n" }
+        end
+        io.write = function(...) encoded = table.concat({ ... }); return true end
+        local function command(pmu_name, safe)
+            encoded = nil
+            assert(Application.memory_bandwidth({ memory_pmu = pmu_name, safe_mode = safe,
+                explicit = { safe_mode = true }, privilege = { mode = "user", root = false } }) == 0)
+            assert(encoded:sub(-1) == "\n" and select(2, encoded:gsub("\n", "")) == 1)
+            local document = assert(Decode.decode(encoded))
+            local errors = assert(Validator.validate(document, schema))
+            assert(#errors == 0, table.concat(errors, "\n"))
+            return document
+        end
+        local list = command("list", false)
+        assert(list.schema == Application.MEMORY_BANDWIDTH_SCHEMA and list.mode == "list" and list.status == "ok")
+        assert(calls == 0 and #list.pmus == 1 and list.pmus[1].id == "uncore_imc_0")
+        assert(list.pmus[1].type == 8 and list.pmus[1].source == pmu)
+        assert(list.result.status == "ok" and #list.result.sections == 0 and list.pmus_truncated == false)
+        list.status = "invented"
+        assert(#Validator.validate(list, schema) > 0)
+        list.status, list.processes = "ok", { { pid = 1 } }
+        assert(#Validator.validate(list, schema) > 0)
+        list.processes, list.pmus[1].id = nil, ""
+        assert(#Validator.validate(list, schema) > 0)
+        local measured = command(nil, false)
+        assert(calls == 1 and measured.mode == "measure" and measured.status == "ok")
+        assert(measured.result.entity.metrics.measurement_scope.value == "system")
+        assert(measured.result.entity.metrics.total_bandwidth.value == 9600)
+        assert(#measured.result.entity.metrics.counter_samples.value == 2)
+        assert(measured.captured_monotonic_ns == 2e9 and measured.captured_unix_ns == 3e9)
+        local read = measured.result.entity.metrics.read_bandwidth
+        read.unit = "watts"
+        assert(#Validator.validate(measured, schema) > 0)
+        read.unit = "bytes_per_second"
+        local sample = measured.result.entity.metrics.counter_samples.value[1]
+        sample.bytes_per_second = -1
+        assert(#Validator.validate(measured, schema) > 0)
+        local single = command("uncore_imc_0", false)
+        assert(calls == 2 and single.result.entity.metrics.measurement_scope.value == "controller_pmu")
+        assert(single.result.source == pmu and single.producer.name == "wtop")
+        local absent = command("uncore_imc_missing", false)
+        assert(calls == 2 and absent.status == "unavailable" and absent.result.entity.metrics.read_bandwidth.value == nil)
+        local safe = command(nil, true)
+        assert(calls == 2 and safe.status == "unavailable" and safe.reason == "safe_mode")
+        assert(command("list", true).status == "ok" and calls == 2)
+        local readable_fs = fs
+        fs = Fixture.new({ denied = { [base] = true } })
+        local denied_list = command("list", false)
+        assert(denied_list.status == "denied" and #denied_list.pmus == 0 and calls == 2)
+        fs = readable_fs
+        for _, platform in ipairs({ "Windows", "Darwin" }) do
+            host = platform
+            local unavailable = command(nil, false)
+            assert(unavailable.platform == platform and unavailable.status == "unavailable")
+            assert(unavailable.reason == "unsupported_on_this_platform" and calls == 2)
+            local missing = command("list", false)
+            assert(#missing.pmus == 0 and missing.status == "unavailable" and calls == 2)
+        end
+        host = "Linux"
+        io.write = function() return nil, "disk full" end
+        assert(not pcall(Application.memory_bandwidth, { safe_mode = true, explicit = { safe_mode = true },
+            privilege = { root = false } }), "output failure was reported as a successful command")
+        local dispatched = false
+        Application.memory_bandwidth = function(options)
+            dispatched = true; assert(options.memory_pmu == "list"); return 0
+        end
+        assert(cli.run({ "--memory-bandwidth", "--memory-pmu", "list" }, {
+            platform = { require_supported = function() return { sysname = "Linux" } end },
+            privilege = { identity = function() return { root = true } end },
+        }) == 0 and dispatched)
+    end, debug.traceback)
+    Native.uname, Native.run, Clock.default, Config.load = before.uname, before.run, before.clock, before.load
+    Engine.new, Bandwidth.new, System.find_executable, io.write = before.engine, before.constructor, before.find, before.write
+    Application.memory_bandwidth = before.command
+    assert(ok, why)
+    print("ok: bandwidth CLI parsing, dispatch, same real reader/model, list/no-counter, selection, safe/unsupported states and no unrelated sampling")
 end
 
 return true

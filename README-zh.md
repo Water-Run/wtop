@@ -14,6 +14,7 @@ wtop                # 交互式监控
 wtop --snapshot     # 供脚本使用的 JSON 快照
 wtop --stream --count 60 > samples.jsonl  # 保存 60 份 JSON 快照
 wtop --report       # 英文 Markdown 硬件摘要
+wtop --memory-bandwidth  # 按需测量内存带宽，输出 JSON（Linux）
 wtop --diagnose     # 查看本机可读取的数据源
 ```
 
@@ -141,6 +142,8 @@ make run
 | `--stream` | 持续输出逐行 JSON 快照，直到中断 |
 | `--count N` | 配合 `--stream`：输出 N 份后退出 |
 | `--report` | 输出英文 Markdown 硬件摘要 |
+| `--memory-bandwidth` | 测量一次内存带宽并输出 JSON（Linux，需要 perf 权限） |
+| `--memory-pmu NAME` | 配合 `--memory-bandwidth` 选择 PMU，或用 `list` 列出 PMU |
 | `--unmask-remote-addresses` | 配合 `--snapshot` 或 `--stream`：导出完整的远端套接字地址 |
 | `--agent` | 输出供脚本和 LLM 代理使用的紧凑 JSON 上下文 |
 | `--diagnose` | 显示本机哪些数据源可用 |

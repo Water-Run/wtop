@@ -293,6 +293,23 @@ function PerfBandwidth.new(options)
   }, PerfBandwidth)
 end
 
+-- Interactive and headless clients use the same executable discovery and
+-- read policy. Merely creating the reader does not open a counter.
+function PerfBandwidth.for_context(context)
+  context = context or {}
+  if type(context) ~= "table" then error("perf context must be a table", 2) end
+  local System = require("wtop.system")
+  local reader = PerfBandwidth.new({ runner = context.runner, clock = context.clock,
+    executable = System.find_executable("perf") or "/usr/bin/perf",
+    sleep_executable = System.find_executable("sleep") or "/usr/bin/sleep" })
+  return function(request)
+    if context.safe_mode then
+      return { status = "unavailable", reason = "safe_mode", provider = "perf_stat", permission = "user" }
+    end
+    return reader:read(request)
+  end
+end
+
 function PerfBandwidth:_events(pmus)
   local list = type(pmus) == "table" and pmus or {}
   local specifications, seen = {}, {}

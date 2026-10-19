@@ -17,6 +17,40 @@ wtop --agent
 
 一个已知的限制,明说而不隐瞒:空的 JSON 容器同时满足 `"type": "object"` 和 `"type": "array"`。解码器为两种 JSON 类型返回同一种 Lua 类型,因此要么接受真实的违例,要么拒绝合法的空调表——两者取其一。所有非空容器均按常规方式校验。
 
+## 按需内存带宽
+
+```bash
+wtop --memory-bandwidth --memory-pmu list
+wtop --memory-bandwidth
+wtop --memory-bandwidth --memory-pmu uncore_imc_free_running_0
+```
+
+这些命令输出一行 JSON，不需要终端，也不启动完整系统与进程采样。
+模式为 `dev.waterrun.wtop.memory-bandwidth/v1`，契约见
+[memory-bandwidth-v1.schema.json](memory-bandwidth-v1.schema.json)。
+`mode=list` 返回有界 PMU 清单，不打开性能计数器；`mode=measure` 使用
+内存详情相同的读取器执行一次有界测量。默认汇总系统事件，指定 PMU 时
+只请求该项，`result.entity.metrics.measurement_scope.value` 分别为
+`system` 或 `controller_pmu`。PMU 实例不等于内存插槽或 DIMM 通道。
+
+顶层 `status` 与 `result.status` 相同。权限不足、无计数器、读取失败分别
+保留 `denied`、`unavailable`、`error` 及原因；这些是有效 JSON 报告，
+命令成功写出时退出码为 0。应先检查状态和字段质量，再使用数值。
+Linux 需要可用的 `perf` 与相应权限；macOS、Windows 返回不支持的状态。
+`--safe-mode` 可以列出 PMU，但不会执行测量助手。
+
+`result` 保留检查器的实体、字段、来源、单位、时间和质量。
+`counter_samples.value` 按 PMU、事件、控制 CPU 实例列出原始计数、运行
+纳秒、运行百分比及换算后的字节/秒；它表示控制实例，不定位流量来自哪颗
+CPU 或 DIMM。`details.counter_samples_total` 与
+`counter_samples_truncated` 说明明细是否完整。读取/写入速率分别保留，
+没有可信计数时数值缺席。系统理论带宽不用于单 PMU 的利用率。
+
+`captured_monotonic_ns` 和 `captured_unix_ns` 标记输出捕获时间，
+测量窗口和各字段时间仍以 `result` 中的证据为准。
+`make check` 分别对本机的测量与清单输出应用 schema；安装烟测也检查
+清单、安全模式、普通测量与平台状态。
+
 ## 数据结构
 
 | 字段 | 含义 |

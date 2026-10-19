@@ -1,0 +1,544 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dev:waterrun:wtop:memory-bandwidth:v1",
+  "title": "wtop memory bandwidth v1",
+  "description": "One bounded on-demand PMU discovery or measurement document. Missing and denied counters keep their state.",
+  "type": "object",
+  "required": [
+    "schema",
+    "mode",
+    "platform",
+    "producer",
+    "privilege",
+    "status",
+    "result",
+    "captured_monotonic_ns",
+    "captured_unix_ns"
+  ],
+  "properties": {
+    "schema": {
+      "const": "dev.waterrun.wtop.memory-bandwidth/v1"
+    },
+    "mode": {
+      "enum": [
+        "list",
+        "measure"
+      ]
+    },
+    "platform": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "producer": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "const": "wtop"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "privilege": {
+      "type": "object",
+      "required": [
+        "mode",
+        "root",
+        "requested"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "user",
+            "root",
+            "unknown"
+          ]
+        },
+        "root": {
+          "type": "boolean"
+        },
+        "requested": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "unavailable",
+        "denied",
+        "error"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "requested_pmu": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "captured_monotonic_ns": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "captured_unix_ns": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "result": {
+      "$ref": "#/$defs/result"
+    },
+    "pmus": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "source",
+          "events_truncated"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "type": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "events_truncated": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "pmus_truncated": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "field": {
+      "type": "object",
+      "required": [
+        "quality",
+        "estimated",
+        "permission"
+      ],
+      "properties": {
+        "quality": {
+          "enum": [
+            "fresh",
+            "stale",
+            "gap",
+            "estimated",
+            "unavailable",
+            "denied",
+            "error",
+            "partial",
+            "reset",
+            "measured",
+            "truncated",
+            "missing",
+            "held"
+          ]
+        },
+        "estimated": {
+          "type": "boolean"
+        },
+        "permission": {
+          "type": "string"
+        },
+        "timestamp_ns": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "section": {
+      "type": "object",
+      "required": [
+        "id",
+        "fields",
+        "quality"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quality": {
+          "enum": [
+            "fresh",
+            "stale",
+            "gap",
+            "estimated",
+            "unavailable",
+            "denied",
+            "error",
+            "partial",
+            "reset",
+            "measured",
+            "truncated",
+            "missing",
+            "held"
+          ]
+        },
+        "fields": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/field"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "result": {
+      "type": "object",
+      "required": [
+        "status",
+        "quality",
+        "duration_ns",
+        "sections",
+        "permission",
+        "cached"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "ok",
+            "unavailable",
+            "denied",
+            "error"
+          ]
+        },
+        "quality": {
+          "enum": [
+            "fresh",
+            "stale",
+            "gap",
+            "estimated",
+            "unavailable",
+            "denied",
+            "error",
+            "partial",
+            "reset",
+            "measured",
+            "truncated",
+            "missing",
+            "held"
+          ]
+        },
+        "duration_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "timestamp_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "permission": {
+          "type": "string"
+        },
+        "cached": {
+          "type": "boolean"
+        },
+        "sections": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/section"
+          }
+        },
+        "entity": {
+          "$ref": "#/$defs/entity"
+        }
+      },
+      "additionalProperties": true
+    },
+    "counter_sample": {
+      "type": "object",
+      "required": [
+        "pmu",
+        "event",
+        "direction",
+        "instance",
+        "quality"
+      ],
+      "properties": {
+        "pmu": {
+          "type": "string",
+          "minLength": 1
+        },
+        "event": {
+          "type": "string",
+          "minLength": 1
+        },
+        "instance": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "direction": {
+          "enum": [
+            "read",
+            "write"
+          ]
+        },
+        "quality": {
+          "enum": [
+            "fresh",
+            "estimated",
+            "unavailable",
+            "error"
+          ]
+        },
+        "bytes_per_second": {
+          "type": "number",
+          "minimum": 0
+        },
+        "count": {
+          "type": "number",
+          "minimum": 0
+        },
+        "runtime_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "running_percent": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cpu_id": {
+          "type": "number",
+          "minimum": 0
+        },
+        "instance_expected": {
+          "type": "boolean"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "counter_samples_field": {
+      "type": "object",
+      "required": [
+        "quality",
+        "estimated",
+        "permission",
+        "value"
+      ],
+      "properties": {
+        "quality": {
+          "enum": [
+            "fresh",
+            "stale",
+            "gap",
+            "estimated",
+            "unavailable",
+            "denied",
+            "error",
+            "partial",
+            "reset",
+            "measured",
+            "truncated",
+            "missing",
+            "held"
+          ]
+        },
+        "estimated": {
+          "type": "boolean"
+        },
+        "permission": {
+          "type": "string"
+        },
+        "timestamp_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "value": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/counter_sample"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "scope_field": {
+      "type": "object",
+      "required": [
+        "quality",
+        "estimated",
+        "permission",
+        "value"
+      ],
+      "properties": {
+        "quality": {
+          "enum": [
+            "fresh",
+            "stale",
+            "gap",
+            "estimated",
+            "unavailable",
+            "denied",
+            "error",
+            "partial",
+            "reset",
+            "measured",
+            "truncated",
+            "missing",
+            "held"
+          ]
+        },
+        "estimated": {
+          "type": "boolean"
+        },
+        "permission": {
+          "type": "string"
+        },
+        "timestamp_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "value": {
+          "enum": [
+            "system",
+            "controller_pmu"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "bandwidth_field": {
+      "type": "object",
+      "required": [
+        "quality",
+        "estimated",
+        "permission",
+        "unit"
+      ],
+      "properties": {
+        "quality": {
+          "enum": [
+            "fresh",
+            "stale",
+            "gap",
+            "estimated",
+            "unavailable",
+            "denied",
+            "error",
+            "partial",
+            "reset",
+            "measured",
+            "truncated",
+            "missing",
+            "held"
+          ]
+        },
+        "estimated": {
+          "type": "boolean"
+        },
+        "permission": {
+          "type": "string"
+        },
+        "timestamp_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "value": {
+          "type": "number",
+          "minimum": 0
+        },
+        "unit": {
+          "const": "bytes_per_second"
+        }
+      },
+      "additionalProperties": true
+    },
+    "entity": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "metrics"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "memory"
+        },
+        "name": {
+          "type": "string"
+        },
+        "metrics": {
+          "type": "object",
+          "required": [
+            "measurement_scope",
+            "read_bandwidth",
+            "write_bandwidth",
+            "total_bandwidth"
+          ],
+          "properties": {
+            "measurement_scope": {
+              "$ref": "#/$defs/scope_field"
+            },
+            "counter_samples": {
+              "$ref": "#/$defs/counter_samples_field"
+            },
+            "read_bandwidth": {
+              "$ref": "#/$defs/bandwidth_field"
+            },
+            "write_bandwidth": {
+              "$ref": "#/$defs/bandwidth_field"
+            },
+            "total_bandwidth": {
+              "$ref": "#/$defs/bandwidth_field"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

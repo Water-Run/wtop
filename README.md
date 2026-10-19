@@ -16,6 +16,7 @@ wtop                # interactive monitor
 wtop --snapshot     # one JSON snapshot, for scripts
 wtop --stream --count 60 > samples.jsonl  # 60 JSON snapshots
 wtop --report       # English hardware summary in Markdown
+wtop --memory-bandwidth  # on-demand memory bandwidth as JSON (Linux)
 wtop --diagnose     # what wtop can see on this machine
 ```
 
@@ -148,6 +149,8 @@ in `dist/macos-bundle/`.
 | `--stream` | Print snapshots as JSON Lines until interrupted |
 | `--count N` | With `--stream`, stop after N snapshots |
 | `--report` | Print an English hardware summary in Markdown |
+| `--memory-bandwidth` | Measure memory bandwidth once as JSON (Linux; requires perf access) |
+| `--memory-pmu NAME` | Select a PMU, or use `list` to list PMUs, with `--memory-bandwidth` |
 | `--unmask-remote-addresses` | With `--snapshot` or `--stream`: export full remote socket addresses |
 | `--agent` | Print compact JSON context for scripts and LLM agents |
 | `--diagnose` | Show which data sources work on this machine |

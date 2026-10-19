@@ -249,6 +249,70 @@ function M.report(options)
     return 0
 end
 
+M.MEMORY_BANDWIDTH_SCHEMA = "dev.waterrun.wtop.memory-bandwidth/v1"
+
+function M.memory_bandwidth(options)
+    local resolved = resolve_options(options)
+    local Clock = require("wtop.core.clock")
+    local Runner = require("wtop.core.runner")
+    local Bandwidth = require("wtop.inspectors.ram_bandwidth")
+    local Perf = require("wtop.inspectors.perf_bandwidth")
+    local Model = require("wtop.inspectors.model")
+    local FS = require("wtop.linux.fs")
+    local execute = native.run
+    if resolved.safe_mode then execute = false end
+    local context = { clock = Clock.default, safe_mode = resolved.safe_mode,
+        runner = Runner.new({ execute = execute }) }
+    local host = native.uname() or {}
+    local listing = options.memory_pmu == "list"
+    local version = require("wtop.version")
+    local output = { schema = M.MEMORY_BANDWIDTH_SCHEMA, mode = listing and "list" or "measure",
+        producer = { name = version.name, version = version.version, revision = version.revision },
+        platform = host.sysname or "unknown", requested_pmu = options.memory_pmu,
+        privilege = { mode = resolved.privilege.mode or "unknown",
+            root = resolved.privilege.root == true, requested = resolved.privilege.requested == true } }
+    if host.sysname ~= "Linux" then
+        output.status = "unavailable"
+        output.reason = "unsupported_on_this_platform"
+        if listing then output.pmus = json.array({})
+        else
+            output.result = Model.result("unavailable", nil, json.array({}), { reason = output.reason,
+                timestamp_ns = context.clock:now_ns(), provider = "native_platform" })
+        end
+    else
+        local inspector = Bandwidth.new({ clock = context.clock, perf_reader = Perf.for_context(context) })
+        if listing then
+            local entities, err = inspector:enumerate(context)
+            output.pmus = json.array({})
+            output.status = entities and "ok" or FS.error_status(err)
+            output.reason = not entities and (err and err.message or "read_failed") or nil
+            output.pmus_truncated = entities and entities.truncated == true or false
+            for _, entity in ipairs(entities or {}) do
+                if entity.measurement_scope == "controller_pmu" then
+                    output.pmus[#output.pmus + 1] = { id = entity.id, name = entity.name,
+                        type = entity.type, source = entity.source,
+                        events_truncated = entity.events_truncated == true }
+                end
+            end
+        else
+            local entity = options.memory_pmu and { id = options.memory_pmu, measurement_scope = "controller_pmu" }
+                or { id = "system-memory", name = "System aggregate", measurement_scope = "system" }
+            output.result = inspector:inspect(context, entity)
+            output.status, output.reason = output.result.status, output.result.reason
+        end
+    end
+    if listing then
+        output.pmus_truncated = output.pmus_truncated == true
+        output.result = Model.result(output.status, nil, json.array({}), {
+            quality = output.status == "ok" and "fresh" or output.status, reason = output.reason,
+            timestamp_ns = context.clock:now_ns(), provider = host.sysname == "Linux" and "pmu_sysfs" or "native_platform" })
+    end
+    output.captured_monotonic_ns = context.clock:now_ns()
+    output.captured_unix_ns = context.clock:wall_ns()
+    write_json(output)
+    return 0
+end
+
 function M.run(options)
     local Tui = require("wtop.tui")
     return Tui.run(resolve_options(options))

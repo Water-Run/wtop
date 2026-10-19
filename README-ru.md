@@ -16,6 +16,7 @@ wtop                # интерактивный монитор
 wtop --snapshot     # один снимок в JSON, для скриптов
 wtop --stream --count 60 > samples.jsonl  # 60 снимков в JSON
 wtop --report       # отчёт об оборудовании в Markdown на английском
+wtop --memory-bandwidth  # пропускная способность памяти в JSON по запросу (Linux)
 wtop --diagnose     # что wtop видит на этой машине
 ```
 
@@ -150,6 +151,8 @@ Apple silicon и 10.13 на Intel.
 | `--stream` | Выводить снимки построчно в JSON до прерывания |
 | `--count N` | С `--stream`: завершить после N снимков |
 | `--report` | Вывести отчёт об оборудовании в Markdown на английском |
+| `--memory-bandwidth` | Одно измерение пропускной способности памяти в JSON (Linux; нужен доступ к perf) |
+| `--memory-pmu NAME` | С `--memory-bandwidth`: выбрать PMU или вывести список через `list` |
 | `--unmask-remote-addresses` | С `--snapshot` или `--stream`: экспортировать полные удалённые адреса сокетов |
 | `--agent` | Компактный JSON для скриптов и LLM-агентов |
 | `--diagnose` | Показать, какие источники данных работают на этой машине |

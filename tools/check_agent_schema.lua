@@ -2,6 +2,7 @@
 -- Apply docs/agent-v1.schema.json to a document wtop produced.
 --
 -- Usage: tools/check_agent_schema.lua [--schema PATH] [--document PATH]
+--                                    [--mode agent|memory-bandwidth|memory-pmu-list]
 --
 -- With no --document the document is produced here, by running `--agent`
 -- against this host.  That is the point: a schema checked only against a
@@ -20,6 +21,9 @@ local Validator = require("agent_schema")
 
 local schema_path = "docs/agent-v1.schema.json"
 local document_path = nil
+local mode = "agent"
+local commands = { agent = "--agent", ["memory-bandwidth"] = "--memory-bandwidth",
+  ["memory-pmu-list"] = "--memory-bandwidth --memory-pmu list" }
 local index = 1
 while index <= #arg do
   local item = arg[index]
@@ -28,6 +32,9 @@ while index <= #arg do
     index = index + 2
   elseif item == "--document" then
     document_path = arg[index + 1] or ""
+    index = index + 2
+  elseif item == "--mode" and commands[arg[index + 1]] then
+    mode = arg[index + 1]
     index = index + 2
   else
     io.stderr:write("check_agent_schema: unknown argument " .. tostring(item) .. "\n")
@@ -38,7 +45,7 @@ end
 if not document_path then
   -- Generated where the suite already keeps its scratch files, so a failed run
   -- leaves something a person can read rather than a pipe that has gone.
-  document_path = "build/native/.wtop-agent-capture.json"
+  document_path = "build/native/.wtop-" .. mode .. "-capture.json"
   os.execute("mkdir -p build/native")
   local lua = os.getenv("WTOP_LUA")
   if not lua or lua == "" then lua = ".tools/lua-5.5.1/bin/lua" end
@@ -47,11 +54,11 @@ if not document_path then
   local command = table.concat({
     "LUA_PATH='./src/?.lua;./src/?/init.lua;;'",
     "LUA_CPATH='" .. native_dir .. "/?.so;;'",
-    "'" .. lua .. "' src/wtop.lua --agent",
+    "'" .. lua .. "' src/wtop.lua " .. commands[mode],
   }, " ")
   local ok = os.execute(command .. " > " .. document_path)
   if ok ~= true and ok ~= 0 then
-    io.stderr:write("check_agent_schema: --agent produced no document, so the "
+    io.stderr:write("check_agent_schema: " .. commands[mode] .. " produced no document, so the "
       .. "schema was not applied to anything.\n")
     os.exit(1)
   end
@@ -64,17 +71,17 @@ if not errors then
 end
 
 if #errors == 0 then
-  io.write("wtop: --agent output conforms to ")
+  io.write("wtop: " .. commands[mode] .. " output conforms to ")
   io.write(schema_path)
   io.write("\n")
   os.exit(0)
 end
 
-io.stderr:write("wtop: --agent output does not conform to " .. schema_path .. ":\n")
+io.stderr:write("wtop: " .. commands[mode] .. " output does not conform to " .. schema_path .. ":\n")
 for _, message in ipairs(errors) do
   io.stderr:write("  " .. message .. "\n")
 end
-io.stderr:write("  The schema is a published contract for anything reading --agent.\n")
+io.stderr:write("  The schema is a published contract for anything reading this output.\n")
 io.stderr:write("  Fix whichever of the two is wrong; do not loosen the schema to\n")
 io.stderr:write("  match a document nobody checked until now.\n")
 os.exit(1)

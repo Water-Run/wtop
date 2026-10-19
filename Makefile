@@ -523,12 +523,18 @@ check: resource-check native locales test-native-terminal-signals test-native-cp
 	@sh -n tools/*.sh
 	@python3 -c 'import pathlib; [compile(path.read_bytes(), str(path), "exec") for path in pathlib.Path("tests").rglob("*.py")]'
 	@python3 -c 'import json; json.load(open("docs/agent-v1.schema.json", encoding="utf-8"))'
+	@python3 -c 'import json; json.load(open("docs/memory-bandwidth-v1.schema.json", encoding="utf-8"))'
 	@# Parsing the agent schema proves the schema is JSON.  It says nothing about
 	@# the document --agent emits, so the next line applies it.  The CI job that
 	@# runs this one is named "Syntax, schema and the full unit suite", and until
 	@# this step existed the middle word was doing no work.
 	@WTOP_LUA='$(LUA)' WTOP_NATIVE_DIR='$(NATIVE_DIR)' \
 		$(LUA) tools/check_agent_schema.lua
+	@for mode in memory-bandwidth memory-pmu-list; do \
+		WTOP_LUA='$(LUA)' WTOP_NATIVE_DIR='$(NATIVE_DIR)' \
+		$(LUA) tools/check_agent_schema.lua --schema docs/memory-bandwidth-v1.schema.json --mode $$mode || exit 1; \
+	done
+	@python3 tests/test_json_contract_smoke.py
 	@python3 tests/test_luainstaller_bootstrap.py
 	@python3 tests/test_windows_x86_artifact.py
 	@python3 tests/test_windows_payload.py --lua '$(LUA)'
