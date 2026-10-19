@@ -116,6 +116,14 @@ local historical_matrix_rows = {
     ["Linux x86_64"] = true,
     ["Linux x86_64,旧 libc"] = true,
 }
+local function commit_count(line, number)
+    local commit, count = line:match("`([%da-f]+)` 当时的 (%d+) 个 Lua 文件")
+    return commit ~= nil and #commit >= 7 and #commit <= 40 and count == number
+end
+assert(commit_count("`6702c31` 当时的 139 个 Lua 文件", "139"))
+assert(not commit_count("当前的 139 个 Lua 文件", "139"))
+assert(not commit_count("`main` 当时的 139 个 Lua 文件", "139"))
+assert(not commit_count("`6702c31` 当时的 139 个 Lua 文件", "165"))
 for line in (matrix .. "\n"):gmatch("[^\n]+") do
     -- Walked by position rather than with gmatch: a `(%d+)(.*)` pattern makes
     -- the second capture swallow the rest of the line, so gmatch would yield
@@ -144,7 +152,7 @@ for line in (matrix .. "\n"):gmatch("[^\n]+") do
                 local guarded = number == tostring(total)
                     or (number == "120" and historical_matrix_rows[row] == true)
                     or line:find("当时运行时为 50 个文件", 1, true) ~= nil
-                    or line:find("`6702c31` 当时的 139 个 Lua 文件", 1, true) ~= nil
+                    or commit_count(line, number)
                 assert(guarded,
                     "the validation matrix states a suite size of " .. number ..
                         " files and nothing accounts for it: a size that is "

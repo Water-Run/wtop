@@ -192,6 +192,10 @@ local parsed_batch = native.proc_batch({ native.pid(), 4194304 }, "stat_parsed")
 assert(type(parsed_batch[1]) == "table" and parsed_batch[1].pid == native.pid()
     and parsed_batch[1].starttime_ticks > 0 and parsed_batch[2] == false,
     "the parsed batch keeps identity and failed-slot semantics")
+local row_batch = native.proc_batch({ native.pid(), 4194304 }, "stat_rows")
+assert(type(row_batch[1]) == "table" and row_batch[1].pid == native.pid()
+    and row_batch[1].starttime_ticks > 0 and row_batch[2] == false,
+    "native row batches keep identity and failed-slot semantics")
 local requested_stat_mode
 local batch_spy = { available = true, system_constants = native.system_constants,
     process_stat_fields = native.process_stat_fields,
@@ -203,6 +207,15 @@ local live_processes = require("wtop.collectors.process").new({
     native = batch_spy, read_status = false, max_processes = 128 }):sample({})
 assert(live_processes.status == "ok" and requested_stat_mode == "stat_parsed",
     "the real process collector must use parsed stat batches")
+batch_spy.process_stat_row_fields = native.process_stat_row_fields
+local live_rows = require("wtop.collectors.process").new({
+    native = batch_spy, read_status = false, max_processes = 128 }):sample({})
+assert(live_rows.status == "ok" and requested_stat_mode == "stat_rows",
+    "the current native module must supply process rows directly")
+for _, row in ipairs(live_rows.data.list) do
+    assert(row.flags == nil and row.rss_pages == nil and row.comm == nil,
+        "parser scratch fields leaked into a public process row")
+end
 local legacy_mode
 local legacy_native = { available = true, system_constants = native.system_constants,
     proc_batch = function(pids, mode, limit)
@@ -310,12 +323,32 @@ for sample = 1, 300 do
     for key, value in pairs(slow) do
         assert(fast[key] == value, "native stat parser drifted on " .. key)
     end
+    local row = assert(native.process_stat_row_fields(body))
+    local renamed = { parent_pid = "ppid", process_group = "pgrp",
+        virtual_bytes = "vsize_bytes", name = "comm" }
+    local expected_fields = { "pid", "id", "name", "state", "parent_pid", "process_group",
+        "session", "flags", "priority", "nice", "threads", "starttime_ticks",
+        "virtual_bytes", "rss_pages", "cpu_ticks", "processor" }
+    local expected = {}
+    for _, key in ipairs(expected_fields) do
+        expected[key] = true
+        assert(row[key] == slow[renamed[key] or key], "native row differs on " .. key)
+    end
+    for key in pairs(row) do assert(expected[key], "unexpected native row field: " .. key) end
 end
 local overflowing = {}
 for index, value in ipairs(fields) do overflowing[index] = value end
 overflowing[20] = "9223372036854775808"
 assert(native.process_stat_fields("123 (worker) S " .. table.concat(overflowing, " ")) == nil,
     "an integer beyond Lua's exact range must use the Lua fallback")
+assert(native.process_stat_row_fields("123 (worker) S " .. table.concat(overflowing, " ")) == nil)
+assert(native.process_stat_row_fields("123 (worker) S nope " .. table.concat(fields, " ")) == nil)
+for _, position in ipairs({ 1, 2, 3, 4, 6, 7, 9, 11, 12, 15, 16, 17, 19, 20, 21, 36 }) do
+    local bad = {}; for index, value in ipairs(fields) do bad[index] = value end
+    bad[position] = "invalid"
+    assert(native.process_stat_row_fields("123 (worker) S " .. table.concat(bad, " ")) == nil,
+        "row construction skipped full stat validation at field " .. position)
+end
 assert(batch_contents[2] == false and not (batch_denied and batch_denied[2]),
     "a missing pid reports failure without a permission flag")
 local batch_missing = native.proc_batch({ native.pid() }, "no_such_file")

@@ -681,17 +681,18 @@ function Process:sample(context, previous)
   -- One native crossing for every stat file when the real /proc is in use.
   -- A context-injected fs (fixtures, isolated tests) always keeps the
   -- per-file reader even with the default proc_path, and so do pure-Lua runs.
-  local batch_contents, batch_denied
+  local batch_contents, batch_denied, batch_rows
   if self.use_native_batch and fs == FS.default and context_fs(self, context) == nil then
     local wanted = {}
     for index, candidate in ipairs(candidates) do
       if index > self.max_processes then break end
       wanted[#wanted + 1] = candidate.pid
     end
-    local mode = self.use_native_parsed_stat and "stat_parsed" or "stat"
+    local rows = type(self.native.process_stat_row_fields) == "function"
+    local mode = rows and "stat_rows" or self.use_native_parsed_stat and "stat_parsed" or "stat"
     local ok, contents, denied_flags = pcall(self.native.proc_batch, wanted, mode)
     if ok and type(contents) == "table" then
-      batch_contents, batch_denied = contents, denied_flags
+      batch_contents, batch_denied, batch_rows = contents, denied_flags, rows
     end
   end
 
@@ -728,7 +729,9 @@ function Process:sample(context, previous)
         elseif stat.pid ~= pid then
           races = races + 1
         else
-          local process = {
+          local is_kernel_thread = kernel_thread(stat)
+          local native_row = batch_rows and type(stat_content) == "table"
+          local process = native_row and stat or {
             id = stat.id,
             pid = stat.pid,
             starttime_ticks = stat.starttime_ticks,
@@ -753,6 +756,21 @@ function Process:sample(context, previous)
             cpu_percent = nil,
             quality = "gap",
           }
+          if native_row then
+            -- This fresh native table is already in the public row shape.
+            -- Finish the context-dependent values and remove parser scratch
+            -- fields, avoiding a second large table for every process.
+            process.name = sanitize_text(process.name)
+            process.resident_bytes = stat.rss_pages >= 0
+              and stat.rss_pages <= math.maxinteger // page_size_bytes
+              and (stat.rss_pages * page_size_bytes) or nil
+            process.cpu_time_seconds = type(stat.cpu_ticks) == "number"
+              and stat.cpu_ticks / clock_ticks_per_second or nil
+            process.elapsed_seconds = uptime_seconds
+              and uptime_seconds - stat.starttime_ticks / clock_ticks_per_second or nil
+            process.flags, process.rss_pages = nil, nil
+            process.quality = "gap"
+          end
           if process.elapsed_seconds and process.elapsed_seconds < 0 then
             process.elapsed_seconds = process.elapsed_seconds >= -1 and 0 or nil
           end
@@ -788,7 +806,6 @@ function Process:sample(context, previous)
           local thread_list = wants_thread_list(context, process.id)
           local command_value = nil
           local io_attempted = false
-          local is_kernel_thread = kernel_thread(stat)
           local cached = prior_cache[process.id]
           if cached and cached.kernel_thread ~= nil and cached.kernel_thread ~= is_kernel_thread then
             cached = nil

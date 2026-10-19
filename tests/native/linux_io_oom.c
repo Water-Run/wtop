@@ -78,7 +78,7 @@ int main(void) {
  lua_State *L=lua_newstate(allocate,NULL,0);assert(L);register_guard(L);
  unsigned initial_descriptors=descriptors();
  unsigned failures=0,successes=0,leaked_calls=0;size_t lost=0;
- const char *modes[]={"stat","stat_parsed","io","cmdline","no_such_file"};
+ const char *modes[]={"stat","stat_parsed","stat_rows","io","cmdline","no_such_file"};
  for(unsigned mode=0;mode<sizeof(modes)/sizeof(modes[0]);mode++){
   assert(call(L,modes[mode],0)==LUA_OK);assert(!live_bytes);
   for(unsigned budget=1;budget<=160;budget++){

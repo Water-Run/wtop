@@ -1661,7 +1661,9 @@ static int l_read_cpu_clock_counters(lua_State *L) {
  * Arguments: pids array (positive integers), file name ([a-z_]{1,31}),
  * optional byte limit per file (default 64 KiB, max 1 MiB). The special
  * stat_parsed name reads stat and returns validated field tables on its fast
- * path; unusual records remain strings for the Lua parser to classify.
+ * path; stat_rows instead builds the collector's row fields, with flags and
+ * rss_pages retained for its final conversion. Unusual records remain strings
+ * for the Lua parser to classify.
  * Returns: contents array (string/table, or false for any failure) and a
  * parallel denied array (true where the failure was a permission error). */
 #define PROC_BATCH_MAX_ENTRIES 8192
@@ -1692,7 +1694,7 @@ static int proc_stat_integer(const char *first, const char *end, lua_Integer *ou
 /* Fast path for the regular /proc/<pid>/stat shape. Malformed or unusual
  * records stay as their raw string so the Lua parser keeps its exact reason
  * codes. The numeric range checks match that parser's published fields. */
-static int push_proc_stat_fields(lua_State *L, const char *data, size_t length) {
+static int push_proc_stat_fields(lua_State *L, const char *data, size_t length, int row) {
     static const unsigned char needed[37] = {
         [1] = 1, [2] = 1, [3] = 1, [4] = 1, [6] = 1, [7] = 1,
         [9] = 1, [11] = 1, [12] = 1, [15] = 1, [16] = 1, [17] = 1,
@@ -1755,25 +1757,27 @@ static int push_proc_stat_fields(lua_State *L, const char *data, size_t length) 
     lua_createtable(L, 0, 22);
 #define STAT_FIELD(key, position)                 \
     do { lua_pushinteger(L, values[position]); lua_setfield(L, -2, key); } while (0)
-    STAT_FIELD("ppid", 1);
-    STAT_FIELD("pgrp", 2);
+    STAT_FIELD(row ? "parent_pid" : "ppid", 1);
+    STAT_FIELD(row ? "process_group" : "pgrp", 2);
     STAT_FIELD("session", 3);
-    STAT_FIELD("tty_nr", 4);
     STAT_FIELD("flags", 6);
-    STAT_FIELD("minflt", 7);
-    STAT_FIELD("majflt", 9);
-    STAT_FIELD("utime_ticks", 11);
-    STAT_FIELD("stime_ticks", 12);
+    if (!row) {
+        STAT_FIELD("tty_nr", 4);
+        STAT_FIELD("minflt", 7);
+        STAT_FIELD("majflt", 9);
+        STAT_FIELD("utime_ticks", 11);
+        STAT_FIELD("stime_ticks", 12);
+    }
     STAT_FIELD("priority", 15);
     STAT_FIELD("nice", 16);
     STAT_FIELD("threads", 17);
     STAT_FIELD("starttime_ticks", 19);
-    STAT_FIELD("vsize_bytes", 20);
+    STAT_FIELD(row ? "virtual_bytes" : "vsize_bytes", 20);
     STAT_FIELD("rss_pages", 21);
 #undef STAT_FIELD
     lua_pushinteger(L, pid); lua_setfield(L, -2, "pid");
     lua_pushlstring(L, open + 1, (size_t)(close - open - 1));
-    lua_setfield(L, -2, "comm");
+    lua_setfield(L, -2, row ? "name" : "comm");
     lua_pushlstring(L, state, 1); lua_setfield(L, -2, "state");
     lua_pushinteger(L, values[11] + values[12]); lua_setfield(L, -2, "cpu_ticks");
     if (have_processor) {
@@ -1786,7 +1790,14 @@ static int push_proc_stat_fields(lua_State *L, const char *data, size_t length) 
 static int l_process_stat_fields(lua_State *L) {
     size_t length;
     const char *data = luaL_checklstring(L, 1, &length);
-    if (!push_proc_stat_fields(L, data, length)) lua_pushnil(L);
+    if (!push_proc_stat_fields(L, data, length, 0)) lua_pushnil(L);
+    return 1;
+}
+
+static int l_process_stat_row_fields(lua_State *L) {
+    size_t length;
+    const char *data = luaL_checklstring(L, 1, &length);
+    if (!push_proc_stat_fields(L, data, length, 1)) lua_pushnil(L);
     return 1;
 }
 
@@ -1795,7 +1806,8 @@ static int l_proc_batch(lua_State *L) {
     const char *name = luaL_checkstring(L, 2);
     lua_Integer limit_value = luaL_optinteger(L, 3, 64 * 1024);
     size_t name_length = strlen(name);
-    int parsed_stat = strcmp(name, "stat_parsed") == 0;
+    int stat_rows = strcmp(name, "stat_rows") == 0;
+    int parsed_stat = stat_rows || strcmp(name, "stat_parsed") == 0;
     const char *filename = parsed_stat ? "stat" : name;
     if (name_length == 0 || name_length > 31) {
         return luaL_argerror(L, 2, "name must be 1..31 bytes");
@@ -1878,7 +1890,7 @@ static int l_proc_batch(lua_State *L) {
         }
         if (failed) {
             lua_pushboolean(L, 0);
-        } else if (!parsed_stat || !push_proc_stat_fields(L, buffer, length)) {
+        } else if (!parsed_stat || !push_proc_stat_fields(L, buffer, length, stat_rows)) {
             lua_pushlstring(L, buffer, length);
         }
         lua_rawseti(L, guard_index + 1, entry);
@@ -2325,6 +2337,7 @@ static const luaL_Reg functions[] = {
     {"read_cpu_clock_counters", l_read_cpu_clock_counters},
     {"proc_batch", l_proc_batch},
     {"process_stat_fields", l_process_stat_fields},
+    {"process_stat_row_fields", l_process_stat_row_fields},
     {"readlink", l_readlink},
     {"path_type", l_path_type},
     {"statvfs", l_statvfs},

@@ -1,0 +1,184 @@
+package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
+local Process = require("wtop.collectors.process")
+local Parsers = require("wtop.linux.parsers")
+local FS = require("wtop.linux.fs")
+
+-- Text remains safe for a terminal, including every single-byte input and
+-- strings that must take UTF-8 repair rather than the ordinary ASCII path.
+assert(Process.sanitize_text(false) == nil)
+assert(Process.sanitize_text("  plain task  ") == "plain task")
+assert(Process.sanitize_text(" 你好🙂 ") == "你好🙂")
+assert(Process.sanitize_text("a\0\0b\tc\nd") == "a b c?d")
+assert(Process.sanitize_text("a\240\159b") == "a��b")
+for byte = 0, 255 do
+  local input = string.char(byte)
+  local expected = (byte == 0 or byte == 9) and " "
+    or (byte < 32 or byte == 127) and "?"
+    or byte > 127 and "�" or input
+  assert(Process.sanitize_text("a" .. input .. "b") == "a" .. expected .. "b",
+    "unexpected process text byte: " .. byte)
+end
+
+local file = assert(io.open("tests/fixtures/proc/100.stat.1", "rb"))
+local original = file:read("*a"); file:close()
+local function stat(pid)
+  return original:gsub("^100 ", tostring(pid) .. " ")
+end
+
+-- Enumeration order, noncanonical PIDs, limits and a disappearing PID must
+-- not change native batch alignment or the public numeric PID ordering.
+local entries = { "300", "bad", "030", "200", "3", "0", "-1", "2147483648", "100" }
+local batches, reads = {}, {}
+local throw_batch, empty_batch, denied_batch, parsed = false, false, false, false
+local function read(_, path)
+  reads[path] = (reads[path] or 0) + 1
+  if path == "/proc/uptime" then return "100 0\n" end
+  local pid = path:match("^/proc/(%d+)/stat$")
+  if pid and pid ~= "100" then return stat(tonumber(pid)) end
+  return nil, { kind = "missing" }
+end
+local provider = { available = true }
+function provider.proc_batch(pids, mode)
+  local copy = {}; for i, pid in ipairs(pids) do copy[i] = pid end
+  batches[#batches + 1] = { pids = copy, mode = mode }
+  if throw_batch then error("batch unavailable") end
+  if empty_batch then return nil end
+  local contents, denied = {}, {}
+  for i, pid in ipairs(pids) do
+    contents[i] = mode == "io" and "read_bytes: 10\nwrite_bytes: 20\n"
+      or pid ~= 100 and (parsed and assert(Parsers.process_stat(stat(pid))) or stat(pid))
+      or false
+    if pid == 100 and denied_batch then denied[i] = true end
+  end
+  return contents, denied
+end
+
+local prior_list, prior_read = FS.default.list, FS.default.read
+local ok, failure = xpcall(function()
+  FS.default.list = function(_, path, limit)
+    assert(path == "/proc" and limit >= 256)
+    return entries
+  end
+  FS.default.read = read
+  for _, max in ipairs({ 1, 3, 8 }) do
+    for _, use_parsed in ipairs({ false, true }) do
+      parsed = use_parsed
+      provider.process_stat_fields = use_parsed and Parsers.process_stat or nil
+      batches, reads = {}, {}
+      local c = Process.new({ native = provider, max_processes = max,
+        max_bulk_io_reads = 2, read_status = false })
+      local r = c:sample({ now_ns = function() return 1e9 end, scan_process_io = true })
+      assert(r.data.process_candidates == 4 and r.data.scanned == math.min(max, 4))
+      assert(r.data.truncated == (max < 4))
+      assert(#batches == 2 and batches[1].mode == "io")
+      assert(#batches[1].pids == math.min(max, 2))
+      assert(batches[2].mode == (use_parsed and "stat_parsed" or "stat"))
+      local wanted = { 3, 100, 200, 300 }
+      -- There are four canonical entries; 030 is not a second spelling of 30.
+      assert(#batches[2].pids == math.min(max, #wanted))
+      for i, pid in ipairs(batches[2].pids) do assert(pid == wanted[i]) end
+      local last = 0
+      for _, row in ipairs(r.data.list) do
+        assert(row.pid > last and row.pid ~= 100)
+        assert(r.data.by_id[row.id] == row and r.data.by_pid[row.pid] == row)
+        last = row.pid
+      end
+    end
+  end
+
+  for _, kind in ipairs({ "throw", "empty", "denied" }) do
+    throw_batch, empty_batch, denied_batch = kind == "throw", kind == "empty", kind == "denied"
+    local c = Process.new({ native = provider, read_status = false })
+    local r = c:sample({ now_ns = function() return 1e9 end })
+    assert(#r.data.list == 3 and r.data.scanned == 4)
+    assert(r.data.denied == (denied_batch and 1 or 0))
+    assert(r.data.races == (denied_batch and 0 or 1))
+  end
+  throw_batch, empty_batch, denied_batch = false, false, false
+  batches = {}
+  local injected = { list = FS.default.list, read = read }
+  local c = Process.new({ native = provider, read_status = false })
+  assert(#c:sample({ fs = injected, now_ns = function() return 1e9 end }).data.list == 3)
+  assert(#batches == 0, "context filesystem was sent to real-proc batch reader")
+
+  -- A duplicate just beyond the scan cap still prevents reuse of a private
+  -- cache record that belongs to the previous sample.
+  entries = { "3" }
+  c = Process.new({ native = provider, read_status = false, max_processes = 1 })
+  local first = c:sample({ now_ns = function() return 1e9 end })
+  local cached = c.identity_cache[first.data.list[1].id]
+  entries = { "3", "3" }
+  local second = c:sample({ now_ns = function() return 2e9 end }, first)
+  assert(second.data.truncated and #second.data.list == 1)
+  assert(c.identity_cache[second.data.list[1].id] ~= cached)
+
+  -- The native row path and the older parsed-stat path must publish the same
+  -- complete result, including unusual names, counters and rejected races.
+  local real_native = require("wtop.native")
+  if type(real_native.process_stat_row_fields) == "function" then
+    local function copy(value)
+      if type(value) ~= "table" then return value end
+      local result = {}; for key, field in pairs(value) do result[key] = copy(field) end
+      return result
+    end
+    local function same(left, right)
+      if type(left) ~= type(right) then return false end
+      if type(left) ~= "table" then return left == right end
+      for key, value in pairs(left) do if not same(value, right[key]) then return false end end
+      for key in pairs(right) do if left[key] == nil then return false end end
+      return true
+    end
+    local tokens = {}
+    for token in original:match("^100 %b()%s+(.+)$"):gmatch("%S+") do
+      tokens[#tokens + 1] = token
+    end
+    local function body(name, rss, flags, start)
+      local copy = {}; for i, value in ipairs(tokens) do copy[i] = value end
+      copy[7], copy[20], copy[22] = tostring(flags), tostring(start), tostring(rss)
+      return "3 (" .. name .. ") " .. table.concat(copy, " ")
+    end
+    local function collect(use_rows, initial, final)
+      local observed_mode
+      local p = { available = true, process_stat_fields = real_native.process_stat_fields,
+        process_stat_row_fields = use_rows and real_native.process_stat_row_fields or nil }
+      function p.proc_batch(pids, mode)
+        assert(#pids == 1 and pids[1] == 3)
+        observed_mode = mode
+        local parse = use_rows and real_native.process_stat_row_fields or real_native.process_stat_fields
+        return { parse(initial) or initial }, {}
+      end
+      FS.default.read = function(_, path)
+        if path == "/proc/uptime" then return "100 0\n" end
+        if path == "/proc/3/stat" then return final or initial end
+        if path == "/proc/3/cmdline" then return "program\0argument\0" end
+        return nil, { kind = "missing" }
+      end
+      entries = { "3" }
+      local collector = Process.new({ native = p, read_status = false, read_cmdline = true,
+        clock_ticks_per_second = 100, page_size_bytes = 4096 })
+      local result = collector:sample({ now_ns = function() return 1e9 end })
+      assert(observed_mode == (use_rows and "stat_rows" or "stat_parsed"))
+      local saved = copy(result)
+      collector:sample({ now_ns = function() return 2e9 end }, result)
+      assert(same(result, saved), "native row reuse mutated an old snapshot")
+      return result
+    end
+    for _, case in ipairs({
+      { body("plain", 512, 0, 1000) },
+      { body("name ) 你好\255", -1, 0, 1000) },
+      { body("large RSS", math.maxinteger, 0, 1000) },
+      { body("kernel worker", 512, 0x200000, 1000) },
+      { body("reused", 512, 0, 1000), body("new", 512, 0, 2000) },
+      { body("changed role", 512, 0, 1000), body("kernel", 512, 0x200000, 1000) },
+      { body("malformed final", 512, 0, 1000), "invalid" },
+      { "invalid initial" },
+    }) do
+      local old = collect(false, table.unpack(case))
+      local current = collect(true, table.unpack(case))
+      assert(same(current, old), "native row changed the public process sample")
+    end
+  end
+end, debug.traceback)
+FS.default.list, FS.default.read = prior_list, prior_read
+assert(ok, failure)
+print("ok: process text bytes, PID ordering, scan and I/O caps, batch failures, fallback and duplicate boundary")
