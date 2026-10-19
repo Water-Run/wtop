@@ -218,6 +218,22 @@ local function permission_error(message)
     or lower:find("cap_perfmon", 1, true)
 end
 
+-- perf can replace EACCES with EINVAL when its permission fallback retries
+-- our system-wide event with a user-only modifier. Require the exact event
+-- and syscall diagnostic on the same line, plus restrictive paranoid context.
+local function restricted_user_fallback(message, specifications, paranoid)
+  if type(paranoid) ~= "number" or paranoid <= 1 then return false end
+  local expected = {}
+  for _, specification in ipairs(specifications) do
+    expected["The sys_perf_event_open() syscall failed for event ("
+      .. specification.label .. "u): Invalid argument"] = true
+  end
+  for line in tostring(message):gmatch("[^\r\n]+") do
+    if expected[trim(line)] then return true end
+  end
+  return false
+end
+
 local function event_open_failure(message)
   local lower = tostring(message or ""):lower()
   return lower:find("sys_perf_event_open", 1, true)
@@ -427,8 +443,9 @@ function PerfBandwidth:read(request)
   if run.status ~= "ok" or run.exit_code ~= 0 then
     local paranoid = finite_number(request.perf_event_paranoid)
       or finite_number(self.paranoid)
-    local denied = run.status == "denied" or permission_error(output)
     local open_failed = event_open_failure(output) ~= nil
+    local denied = run.status == "denied" or permission_error(output)
+      or (open_failed and restricted_user_fallback(output, specifications, paranoid))
     local workload_issue = workload_failure(output)
     local status, reason
     if run.status == "timeout" then

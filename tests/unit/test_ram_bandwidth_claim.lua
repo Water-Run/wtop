@@ -1,37 +1,12 @@
 package.path = "./src/?.lua;./src/?/init.lua;./tests/?.lua;" .. package.path
 
--- Is the RAM-bandwidth inspector honest about what it can do?
---
--- docs/PLAN.md carried "whether to retain the experimental perf stat RAM-bandwidth
--- Inspector in 0.1, including platform claims and default enablement" as an open
--- question, and it was open for the same reason the minimum-GPU-capability
--- question was: it was filed as needing hardware nobody had.  It does not.  The
--- question that is answerable from the source -- what does the capability record
--- claim, and what has actually been established -- was answerable all along, and
--- one host shape turned out to be enough to answer it.
---
--- The finding, measured on a host that publishes all four PMU names the
--- whitelist looks for:
---
---   uncore_imc_0, uncore_imc_1,
---   uncore_imc_free_running_0, uncore_imc_free_running_1
---
--- `perf list` advertises data_read, data_write and data_total on the free-running
--- pair -- exactly the event names the reader matches -- and every one of them
--- fails `sys_perf_event_open` with EINVAL, because a free-running counter is not
--- a counting PMU.  So the probe found four PMUs and reported `available` with an
--- empty reason, and the first real measurement produced
--- `memory_events_not_supported`.  A line that says ready and then says nothing is
--- the same defect as an SBOM with no hashes: it asserts a conclusion nobody
--- established.
---
--- What is deliberately *not* asserted here, because it could not be measured: the
--- `perf_event_paranoid` rule.  The obvious fix -- "downgrade when paranoid >= 2,
--- because uncore needs CAP_PERFMON" -- is a kernel rule that this host cannot
--- demonstrate, since its events fail with EINVAL before any permission check is
--- reached.  Both `perf stat -a -e unc_m_cas_count_rd` and the per-task form fail
--- identically.  Writing an unmeasured rule into a capability record is the defect
--- this project keeps removing, so the fix states only what the probe established.
+-- Finding a matching PMU does not prove that a counter can be read. Keep
+-- capability discovery free of perf invocations, preserve a reason in the UI,
+-- and distinguish measured values from a topology-derived theoretical limit.
+-- The real host publishes two programmable IMC PMUs with no events and two
+-- free-running PMUs with read/write events. Its ordinary-user perf retry hides
+-- EACCES behind EINVAL, while root can read the counters; neither outcome is
+-- established by enumerating the PMU names alone.
 
 local Fixture = require("support.fixture_fs")
 local Bandwidth = require("wtop.inspectors.ram_bandwidth")
@@ -41,9 +16,7 @@ local ViewModel = require("wtop.view_model")
 local translator = assert(I18n.new({ locale = "en-US" }))
 local engine = { history_values = function() return {} end }
 
--- The host measured above, reproduced as a fixture: four matching PMUs, of which
--- the counting pair publishes no events at all and the free-running pair
--- publishes the modern names the reader knows.
+-- Reproduce that host's source shape without opening hardware counters.
 local PMUS = { "uncore_imc_0", "uncore_imc_1",
               "uncore_imc_free_running_0", "uncore_imc_free_running_1" }
 
@@ -195,5 +168,33 @@ assert(with_topology.provider == "memory_topology_formula",
     "a result built only from the topology formula reports provider "
         .. tostring(with_topology.provider) .. "; a reader is named as the "
         .. "provider even when the reader produced nothing")
+
+-- Exercise the production perf classifier through the actual inspector model.
+local PerfBandwidth = require("wtop.inspectors.perf_bandwidth")
+local perf = PerfBandwidth.new({ runner = { run = function()
+    return { status = "error", exit_code = 1, stderr = table.concat({
+        "No supported events found.",
+        "The sys_perf_event_open() syscall failed for event (uncore_imc_free_running_0/data_read/u): Invalid argument",
+    }, "\n") }
+end } })
+local denied_inspector = collector(function(request) return perf:read(request) end)
+local denied_result = denied_inspector:inspect(context, { id = "system-memory" })
+assert(denied_result.status == "denied" and denied_result.quality == "denied")
+assert(denied_result.reason == "perf_event_permission_denied")
+for _, name in ipairs({ "read_bandwidth", "write_bandwidth", "total_bandwidth" }) do
+    local field = denied_result.entity.metrics[name]
+    assert(field.value == nil and field.quality == "denied"
+        and field.reason == "perf_event_permission_denied",
+        "a denied hardware sample must remain absent with its permission reason")
+end
+local denied_with_formula = denied_inspector:inspect(context, {
+    id = "system-memory", data_rate_mt_s = 4800, channels = 2, bus_width_bits = 64,
+    topology_source = "dmi",
+})
+assert(denied_with_formula.status == "ok" and denied_with_formula.quality == "estimated")
+assert(denied_with_formula.entity.metrics.total_bandwidth.value == nil
+    and denied_with_formula.entity.metrics.total_bandwidth.quality == "denied")
+assert(denied_with_formula.entity.metrics.theoretical_bandwidth.estimated)
+print("RAM inspector permission retry: denied fields and theoretical estimate stay distinct")
 
 return true

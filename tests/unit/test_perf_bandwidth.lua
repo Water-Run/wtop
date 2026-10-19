@@ -236,13 +236,13 @@ local large_count = PerfBandwidth.new({
 assert(large_count.status == "ok" and large_count.read_bytes_per_second > 5e20,
   "large integer counters must convert in floating point instead of wrapping")
 
-local function failed_read(raw, paranoid)
+local function failed_read(raw, paranoid, pmus)
   return PerfBandwidth.new({
     clock = clock_with_step(250000000),
     runner = { run = function() return raw end },
   }):read({
     perf_event_paranoid = paranoid,
-    pmus = { { name = "uncore_imc_0", events = { cas_count_read = {} } } },
+    pmus = pmus or { { name = "uncore_imc_0", events = { cas_count_read = {} } } },
   })
 end
 
@@ -283,6 +283,52 @@ local unsupported_open = failed_read({
 assert(unsupported_open.status == "unavailable"
   and unsupported_open.reason == "memory_events_not_supported")
 assert(unsupported_open.details.permission_may_be_required == true)
+
+-- Captured on the i7-13620H host: perf_event_open first returned EACCES,
+-- then perf retried with exclude_kernel/exclude_hv and reported only EINVAL.
+local permission_retry = table.concat({
+  "Error:",
+  "No supported events found.",
+  "The sys_perf_event_open() syscall failed for event (uncore_imc_free_running_0/data_read/u): Invalid argument",
+  '"dmesg | grep -i perf" may provide additional information.',
+}, "\n")
+local retry_pmus = { {
+  name = "uncore_imc_free_running_0",
+  events = { data_read = {}, data_write = {} },
+} }
+local function retry_failure(diagnostics, paranoid, stdout)
+  return failed_read({ status = "error", exit_code = 1,
+    stderr = diagnostics, stdout = stdout }, paranoid, retry_pmus)
+end
+local retry_denied = retry_failure(permission_retry, 2)
+assert(retry_denied.status == "denied"
+  and retry_denied.reason == "perf_event_permission_denied")
+assert(retry_denied.details.perf_event_paranoid == 2
+  and retry_denied.details.permission_may_be_required)
+assert(retry_denied.read_bytes_per_second == nil
+  and retry_denied.write_bytes_per_second == nil)
+for _, paranoid in ipairs({ -1, 0, 1 }) do
+  assert(retry_failure(permission_retry, paranoid).status == "unavailable",
+    "the user modifier alone cannot prove a restrictive permission fallback")
+end
+assert(retry_failure(permission_retry).status == "unavailable")
+for _, diagnostics in ipairs({
+  permission_retry:gsub("data_read/u", "data_read/"),
+  permission_retry:gsub("uncore_imc_free_running_0", "other_pmu"),
+  permission_retry:gsub("data_read/u", "data_read/uk"),
+  permission_retry:gsub("Invalid argument", "No such device") .. "\nInvalid argument",
+  permission_retry:gsub("The sys_perf_event_open%(%) syscall failed for event", "failed to open event"),
+  (permission_retry:gsub("Invalid argument", "Invalid argument (unrelated)")),
+}) do
+  assert(retry_failure(diagnostics, 2).status == "unavailable",
+    "unrelated or ambiguous diagnostics must not assert permission denial")
+end
+assert(retry_failure("No supported events found.", 2, permission_retry).status == "unavailable",
+  "workload stdout must not supply a permission-fallback diagnostic")
+local retry_write = permission_retry:gsub("data_read/u", "data_write/u")
+assert(retry_failure(retry_write, 3).status == "denied",
+  "the fallback must match any requested direction, not only the first event")
+print("perf memory permission retry: captured EACCES-to-EINVAL and exact-line negatives passed")
 
 local unavailable = failed_read({
   status = "unavailable", reason = "argv_executor_unavailable",

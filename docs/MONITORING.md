@@ -154,11 +154,19 @@ Storage 页的 `/` 可搜索挂载点、来源、文件系统类型及本地/网
 
 内存带宽 Inspector 不在调度器矩阵之内。按一次键会启动一次约 250 ms 的全局外部 `perf stat`/`sleep` 采样,使用有限的 data/CAS 事件名映射。部分方向、部分事件或多路复用的结果标记为 estimated。
 
-**该 Inspector 的“ready”意味着什么:测量得出,而非假设。** 匹配 PMU 的探测并不运行 `perf`,也不校验权限,所以 `available` 只意味着一件事:存在内存控制器 PMU,且有东西可以被要求读取它们。它并不意味着计数器能够被打开。这个区别不是学术性的——它来自一台真实主机的实际行为。这里的一台开发机发布了白名单查找的全部四个 PMU 名称(`uncore_imc_0`、`uncore_imc_1`、`uncore_imc_free_running_0`、`uncore_imc_free_running_1`),且 `perf list` 在 free-running 对上列出了 `data_read`、`data_write` 和 `data_total`——正是读取器匹配的事件名。然而它们每一个在 `sys_perf_event_open` 上都以 `EINVAL` 失败,因为 free-running 计数器不是计数型 PMU。探测找到了四个 PMU 并报告 ready;第一次真实测量返回 `memory_events_not_supported`。因此能力记录现在携带一条理由,说明计数器存在但尚未被读取,该理由已在全部十份目录中翻译,Insights 行把它显示在 `ready` 旁边,而不是留空。一行先说了 ready 然后什么也不说,与没有哈希的 SBOM 是同一种缺陷。
+匹配 PMU 的探测不运行 `perf`，也不校验权限。来源存在时，能力记录说明
+计数器尚未读取；Insights 同时显示这条理由。按需检查的实际结果决定是否
+能够提供带宽，PMU 名称或 `perf list` 中出现事件不能代替一次成功测量。
 
-本节刻意**不作**两个声明。其一,不声明 `perf_event_paranoid` 阈值,因为这台主机无法演示任何阈值:这些事件在任何权限检查之前就以 `EINVAL` 失败,带不带 `-a` 都一样。把一条未经测量的内核规则写进能力记录,正是本项目一直在清除的缺陷,所以理由只陈述探测所确证的内容。其二,不声明该 Inspector 普遍精确:`theoretical_bandwidth` 数值由内存拓扑计算得出并标记为 `estimated`,因为它是一个公式,并且它是该 Inspector 在计数器无法打开的主机上始终能给出的唯一数值——这就是为什么由拓扑导出的结果报告 `provider: memory_topology_formula`,而不是点名一个什么也没产出的读取器。
+`perf` 的权限回退可能先得到 `EACCES`，再添加仅用户态的 `u` 修饰符重试，
+最终只显示 `EINVAL`。在限制性的 `perf_event_paranoid` 上下文中，只有同一条
+系统调用诊断完整匹配本次请求事件及该修饰符时，才把这类回退归为 `denied`。
+普通 `EINVAL`、未知上下文或其他事件的错误仍为 `unavailable`；工作负载的
+标准输出不参与诊断。没有读到的带宽字段保持缺失，并携带原因，不显示为零。
 
-在完全没有内存控制器 PMU 的主机上——也就是普通笔记本电脑——来源为 `unavailable`,原因是 `memory_controller_pmu_not_found`,它不会作为待补缺口出现在建议列表中。`tests/unit/test_ram_bandwidth_claim.lua` 把这一切全部钉住:探测的理由、探测不打开任何计数器、理由到达渲染行、存在来源时不列为缺口、普通的无 PMU 情形,以及公式导出的数值保持标注。
+`theoretical_bandwidth` 由可信的内存拓扑计算并标为 `estimated`。即使计数器
+被拒绝，理论值与实测字段仍分别保留各自的质量和来源。在没有匹配内存控制器
+PMU 的主机上，来源为 `unavailable`，原因是 `memory_controller_pmu_not_found`。
 
 Insights 是一个静态的能力/Inspector 入口摘要。它读取已有的有界后台样本来获得计数,没有前台采集器集合,也不会为了这些数字而以 1 Hz 采样进程或 GPU 数据。
 
