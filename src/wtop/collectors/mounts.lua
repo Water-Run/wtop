@@ -99,20 +99,24 @@ local function statvfs_error(message, errno)
   else
     reason = tostring(message or "statvfs_failed")
   end
+  if kind ~= nil then
+    if kind == "denied" or kind == "missing" or kind == "unavailable" or kind == "stale" then
+      return kind, reason, errno
+    end
+    return "error", reason, errno
+  end
   local lower = reason:lower()
   local status
-  if kind == "denied" or errno == 1 or errno == 13
+  if errno == 1 or errno == 13
       or lower:find("permission denied", 1, true)
       or lower:find("operation not permitted", 1, true) then
     status = "denied"
-  elseif kind == "stale" or errno == 116 or lower:find("stale file handle", 1, true) then
+  elseif errno == 116 or lower:find("stale file handle", 1, true) then
     status = "stale"
-  elseif kind == "missing" or errno == 2 or errno == 20
+  elseif errno == 2 or errno == 20
       or lower:find("no such file", 1, true)
       or lower:find("not found", 1, true) then
     status = "missing"
-  elseif kind == "unavailable" then
-    status = "unavailable"
   else
     status = "error"
   end

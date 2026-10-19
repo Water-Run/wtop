@@ -441,4 +441,38 @@ equal(observed.id, "100:1000", "live generation returned for an on-demand proces
 _, reason = ConnectionOwner.resolve(owner_fs, { inode = "111" }, { pid = 100, fd = -1 }, { process })
 equal(reason, "owner_unavailable", "invalid fd rejected before filesystem access")
 
+-- Ownership attribution must preserve the adapter's category, even when the
+-- number or wording has a different meaning in another error domain.
+do
+  for _, entry in ipairs({
+      { "io_error", "error" }, { "invalid", "error" }, { "stale", "error" },
+      { "future_kind", "error" }, { false, "error" }, { "too_large", "error" },
+      { "denied", "denied" }, { "missing", "unavailable" }, { "unavailable", "unavailable" },
+    }) do
+    for _, code in ipairs({ 1, 2, 5, 13, 20, 61, 116, 999 }) do
+      for _, message in ipairs({ "opaque localized error", "Permission denied",
+          "No such file or directory", "Stale file handle" }) do
+        local owned, scan = Connections.scan_owners({ list = function()
+          return nil, { kind = entry[1], message = message, errno = code }
+        end }, "/proc", { ["111"] = true }, {})
+        equal(next(owned), nil, "failed owner scan has no invented owners")
+        equal(scan.status, entry[2], "typed owner scan category")
+        assert(scan.partial)
+        equal(scan.reason, message, "owner scan reason retained")
+        equal(scan.errno, code, "owner scan errno retained")
+      end
+    end
+  end
+  for _, entry in ipairs({ { "opaque", 13, "denied" }, { "opaque", 2, "unavailable" },
+      { "opaque", 20, "unavailable" }, { "opaque", 5, "error" },
+      { "permission denied", false, "denied" }, { "not found", false, "unavailable" },
+      { { message = "opaque", errno = 13 }, false, "denied" } }) do
+    local _, scan = Connections.scan_owners({ list = function()
+      return nil, entry[1], entry[2] or nil
+    end }, "/proc", { ["111"] = true }, {})
+    equal(scan.status, entry[3], "legacy owner scan fallback")
+  end
+  print("typed connection owner errors preserve native category, reason and errno; legacy fallback")
+end
+
 return true

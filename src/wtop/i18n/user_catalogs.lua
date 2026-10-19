@@ -36,17 +36,24 @@ local function reason_text(value, fallback)
 end
 
 local function classify_fs_error(value, errno)
-  local kind = type(value) == "table" and value.kind or nil
-  if type(value) == "table" then errno = errno or value.errno end
+  local kind
+  if type(value) == "table" then kind, errno = value.kind, errno or value.errno end
   local reason = reason_text(value)
+  -- The adapter already interpreted its native error domain. Only old,
+  -- unclassified errors need the numeric/text fallback below.
+  if kind ~= nil then
+    if kind == "missing" then return "absent", reason, errno end
+    if kind == "denied" then return "denied", reason, errno end
+    if kind == "too_large" then return "oversize", reason, errno end
+    return "error", reason, errno
+  end
   local lower = reason:lower()
-  if kind == "too_large" then return "oversize", reason, errno end
-  if kind == "missing" or errno == 2 or errno == 20
+  if errno == 2 or errno == 20
       or lower:find("no such file", 1, true)
       or lower:find("not found", 1, true) then
     return "absent", reason, errno
   end
-  if kind == "denied" or errno == 1 or errno == 13
+  if errno == 1 or errno == 13
       or lower:find("permission denied", 1, true)
       or lower:find("operation not permitted", 1, true) then
     return "denied", reason, errno

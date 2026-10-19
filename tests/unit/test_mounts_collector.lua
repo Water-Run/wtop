@@ -242,4 +242,44 @@ local invalid_collector = Mounts.new({ fs = fake_fs(fixture("invalid.mountinfo")
 local invalid_sample = invalid_collector:sample({ now_ns = function() return now end })
 assert(invalid_sample.status == "error" and invalid_sample.reason:find("mountinfo_line_2:", 1, true))
 
+-- A provider's typed error is authoritative across errno domains and locales.
+do
+  for _, entry in ipairs({
+      { "io_error", "error" }, { "invalid", "error" }, { "too_large", "error" },
+      { "future_kind", "error" }, { false, "error" }, { "denied", "denied" },
+      { "missing", "missing" }, { "unavailable", "unavailable" }, { "stale", "stale" },
+    }) do
+    for _, code in ipairs({ 1, 2, 5, 13, 20, 61, 116, 999 }) do
+      for _, message in ipairs({ "opaque localized error", "Permission denied",
+          "No such file or directory", "Stale file handle" }) do
+        local status, reason, number = Mounts.statvfs_error({
+          kind = entry[1], message = message, errno = code,
+        })
+        assert(status == entry[2], "typed mount error reclassified")
+        assert(reason == message and number == code, "mount provenance lost")
+      end
+    end
+  end
+  for _, entry in ipairs({ { "opaque", 13, "denied" }, { "opaque", 2, "missing" },
+      { "opaque", 20, "missing" }, { "opaque", 116, "stale" }, { "opaque", 5, "error" },
+      { "permission denied", false, "denied" }, { "not found", false, "missing" },
+      { "Stale file handle", false, "stale" },
+      { { message = "opaque", errno = 13 }, false, "denied" } }) do
+    assert(Mounts.statvfs_error(entry[1], entry[2] or nil) == entry[3], "legacy mount fallback")
+  end
+  local failed_usage = Mounts.new({ fs = fake_fs(main), statvfs = function()
+    return nil, { kind = "io_error", errno = 13, message = "opaque native error" }
+  end }):sample({ now_ns = function() return now end })
+  assert(failed_usage.status == "ok" and failed_usage.quality == "partial")
+  assert(#failed_usage.data.mounts == #parsed, "failed capacity reads must retain the mount inventory")
+  for _, mount in ipairs(failed_usage.data.mounts) do
+    if not mount.skipped then
+      assert(mount.quality == "error" and mount.capacity == nil and mount.inodes == nil)
+      assert(mount.partial_reason == "statvfs_error" and mount.statvfs_error.errno == 13)
+      assert(mount.statvfs_error.status == "error" and mount.statvfs_error.reason == "opaque native error")
+    end
+  end
+  print("typed mount errors preserve native category, reason and errno; legacy fallback and missing capacity")
+end
+
 return true

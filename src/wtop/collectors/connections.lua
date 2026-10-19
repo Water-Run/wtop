@@ -30,23 +30,27 @@ local HARD_OWNER_LIMITS = {
 }
 
 local function error_kind(err, errno)
-  local kind = type(err) == "table" and err.kind or nil
-  if type(err) == "table" then errno = errno or err.errno end
+  local kind
+  if type(err) == "table" then kind, errno = err.kind, errno or err.errno end
   local reason = type(err) == "table" and (err.message or err.reason or kind) or err
   reason = tostring(reason or "filesystem_error")
+  if kind ~= nil then
+    if kind == "denied" or kind == "missing" or kind == "unavailable" then
+      return kind, reason, errno
+    end
+    return "error", reason, errno
+  end
   local lower = reason:lower()
-  if kind == "denied" or errno == 1 or errno == 13
+  if errno == 1 or errno == 13
       or lower:find("permission denied", 1, true)
       or lower:find("operation not permitted", 1, true) then
     return "denied", reason, errno
   end
-  if kind == "missing" or errno == 2 or errno == 20
+  if errno == 2 or errno == 20
       or lower:find("no such file", 1, true)
       or lower:find("not found", 1, true) then
     return "missing", reason, errno
   end
-  if kind == "unavailable" then return "unavailable", reason, errno end
-  if kind == "too_large" then return "error", reason, errno end
   return "error", reason, errno
 end
 

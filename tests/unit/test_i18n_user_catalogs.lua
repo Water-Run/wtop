@@ -213,4 +213,57 @@ equal(zero_limit.state, "partial", "zero file limit state")
 equal(zero_limit.truncated, true, "zero file limit truncation")
 equal(#zero_limit.loaded, 0, "zero file limit loaded")
 
+-- A native/FS adapter has already interpreted its own error domain. Neither a
+-- coincident errno nor translated text can change that structured category.
+do
+  local expected = {
+    { "io_error", "error" }, { "invalid", "error" }, { "unavailable", "error" },
+    { "stale", "error" }, { "future_kind", "error" }, { false, "error" },
+    { "denied", "denied" }, { "missing", "absent" }, { "too_large", "oversize" },
+  }
+  local loader = { load_yaml = function() error("failed reads cannot reach YAML loading") end }
+  for _, entry in ipairs(expected) do
+    for _, code in ipairs({ 1, 2, 5, 13, 20, 61, 116, 999 }) do
+      for _, message in ipairs({ "opaque localized error", "Permission denied",
+          "No such file or directory", "Stale file handle" }) do
+        local failure = { kind = entry[1], errno = code, message = message }
+        local directory = UserCatalogs.load(loader, {
+          path = "/catalogs", fs = { list = function() return nil, failure end },
+        })
+        local state = entry[2] == "absent" and "absent"
+          or entry[2] == "denied" and "denied" or "error"
+        equal(directory.state, state, "typed directory state")
+        equal(#directory.errors, 1, "one directory failure")
+        equal(directory.errors[1].kind, entry[2], "typed directory category")
+        equal(directory.errors[1].errno, code, "directory errno retained")
+        equal(directory.errors[1].reason, message, "directory reason retained")
+        local file = UserCatalogs.load(loader, {
+          path = "/catalogs", fs = { list = function() return { "test.yml" } end,
+            read = function() return nil, failure end },
+        })
+        equal(file.state, "partial", "one failed catalog keeps directory available")
+        equal(#file.loaded, 0, "failed catalog not installed")
+        equal(#file.errors, 1, "one catalog read failure")
+        equal(file.errors[1].kind, entry[2] == "absent" and "missing" or entry[2],
+          "typed catalog category")
+        equal(file.errors[1].errno, code, "catalog errno retained")
+        equal(file.errors[1].reason, message, "catalog reason retained")
+        equal(file.errors[1].path, "/catalogs/test.yml", "catalog path retained")
+      end
+    end
+  end
+  -- Older adapters may return a message/errno tuple or an unclassified table.
+  for _, entry in ipairs({
+      { "opaque", 13, "denied" }, { "opaque", 2, "absent" },
+      { "opaque", 20, "absent" }, { "opaque", 5, "error" },
+      { "permission denied", false, "denied" }, { "not found", false, "absent" },
+      { { message = "opaque", errno = 13 }, false, "denied" },
+    }) do
+    local result = UserCatalogs.load(loader, { path = "/catalogs",
+      fs = { list = function() return nil, entry[1], entry[2] or nil end } })
+    equal(result.state, entry[3], "legacy directory fallback")
+  end
+  print("typed catalog errors preserve native category, reason and errno; legacy fallback")
+end
+
 return true
