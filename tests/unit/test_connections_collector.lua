@@ -339,10 +339,19 @@ assert(not pcall(Connections.new, {
 equal(largest_read, 0, "invalid limits must not trigger filesystem reads")
 
 -- Real procfs smoke test; owner scanning remains disabled to keep cost bounded
--- and deterministic for ordinary test runs.
-local real = Connections.new():sample({})
-equal(real.status, "ok", "real procfs socket tables")
-assert(real.data.total >= 0 and real.data.owner_scan.status == "disabled")
+-- and deterministic. Other hosts still execute every fixture below, but do
+-- not acquire a requirement to publish Linux procfs. Probe independently of
+-- the collector so a broken collector cannot make its own smoke test skip.
+local procfs = io.open("/proc/net/tcp", "rb")
+if procfs then
+  procfs:close()
+  local real = Connections.new():sample({})
+  equal(real.status, "ok", "real procfs socket tables")
+  assert(real.data.total >= 0 and real.data.owner_scan.status == "disabled")
+  print("real procfs connection smoke passed")
+else
+  print("real procfs connection smoke unavailable on this host; portable fixtures continue")
+end
 
 -- A row's PID and fd are observations, not an identity. Opening its owner
 -- checks the live descriptor between two reads of the same process generation.
