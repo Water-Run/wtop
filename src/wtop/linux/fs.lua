@@ -80,7 +80,17 @@ local FILE_ERRORS = platform_errors()
 
 local function classify_native_error(message, errno, operation)
   local kinds = operation and FILE_ERRORS[operation]
-  if kinds and kinds[errno] then return kinds[errno] end
+  local kind = kinds and kinds[errno]
+  if kind then
+    -- EINVAL/ERROR_INVALID_PARAMETER can also come from open/read/pread.
+    -- Only the native backend's explicit type-check operation proves this
+    -- category; its fixed identifier precedes the localized error text.
+    if kind ~= "not_regular" or (type(message) == "string"
+        and (message:match("^readfile_not_regular:")
+          or message:match("^readfile_not_regular failed %(Win32 error %d+%)$"))) then
+      return kind
+    end
+  end
   return classify_error(message, errno, FILE_ERRORS.general)
 end
 
@@ -215,9 +225,10 @@ local function default_path_type(path)
 end
 
 function FS.new(options)
-  options = options or {}
+  if options == nil then options = {} end
   if type(options) ~= "table" then error("FS options must be a table", 2) end
-  local default_limit = options.default_limit or (4 * 1024 * 1024)
+  local default_limit = options.default_limit
+  if default_limit == nil then default_limit = 4 * 1024 * 1024 end
   if type(default_limit) ~= "number" or default_limit ~= default_limit
       or default_limit < 1 or default_limit > 64 * 1024 * 1024
       or default_limit % 1 ~= 0 then
@@ -240,7 +251,7 @@ function FS.new(options)
   -- The accessor names are also the only ones `FS.new` will ever substitute a real
   -- implementation for, so an unknown key can only ever be a misspelling or dead
   -- weight.
-  local FS_OPTION_KEYS = { "root", "read_file", "read_file_at", "list_dir", "read_link", "path_type", "usb_interface" }
+  local FS_OPTION_KEYS = { "root", "default_limit", "read_file", "read_file_at", "list_dir", "read_link", "path_type", "usb_interface" }
   for key in pairs(options) do
     local known = false
     for _, accepted in ipairs(FS_OPTION_KEYS) do
@@ -296,7 +307,7 @@ function FS:path(path)
 end
 
 function FS:read(path, limit)
-  limit = limit or self.default_limit
+  if limit == nil then limit = self.default_limit end
   if type(limit) ~= "number" or limit ~= limit or limit < 1
       or limit > 64 * 1024 * 1024 or limit % 1 ~= 0 then
     return nil, { kind = "invalid", message = "invalid_read_limit", path = self:path(path) }

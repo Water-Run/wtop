@@ -425,16 +425,16 @@ do
     assert(ok, err)
   end
 
-  local function failure(value, err, code, kind)
+  local function failure(value, err, code, kind, message)
     assert(value == nil and type(err) == "table", "expected a structured read failure")
     assert(err.kind == kind, tostring(code) .. ": expected " .. kind .. ", got " .. tostring(err.kind))
-    assert(err.errno == code and err.message == "opaque localized error")
+    assert(err.errno == code and err.message == (message or "opaque localized error"))
     assert(err.path == "/test")
   end
 
   local function check_adapter(system, exported, cases, reads, links)
-    local code, probes = 0, 0
-    local function fail() return nil, "opaque localized error", code end
+    local code, probes, message = 0, 0, "opaque localized error"
+    local function fail() return nil, message, code end
     local adapter = { available = true, file_errors = exported,
       uname = function() probes = probes + 1; return { sysname = system } end,
       readfile = fail, readfile_at = fail, listdir = fail, listdir_hints = fail,
@@ -465,11 +465,26 @@ do
       end
       for _, entry in ipairs(reads) do
         code = entry[1]
-        local value, err = fs:read("/test", 16)
-        failure(value, err, code, entry[2])
-        value, err = fs:read_at("/test", 0, 16)
-        failure(value, err, code, entry[2])
+        for _, operation in ipairs({
+            { "opaque localized error", false }, { "read: localized", false },
+            { "pread: localized", false }, { "open: localized", false },
+            { "fstat: localized", false }, { "readfile_not_regular_suffix: localized", false },
+            { "readfile_not_regular failed (Win32 error " .. code .. ") trailing", false },
+            { "readfile_not_regular: localized", true },
+            { "readfile_not_regular failed (Win32 error " .. code .. ")", true },
+          }) do
+          message = operation[1]
+          local expected = entry[2]
+          if expected == "not_regular" and not operation[2] then
+            expected = "io_error"
+          end
+          local value, err = fs:read("/test", 16)
+          failure(value, err, code, expected, message)
+          value, err = fs:read_at("/test", 0, 16)
+          failure(value, err, code, expected, message)
+        end
       end
+      message = "opaque localized error"
       for _, entry in ipairs(links) do
         code = entry[1]
         local value, err = fs:readlink("/test")
@@ -511,6 +526,7 @@ do
     { {5,"io_error"}, {13,"io_error"}, {61,"io_error"}, {701,"denied"},
       {702,"missing"}, {703,"unavailable"} },
     { {704,"symlink"}, {705,"not_regular"}, {706,"too_large"} }, { {707,"not_link"} })
+  print("filesystem file-type errors require the native operation marker across current and legacy domains")
 
   -- Lua io.* returns CRT errno even on Windows. Exercise open, read, seek and
   -- close independently, always closing an opened stream after a failed read.

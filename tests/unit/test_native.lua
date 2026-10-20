@@ -68,6 +68,38 @@ assert(listed_path == "/fixture/items" and listed_limit == 2,
   "hint requests must preserve custom filesystem methods")
 assert(not pcall(FS.new, { read_file = "invalid" }))
 
+-- The default is a usable bound, not an option that is parsed and then refused.
+-- An explicit per-read bound overrides it; only nil selects the default.
+do
+    for _, limit in ipairs({ 1, 7, 256, 64 * 1024 * 1024 }) do
+        local seen, calls
+        calls = 0
+        local fs = FS.new({ default_limit = limit, read_file = function(_, requested)
+            seen, calls = requested, calls + 1
+            return ""
+        end })
+        assert(fs:read("/test") == "" and seen == limit)
+        assert(fs:read("/test", 11) == "" and seen == 11)
+        local value, err = fs:read("/test", false)
+        assert(value == nil and err.kind == "invalid" and calls == 2,
+            "false must not silently acquire the default read size")
+    end
+    for _, limit in ipairs({ false, 0, -1, 1.5, 64 * 1024 * 1024 + 1,
+            math.huge, -math.huge, 0/0, "256", {} }) do
+        local ok, err = pcall(FS.new, { default_limit = limit })
+        assert(not ok and tostring(err):find("default_limit must be", 1, true))
+    end
+    assert(not pcall(FS.new, false), "false options are not an omitted table")
+    local seen
+    assert(FS.new({ read_file = function(_, limit) seen = limit; return "" end }):read("/test") == "")
+    assert(seen == 4 * 1024 * 1024)
+    local bounded = FS.new({ default_limit = 1 })
+    local value, err = bounded:read("VERSION")
+    assert(value == nil and err.kind == "too_large", "actual file must honor the configured default")
+    assert(type(bounded:read("VERSION", 64)) == "string", "explicit bound must override the default")
+    print("configured filesystem read limits: defaults, overrides, invalid values and actual bounded file")
+end
+
 do
     local original = native.listdir_hints
     if native.available and type(original) == "function" then
@@ -217,6 +249,26 @@ local ranged_special, _, ranged_special_errno = native.readfile_at("/dev/null", 
 assert(ranged_special == nil and ranged_special_errno == 22)
 local ranged_link, _, ranged_link_errno = native.readfile_at("/proc/self/exe", 0, 16)
 assert(ranged_link == nil and ranged_link_errno == 40)
+-- A regular pseudo-file can reject an otherwise bounded range. EINVAL is not
+-- evidence that fstat rejected its type. Compare the real native and stdio paths.
+if native.path_type("/proc/self/pagemap") == "regular" then
+    local native_value, native_error = FS.new():read_at("/proc/self/pagemap", 1, 1)
+    local original = package.loaded["wtop.native"]
+    package.loaded["wtop.native"] = { available = false }
+    local ok, pure_fs = pcall(function() return assert(loadfile("src/wtop/linux/fs.lua"))().new() end)
+    package.loaded["wtop.native"] = original
+    assert(ok, pure_fs)
+    local pure_value, pure_error = pure_fs:read_at("/proc/self/pagemap", 1, 1)
+    assert(native_value == nil and pure_value == nil)
+    assert(native_error.errno == 22 and pure_error.errno == 22)
+    assert(native_error.kind == "io_error" and pure_error.kind == "io_error",
+        "rejected regular-file range must not be classified as a file-type failure")
+    local special, special_error = FS.new():read_at("/dev/null", 0, 16)
+    assert(special == nil and special_error.kind == "not_regular")
+    print("actual regular-file EINVAL matches native and stdio; real type rejection stays distinct")
+else
+    print("own-process pagemap range probe unavailable; portable operation checks still run")
+end
 local special_content, special_error, special_errno = native.readfile("/dev/null", 16)
 assert(special_content == nil and type(special_error) == "string" and special_errno == 22,
     "bounded reader must reject devices/FIFOs instead of blocking")
