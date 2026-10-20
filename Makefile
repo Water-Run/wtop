@@ -107,6 +107,7 @@ NATIVE_HEADERS += native/wtop_linux_usb.h
 NATIVE_HEADERS += native/wtop_linux_process_status.h
 NATIVE_HEADERS += native/wtop_linux_perf.h
 NATIVE_HEADERS += native/wtop_fs_errors.h
+NATIVE_HEADERS += native/wtop_worker_image_cache.h
 NATIVE_HEADERS += native/wtop_windows_display_mode.h
 NATIVE_REVISION_HEADER := $(NATIVE_DIR)/build_revision.h
 NATIVE_VERSION_HEADER := $(NATIVE_DIR)/build_version.h
@@ -383,7 +384,7 @@ SAN_RUN_ENV = ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 \
 SANITIZER_EXCLUDED := tests/unit/test_benchmark_record.lua
 
 test-sanitized: resource-check $(LUA_STAMP) $(NATIVE_REVISION_HEADER) \
-        $(NATIVE_VERSION_HEADER) sanitize-native test-native-amdsmi-sanitized test-native-levelzero-sanitized test-native-nvml-sanitized test-native-nvml-worker-sanitized test-native-gpu-worker-sanitized test-native-hardware-worker-sanitized test-native-drm-worker-sanitized test-native-cpu-clocks-sanitized test-native-cpuid-sanitized test-native-process-status-sanitized test-native-usb-endpoints-sanitized test-native-io-oom-sanitized test-native-perf-counts-sanitized test-native-directory-hints-sanitized
+        $(NATIVE_VERSION_HEADER) sanitize-native test-native-amdsmi-sanitized test-native-levelzero-sanitized test-native-nvml-sanitized test-native-nvml-worker-sanitized test-native-gpu-worker-sanitized test-native-hardware-worker-sanitized test-native-drm-worker-sanitized test-native-cpu-clocks-sanitized test-native-cpuid-sanitized test-native-process-status-sanitized test-native-usb-endpoints-sanitized test-native-io-oom-sanitized test-native-perf-counts-sanitized test-native-directory-hints-sanitized test-native-worker-images-sanitized
 	@if [ -z '$(SAN_ASAN_RUNTIME)' ]; then echo "wtop: the sanitized module names no ASan runtime to preload, so the suite cannot run on the uninstrumented interpreter"; exit 1; fi
 	@for mode in --snapshot --agent --diagnose; do \
 		echo "wtop: sanitized $$mode"; \
@@ -456,6 +457,25 @@ test-native-directory-hints-sanitized: $(LUA_STAMP) $(NATIVE_REVISION_HEADER) $(
 		tests/native/linux_directory_hints.c $(filter-out native/wtop_native.c,$(NATIVE_SOURCES)) \
 		$(LUA_PREFIX)/lib/liblua.a -lm -ldl -pthread -o $(SANITIZED_DIR)/directory-hints-fixture
 	@ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 $(SANITIZED_DIR)/directory-hints-fixture
+
+.PHONY: test-native-worker-images test-native-worker-images-sanitized
+test-native-worker-images:
+	@mkdir -p build/native-worker-images
+	@$(CC) $(CFLAGS) -std=c17 -O2 -Wall -Wextra -Werror -pthread -Inative \
+		tests/native/worker_image_cache.c -o build/native-worker-images/fixture
+	@build/native-worker-images/fixture
+	@$(CC) $(CFLAGS) -std=c17 -O2 -Wall -Wextra -Werror -pthread -Inative \
+		-DWTOP_TEST_NO_SEALS tests/native/worker_image_cache.c -o build/native-worker-images/no-seals
+	@build/native-worker-images/no-seals
+
+test-native-worker-images-sanitized:
+	@mkdir -p build/native-worker-images-san
+	@$(CC) $(SANITIZER_CFLAGS) -fno-pie -no-pie -pthread -Inative \
+		tests/native/worker_image_cache.c -o build/native-worker-images-san/fixture
+	@ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 build/native-worker-images-san/fixture
+	@$(CC) $(SANITIZER_CFLAGS) -fno-pie -no-pie -pthread -Inative \
+		-DWTOP_TEST_NO_SEALS tests/native/worker_image_cache.c -o build/native-worker-images-san/no-seals
+	@ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 build/native-worker-images-san/no-seals
 
 .PHONY: test-native-amdsmi test-native-amdsmi-sanitized
 test-native-amdsmi: $(LUA_STAMP)
@@ -539,7 +559,7 @@ test-native-gpu-worker-sanitized: sanitize-native $(LUA_STAMP)
 		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' \
 		--output build/native-gpu-worker-san --native-only
 
-check: resource-check native locales test-native-terminal-signals test-native-cpu-limits test-native-io-oom test-native-nvme-health test-native-wifi test-native-drm-modes test-native-usb-endpoints test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid test-native-process-status test-native-perf-counts test-native-tui-input test-native-directory-hints
+check: resource-check native locales test-native-terminal-signals test-native-cpu-limits test-native-io-oom test-native-nvme-health test-native-wifi test-native-drm-modes test-native-usb-endpoints test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid test-native-process-status test-native-perf-counts test-native-tui-input test-native-directory-hints test-native-worker-images
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAC) -p $$(find src tools tests -type f -name '*.lua' -print)
 	@sh -n tools/*.sh
 	@python3 -c 'import pathlib; [compile(path.read_bytes(), str(path), "exec") for path in pathlib.Path("tests").rglob("*.py")]'

@@ -66,6 +66,9 @@ struct gpu_job {
     char reason[96];
     char **environment;
     unsigned char *configuration;size_t configuration_size;
+#ifndef __APPLE__
+    int shared_image;
+#endif
 #ifdef __APPLE__
     int image_fd;
     char image_path[PATH_MAX];
@@ -141,7 +144,7 @@ static void job_error(struct gpu_job *job,const char *reason,int error) {
     pthread_mutex_lock(&job->mutex);job->state=ERROR;job->error=error;job->failed_at=client_now();
     snprintf(job->reason,sizeof(job->reason),"%s",reason);pthread_cond_broadcast(&job->condition);pthread_mutex_unlock(&job->mutex);
 }
-static int fd_image(unsigned source,char image_path[PATH_MAX]) {
+static int create_image(unsigned source,char image_path[PATH_MAX]) {
     image_path[0]=0;
 #ifdef __APPLE__
     if(source<GPU_VENDOR_COUNT){errno=EINVAL;return -1;}
@@ -190,6 +193,8 @@ static int fd_image(unsigned source,char image_path[PATH_MAX]) {
     int executable=fcntl(reader,F_DUPFD_CLOEXEC,10);error=errno;close(reader);errno=error;return executable;
 #endif
 }
+#include "wtop_worker_image_cache.h"
+
 static void close_image(int executable,const char *image_path) {
     close(executable);if(image_path[0])unlink(image_path);
 }
@@ -212,7 +217,7 @@ static int socket_pair(int pair[2]) {
 static int spawn_reader(struct gpu_job *job,int *channel) {
     /* Refuse a process sandbox which prevents ownership/reaping altogether. */
     if(waitpid((pid_t)INT_MAX,NULL,WNOHANG)<0&&errno!=ECHILD)return errno;
-    char image_path[PATH_MAX];int executable=fd_image(job->vendor,image_path);if(executable<0)return errno;
+    char image_path[PATH_MAX];int executable=acquire_image(job,image_path);if(executable<0)return errno;
     int pair[2];
     int pair_error=socket_pair(pair);
     if(pair_error){close_image(executable,image_path);return pair_error;}
@@ -392,6 +397,7 @@ static void *controller(void *opaque) {
     }
 done:
     finish_child(job,channel,descriptor);
+    release_image(job);
     pthread_mutex_lock(&job->mutex);job->done=1;pthread_cond_broadcast(&job->condition);pthread_mutex_unlock(&job->mutex);
     atomic_fetch_sub(&controllers[job->vendor],1);job_release(job);return NULL;
 }
