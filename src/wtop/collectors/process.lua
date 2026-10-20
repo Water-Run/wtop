@@ -655,18 +655,19 @@ function Process:sample(context, previous)
   local scanned = 0
   local visible_ids = visible_process_ids(context)
   local visible_wait_ids = visible_process_ids(context, "visible_wait_process_ids")
+  local resolve_username = context and context.resolve_username
+  if type(resolve_username) ~= "function" then resolve_username = nil end
+  local usernames = {}
 
   local candidates = {}
   for _, entry in ipairs(entries) do
     local pid = canonical_pid(entry)
-    if pid then candidates[#candidates + 1] = { name = entry, pid = pid } end
+    if pid then candidates[#candidates + 1] = pid end
   end
   local process_candidates = #candidates
   local truncated = directory_truncated == true or process_candidates > self.max_processes
 
-  table.sort(candidates, function(left, right)
-    return left.pid < right.pid
-  end)
+  table.sort(candidates)
 
   -- A process I/O sort/filter needs comparable readings for the whole
   -- collected set. Never pay this cost for the default CPU table. The native
@@ -685,9 +686,9 @@ function Process:sample(context, previous)
   if bulk_due and self.use_native_batch and fs == FS.default
       and context_fs(self, context) == nil then
     local wanted = {}
-    for index, candidate in ipairs(candidates) do
+    for index, pid in ipairs(candidates) do
       if index > self.max_processes or index > self.max_bulk_io_reads then break end
-      wanted[#wanted + 1] = candidate.pid
+      wanted[#wanted + 1] = pid
     end
     local ok, contents, denied_flags = pcall(self.native.proc_batch, wanted, "io", 65536)
     if ok and type(contents) == "table" then
@@ -703,9 +704,9 @@ function Process:sample(context, previous)
   local batch_contents, batch_denied, batch_rows
   if self.use_native_batch and fs == FS.default and context_fs(self, context) == nil then
     local wanted = {}
-    for index, candidate in ipairs(candidates) do
+    for index, pid in ipairs(candidates) do
       if index > self.max_processes then break end
-      wanted[#wanted + 1] = candidate.pid
+      wanted[#wanted + 1] = pid
     end
     local rows = type(self.native.process_stat_row_fields) == "function"
     local mode = rows and "stat_rows" or self.use_native_parsed_stat and "stat_parsed" or "stat"
@@ -715,8 +716,8 @@ function Process:sample(context, previous)
     end
   end
 
-  for index, candidate in ipairs(candidates) do
-    local entry, pid = candidate.name, candidate.pid
+  for index, pid in ipairs(candidates) do
+    local entry = tostring(pid)
       if scanned >= self.max_processes then
         break
       end
@@ -1191,9 +1192,20 @@ function Process:sample(context, previous)
               end
             end
           end
-          if context and type(context.resolve_username) == "function" and process.uid then
-            local resolved, user = pcall(context.resolve_username, process.uid)
-            if resolved then process.user = sanitize_text(user) end
+          if resolve_username and process.uid then
+            local user = usernames[process.uid]
+            if user ~= nil then
+              process.user = user ~= false and user or nil
+            else
+              local resolved, value = pcall(resolve_username, process.uid)
+              if resolved then
+                process.user = sanitize_text(value)
+                -- Names belong to UIDs, so one successful lookup (including
+                -- an absent name) serves this scan. Retry exceptions and
+                -- keep this map local to the current scan and resolver.
+                usernames[process.uid] = process.user or false
+              end
+            end
           end
 
           -- Run-queue wait for a process, read only for the rows the table is
@@ -1277,8 +1289,8 @@ function Process:sample(context, previous)
             -- outlive its processes or grow without bound.
             local entry = live_cache[process.id]
             if not entry then
-              local unique_pid = (index == 1 or candidates[index - 1].pid ~= pid)
-                and (index == #candidates or candidates[index + 1].pid ~= pid)
+              local unique_pid = (index == 1 or candidates[index - 1] ~= pid)
+                and (index == #candidates or candidates[index + 1] ~= pid)
               -- This cache record is private. Its referenced values can also
               -- belong to older snapshots, so replace fields, not their data.
               entry = unique_pid and cached or {}

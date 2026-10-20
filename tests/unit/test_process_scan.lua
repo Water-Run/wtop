@@ -253,3 +253,54 @@ do
 end
 
 print("ok: periodic process metadata, old-module fallback, immutable snapshots, denied/backoff, clock reversal, full identity readback and thousand-identity phases")
+
+-- A scan shares resolved names by UID, without extending the database TTL.
+do
+ local Native=require("wtop.native")
+local f=assert(io.open("tests/fixtures/proc/100.stat.1","rb"));local body=f:read("a");assert(f:close())
+for _,native in ipairs({{available=false},Native})do
+ local now,calls,step=1e9,{},1
+ local fs={list=function()return{"4","04","3","2","1"}end}
+ function fs:read(path)
+  if path=="/proc/uptime"then return"100 0\n"end
+  local pid=tonumber(path:match("/proc/(%d+)/stat$"));if pid then return(body:gsub("^100 ",pid.." "))end
+  pid=tonumber(path:match("/proc/(%d+)/status$"))
+  if pid then local uid=pid<=2 and 1000 or 2000;return("Uid:\t%d\t%d\t%d\t%d\n"):format(uid,uid,uid,uid)end
+  return nil,{kind="missing"}
+ end
+ local collector=Process.new({fs=fs,native=native,clock_ticks_per_second=100,page_size_bytes=4096})
+ local function resolve(uid)
+  calls[uid]=(calls[uid]or 0)+1
+  if step==1 then return uid==1000 and"  Alice\t "or nil end
+  if step==2 then return uid==1000 and"Renamed"or"Second"end
+  if step==3 then
+   if uid==1000 and calls[uid]==1 then error("lookup transient failure")end
+   return uid==1000 and"Recovered"or nil
+  end
+  return nil
+ end
+ local context={fs=fs,now_ns=function()return now end,resolve_username=resolve}
+ local first=collector:sample(context);assert(#first.data.list==4)
+ assert(calls[1000]==1 and calls[2000]==1,"same scan repeated a successful UID lookup")
+ assert(first.data.by_pid[1].user=="Alice"and first.data.by_pid[2].user=="Alice")
+ assert(first.data.by_pid[3].user==nil and first.data.by_pid[4].user==nil)
+ step=2;calls={};now=now+1e9
+ local second=collector:sample(context,first)
+ assert(calls[1000]==1 and calls[2000]==1)
+ assert(second.data.by_pid[1].user=="Renamed"and second.data.by_pid[2].user=="Renamed")
+ assert(second.data.by_pid[3].user=="Second"and second.data.by_pid[4].user=="Second")
+ assert(first.data.by_pid[1].user=="Alice"and first.data.by_pid[3].user==nil,"old snapshot changed")
+ step=3;calls={};now=now+1e9
+ local third=collector:sample(context,second)
+ assert(calls[1000]==2 and calls[2000]==1,"lookup exception was memoized")
+ assert(third.data.by_pid[1].user=="Renamed"and third.data.by_pid[2].user=="Recovered")
+ assert(third.data.by_pid[3].user==nil and third.data.by_pid[4].user==nil)
+ step=4;calls={};now=now+1e9
+ context.resolve_username=function(uid)calls[uid]=(calls[uid]or 0)+1;return"Replacement"end
+ local fourth=collector:sample(context,third)
+ assert(calls[1000]==1 and calls[2000]==1)
+ for _,row in ipairs(fourth.data.list)do assert(row.user=="Replacement")end
+ assert(third.data.by_pid[1].user=="Renamed"and third.data.by_pid[2].user=="Recovered")
+end
+ print("per-scan UID names: sanitized once, missing preserved, next-scan rename, resolver replacement, exception retry and immutable old snapshots")
+end
