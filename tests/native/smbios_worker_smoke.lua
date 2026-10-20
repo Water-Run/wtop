@@ -16,7 +16,8 @@ for id in pairs(Worker.sources) do
     assert(scheduler:add(shared:wrap(require("wtop.collectors."..id).new())))
     count=count+1
 end
-assert(count==13 and Worker.sources.firmware_enclosures and Worker.sources.platform_firmware)
+assert(count==14 and Worker.sources.firmware_enclosures and Worker.sources.platform_firmware
+    and Worker.sources.firmware_probes)
 local function tick()
     for _, id in ipairs(scheduler.order) do scheduler:task(id).next_due_ns=0 end
     local start=Native.monotonic_ns();local results=scheduler:tick(context)
@@ -37,8 +38,13 @@ local function settle(seconds,wanted)
 end
 local fresh=settle(3)
 assert(fresh.onboard_devices.status=="ok" and fresh.port_connectors.status=="ok")
+local probes=assert(fresh.firmware_probes.data)
+assert(fresh.firmware_probes.status=="ok" and #probes.probes==3 and #probes.cooling_devices==1)
+assert(probes.probes[1].nominal_value==12 and probes.probes[2].nominal_value==-5.5
+    and probes.probes[3].nominal_value==2.5 and probes.cooling_devices[1].nominal_speed_rpm==1600)
 local observed=fresh.onboard_devices.value_timestamp_ns
 assert(observed==fresh.port_connectors.value_timestamp_ns and observed<=fresh.onboard_devices.timestamp_ns)
+assert(observed==fresh.firmware_probes.value_timestamp_ns)
 local pids={};for pid in contents(count_file):gmatch("%d+") do pids[#pids+1]=pid end
 assert(#pids==1,"firmware views read the table more than once")
 for id,value in pairs(fresh) do
@@ -52,6 +58,8 @@ for _,value in pairs(pending) do assert(value.sampling_pending) end
 snapshot=Snapshot.merge(snapshot,pending,2,Native.monotonic_ns())
 assert(snapshot.quality.onboard_devices.quality=="stale"
     and snapshot.quality.onboard_devices.value_timestamp_ns==observed)
+assert(snapshot.quality.firmware_probes.quality=="stale"
+    and snapshot.quality.firmware_probes.value_timestamp_ns==observed)
 local independent=Hardware.new(require("wtop.collectors.cpufreq").new())
 local deadline=Native.monotonic_ns()+3e9
 repeat
@@ -77,7 +85,10 @@ repeat
 until false
 assert(recovered.onboard_devices.value_timestamp_ns>observed
     and recovered.onboard_devices.value_timestamp_ns==recovered.port_connectors.value_timestamp_ns)
+assert(recovered.firmware_probes.status=="ok"
+    and recovered.firmware_probes.value_timestamp_ns==recovered.onboard_devices.value_timestamp_ns
+    and recovered.firmware_probes.data.cooling_devices[1].nominal_speed_rpm==1600)
 pids={};for pid in contents(count_file):gmatch("%d+") do pids[#pids+1]=pid end
 assert(#pids==3 and pids[1]==pids[2] and pids[3]~=pids[1],"raw source duplication or wrong recovery epoch")
 scheduler:stop(context);shared:close();independent:close()
-print("ok: thirteen firmware views, one raw read/parse epoch, real timestamps, timeout/reap, independent source and shared recovery")
+print("ok: fourteen firmware views including voltage/temperature/current/cooling declarations, one raw read/parse epoch, real timestamps, timeout/reap, independent source and shared recovery")

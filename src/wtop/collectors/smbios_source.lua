@@ -15,6 +15,34 @@ local function copy(value, seen)
   return result
 end
 
+-- Retain one filtered public revision per provider, not raw firmware or a
+-- hash of private identifiers. Reads and parsing still happen afresh. Stable
+-- tokens let independently scheduled views recognize unchanged declarations.
+local revisions = setmetatable({}, { __mode = "k" })
+local function equal(left, right)
+  if type(left) ~= type(right) then return false end
+  if type(left) ~= "table" then return left == right end
+  for key, value in pairs(left) do if not equal(value, right[key]) then return false end end
+  for key in pairs(right) do if left[key] == nil then return false end end
+  return true
+end
+
+local function revision_token(collector, provider, input, parsed)
+  if not parsed or type(provider) ~= "table" then return {} end
+  local failure = input.metadata_error
+  local status = failure and FS.error_status(failure) or nil
+  local reason = type(failure) == "table" and failure.message or nil
+  local prior = revisions[provider]
+  if prior and prior.platform == collector.platform and prior.base_path == collector.base_path
+      and prior.source == input.source and prior.metadata_status == status
+      and prior.metadata_reason == reason and equal(prior.public, parsed) then return prior.token end
+  local token = {}
+  revisions[provider] = { platform = collector.platform, base_path = collector.base_path,
+    source = input.source, metadata_status = status, metadata_reason = reason,
+    public = copy(parsed), token = token }
+  return token
+end
+
 function M.read(collector, context)
   if context and context.smbios_input and collector.platform == "linux" then
     return context.smbios_input:read(collector, context)
@@ -72,22 +100,23 @@ function M.load(collector, context)
     for _, entry in ipairs(entries) do
       if entry.platform == collector.platform and entry.base_path == collector.base_path
           and entry.provider == provider then
-        return entry.input, copy(entry.parsed), entry.reason
+        return entry.input, copy(entry.parsed), entry.reason, nil, entry.cohort
       end
     end
   end
   local input, read_error = M.read(collector, context)
   if not input then return nil, nil, nil, read_error end
   local parsed, reason = SMBIOS.parse(input.data, input.metadata)
+  local cohort = revision_token(collector, provider, input, parsed)
   if batch then
     entries = entries or {}
     batch.smbios = entries
     entries[#entries + 1] = { platform = collector.platform,
       base_path = collector.base_path, provider = provider,
-      input = input, parsed = parsed, reason = reason }
-    return input, copy(parsed), reason
+      input = input, parsed = parsed, reason = reason, cohort = cohort }
+    return input, copy(parsed), reason, nil, cohort
   end
-  return input, parsed, reason
+  return input, parsed, reason, nil, cohort
 end
 
 function M.attach_metadata_issue(parsed, input, base_path)

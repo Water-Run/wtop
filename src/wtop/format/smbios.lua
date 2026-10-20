@@ -1,5 +1,5 @@
 -- Bounded SMBIOS 2.x/3.x hardware inventory (DSP0134, types 0, 1, 2, 3, 4, 7, 8, 9, 10,
--- 16, 17, 19, 20, 22, 37, 38, 39, 41, 42, 43 and 45).
+-- 16, 17, 19, 20, 22, 26, 27, 28, 29, 37, 38, 39, 41, 42, 43 and 45).
 -- Only named public fields are copied out. Serial numbers, asset tags, UUIDs
 -- and raw firmware bytes are not retained in the parsed result.
 local Common = require("wtop.collectors.common")
@@ -134,6 +134,18 @@ local SUPPLY_STATUSES = { [1] = "Other", [2] = "Unknown", [3] = "OK",
   [4] = "Non-critical", [5] = "Critical" }
 local SUPPLY_RANGES = { [1] = "Other", [2] = "Unknown", [3] = "Manual",
   [4] = "Auto-switch", [5] = "Wide range", [6] = "Not applicable" }
+local PROBE_STATUSES = { [1] = "Other", [2] = "Unknown", [3] = "OK",
+  [4] = "Non-critical", [5] = "Critical", [6] = "Non-recoverable" }
+local PROBE_LOCATIONS = { [1] = "Other", [2] = "Unknown", [3] = "Processor",
+  [4] = "Disk", [5] = "Peripheral Bay", [6] = "System Management Module",
+  [7] = "Motherboard", [8] = "Memory Module", [9] = "Processor Module",
+  [10] = "Power Unit", [11] = "Add-in Card" }
+local TEMPERATURE_LOCATIONS = { [12] = "Front Panel Board", [13] = "Back Panel Board",
+  [14] = "Power System Board", [15] = "Drive Back Plane" }
+local COOLING_TYPES = { [1] = "Other", [2] = "Unknown", [3] = "Fan",
+  [4] = "Centrifugal Blower", [5] = "Chip Fan", [6] = "Cabinet Fan",
+  [7] = "Power Supply Fan", [8] = "Heat Pipe", [9] = "Integrated Refrigeration",
+  [16] = "Active Cooling", [17] = "Passive Cooling" }
 local BATTERY_CHEMISTRIES = { [1] = "Other", [2] = "Unknown",
   [3] = "Lead acid", [4] = "Nickel cadmium", [5] = "Nickel metal hydride",
   [6] = "Lithium-ion", [7] = "Zinc air", [8] = "Lithium polymer" }
@@ -213,6 +225,10 @@ function M.parse(data, metadata, options)
     "max_firmware_components", options.max_firmware_components, 128, 128)
   local max_host_interfaces = Common.positive_integer(
     "max_host_interfaces", options.max_host_interfaces, 64, 64)
+  local max_firmware_probes = Common.positive_integer(
+    "max_firmware_probes", options.max_firmware_probes, 128, 128)
+  local max_firmware_cooling = Common.positive_integer(
+    "max_firmware_cooling", options.max_firmware_cooling, 64, 64)
   local result = { arrays = {}, devices = {}, slots = {}, ports = {}, onboard_devices = {},
     baseboards = {}, enclosures = {},
     platform_firmwares = {}, firmware_systems = {},
@@ -221,6 +237,7 @@ function M.parse(data, metadata, options)
     firmware_batteries = {}, firmware_bmcs = {}, firmware_tpms = {},
     firmware_components = {},
     host_interfaces = {},
+    firmware_probes = {}, firmware_cooling = {},
     issues = {}, partial = false, truncated = false,
     major = metadata.major, minor = metadata.minor, docrev = metadata.docrev, structure_count = 0 }
   local function issue(field, offset, record)
@@ -252,7 +269,8 @@ function M.parse(data, metadata, options)
     if kind == 127 then ended = true; break end
     local record, members
     if kind == 0 or kind == 1 or kind == 2 or kind == 3 or kind == 4 or kind == 7 or kind == 8 or kind == 9 or kind == 10 or kind == 16 or kind == 17
-        or kind == 19 or kind == 20 or kind == 22 or kind == 37
+        or kind == 19 or kind == 20 or kind == 22 or kind == 26 or kind == 27
+        or kind == 28 or kind == 29 or kind == 37
         or kind == 38 or kind == 39 or kind == 41 or kind == 42 or kind == 43
         or kind == 45 then
       record = { id = string.format("%04x", handle), handle = handle,
@@ -758,6 +776,58 @@ function M.parse(data, metadata, options)
         if #result.firmware_bmcs < max_firmware_bmcs then
           result.firmware_bmcs[#result.firmware_bmcs + 1] = record
         else result.truncated = true; issue("firmware_bmc_limit", position - 1) end
+      elseif (kind == 26 or kind == 28 or kind == 29) and length >= 20 then
+        record.structure_type = kind
+        record.probe_type = kind == 26 and "voltage" or kind == 28 and "temperature" or "current"
+        record.unit = kind == 26 and "volts" or kind == 28 and "celsius" or "amperes"
+        record.description = read_string(4)
+        local flags = uint(fields, 5, 1)
+        record.location_code, record.status_code = flags & 0x1f, flags >> 5
+        record.location = PROBE_LOCATIONS[record.location_code]
+          or kind == 28 and TEMPERATURE_LOCATIONS[record.location_code] or nil
+        record.status = PROBE_STATUSES[record.status_code]
+        local scale = kind == 28 and 10 or 1000
+        for _, spec in ipairs({ { 6, "maximum", scale, true }, { 8, "minimum", scale, true },
+            { 10, "resolution", kind == 28 and 1000 or 10000 },
+            { 12, "tolerance", scale }, { 14, "accuracy_percent", 100 } }) do
+          local raw = uint(fields, spec[1], 2)
+          record[spec[2] .. "_raw"] = raw
+          if raw ~= 0x8000 then
+            local value = spec[4] and raw >= 0x8000 and raw - 0x10000 or raw
+            record[spec[2]] = value / spec[3]
+          end
+        end
+        record.oem_data_present = uint(fields, 16, 4) ~= 0
+        if length == 21 then issue("probe_nominal_length", position - 1, record)
+        elseif length >= 22 then
+          local raw = uint(fields, 20, 2)
+          record.nominal_value_raw = raw
+          if raw ~= 0x8000 then record.nominal_value = (raw >= 0x8000 and raw - 0x10000 or raw) / scale end
+        end
+        if record.minimum and record.maximum and record.minimum > record.maximum then
+          issue("probe_range", position - 1, record)
+        end
+        if #result.firmware_probes < max_firmware_probes then
+          result.firmware_probes[#result.firmware_probes + 1] = record
+        else result.truncated = true; issue("firmware_probe_limit", position - 1) end
+      elseif kind == 27 and length >= 12 then
+        record.structure_type = 27
+        local reference = uint(fields, 4, 2)
+        if reference ~= 0xffff then record.temperature_probe_id = string.format("%04x", reference) end
+        local flags = uint(fields, 6, 1)
+        record.device_type_code, record.status_code = flags & 0x1f, flags >> 5
+        record.device_type, record.status = COOLING_TYPES[record.device_type_code], PROBE_STATUSES[record.status_code]
+        record.cooling_unit_group = uint(fields, 7, 1)
+        record.oem_data_present = uint(fields, 8, 4) ~= 0
+        if length == 13 then issue("cooling_nominal_length", position - 1, record)
+        elseif length >= 14 then
+          record.nominal_speed_raw = uint(fields, 12, 2)
+          if record.nominal_speed_raw ~= 0x8000 then record.nominal_speed_rpm = record.nominal_speed_raw end
+        end
+        if length >= 15 then record.description = read_string(14) end
+        if #result.firmware_cooling < max_firmware_cooling then
+          result.firmware_cooling[#result.firmware_cooling + 1] = record
+        else result.truncated = true; issue("firmware_cooling_limit", position - 1) end
       elseif kind == 39 and length >= 16 then
         record.power_unit_group = uint(fields, 4, 1)
         record.location = read_string(5)
@@ -1006,6 +1076,13 @@ function M.parse(data, metadata, options)
   if metadata.structure_count and metadata.structure_count ~= result.structure_count then
     issue("structure_count", position - 1)
   end
+  -- Reference integrity needs a complete handle namespace, independently of
+  -- an unrelated record's invalid numeric or string attribute.
+  result._handles_complete = not result.truncated
+    and (ended or metadata.table_bytes and metadata.structure_count == result.structure_count
+      and position == limit + 1) == true
+    and (not metadata.table_bytes or #data >= metadata.table_bytes)
+    and (not metadata.structure_count or metadata.structure_count == result.structure_count)
   local device_counts = {}
   for _, device in ipairs(result.devices) do
     local parent = arrays[device.array_handle]
@@ -1035,6 +1112,18 @@ function M.parse(data, metadata, options)
     end
   end
   if not result.truncated then
+    local cooling_groups = {}
+    for _, device in ipairs(result.firmware_cooling) do
+      if device.cooling_unit_group > 0 then
+        local group = device.cooling_unit_group
+        cooling_groups[group] = (cooling_groups[group] or 0) + 1
+      end
+    end
+    for _, device in ipairs(result.firmware_cooling) do
+      if device.cooling_unit_group > 0 and cooling_groups[device.cooling_unit_group] < 2 then
+        issue("cooling_unit_group", device.offset, device)
+      end
+    end
     local group_counts = {}
     for _, supply in ipairs(result.firmware_power_supplies) do
       if supply.power_unit_group > 0 then
@@ -1083,6 +1172,7 @@ function M.parse(data, metadata, options)
       and #result.firmware_components == 0
       and #result.host_interfaces == 0
       and #result.firmware_power_supplies == 0
+      and #result.firmware_probes == 0 and #result.firmware_cooling == 0
       and #result.processors == 0 and #result.caches == 0
       and #result.array_ranges == 0 and #result.device_ranges == 0
       and result.partial then return nil, "smbios_invalid" end

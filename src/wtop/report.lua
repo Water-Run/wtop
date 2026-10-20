@@ -607,13 +607,39 @@ function M.render(snapshot)
                 quantity(battery.design_voltage_mv, 1000, " V", 2) }
         end, firmware_batteries)
     local firmware_supplies = object(snapshot.firmware_power_supplies)
-    table_section(lines, "Firmware power supplies", { "Supply", "Location", "Rated output", "Firmware status", "Group" },
+    table_section(lines, "Firmware power supplies", { "Supply", "Location", "Rated output", "Firmware status", "Group",
+        "Voltage probe handle", "Current probe handle", "Cooling device handle" },
         firmware_supplies.supplies, function(supply)
             return { supply.name or supply.id, supply.location,
                 quantity(supply.max_power_watts, 1, " W", 0), supply.status,
                 supply.power_unit_group and supply.power_unit_group > 0
-                    and supply.power_unit_group or nil }
+                    and supply.power_unit_group or nil, supply.voltage_probe_id,
+                supply.current_probe_id, supply.cooling_device_id }
         end, firmware_supplies)
+    local firmware_probes = object(snapshot.firmware_probes)
+    local function probe_value(value, unit)
+        local suffix = ({ volts = "V", celsius = "C", amperes = "A" })[unit]
+        if type(value) == "number" and suffix then return string.format("%.6g %s", value, suffix) end
+    end
+    table_section(lines, "Firmware probes", { "Handle", "Probe", "Kind", "Location", "Readable minimum",
+        "Readable maximum", "Nominal value", "Resolution", "Tolerance", "Accuracy", "Firmware status" },
+        firmware_probes.probes, function(probe)
+            return { probe.id, probe.description, probe.probe_type, probe.location,
+                probe_value(probe.minimum, probe.unit), probe_value(probe.maximum, probe.unit),
+                probe_value(probe.nominal_value, probe.unit), probe_value(probe.resolution, probe.unit),
+                probe_value(probe.tolerance, probe.unit), quantity(probe.accuracy_percent, 1, "%", 2), probe.status }
+        end, firmware_probes)
+    table_section(lines, "Firmware cooling devices", { "Handle", "Device", "Type", "Nominal speed",
+        "Firmware status", "Cooling group", "Temperature probe handle" },
+        firmware_probes.cooling_devices, function(device)
+            return { device.id, device.description, device.device_type,
+                quantity(device.nominal_speed_rpm, 1, " rpm", 0), device.status,
+                device.cooling_unit_group, device.temperature_probe_id }
+        end, firmware_probes)
+    if #list(firmware_probes.probes) > 0 or #list(firmware_probes.cooling_devices) > 0 then
+        lines[#lines + 1] = "Firmware ranges, nominal values and status are declarations, not live measurements or alarm thresholds."
+        lines[#lines + 1] = ""
+    end
     local processor_firmware = object(snapshot.processor_firmware)
     local firmware_bmcs = object(snapshot.firmware_bmcs)
     table_section(lines, "Firmware BMC interfaces",

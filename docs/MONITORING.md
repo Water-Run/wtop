@@ -29,6 +29,7 @@ CLI 默认 `--interval 1000`。活动页面使用基准间隔与采集器下限�
 | 板载设备 | SMBIOS Type 10/41 的名称、类型与固件启用状态；Type 41 的唯一 PCI 地址可引用当前功能 | Linux `/sys/firmware/dmi/tables`；Windows `GetSystemFirmwareTable` | 60 s / 300 s |
 | 固件电池 | SMBIOS Type 22 的位置、名称、化学类型、设计容量/电压及报告误差；独立于实时电量 | Linux `/sys/firmware/dmi/tables`；Windows `GetSystemFirmwareTable` | 60 s / 300 s |
 | 固件电源 | SMBIOS Type 39 的槽位、型号、额定持续输出、存在/插拔标志、冗余组和可选探针句柄；不是实时功耗 | Linux `/sys/firmware/dmi/tables`；Windows `GetSystemFirmwareTable` | 60 s / 300 s |
+| 固件探针与散热设备 | SMBIOS Type 26/28/29 的电压、温度、电流可测范围、分辨率、容差与标称值，Type 27 散热设备的标称转速和冗余组；按有效的类型句柄关联电源及温度探针 | Linux `/sys/firmware/dmi/tables`；Windows `GetSystemFirmwareTable` | 60 s / 300 s |
 | BMC 接口 | SMBIOS Type 38 的 IPMI 接口类型、版本、目标地址及可选的寄存器布局和中断；不是实时 BMC 状态 | Linux `/sys/firmware/dmi/tables`；Windows `GetSystemFirmwareTable` | 60 s / 300 s |
 | 固件 TPM | SMBIOS Type 43 的厂商 ID、规范与固件版本字段、描述及配置特征；不是当前 TPM 安全状态 | Linux `/sys/firmware/dmi/tables`；Windows `GetSystemFirmwareTable` | 60 s / 300 s |
 | 固件组件 | SMBIOS Type 45 的组件、版本、发布日期、镜像大小、静态状态和明确的关联句柄；不测量实时健康或更新服务 | Linux `/sys/firmware/dmi/tables`；Windows `GetSystemFirmwareTable` | 60 s / 300 s |

@@ -251,6 +251,15 @@ ATA 原始属性没有通用温度单位，也不据此合成健康通过/失败
 
 ## 完整快照
 
+可选的 `metrics.firmware_probes` 提供 SMBIOS 探针规格和散热设备声明。
+`declarations_only` 固定为 true；`probes` 与 `cooling_devices` 各最多五项，
+总数和 `truncated` 说明截断。电压、电流、温度分别用 V、A、C，转速用 rpm。
+`nominal_value`、可测范围、分辨率、容差和固件状态不是当前读数或告警阈值，
+不会产生实时健康信号。未知值留空，原始 16 位规格字段可保留供核对。
+完整 Snapshot 的 `firmware_probes` 提供有界清单，系统设备树保留经核对的
+电源、散热设备和温度探针引用；不依据位置文字推断具体 CPU，也不由
+标称电压和电流计算功耗。原始固件、OEM 内容和内部版本标记不导出。
+
 需要原始细节时使用以下命令:
 
 ```bash

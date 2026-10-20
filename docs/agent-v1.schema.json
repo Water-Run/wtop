@@ -70,6 +70,145 @@
         "gpu": { "$ref": "#/$defs/metricObject" },
         "power": { "$ref": "#/$defs/metricObject" },
         "sensors": { "$ref": "#/$defs/metricObject" },
+        "firmware_probes": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "SMBIOS probe and cooling declarations. Nominal values, readable ranges and reported status are not live measurements or alarm thresholds.",
+          "required": [
+            "declarations_only",
+            "probes",
+            "cooling_devices"
+          ],
+          "properties": {
+            "declarations_only": {
+              "type": "boolean",
+              "const": true
+            },
+            "probes": {
+              "type": "array",
+              "maxItems": 5,
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [
+                  "id",
+                  "probe_type",
+                  "unit"
+                ],
+                "properties": {
+                  "minimum": {
+                    "type": "number"
+                  },
+                  "maximum": {
+                    "type": "number"
+                  },
+                  "resolution": {
+                    "type": "number"
+                  },
+                  "tolerance": {
+                    "type": "number"
+                  },
+                  "accuracy_percent": {
+                    "type": "number"
+                  },
+                  "nominal_value": {
+                    "type": "number"
+                  },
+                  "handle": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "structure_type": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "location_code": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "status_code": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "minimum_raw": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "maximum_raw": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "resolution_raw": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "tolerance_raw": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "accuracy_percent_raw": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "nominal_value_raw": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "probe_type": {
+                    "type": "string",
+                    "enum": [
+                      "voltage",
+                      "temperature",
+                      "current"
+                    ]
+                  },
+                  "unit": {
+                    "type": "string",
+                    "enum": [
+                      "volts",
+                      "celsius",
+                      "amperes"
+                    ]
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 256
+                  }
+                }
+              }
+            },
+            "cooling_devices": {
+              "type": "array",
+              "maxItems": 5,
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [
+                  "id"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "nominal_speed_rpm": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "temperature_probe_id": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 256
+                  }
+                }
+              }
+            }
+          }
+        },
         "processes": { "$ref": "#/$defs/metricObject" }
       },
       "additionalProperties": true

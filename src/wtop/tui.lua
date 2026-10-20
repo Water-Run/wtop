@@ -3662,8 +3662,57 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         add("firmware_psu.voltage_probe", "Voltage probe handle", device.voltage_probe_id)
         add("firmware_psu.cooling_device", "Cooling device handle", device.cooling_device_id)
         add("firmware_psu.current_probe", "Current probe handle", device.current_probe_id)
+        for _, spec in ipairs({ { "firmware_probe_ids", "firmware_probe.related_probes", "Related firmware probes" },
+            { "firmware_cooling_ids", "firmware_probe.related_cooling", "Related firmware cooling devices" } }) do
+            local labels = {}
+            for _, id in ipairs(node[spec[1]]) do
+                local target = graph.by_id[id]
+                labels[#labels + 1] = target and Hardware.label(target, i18n) or id
+            end
+            if #labels > 0 then add_list(spec[2], spec[3], labels) end
+        end
         lines[#lines + 1] = translated(i18n, "firmware_psu.note",
             "Firmware capacity and status are declarations, not live power or health readings.")
+    elseif node.kind == "firmware_probe" or node.kind == "firmware_cooling" then
+        lines[#lines + 1] = translated(i18n, "firmware_probe.note",
+            "Firmware declarations only; no live readings or alarm thresholds.")
+        local function value(number, unit)
+            local suffix = ({ volts = "V", celsius = "C", amperes = "A" })[unit]
+            if type(number) == "number" and suffix then return string.format("%.6g %s", number, suffix) end
+        end
+        add("firmware_probe.description", "Description", device.description)
+        add("firmware_probe.status", "Firmware status", device.status or device.status_code)
+        if node.kind == "firmware_probe" then
+            add("firmware_probe.type", "Probe kind", device.probe_type)
+            add("firmware_probe.location", "Firmware location", device.location or device.location_code)
+            add("firmware_probe.minimum", "Readable minimum", value(device.minimum, device.unit))
+            add("firmware_probe.maximum", "Readable maximum", value(device.maximum, device.unit))
+            add("firmware_probe.nominal", "Nominal value", value(device.nominal_value, device.unit))
+            add("firmware_probe.resolution", "Resolution", value(device.resolution, device.unit))
+            add("firmware_probe.tolerance", "Tolerance", value(device.tolerance, device.unit))
+            add("firmware_probe.accuracy", "Accuracy (%)", device.accuracy_percent)
+        else
+            add("firmware_probe.cooling_type", "Cooling device type", device.device_type or device.device_type_code)
+            add("firmware_probe.nominal_speed", "Nominal speed (rpm)", device.nominal_speed_rpm)
+            add("firmware_probe.group", "Cooling unit group", device.cooling_unit_group)
+            add("firmware_probe.temperature_handle", "Temperature probe handle", device.temperature_probe_id)
+            local peers = {}
+            for _, id in ipairs(node.redundant_peer_ids) do
+                local target = graph.by_id[id]
+                peers[#peers + 1] = target and Hardware.label(target, i18n) or id
+            end
+            if #peers > 0 then add_list("firmware_psu.peers", "Firmware redundancy peers", peers) end
+        end
+        for _, spec in ipairs({ { "firmware_probe_ids", "firmware_probe.related_probes", "Related firmware probes" },
+            { "firmware_cooling_ids", "firmware_probe.related_cooling", "Related firmware cooling devices" },
+            { "power_supply_ids", "firmware_probe.related_supplies", "Related firmware power supplies" } }) do
+            local labels = {}
+            for _, id in ipairs(node[spec[1]]) do
+                local target = graph.by_id[id]
+                labels[#labels + 1] = target and Hardware.label(target, i18n) or id
+            end
+            if #labels > 0 then add_list(spec[2], spec[3], labels) end
+        end
     elseif node.kind == "edac_controller" or node.kind == "edac_module" then
         if node.kind == "edac_controller" then
             add("edac.name", "Controller name", device.name)

@@ -2511,6 +2511,7 @@ local COLLECTOR_RESOURCE = {
     firmware_enclosures = "firmware_enclosures",
     platform_firmware = "platform_firmware",
     firmware_power_supplies = "firmware_power_supplies",
+    firmware_probes = "firmware_probes",
     firmware_bmcs = "firmware_bmcs",
     firmware_tpms = "firmware_tpms",
     firmware_components = "firmware_components",

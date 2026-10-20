@@ -18,6 +18,7 @@ local constructors = {
   firmware_enclosures = require("wtop.collectors.firmware_enclosures"),
   platform_firmware = require("wtop.collectors.platform_firmware"),
   firmware_power_supplies = require("wtop.collectors.firmware_power_supplies"),
+  firmware_probes = require("wtop.collectors.firmware_probes"),
   firmware_bmcs = require("wtop.collectors.firmware_bmcs"),
   firmware_tpms = require("wtop.collectors.firmware_tpms"),
   firmware_components = require("wtop.collectors.firmware_components"),

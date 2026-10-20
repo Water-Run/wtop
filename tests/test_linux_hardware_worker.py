@@ -129,8 +129,20 @@ def main() -> None:
         firmware=directory/'firmware';firmware.mkdir()
         def record(kind,handle,body,strings=()):
             return bytes([kind,len(body)+4])+handle.to_bytes(2,'little')+body+b'\0'.join(strings)+b'\0\0'
+        def probe(kind, handle, nominal, description):
+            body = bytearray(18)
+            body[0:2] = bytes([1, 0x63])
+            for offset in [2, 4, 6, 8, 10]:
+                body[offset:offset+2] = b'\x00\x80'
+            body[16:18] = nominal.to_bytes(2, 'little', signed=True)
+            return record(kind, handle, body, [description])
         (firmware/'DMI').write_bytes(record(10,0x1000,bytes([133,1]),[b'Firmware Ethernet'])
-            +record(8,0x0800,bytes([1,0,2,18,16]),[b'Internal',b'USB'])+record(127,0xffff,b''))
+            +record(8,0x0800,bytes([1,0,2,18,16]),[b'Internal',b'USB'])
+            +probe(26,0x2600,12000,b'Firmware input rail')
+            +probe(28,0x2800,-55,b'Firmware inlet temperature')
+            +probe(29,0x2900,2500,b'Firmware input current')
+            +record(27,0x2700,b'\x00\x28\x63\x00'+bytes(4)+b'\x40\x06\x01',[b'Firmware fan'])
+            +record(127,0xffff,b''))
         spd=directory/'spd';spd.mkdir()
         for address,fixture in [('13-0050','AQD-D5V16GR48-SB'),('13-0052','MTC40F2046S1RC48BA1')]:
             dimm=spd/address;dimm.mkdir();(dimm/'name').write_text('spd5118\n')

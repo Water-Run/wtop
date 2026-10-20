@@ -6,7 +6,7 @@ local M, Shared, Proxy = {}, {}, {}
 Shared.__index, Proxy.__index = Shared, Proxy
 M.sources = { memory_devices = true, expansion_slots = true, port_connectors = true,
     onboard_devices = true, firmware_batteries = true, firmware_power_supplies = true,
-    firmware_enclosures = true,
+    firmware_enclosures = true, firmware_probes = true,
     platform_firmware = true,
     firmware_bmcs = true, firmware_tpms = true, firmware_components = true,
     host_interfaces = true, processor_firmware = true }

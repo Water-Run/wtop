@@ -847,6 +847,12 @@ function M.new_all(options)
   supply_options.platform = options.platform or "portable"
   result.firmware_power_supplies = require("wtop.collectors.firmware_power_supplies")
     .new(supply_options)
+  local probe_options = {}
+  for key, value in pairs(options.firmware_probes or options.common or {}) do
+    probe_options[key] = value
+  end
+  probe_options.platform = options.platform or "portable"
+  result.firmware_probes = require("wtop.collectors.firmware_probes").new(probe_options)
   local bmc_options = {}
   for key, value in pairs(options.firmware_bmcs or options.common or {}) do
     bmc_options[key] = value

@@ -95,6 +95,8 @@ local KIND_LABELS = {
     platform_firmware = { "firmware_platform.device", "Platform firmware {id}" },
     firmware_system = { "firmware_platform.system", "Firmware system {id}" },
     firmware_power_supply = { "firmware_psu.device", "Firmware power supply {id}" },
+    firmware_probe = { "firmware_probe.device", "Firmware probe {id}" },
+    firmware_cooling = { "firmware_probe.cooling", "Firmware cooling device {id}" },
     firmware_bmc = { "firmware_bmc.device", "Firmware BMC interface {id}" },
     firmware_tpm = { "firmware_tpm.device", "Firmware TPM {id}" },
     firmware_component = { "firmware_component.device", "Firmware component {id}" },
@@ -143,6 +145,8 @@ function M.label(node, i18n)
     local label = identifier(device.name) or identifier(device.location)
     if label then return label end
   end
+  if (node.kind == "firmware_probe" or node.kind == "firmware_cooling")
+      and identifier(device.description) then return device.description end
   if node.kind == "firmware_tpm" and identifier(device.description) then
     return device.description
   end
@@ -220,6 +224,7 @@ function M.build(snapshot)
       redundant_peer_ids = {}, slave_ids = {}, holder_ids = {},
       associated_ids = {}, firmware_component_ids = {}, esrt_ids = {},
       chassis_ids = {}, baseboard_ids = {}, contained_ids = {} }
+    node.firmware_probe_ids, node.firmware_cooling_ids, node.power_supply_ids = {}, {}, {}
     result.by_id[id] = node
     unsorted[#unsorted + 1] = node
     return node
@@ -1073,6 +1078,20 @@ function M.build(snapshot)
   end
   local supplies = type(snapshot.firmware_power_supplies) == "table"
     and snapshot.firmware_power_supplies or {}
+  local probes = type(snapshot.firmware_probes) == "table" and snapshot.firmware_probes or {}
+  result.partial = result.partial or probes.partial == true
+  result.truncated = result.truncated or probes.truncated == true
+  for _, spec in ipairs({ { "probes", "firmware-probe:", "firmware_probe", 128 },
+                         { "cooling_devices", "firmware-cooling:", "firmware_cooling", 64 } }) do
+    for index, device in ipairs(type(probes[spec[1]]) == "table" and probes[spec[1]] or {}) do
+      if index > spec[4] then result.truncated = true break end
+      if type(device) == "table" and identifier(device.id) then
+        local node = add_node("firmware", device.description or ("0x" .. device.id),
+          device, spec[2] .. device.id, nil, "firmware_probes", device.id)
+        if node then node.kind, node.ambiguous = spec[3], device.ambiguous == true end
+      else result.partial = true end
+    end
+  end
   local bmcs = type(snapshot.firmware_bmcs) == "table"
     and snapshot.firmware_bmcs or {}
   local bmc_list = type(bmcs.devices) == "table" and bmcs.devices or {}
@@ -1327,6 +1346,69 @@ function M.build(snapshot)
       and node.device.quality == "fresh"
       and not (type(snapshot[node.resource]) == "table" and snapshot[node.resource].truncated)
       and Quality.current_source(snapshot.quality, node.resource)
+  end
+  -- A typed handle is a cross-reference, not containment. The cooling and
+  -- temperature records share one source; PSU links additionally need the
+  -- parent-side token proving matching public table revisions and provider.
+  local probes_current = probes._handles_complete == true and probes.truncated ~= true
+    and Quality.current_source(snapshot.quality, "firmware_probes")
+  local same_table = type(probes._smbios_cohort) == "table"
+    and probes._smbios_cohort == supplies._smbios_cohort
+  local probe_handles = {}
+  for _, node in ipairs(unsorted) do
+    if node.kind == "firmware_probe" or node.kind == "firmware_cooling" then
+      local handle = node.device.handle
+      if math.type(handle) == "integer" and handle >= 0 and handle < 65535 then
+        local id = string.format("%04x", handle)
+        if probe_handles[id] ~= nil or by_handle[id] ~= nil or node.ambiguous or node.device.ambiguous then
+          probe_handles[id] = false
+        else probe_handles[id] = node end
+      end
+    end
+  end
+  local function probe_link(source, handle, expected_kind, expected_type)
+    local target = probe_handles[handle]
+    local structure = expected_kind == "firmware_cooling" and 27
+      or ({ voltage = 26, temperature = 28, current = 29 })[expected_type]
+    if current_firmware_node(source) and current_firmware_node(target)
+        and target.kind == expected_kind
+        and target.device.structure_type == structure
+        and (not expected_type or target.device.probe_type == expected_type) then
+      local forward = expected_kind == "firmware_cooling" and "firmware_cooling_ids" or "firmware_probe_ids"
+      local reverse = source.kind == "firmware_cooling" and "firmware_cooling_ids" or "power_supply_ids"
+      source[forward][#source[forward] + 1] = target.id
+      target[reverse][#target[reverse] + 1] = source.id
+    end
+  end
+  if probes_current then
+    local cooling_groups = {}
+    for _, node in ipairs(unsorted) do
+      if node.kind == "firmware_cooling" then
+        probe_link(node, node.device.temperature_probe_id, "firmware_probe", "temperature")
+        local group = node.device.cooling_unit_group
+        if math.type(group) == "integer" and group >= 1 and group <= 255 then
+          local entry = cooling_groups[group] or { members = {}, complete = true }
+          cooling_groups[group] = entry
+          if not current_firmware_node(node) then entry.complete = false
+          else entry.members[#entry.members + 1] = node end
+        end
+      elseif node.kind == "firmware_power_supply" and same_table
+          and supplies._handles_complete == true and supplies.truncated ~= true then
+        probe_link(node, node.device.voltage_probe_id, "firmware_probe", "voltage")
+        probe_link(node, node.device.current_probe_id, "firmware_probe", "current")
+        probe_link(node, node.device.cooling_device_id, "firmware_cooling")
+      end
+    end
+    for _, group in pairs(cooling_groups) do
+      if group.complete and #group.members >= 2 then
+        for _, node in ipairs(group.members) do
+          for _, peer in ipairs(group.members) do
+            if node ~= peer then node.redundant_peer_ids[#node.redundant_peer_ids + 1] = peer.id end
+          end
+          table.sort(node.redundant_peer_ids)
+        end
+      end
+    end
   end
   if enclosures.truncated ~= true and #(enclosures.baseboards or {}) <= 64
       and #(enclosures.enclosures or {}) <= 64
@@ -1710,6 +1792,7 @@ function M.related(graph, id, limit)
       { "slave_ids" }, { "holder_ids" },
       { "channel_ids" }, { "memory_device_ids" }, { "redundant_peer_ids" },
       { "cooling_ids" }, { "thermal_zone_ids" },
+      { "firmware_probe_ids" }, { "firmware_cooling_ids" }, { "power_supply_ids" },
       { "cache_ids" }, { "firmware_socket_ids" },
       { "associated_ids" }, { "firmware_component_ids" },
       { "chassis_ids" }, { "baseboard_ids" }, { "contained_ids" },

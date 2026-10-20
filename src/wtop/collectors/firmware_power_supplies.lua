@@ -22,7 +22,7 @@ end
 
 function FirmwarePower:sample(context)
   local started = Common.now_ns(context)
-  local input, parsed, reason, read_error = Source.load(self, context)
+  local input, parsed, reason, read_error, cohort = Source.load(self, context)
   if not input then return read_error end
   local source = input.source
   if not parsed then
@@ -35,6 +35,8 @@ function FirmwarePower:sample(context)
   end
   Source.attach_metadata_issue(parsed, input, self.base_path)
   local result = { supplies = parsed.firmware_power_supplies, issues = parsed.issues,
+    _smbios_cohort = cohort,
+    _handles_complete = parsed._handles_complete,
     partial = parsed.partial, truncated = parsed.truncated,
     major = parsed.major, minor = parsed.minor, docrev = parsed.docrev,
     structure_count = parsed.structure_count, source = source }

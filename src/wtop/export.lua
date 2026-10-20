@@ -1306,6 +1306,33 @@ local function export_firmware_batteries(firmware)
     return result
 end
 
+local function export_firmware_probes(firmware, maximum)
+    maximum = maximum or 128
+    local result = copy_fields(firmware, { "source", "major", "minor", "docrev",
+        "partial", "truncated", "structure_count" })
+    result.declarations_only = true
+    result.probes, result.cooling_devices = json.array({}), json.array({})
+    for _, spec in ipairs({ { "probes", 128, { "id", "handle", "structure_type",
+        "probe_type", "unit", "description", "location_code", "location",
+        "status_code", "status", "minimum_raw", "minimum", "maximum_raw", "maximum",
+        "resolution_raw", "resolution", "tolerance_raw", "tolerance",
+        "accuracy_percent_raw", "accuracy_percent", "nominal_value_raw", "nominal_value",
+        "oem_data_present", "source", "quality", "ambiguous" } },
+        { "cooling_devices", 64, { "id", "handle", "structure_type", "description",
+        "device_type_code", "device_type", "status_code", "status", "temperature_probe_id",
+        "cooling_unit_group", "nominal_speed_raw", "nominal_speed_rpm", "oem_data_present",
+        "source", "quality", "ambiguous" } } }) do
+        local rows = firmware and firmware[spec[1]] or {}
+        result[spec[1] .. "_total"] = #rows
+        for index, row in ipairs(rows) do
+            if index > math.min(maximum, spec[2]) then result.truncated = true break end
+            result[spec[1]][index] = copy_fields(row, spec[3])
+        end
+    end
+    result.issues = export_issues(firmware and firmware.issues)
+    return result
+end
+
 local function export_firmware_power_supplies(firmware)
     local result = copy_fields(firmware, { "source", "major", "minor", "docrev",
         "partial", "truncated", "structure_count" })
@@ -2124,7 +2151,8 @@ local function export_inventory(snapshot)
         nodes[index].holder_ids = json.array(node.holder_ids)
         nodes[index].cache_ids = json.array(node.cache_ids)
         nodes[index].firmware_socket_ids = json.array(node.firmware_socket_ids)
-        for _, key in ipairs({ "chassis_ids", "baseboard_ids", "contained_ids" }) do
+        for _, key in ipairs({ "chassis_ids", "baseboard_ids", "contained_ids",
+            "firmware_probe_ids", "firmware_cooling_ids", "power_supply_ids" }) do
             if #node[key] > 0 then nodes[index][key] = json.array(node[key]) end
         end
         if #node.associated_ids > 0 then
@@ -2219,6 +2247,7 @@ function M.snapshot(snapshot, options)
         firmware_enclosures = export_firmware_enclosures(snapshot.firmware_enclosures),
         platform_firmware = export_platform_firmware(snapshot.platform_firmware),
         firmware_power_supplies = export_firmware_power_supplies(snapshot.firmware_power_supplies),
+        firmware_probes = export_firmware_probes(snapshot.firmware_probes),
         firmware_bmcs = export_firmware_bmcs(snapshot.firmware_bmcs),
         firmware_tpms = export_firmware_tpms(snapshot.firmware_tpms),
         firmware_components = export_firmware_components(snapshot.firmware_components),
@@ -2995,6 +3024,7 @@ function M.agent(snapshot, options)
                 closest_to_critical = closest_critical,
             }),
             firmware_enclosures = export_firmware_enclosures(full.firmware_enclosures, device_limit),
+            firmware_probes = export_firmware_probes(full.firmware_probes, device_limit),
             platform_firmware = export_platform_firmware(full.platform_firmware, device_limit),
             displays = export_displays(full.displays, device_limit, snapshot.quality and snapshot.quality.displays),
             processes = json.object({ total = full.processes and full.processes.total }),
