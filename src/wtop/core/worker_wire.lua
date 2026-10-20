@@ -36,45 +36,56 @@ function M.encode(value)
     return table.concat(chunks)
 end
 
+-- Decode tags as bytes and advance fixed-width fields directly. Every field
+-- is checked against the frame before string.unpack or substring extraction.
+local NIL, TRUE, FALSE, INTEGER, DOUBLE, STRING, MAP = ("ztfidsm"):byte(1, 7)
 function M.decode(data)
-    assert(type(data) == "string" and #data <= M.MAX_BYTES, "worker_wire_bytes")
-    local p, nodes = 1, 0
-    local function take(n)
-        assert(n <= #data - p + 1, "worker_wire_short")
-        local old = p; p = p + n; return old
-    end
+    if type(data) ~= "string" or #data > M.MAX_BYTES then error("worker_wire_bytes") end
+    local p, nodes, size = 1, 0, #data
     local function visit(depth)
         nodes = nodes + 1
-        assert(nodes <= M.MAX_NODES and depth <= M.MAX_DEPTH, "worker_wire_complexity")
-        local tag = data:sub(take(1), p - 1)
-        if tag == "z" then return nil end
-        if tag == "t" then return true end
-        if tag == "f" then return false end
-        if tag == "i" then return (string.unpack("<i8", data, take(8))) end
-        if tag == "d" then
-            local n = string.unpack("<d", data, take(8))
-            assert(n == n and math.abs(n) ~= math.huge, "worker_wire_number"); return n
+        if nodes > M.MAX_NODES or depth > M.MAX_DEPTH then error("worker_wire_complexity") end
+        local tag = data:byte(p)
+        if tag == nil then error("worker_wire_short") end
+        p = p + 1
+        if tag == NIL then return nil end
+        if tag == TRUE then return true end
+        if tag == FALSE then return false end
+        if tag == INTEGER or tag == DOUBLE then
+            if size - p < 7 then error("worker_wire_short") end
+            local value
+            value, p = string.unpack(tag == INTEGER and "<i8" or "<d", data, p)
+            if tag == DOUBLE then
+                if value ~= value or math.abs(value) == math.huge then error("worker_wire_number") end
+            end
+            return value
         end
-        if tag == "s" then
-            local n = string.unpack("<I4", data, take(4))
-            local start = take(n); return data:sub(start, start + n - 1)
+        if tag == STRING or tag == MAP then
+            if size - p < 3 then error("worker_wire_short") end
+            local n
+            n, p = string.unpack("<I4", data, p)
+            if tag == STRING then
+                if n > size - p + 1 then error("worker_wire_short") end
+                local start = p
+                p = p + n
+                return data:sub(start, p - 1)
+            end
+            if n > (M.MAX_NODES - nodes) // 2 then error("worker_wire_complexity") end
+            local result = {}
+            for _ = 1, n do
+                local key = visit(depth + 1)
+                if type(key) ~= "string" and math.type(key) ~= "integer" then error("worker_wire_key") end
+                if result[key] ~= nil then error("worker_wire_duplicate") end
+                local value = visit(depth + 1)
+                if value == nil then error("worker_wire_nil_field") end
+                result[key] = value
+            end
+            return result
         end
-        assert(tag == "m", "worker_wire_tag")
-        local n = string.unpack("<I4", data, take(4))
-        assert(n <= (M.MAX_NODES - nodes) // 2, "worker_wire_complexity")
-        local result = {}
-        for _ = 1, n do
-            local key = visit(depth + 1)
-            assert(type(key) == "string" or math.type(key) == "integer", "worker_wire_key")
-            assert(result[key] == nil, "worker_wire_duplicate")
-            local value = visit(depth + 1)
-            assert(value ~= nil, "worker_wire_nil_field")
-            result[key] = value
-        end
-        return result
+        error("worker_wire_tag")
     end
     local result = visit(0)
-    assert(p == #data + 1, "worker_wire_trailing")
+    if p ~= size + 1 then error("worker_wire_trailing") end
     return result
 end
 

@@ -27,6 +27,61 @@ end
 local data = Wire.encode(original)
 for i = 0, #data - 1 do assert(not pcall(Wire.decode, data:sub(1, i))) end
 
+-- Exercise the byte decoder's boundaries independently of the encoder.
+do
+    local function rejected(bytes, reason)
+        local ok, why = pcall(Wire.decode, bytes)
+        assert(not ok and tostring(why):find(reason, 1, true), reason)
+    end
+    for tag = 0, 255 do
+        local bytes = string.char(tag)
+        if bytes == "z" or bytes == "t" or bytes == "f" then
+            local ok = pcall(Wire.decode, bytes)
+            assert(ok, "one-byte value rejected")
+        elseif bytes == "i" or bytes == "d" or bytes == "s" or bytes == "m" then
+            rejected(bytes, "worker_wire_short")
+        else rejected(bytes, "worker_wire_tag") end
+    end
+    local empty = "s" .. string.pack("<I4", 0)
+    local binary = "s" .. string.pack("<I4", 3) .. "\0\255\128"
+    assert(Wire.decode(empty) == "" and Wire.decode(binary) == "\0\255\128")
+    for position = 0, #binary - 1 do rejected(binary:sub(1, position), "worker_wire_short") end
+    rejected(empty .. "z", "worker_wire_trailing")
+    local pair = "m" .. string.pack("<I4", 1)
+    for _, key in ipairs({ "z", "t", "f", "d" .. string.pack("<d", 1.0),
+        "m" .. string.pack("<I4", 0) }) do
+        rejected(pair .. key .. "t", "worker_wire_key")
+    end
+    rejected("m" .. string.pack("<I4", 2) .. empty .. "f" .. empty .. "t",
+        "worker_wire_duplicate")
+    rejected(pair .. empty .. "z", "worker_wire_nil_field")
+    for _, value in ipairs({ math.huge, -math.huge, 0/0 }) do
+        rejected("d" .. string.pack("<d", value), "worker_wire_number")
+    end
+    -- A root map and three pairs consume exactly seven protocol nodes.
+    local exact = Wire.encode({ [0] = false, [math.mininteger] = "", [math.maxinteger] = "end" })
+    local maximum = Wire.MAX_NODES
+    Wire.MAX_NODES = 7
+    local value = Wire.decode(exact)
+    assert(value[0] == false and value[math.mininteger] == "" and value[math.maxinteger] == "end")
+    Wire.MAX_NODES = 6
+    rejected(exact, "worker_wire_complexity")
+    Wire.MAX_NODES = maximum
+    maximum = Wire.MAX_BYTES
+    Wire.MAX_BYTES = #binary
+    assert(Wire.decode(binary) == "\0\255\128")
+    Wire.MAX_BYTES = #binary - 1
+    rejected(binary, "worker_wire_bytes")
+    Wire.MAX_BYTES = maximum
+    local nested = "t"
+    for _ = 1, Wire.MAX_DEPTH do nested = pair .. empty .. nested end
+    local decoded = Wire.decode(nested)
+    for _ = 1, Wire.MAX_DEPTH do decoded = decoded[""] end
+    assert(decoded == true)
+    rejected(pair .. empty .. nested, "worker_wire_complexity")
+    print("worker wire byte fields: all tags, exact limits, nested frames, invalid keys and false-value duplicates")
+end
+
 local actual = package.loaded["wtop.native"]
 local now, response, closes, opens = 100, nil, 0, 0
 local fake = { available = true,
