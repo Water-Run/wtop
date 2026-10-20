@@ -819,6 +819,25 @@ function M.render(snapshot)
                 channel.quality }
         end, sensors)
 
+    local fan_controls = {}
+    for _, device in ipairs(list(sensors.devices)) do
+        for _, control in ipairs(list(object(device).fan_controls)) do
+            fan_controls[#fan_controls + 1] = { device = device, control = control }
+        end
+    end
+    if #fan_controls > 0 then
+        lines[#lines + 1] = "Driver fan-control settings; applied output and fan RPM are not verified."
+    end
+    table_section(lines, "Fan control settings",
+        { "Device", "Control", "Setting", "Raw", "Method", "Output mode", "Base frequency", "Temperature selection", "Quality" },
+        fan_controls, function(item)
+            local c = item.control; local inputs = {}
+            for _, input in ipairs(list(c.temperature_inputs)) do inputs[#inputs + 1] = "temp" .. input end
+            return { named_id(item.device), c.id, quantity(c.setting_percent, 1, "%", 1),
+                c.raw_value, c.control_method, c.output_mode, quantity(c.frequency_hz, 1, " Hz", 0),
+                table.concat(inputs, ", "), c.quality }
+        end, sensors)
+
     local energy_power, hwmon_power = {}, {}
     for _, item in ipairs(readings) do
         if item.channel.power then

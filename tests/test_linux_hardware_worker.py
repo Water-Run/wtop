@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import subprocess
@@ -12,6 +13,78 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+
+def verify_fan_control_application(args, env, work):
+    """Standard PWM readback through the real worker, CLI and terminal."""
+    command = ([str(args.executable.resolve())] if args.executable else
+               [str(args.lua_prefix.resolve()/'bin/lua'), str(ROOT/'src/wtop.lua')])
+    receipts = {}
+    for mode in ['snapshot', 'agent', 'report', 'stream']:
+        extra = ['--count', '4', '--interval', '1000'] if mode == 'stream' else []
+        run = subprocess.run(command+['--'+mode]+extra, cwd=ROOT, env=env, capture_output=True, timeout=35)
+        for suffix, body in [('out', run.stdout), ('stderr', run.stderr)]:
+            path = work/('fan-control-'+mode+'.'+suffix);path.write_bytes(body);path.chmod(0o600)
+        run.check_returncode();receipts[mode] = hashlib.sha256(run.stdout).hexdigest()
+        if mode == 'report':
+            assert b'Fan control settings' in run.stdout and b'not verified' in run.stdout
+            assert b'50.2%' in run.stdout and b'25000 Hz' in run.stdout
+            continue
+        rows = [json.loads(line) for line in run.stdout.splitlines()]
+        assert len(rows) == (4 if mode == 'stream' else 1)
+        found = 0
+        for snapshot in rows:
+            if mode == 'agent':
+                controls = snapshot['metrics']['sensors']['fan_controls']
+                assert snapshot['metrics']['sensors']['fan_count'] == 1
+            else:
+                device = next(x for x in snapshot['sensors']['devices'] if x['name'] == 'wtop-fixture')
+                controls = device['fan_controls']
+                assert len([c for c in device['channels'] if c['type'] == 'fan']) == 1
+            assert len(controls) == 1
+            control = controls[0]
+            assert control['raw_value'] == 128 and control['settings_only']
+            assert control['control_method'] == 'manual' and control['output_mode'] == 'pwm'
+            assert control['frequency_hz'] == 25000 and control['temperature_inputs'] == [1, 3]
+            assert 'input' not in control and 'rpm' not in control and 'session' not in control
+            if 'setting_percent' in control:
+                assert abs(control['setting_percent']-128/255*100)<1e-9;found += 1
+        assert found, 'no current PWM control setting in '+mode
+    saved = os.environ.copy();os.environ.update(env, WTOP_ROOT=str(ROOT), WTOP_LUA=str(args.lua_prefix.resolve()/'bin/lua'))
+    if args.executable:os.environ['WTOP_EXECUTABLE'] = str(args.executable.resolve())
+    sys.path.insert(0, str(ROOT/'tests'));import pty_smoke as tty
+    original = tty._markers_visible;screens = {};terminals = []
+    def visible(markers, data, columns, rows):
+        screen = tty.VirtualScreen(columns, rows);screen.feed(bytes(data));text = screen.text()
+        if markers == ('fan-control-capture',) or 'wtop-fixture' in text:
+            screens[hashlib.sha256(text.encode()).hexdigest()] = text
+        if markers == ('fan-control-capture',):return True
+        return original(markers, data, columns, rows)
+    tty._markers_visible = visible
+    try:
+        for columns, rows, locale, ascii_mode in [(100, 30, 'en-US', False), (80, 24, 'zh-CN', False), (100, 30, 'en-US', True)]:
+            screens.clear()
+            script = [(('sleep', 2), None), (b'h', None), (('sleep', .5), ('fan-control-capture',))]
+            for _ in range(7):script.extend([(b'\x1b[6~', None), (('sleep', .2), ('fan-control-capture',))])
+            script.extend([(b'\x1b', None), (b'2', None), (('sleep', .3), ('Command',) if locale == 'en-US' else ('命令',)), (b'q', None)])
+            environment = {'TERM':'dumb','COLORTERM':None,'LANG':'C','LC_ALL':'C','LC_CTYPE':'C'} if ascii_mode else None
+            raw = tty.run_session(columns, rows, exercise=False, cli_options=('--lang', locale, '--no-color'),
+                                  terminal_environment=environment, script=script)
+            stem = 'fan-control-'+str(columns)+'-'+locale+('-ascii' if ascii_mode else '')
+            for suffix, body in [('.pty', raw), ('-screens.json', json.dumps(screens, ensure_ascii=False).encode())]:
+                path = work/(stem+suffix);path.write_bytes(body);path.chmod(0o600)
+            normalized = ' '.join(' '.join(screens.values()).split())
+            for marker in ['pwm1', '[####----]', '50.2%', '25000', 'temp1, temp3']:
+                if marker == '25000':assert re.search(r'25(?:[.,]0+)?\s*kHz|25000', normalized)
+                else:assert marker in normalized, (locale, marker)
+            assert ('Driver settings' if locale == 'en-US' else '驱动控制设置') in normalized
+            if ascii_mode:assert all(byte < 128 for byte in raw)
+            terminals.append(dict(columns=columns, rows=rows, locale=locale, ascii=ascii_mode,
+                                  pty_sha256=hashlib.sha256(raw).hexdigest()))
+    finally:tty._markers_visible = original;os.environ.clear();os.environ.update(saved)
+    path = work/'FAN-CONTROL-application-acceptance.json'
+    path.write_text(json.dumps(dict(status='passed',scope='software hwmon fixture through production reader/CLI/TUI; not physical fan verification',
+        CLI_sha256=receipts,TTY=terminals),indent=2)+'\n');path.chmod(0o600)
+    print('FAN_CONTROL_APPLICATION_PASSED:readonly settings through worker,4CLI modes/4stream frames,English/Chinese/ASCII terminals and separate RPM semantics',flush=True)
 
 def verify_cta_application(args, env, work):
     """Exercise decoded claims in the production CLI and terminal, via fake sysfs."""
@@ -117,7 +190,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix='hardware-reader-',dir=work) as temporary:
         directory=Path(temporary); tree=directory/'hwmon'; device=tree/'hwmon0'; device.mkdir(parents=True)
         for name,value in {'name':'wtop-fixture\n','temp1_label':'Isolated sensor\n',
-                           'temp1_input':'42000\n','temp1_crit':'95000\n'}.items():
+                           'temp1_input':'42000\n','temp1_crit':'95000\n',
+                           'fan1_input':'1600\n','pwm1':'128\n','pwm1_enable':'1\n',
+                           'pwm1_mode':'1\n','pwm1_freq':'25000\n','pwm1_auto_channels_temp':'5\n'}.items():
             (device/name).write_text(value)
         control=directory/'control'; control.write_text('0\n'); entered=directory/'entered'
         power=directory/'power'; zone=power/'intel-rapl:0';zone.mkdir(parents=True)
@@ -176,6 +251,8 @@ local f=assert(io.open(os.getenv("WTOP_TEST_EDID_OUTPUT"),"wb"));assert(f:write(
              'WTOP_HARDWARE_FIXTURE_ENTERED':str(entered)}
         subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/hardware_worker_smoke.lua'),
                         str(ROOT),str(control),str(entered),str(power)],cwd=ROOT,env=env,check=True,timeout=20)
+        if not args.native_only:
+            verify_fan_control_application(args, env, work)
         firmware_env={**env,'WTOP_SMBIOS_FIXTURE_ROOT':str(firmware),
                       'WTOP_SMBIOS_FIXTURE_CONTROL':str(firmware_control),
                       'WTOP_SMBIOS_FIXTURE_ENTERED':str(firmware_entered),

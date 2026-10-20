@@ -9,6 +9,7 @@ local PowerDomains = require("wtop.model.power_domains")
 local PowerSession = require("wtop.model.power_session")
 local GPUPowerSession = require("wtop.model.gpu_power_session")
 local SensorPower = require("wtop.model.sensor_power")
+local FanControl = require("wtop.model.fan_control")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
@@ -1617,6 +1618,19 @@ local function export_sensors(snapshot)
             "identity_quality", "quality", "truncated", "source", "driver",
         })
         exported.channels = json.array({})
+        if #(device.fan_controls or {}) > 0 or device.fan_controls_truncated then
+            exported.fan_controls = json.array({})
+            exported.fan_controls_truncated = device.fan_controls_truncated == true
+            for control_index, control in ipairs(device.fan_controls or {}) do
+                if control_index > FanControl.MAX_CONTROLS then
+                    exported.fan_controls_truncated = true; break
+                end
+                local row = FanControl.public(snapshot, device, control)
+                row.temperature_inputs = json.array(row.temperature_inputs)
+                row.errors = json.object(row.errors)
+                exported.fan_controls[control_index] = row
+            end
+        end
         for channel_index, channel in ipairs(device.channels or {}) do
             local output = copy_fields(channel, {
                 "id", "type", "index", "unit", "label", "input", "input_source",
@@ -2681,11 +2695,21 @@ function M.agent(snapshot, options)
         "GPU utilization is elevated", "gpus")
 
     local temperature_count, fan_count, sensor_power_count = 0, 0, 0
+    local fan_controls, fan_controls_total, fan_controls_truncated = json.array({}), 0, false
     local energy_power, energy_power_count = json.array({}), 0
     local hwmon_power, hwmon_power_count = json.array({}), 0
     local top_temperatures = json.array({})
     local threshold_temperature, closest_critical
     for _, device in ipairs(full.sensors and full.sensors.devices or {}) do
+        fan_controls_truncated = fan_controls_truncated or device.fan_controls_truncated == true
+        for _, control in ipairs(device.fan_controls or {}) do
+            fan_controls_total = fan_controls_total + 1
+            if #fan_controls < device_limit then
+                local row = copy_object(control)
+                row.device_id, row.device = device.id, device.name
+                fan_controls[#fan_controls + 1] = row
+            end
+        end
         for _, channel in ipairs(device.channels or {}) do
             if channel.type == "energy" and channel.power then
                 energy_power_count = energy_power_count + 1
@@ -3013,6 +3037,9 @@ function M.agent(snapshot, options)
                 temperature_count = temperature_count,
                 fan_count = fan_count,
                 power_count = sensor_power_count,
+                fan_controls = fan_controls,
+                fan_controls_total = fan_controls_total,
+                fan_controls_truncated = fan_controls_truncated or fan_controls_total > #fan_controls,
                 energy_power = energy_power,
                 energy_power_total = energy_power_count,
                 energy_power_truncated = energy_power_count > #energy_power,

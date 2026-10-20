@@ -22,6 +22,7 @@ local ProcessCgroup = require("wtop.linux.process_cgroup")
 local Quality = require("wtop.model.quality")
 local Thermal = require("wtop.model.thermal")
 local SensorPower = require("wtop.model.sensor_power")
+local FanControl = require("wtop.model.fan_control")
 local WorkloadNavigation = require("wtop.model.workload_navigation")
 local Terminal = require("wtop.terminal")
 local UI = require("wtop.ui")
@@ -916,9 +917,16 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
             .. ": " .. inspector_text(Technical.reason(i18n, state.reason),
                 INSPECTOR_ROW_WIDTH)
     end
-    local total = 0
-    for _, device in ipairs(devices) do total = total + #(device.channels or {}) end
-    lines[#lines + 1] = translated(i18n, "metrics.sensor", "Sensor") .. ": " .. total
+    local total, sensor_total, control_total = 0, 0, 0
+    for _, device in ipairs(devices) do
+        sensor_total = sensor_total + #(device.channels or {})
+        control_total = control_total + #(device.fan_controls or {})
+    end
+    total = sensor_total + control_total
+    lines[#lines + 1] = translated(i18n, "metrics.sensor", "Sensor") .. ": " .. sensor_total
+    if control_total > 0 then
+        lines[#lines + 1] = translated(i18n, "fan_control.title", "Fan control settings") .. ": " .. control_total
+    end
     if total == 0 then
         lines[#lines + 1] = ""
         lines[#lines + 1] = translated(i18n, "ui.no_data", "No data")
@@ -989,7 +997,7 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
     local disk_mounts = ViewModel.disk_mount_join(snapshot)
     for _, device in ipairs(devices) do
         if shown >= SENSOR_DETAIL_LIMIT then break end
-        if #(device.channels or {}) > 0 then
+        if #(device.channels or {}) > 0 or #(device.fan_controls or {}) > 0 then
             local device_quality = device.quality or "unavailable"
             if stale_sample and (device_quality == "fresh" or device_quality == "estimated") then
                 device_quality = "stale"
@@ -1155,6 +1163,48 @@ local function sensor_detail_lines(snapshot, i18n, now_ns)
                             now_ns - session.last_timestamp_ns) / 1000000000,
                             i18n, "seconds"), INSPECTOR_ROW_WIDTH)
                 end
+            end
+        end
+        if #(device.fan_controls or {}) > 0 and shown < SENSOR_DETAIL_LIMIT then
+            lines[#lines + 1] = "  " .. translated(i18n, "fan_control.title", "Fan control settings")
+            lines[#lines + 1] = inspector_text("    " .. translated(i18n, "fan_control.note",
+                "Driver settings; applied output and fan RPM are not verified."), INSPECTOR_ROW_WIDTH)
+            for index, control in ipairs(device.fan_controls) do
+                if index > FanControl.MAX_CONTROLS or shown >= SENSOR_DETAIL_LIMIT then break end
+                shown = shown + 1
+                local row = FanControl.public(snapshot, device, control, now_ns)
+                local value = "—"
+                if row.setting_percent ~= nil then
+                    local filled = math.floor(row.setting_percent * 8 / 100 + 0.5)
+                    if row.setting_percent > 0 then filled = math.max(1, filled) end
+                    value = "[" .. string.rep("#", filled) .. string.rep("-", 8 - filled) .. "] "
+                        .. i18n.format:percent(row.setting_percent, { precision = 1 })
+                end
+                lines[#lines + 1] = "    " .. tostring(row.id) .. ": " .. value
+                    .. "  [" .. Technical.state(i18n, row.quality) .. "]"
+                local function setting(key, fallback, value)
+                    lines[#lines + 1] = inspector_text("      " .. translated(i18n, key, fallback)
+                        .. ": " .. tostring(value or "—"), INSPECTOR_ROW_WIDTH)
+                end
+                setting("fan_control.raw", "Raw control value", row.raw_value)
+                local method = row.control_method
+                    and translated(i18n, "fan_control.method." .. row.control_method, row.control_method) or "—"
+                if row.enable_code ~= nil then method = method .. " (" .. row.enable_code .. ")" end
+                setting("fan_control.method", "Control method", method)
+                local mode = row.output_mode
+                    and translated(i18n, "fan_control.mode." .. row.output_mode, row.output_mode) or "—"
+                if row.output_mode_code ~= nil then mode = mode .. " (" .. row.output_mode_code .. ")" end
+                setting("fan_control.output_mode", "Output mode", mode)
+                setting("fan_control.frequency", "Base PWM frequency", format_value(row.frequency_hz, i18n, "hertz"))
+                local temperatures = {}
+                for _, input in ipairs(row.temperature_inputs) do temperatures[#temperatures + 1] = "temp" .. input end
+                for first = 1, #temperatures, 6 do
+                    local group = {}
+                    for position = first, math.min(first + 5, #temperatures) do group[#group + 1] = temperatures[position] end
+                    setting("fan_control.temperatures", "Temperature selection", table.concat(group, ", "))
+                end
+                lines[#lines + 1] = inspector_text("      " .. translated(i18n, "metrics.source", "Source")
+                    .. ": " .. tostring(row.source), INSPECTOR_ROW_WIDTH)
             end
         end
     end

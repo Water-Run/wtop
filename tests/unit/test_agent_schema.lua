@@ -17,7 +17,7 @@ package.path = "./src/?.lua;./src/?/init.lua;./tools/?.lua;./tests/?.lua;" .. pa
 -- which is the defect this project removed from `--version` when it first
 -- compared two values that happened to agree.  So most of what follows is the
 -- validator being shown documents it must reject, one per keyword the schema
--- uses: const, enum, type, required, maxItems, minLength, maxLength, minimum,
+-- uses: const, enum, type, required, maxItems, minLength, maxLength, minimum, maximum,
 -- $ref and additionalProperties.  If a rule stops rejecting, this file fails
 -- and the rule is reported as satisfied when it is not.
 --
@@ -127,6 +127,12 @@ rejected("maxLength", function(d)
                   severity = "warning", message = "m" } }
 end, "longer than maxLength")
 rejected("minimum", function(d) d.captured_unix_ns = -1 end, "below the minimum")
+for _, value in ipairs({ 0, 50.2, 100 }) do
+  assert(#Validator.validate(value, { type = "number", minimum = 0, maximum = 100 }) == 0)
+end
+assert(table.concat(Validator.validate(100.1, { type = "number", maximum = 100 }), "\n")
+  :find("above the maximum", 1, true))
+assert(#Validator.validate(-0.1, { type = "number", minimum = 0, maximum = 100 }) > 0)
 rejected("negative retained-value age", function(d)
   d.data_quality = { { resource = "cpu", value_age_ms = -1 } }
 end, "below the minimum")

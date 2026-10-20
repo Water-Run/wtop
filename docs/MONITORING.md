@@ -51,7 +51,7 @@ CLI 默认 `--interval 1000`。活动页面使用基准间隔与采集器下限�
 | CPUFreq | 策略/CPU 集合、硬件当前值或硬件反馈短时平均值、调频读数、最低/最高频率、来源与质量、驱动、governor、boost/EPP | cpufreq sysfs | 1 s / 5 s |
 | CPU 热节流 | 每逻辑 CPU 的核心/封装热节流累计次数、相邻样本新增次数、累计与最长持续毫秒数 | `/sys/devices/system/cpu/cpu*/thermal_throttle` | 5 s / 30 s |
 | CPU 空闲态 | 每逻辑 CPU、每状态的使用次数、内核报告时间、进入请求被拒次数、时长短于目标及可选更深状态次数；保留累计值和相邻样本增量、退出延迟与目标驻留时间 | `/sys/devices/system/cpu/cpu*/cpuidle/state*` | 5 s / 30 s |
-| hwmon | 温度、风扇转速、电压、电流、功率、能耗、阈值/告警/故障;识别 `temp1_crit_alarm` 这类带限值的告警形式以及裸 `temp1_alarm` 形式;电压通道从 `in0` 起向上读取;过滤已知的无效哨兵值;恰好为零的阈值,或 u16 温度哨兵值,按“驱动未设置该属性”丢弃,而不是当作一条界限上报;设备的 `device_target` 供视图层把读数归属到 GPU 或磁盘(磁盘标注带型号与挂载点),表与浮层共用同一联接；直接读数记录本次会话最小/最大/采样平均 | `/sys/class/hwmon` | 1 s / 5 s |
+| hwmon | 温度、风扇转速、电压、电流、功率、能耗、阈值/告警/故障；独立读取风扇控制设置（输出值/百分比、控制方式、DC/PWM 模式、基准频率和温度选择），不当作 RPM 或已应用输出;识别 `temp1_crit_alarm` 这类带限值的告警形式以及裸 `temp1_alarm` 形式;电压通道从 `in0` 起向上读取;过滤已知的无效哨兵值;恰好为零的阈值,或 u16 温度哨兵值,按“驱动未设置该属性”丢弃,而不是当作一条界限上报;设备的 `device_target` 供视图层把读数归属到 GPU 或磁盘(磁盘标注带型号与挂载点),表与浮层共用同一联接；直接读数记录本次会话最小/最大/采样平均 | `/sys/class/hwmon` | 1 s / 5 s |
 | Powercap | 有界的 zone 层级、能量/直接功率、约束、防回绕/防复位的差值计算、独立的 CPU 封装与整机/`psys` 聚合;恰好为零的功率上限或界限,或驱动以 ENODATA 应答的属性,按“驱动未设置该属性”丢弃,而不是上报 | powercap sysfs | 1 s / 5 s |
 | 挂载 | 挂载标识、文件系统/来源/只读状态,以及安全时的容量和 inode 数 | `/proc/self/mountinfo`, `statvfs` | 5 s / 30 s |
 | 硬件清单 | PCI/USB 设备与 USB 接口、接口驱动/类别/端点数、PCI 链路、MSI/MSI-X 向量及观察到的中断计数、IOMMU 组成员及可见 PCI 同组引用、SR-IOV PF/VF 引用及可用时的 PCIe AER 错误计数；Linux 磁盘/分区、网卡父子树及按设备号关联的挂载；设备详情关联传感器，`inventory.topology` 导出同一关系。Windows/macOS 缺少路径时平面展示 | sysfs + `pci.ids` / SetupAPI / IOKit，复用磁盘/网络/挂载快照 | 总线 30 s / 120 s；其余按各采集器间隔 |

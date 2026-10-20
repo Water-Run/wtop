@@ -1589,6 +1589,8 @@ function M.build(snapshot)
       view = {}
       for key, value in pairs(sensor) do view[key] = value end
       view.channels = channels
+      -- A selected core-temperature channel does not identify fan wiring.
+      view.fan_controls, view.fan_controls_truncated = nil, nil
     end
     node.sensor_ids[#node.sensor_ids + 1] = id
     node.sensors[#node.sensors + 1] = view

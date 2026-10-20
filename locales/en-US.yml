@@ -7,6 +7,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  fan_control.title: "Fan control settings"
+  fan_control.raw: "Raw control value"
+  fan_control.method: "Control method"
+  fan_control.method.full_speed: "No control (full speed)"
+  fan_control.method.manual: "Manual"
+  fan_control.method.automatic: "Automatic"
+  fan_control.output_mode: "Output mode"
+  fan_control.mode.dc: "DC"
+  fan_control.mode.pwm: "PWM"
+  fan_control.frequency: "Base PWM frequency"
+  fan_control.temperatures: "Temperature selection"
+  fan_control.note: "Driver settings; applied output and fan RPM are not verified."
   firmware_probe.device: "Firmware probe {id}"
   firmware_probe.cooling: "Firmware cooling device {id}"
   firmware_probe.description: "Description"

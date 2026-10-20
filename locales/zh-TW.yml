@@ -8,6 +8,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  fan_control.title: "風扇控制設定"
+  fan_control.raw: "原始控制值"
+  fan_control.method: "控制方式"
+  fan_control.method.full_speed: "不控制（全速）"
+  fan_control.method.manual: "手動"
+  fan_control.method.automatic: "自動"
+  fan_control.output_mode: "輸出模式"
+  fan_control.mode.dc: "直流"
+  fan_control.mode.pwm: "PWM"
+  fan_control.frequency: "PWM 基準頻率"
+  fan_control.temperatures: "溫度通道選擇"
+  fan_control.note: "驅動控制設定，不代表已套用的輸出或實測風扇轉速。"
   firmware_probe.device: "韌體探針 {id}"
   firmware_probe.cooling: "韌體散熱裝置 {id}"
   firmware_probe.description: "描述"

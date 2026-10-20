@@ -23,6 +23,10 @@ local function settle(proxy, seconds, expected)
 end
 local fresh = settle(hwmon, 3)
 assert(fresh.status=="ok" and fresh.data.devices[1].channels[1].input==42)
+local control_fresh=assert(fresh.data.devices[1].fan_controls[1])
+assert(control_fresh.raw_value==128 and control_fresh.enable_code==1 and control_fresh.frequency_hz==25000)
+assert(control_fresh.output_mode_code==1 and control_fresh.temperature_channels_mask==5)
+assert(control_fresh.input==nil and control_fresh.session==nil)
 local sampled = fresh.value_timestamp_ns
 local first_power=settle(power,3)
 assert(first_power.status=="ok" and first_power.data.zones[1].power_watts==nil,
@@ -34,6 +38,8 @@ assert(pending.sampling_pending)
 snapshot = Snapshot.merge(snapshot,{hwmon=pending},2,Native.monotonic_ns())
 assert(snapshot.quality.sensors.quality=="stale" and snapshot.quality.sensors.value_timestamp_ns==sampled)
 assert(snapshot.sensors.devices[1].channels[1].input==42)
+local control_stale=require("wtop.export").snapshot(snapshot).sensors.devices[1].fan_controls[1]
+assert(control_stale.raw_value==128 and control_stale.setting_percent==nil and control_stale.quality=="stale")
 local other = settle(cpufreq,3)
 assert(other.reason~="hardware_query_timeout", "one stuck source blocked another")
 Native.sleep_ms(150)
@@ -64,5 +70,8 @@ while recovered.reason=="hardware_query_timeout" do
 end
 assert(recovered.status=="ok" and recovered.value_timestamp_ns>sampled)
 assert(recovered.data.devices[1].channels[1].input==42)
+assert(recovered.data.devices[1].fan_controls[1].raw_value==128
+    and recovered.data.devices[1].fan_controls[1].observed_at_ns>control_fresh.observed_at_ns)
 hwmon:close();cpufreq:close();power:close()
 print("ok: complete hardware samples, real timestamps, bounded timeout/reap, independent source and recovery; exact energy delta and cap arithmetic")
+print("ok: readonly PWM control settings round-trip, stale percentage withdrawal, real observation times and timeout/recovery without RPM promotion")

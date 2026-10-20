@@ -36,7 +36,7 @@ local SUPPORTED = {
   ["$ref"] = true, ["$defs"] = true, ["properties"] = true,
   ["items"] = true, ["additionalProperties"] = true, ["required"] = true,
   -- assertions
-  ["type"] = true, ["const"] = true, ["enum"] = true, ["minimum"] = true,
+  ["type"] = true, ["const"] = true, ["enum"] = true, ["minimum"] = true, ["maximum"] = true,
   ["minLength"] = true, ["maxLength"] = true, ["maxItems"] = true,
   -- annotations, which constrain nothing and are carried for completeness
   ["$schema"] = true, ["$id"] = true, ["title"] = true, ["description"] = true,
@@ -209,6 +209,10 @@ local function validate_node(value, schema, root, path, errors)
     if type(schema.minimum) == "number" and value < schema.minimum then
       errors[#errors + 1] = string.format("%s: below the minimum %s", path,
         tostring(schema.minimum))
+    end
+    if type(schema.maximum) == "number" and value > schema.maximum then
+      errors[#errors + 1] = string.format("%s: above the maximum %s", path,
+        tostring(schema.maximum))
     end
   end
 

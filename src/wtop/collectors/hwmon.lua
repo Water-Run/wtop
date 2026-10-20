@@ -3,6 +3,7 @@ local FS = require("wtop.linux.fs")
 local Common = require("wtop.collectors.common")
 local SensorSession = require("wtop.model.sensor_session")
 local SensorPower = require("wtop.model.sensor_power")
+local FanControls = require("wtop.collectors.hwmon_fan_controls")
 
 local Hwmon = {}
 Hwmon.__index = Hwmon
@@ -212,6 +213,8 @@ function Hwmon.new(options)
       "max_entries_per_device", options.max_entries_per_device, 1024, 1, 65536),
     max_channels_per_device = bounded_integer(
       "max_channels_per_device", options.max_channels_per_device, 256, 1, 16384),
+    max_fan_controls_per_device = bounded_integer(
+      "max_fan_controls_per_device", options.max_fan_controls_per_device, 32, 1, 64),
     max_channel_index = bounded_integer(
       "max_channel_index", options.max_channel_index, 4096, 1, 1048576),
     max_text_bytes = bounded_integer("max_text_bytes", options.max_text_bytes, 4096, 1, 1048576),
@@ -500,6 +503,19 @@ local function read_device(self, fs, entry, used_ids, context)
     any_partial = any_partial or channel.quality == "partial" or channel.quality == "unavailable"
     any_estimated = any_estimated or channel.quality == "estimated"
   end
+  local control_path
+  local controls, controls_truncated = FanControls.read(fs, base, entries, self, context, function(first)
+    local path = normalize_target(fs:readlink(base))
+    if first then control_path = path end
+    local current_name = safe_text(read_limited(fs, base .. "/name", self.max_text_bytes))
+    local current_target = normalize_target(fs:readlink(base .. "/device"))
+    return path == control_path and current_name == name and current_target == target
+  end)
+  controls_truncated = controls_truncated or directory_truncated == true
+  any_partial = any_partial or controls_truncated
+  for _, control in ipairs(controls) do
+    any_partial = any_partial or control.quality ~= "fresh"
+  end
 
   local quality
   if any_partial then
@@ -525,7 +541,9 @@ local function read_device(self, fs, entry, used_ids, context)
     channels = channels,
     by_id = by_id,
     channel_counts = counts,
-    truncated = channels_truncated,
+    fan_controls = controls,
+    fan_controls_truncated = controls_truncated,
+    truncated = channels_truncated or controls_truncated,
     errors = errors,
     source = base,
     driver = driver_link and driver_link:match("/drivers/([%w_.-]+)$") or nil,
@@ -560,6 +578,7 @@ function Hwmon:sample(context, previous)
     local device = read_device(self, fs, entries[index], used_ids, context)
     devices[#devices + 1] = device
     by_id[device.id] = device
+    truncated = truncated or device.fan_controls_truncated
     any_partial = any_partial or device.quality == "partial"
     any_estimated = any_estimated or device.quality == "estimated"
   end

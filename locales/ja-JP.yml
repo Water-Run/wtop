@@ -8,6 +8,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  fan_control.title: "ファン制御設定"
+  fan_control.raw: "制御の生の値"
+  fan_control.method: "制御方式"
+  fan_control.method.full_speed: "制御なし（全速）"
+  fan_control.method.manual: "手動"
+  fan_control.method.automatic: "自動"
+  fan_control.output_mode: "出力モード"
+  fan_control.mode.dc: "直流"
+  fan_control.mode.pwm: "PWM"
+  fan_control.frequency: "PWM 基準周波数"
+  fan_control.temperatures: "温度入力の選択"
+  fan_control.note: "ドライバーの設定値です。適用出力や実際の回転数は未確認です。"
   firmware_probe.device: "ファームウェアプローブ {id}"
   firmware_probe.cooling: "ファームウェア冷却装置 {id}"
   firmware_probe.description: "説明"

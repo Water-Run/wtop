@@ -175,6 +175,15 @@ Linux GPU 的 `top.gpus[].observations` 按来源记录观测时间、接收时�
 界面可优先使用同一当前设备的有效 hwmon 功耗通道；厂商原始观测及其质量
 仍在导出中保留，通道读数和上限可在 `sensors` 中核对。
 
+Linux hwmon 设备的 `fan_controls` 与实测 `channels` 分开。控制值范围为
+0–255，当前可用时的 `setting_percent` 将它换算为 0–100%；`enable_code`
+保留驱动的自动模式编号，`control_method` 给出通用方式。`output_mode`
+区分 DC 与 PWM，`temperature_inputs` 来自明确的温度选择位图。
+这些是驱动设置，`settings_only` 固定为 true，不证明已应用输出或实际
+风扇转速；不按相同编号猜测 `pwmN` 与 `fanN` 的接线，也不进入转速计数、
+会话统计或健康告警。过期、失败或无效输入不提供当前百分比。
+`metrics.sensors.fan_controls` 最多保留五项，并提供总数和截断标志。
+
 温度条目的 `critical_celsius` 来自同一通道的 `crit`，`headroom_celsius` 为临界值减去当前温度；完整 Snapshot、硬件报告与 `top.sensors` 使用同一计算。`max` 和 `emergency` 分别保留，不作为缺失 `crit` 的替代。`metrics.sensors.minimum_headroom_celsius` 与 `closest_to_critical` 保留全部有效温度通道中的最小余量及对应设备，独立于最热列表的数量限制。余量不表示限频位；过期、故障或不可用的读数没有当前余量，也不产生新的温度阈值信号。
 
 Windows GPU 的 `providers.levelzero`、设备 `sysman` 和 `observations.levelzero`

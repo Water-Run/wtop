@@ -13,6 +13,7 @@ local GPUPowerSession = require("wtop.model.gpu_power_session")
 local SensorPower = require("wtop.model.sensor_power")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
+local FanControl = require("wtop.model.fan_control")
 local StorageHealth = require("wtop.model.storage_health")
 local Hardware = require("wtop.model.hardware")
 local HardwareFilter = require("wtop.model.hardware_filter")
@@ -1572,6 +1573,16 @@ local function sensor_rows(snapshot, format)
         return left.device < right.device
     end
     for _, device in ipairs(snapshot.sensors and snapshot.sensors.devices or {}) do
+        for index, control in ipairs(device.fan_controls or {}) do
+            if index > FanControl.MAX_CONTROLS then break end
+            local row = FanControl.public(snapshot, device, control)
+            bounded_best_add(rows, TABLE_ROW_LIMIT, better, {
+                device = device.name or device.class or "?", sensor = row.id,
+                type = "fan_control", value = row.setting_percent ~= nil
+                    and percent(format, row.setting_percent) or "—",
+                critical = "—", headroom = "—", status = row.quality, alarm = false,
+            })
+        end
         for _, channel in ipairs(device.channels or {}) do
             local thermal = Thermal.channel(snapshot, device, channel)
             bounded_best_add(rows, TABLE_ROW_LIMIT, better, {

@@ -8,6 +8,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  fan_control.title: "Настройки вентилятора"
+  fan_control.raw: "Исходное значение"
+  fan_control.method: "Способ управления"
+  fan_control.method.full_speed: "Без управления (полная скорость)"
+  fan_control.method.manual: "Ручной"
+  fan_control.method.automatic: "Автоматический"
+  fan_control.output_mode: "Режим выхода"
+  fan_control.mode.dc: "Постоянный ток"
+  fan_control.mode.pwm: "PWM"
+  fan_control.frequency: "Базовая частота PWM"
+  fan_control.temperatures: "Выбор датчиков температуры"
+  fan_control.note: "Настройки драйвера; фактический выход и обороты не подтверждены."
   firmware_probe.device: "Датчик прошивки {id}"
   firmware_probe.cooling: "Устройство охлаждения прошивки {id}"
   firmware_probe.description: "Описание"

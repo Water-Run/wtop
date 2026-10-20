@@ -8,6 +8,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  fan_control.title: "팬 제어 설정"
+  fan_control.raw: "원시 제어 값"
+  fan_control.method: "제어 방식"
+  fan_control.method.full_speed: "제어 없음(최고 속도)"
+  fan_control.method.manual: "수동"
+  fan_control.method.automatic: "자동"
+  fan_control.output_mode: "출력 모드"
+  fan_control.mode.dc: "직류"
+  fan_control.mode.pwm: "PWM"
+  fan_control.frequency: "PWM 기본 주파수"
+  fan_control.temperatures: "온도 입력 선택"
+  fan_control.note: "드라이버 설정이며 실제 출력이나 팬 회전수는 확인되지 않았습니다."
   firmware_probe.device: "펌웨어 프로브 {id}"
   firmware_probe.cooling: "펌웨어 냉각 장치 {id}"
   firmware_probe.description: "설명"

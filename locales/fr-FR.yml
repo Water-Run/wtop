@@ -8,6 +8,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  fan_control.title: "Réglages de ventilation"
+  fan_control.raw: "Valeur brute"
+  fan_control.method: "Méthode de contrôle"
+  fan_control.method.full_speed: "Sans contrôle (vitesse maximale)"
+  fan_control.method.manual: "Manuelle"
+  fan_control.method.automatic: "Automatique"
+  fan_control.output_mode: "Mode de sortie"
+  fan_control.mode.dc: "Courant continu"
+  fan_control.mode.pwm: "PWM"
+  fan_control.frequency: "Fréquence PWM de base"
+  fan_control.temperatures: "Entrées de température"
+  fan_control.note: "Réglages du pilote ; sortie appliquée et régime réel non vérifiés."
   firmware_probe.device: "Sonde du micrologiciel {id}"
   firmware_probe.cooling: "Dispositif de refroidissement du micrologiciel {id}"
   firmware_probe.description: "Description"

@@ -8,6 +8,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  fan_control.title: "Lüftersteuerung"
+  fan_control.raw: "Roher Steuerwert"
+  fan_control.method: "Steuerungsart"
+  fan_control.method.full_speed: "Keine Steuerung (volle Drehzahl)"
+  fan_control.method.manual: "Manuell"
+  fan_control.method.automatic: "Automatisch"
+  fan_control.output_mode: "Ausgabemodus"
+  fan_control.mode.dc: "Gleichstrom"
+  fan_control.mode.pwm: "PWM"
+  fan_control.frequency: "PWM-Grundfrequenz"
+  fan_control.temperatures: "Temperaturauswahl"
+  fan_control.note: "Treibereinstellungen; tatsächliche Ausgabe und Drehzahl unbestätigt."
   firmware_probe.device: "Firmware-Sonde {id}"
   firmware_probe.cooling: "Firmware-Kühlgerät {id}"
   firmware_probe.description: "Beschreibung"

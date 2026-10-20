@@ -8,6 +8,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  fan_control.title: "Configurações de ventilação"
+  fan_control.raw: "Valor bruto"
+  fan_control.method: "Método de controle"
+  fan_control.method.full_speed: "Sem controle (velocidade máxima)"
+  fan_control.method.manual: "Manual"
+  fan_control.method.automatic: "Automático"
+  fan_control.output_mode: "Modo de saída"
+  fan_control.mode.dc: "Corrente contínua"
+  fan_control.mode.pwm: "PWM"
+  fan_control.frequency: "Frequência PWM base"
+  fan_control.temperatures: "Entradas de temperatura"
+  fan_control.note: "Configurações do driver; saída aplicada e RPM reais não confirmados."
   firmware_probe.device: "Sonda do firmware {id}"
   firmware_probe.cooling: "Dispositivo de refrigeração do firmware {id}"
   firmware_probe.description: "Descrição"
