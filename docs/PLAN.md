@@ -17,8 +17,10 @@ GPU 功耗百分比与余量现在分别校验功耗读数和配置上限的逐�
 
 `5d06af1` 的全新 i686 CI 已实际成功：173 个 Lua 文件、ABI、身份、
 记录、十三次守卫终端与 C locale 阶段全部退出零，下载日志的摘要
-与状态逐项相符。其整组跨平台 CI 仍在运行；不将单项成功视为整组
-完成。证据见 `build/i686-tooling-20261024/CI-I686-ACCEPTANCE.json`。
+与状态逐项相符。其整组跨平台 CI 的十九项作业现已全部成功，包含
+独立下载包验收；观察任务实际退出零。证据见
+`build/i686-tooling-20261024/CI-I686-ACCEPTANCE.json` 与
+`build/i686-tooling-20261024/CI-ACCEPTANCE.json`。
 
 旧内核验收现有可重复入口：`check-linux-i686` 的 `--legacy-kernel`
 选项校验固定内核包、构建静态来宾 init 和内存根文件系统，并运行
