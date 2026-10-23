@@ -35,6 +35,10 @@ local function run(command)
     return output, code
 end
 
+local function quoted_path(path)
+    return "'" .. path:gsub("'", "'\\''") .. "'"
+end
+
 local makefile = read_file("Makefile")
 local lua_version = assert(makefile:match("LUA_VERSION%s*:=%s*([%d%.]+)"))
 local module_path = "build/native/wtop_native.so"
@@ -74,7 +78,7 @@ local function version_at_least(candidate, reference)
 end
 
 local function quiet_floor(path)
-    local output, code = run("python3 tools/elf_floors.py --quiet " .. path)
+    local output, code = run("python3 tools/elf_floors.py --quiet " .. quoted_path(path))
     assert(code == 0, "elf_floors.py failed on " .. path .. ":\n" .. output)
     return (output:match("(%d[%.%d]*)"))
 end
@@ -93,16 +97,41 @@ if module_floor == interpreter_floor then
     other_floor = assert(quiet_floor(other_path))
     other_embedded = 0
 end
+-- A valid toolchain can give all three programs the same floor (for example
+-- when __libc_start_main sets it). Use a real dependency with the same ELF
+-- ABI to keep testing unequal requirements rather than rejecting that host.
+if other_floor == interpreter_floor then
+    local interpreter = read_file(interpreter_path)
+    local compiler = os.getenv("CC") or "cc"
+    for _, library in ipairs({ "libdl.so.2", "libpthread.so.0", "librt.so.1", "libm.so.6" }) do
+        local path, code = run(compiler .. " -print-file-name=" .. library)
+        path = path:gsub("%s+$", "")
+        local handle = code == 0 and io.open(path, "rb") or nil
+        if handle then
+            local header = handle:read(20) or ""
+            handle:close()
+            if header:sub(1, 4) == "\127ELF" and header:sub(5, 6) == interpreter:sub(5, 6)
+                and header:sub(19, 20) == interpreter:sub(19, 20) then
+                local output, status = run("python3 tools/elf_floors.py --quiet " .. quoted_path(path))
+                local floor = status == 0 and output:match("(%d[%.%d]*)") or nil
+                if floor and floor ~= interpreter_floor then
+                    other_path, other_floor, other_embedded = path, floor, 0
+                    break
+                end
+            end
+        end
+    end
+end
 assert(other_floor ~= interpreter_floor,
     "this test needs two files with different floors, and both are now "
         .. module_floor .. "; pick another pair or the property is untested")
 
 -- A plain ELF reports its own floor, and finding nothing inside it is the
 -- expected answer rather than a scan that failed to look.
-local plain = run("python3 tools/elf_floors.py " .. interpreter_path)
+local plain = run("python3 tools/elf_floors.py " .. quoted_path(interpreter_path))
 assert(plain:find("embedded ELF images found: 0", 1, true) ~= nil,
     "a plain interpreter must be reported as carrying no ELF image:\n" .. plain)
-local native_report = run("python3 tools/elf_floors.py " .. module_path)
+local native_report = run("python3 tools/elf_floors.py " .. quoted_path(module_path))
 assert(native_report:find("embedded ELF images found: 2",1,true),
     "both the isolated GPU and Lua hardware readers must be measured inside the native module:\n" .. native_report)
 
@@ -119,8 +148,8 @@ if version_at_least(other_floor, interpreter_floor) then
 end
 
 local combined = "build/native/.wtop-embedded-baseline.so"
-local written, message = os.execute("cat " .. lower .. " " .. higher
-    .. " > " .. combined)
+local written, message = os.execute("cat " .. quoted_path(lower) .. " " .. quoted_path(higher)
+    .. " > " .. quoted_path(combined))
 assert(written == true, "could not assemble the fixture: " .. tostring(message))
 
 local combined_floor = assert(quiet_floor(combined),
@@ -132,7 +161,7 @@ assert(combined_floor == higher_floor,
         .. lower_floor .. " -- reporting only the image at offset 0 is the "
         .. "defect this test exists for")
 
-local report = run("python3 tools/elf_floors.py " .. combined)
+local report = run("python3 tools/elf_floors.py " .. quoted_path(combined))
 assert(report:find("embedded ELF images found: " .. (other_embedded + 1), 1, true) ~= nil,
     "the appended image must be counted, so that a bundler compressing its "
         .. "payload and hiding the images shows up as a zero rather than as a "
