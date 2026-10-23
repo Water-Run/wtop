@@ -71,6 +71,21 @@ for cut = prefix, #body - 1 do
     recovered:close()
     os.remove(path)
 end
+-- Native Windows sensor/frequency elapsed times are Lua numbers even when
+-- they represent whole nanoseconds. Match Snapshot's finite-number contract,
+-- preserving the value rather than rounding it into a different observation.
+local numeric, numeric_parts = writer()
+local timed = snapshot(1)
+timed.quality.power.duration_ns = 4800.0
+timed.quality.cpu = { status="ok", quality="fresh", timestamp_ns=1000000000.0,
+    value_timestamp_ns=999999999.5, duration_ns=13300.5 }
+numeric:append(timed, 1000000010, 1700000000000000000); numeric:close()
+local numeric_file = assert(Recording.open(temporary(table.concat(numeric_parts))))
+local measured = numeric_file:frame(1).snapshot.quality
+assert(measured.power.duration_ns == 4800 and math.type(measured.power.duration_ns) == "float")
+assert(measured.cpu.value_timestamp_ns == 999999999.5 and measured.cpu.duration_ns == 13300.5)
+numeric_file:close()
+print("Recording: native floating-point source times preserve exact values and remain bounded by capture time")
 assert(not Recording.open(temporary("return os.execute('false')")))
 assert(not Recording.open(temporary(Recording.MAGIC .. string.pack("<I4I4", 65537, 0))))
 local function flip(text, position)

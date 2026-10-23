@@ -9495,6 +9495,7 @@ local function run_loop(options, backend, renderer, engine, translator)
         elseif key == "space" then
             paused = not paused
             engine:set_paused(paused)
+            if engine.replay then paused = engine.paused end
             dirty = true
         elseif key == "f" then
             cycle_frequency(1)

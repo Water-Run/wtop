@@ -65,6 +65,7 @@ def main() -> None:
             "replay-offline": "Live inspection" in text or "回放期间不执行" in text,
             "replay-last": "3/3" in text,
             "replay-first": "1/3" in text,
+            "replay-eof-paused": "SpaceResume" in "".join(text.split()),
         }.get(key, False)
         if match: screens[key + "-" + str(columns)] = text
         return match
@@ -100,6 +101,14 @@ def main() -> None:
         if args.guard: assert b"REPLAY_NO_LIVE_READS_PASSED" in raw
         (output / "tiny-40x10.pty").write_bytes(raw)
         receipts.append({"columns":40,"rows":10,"offline_guard":args.guard,
+            "pty_sha256":hashlib.sha256(raw).hexdigest()})
+        raw = tty.run_session(140, 40, exercise=False,
+            cli_options=("--replay",str(fixture),"--replay-frame","3","--lang","en-US","--no-color"),
+            script=[(("sleep",.1),("replay-eof-paused",)),(b" ",None),
+                (("sleep",.2),("replay-eof-paused",)),(b"q",None)])
+        if args.guard: assert b"REPLAY_NO_LIVE_READS_PASSED" in raw
+        (output / "eof-pause.pty").write_bytes(raw)
+        receipts.append({"eof_remains_paused":True,"offline_guard":args.guard,
             "pty_sha256":hashlib.sha256(raw).hexdigest()})
     finally:
         tty._markers_visible = original

@@ -22,9 +22,11 @@ def main() -> None:
     parser.add_argument("--lua", type=Path, default=ROOT / ".tools/lua-5.5.1/bin/lua")
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
-    env = os.environ.copy()
-    env["LUA_PATH"] = str(ROOT / "src/?.lua") + ";" + str(ROOT / "src/?/init.lua") + ";;"
-    env["LUA_CPATH"] = str(ROOT / "build/native/?.so") + ";;"
+    env = {k:v for k,v in os.environ.items()
+        if not k.upper().startswith(("LUA_PATH", "LUA_CPATH", "LUA_INIT"))}
+    if not args.executable:
+        env["LUA_PATH"] = str(ROOT / "src/?.lua") + ";" + str(ROOT / "src/?/init.lua") + ";;"
+        env["LUA_CPATH"] = str(ROOT / "build/native/?.so") + ";;"
     command = [str(args.executable.resolve())] if args.executable else [str(args.lua.resolve()), str(ROOT / "src/wtop.lua")]
     temporary = tempfile.TemporaryDirectory(prefix="wtop-recording-")
     output = args.output_dir.resolve() if args.output_dir else Path(temporary.name)
@@ -38,6 +40,8 @@ def main() -> None:
             result = subprocess.run(command + options, cwd=ROOT, env=env, stdout=stdout, stderr=stderr, timeout=120)
         results.append({"case": name, "actual_exit": result.returncode,
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+        if result.returncode != expected:
+            sys.stderr.write((output / (name + ".stderr")).read_text(encoding="utf-8", errors="replace")[-8192:])
         assert result.returncode == expected, (name, result.returncode, expected)
         return path
 

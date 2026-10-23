@@ -26,6 +26,9 @@ M.crc32 = crc32
 local function uint(n)
     return math.type(n) == "integer" and n >= 0
 end
+local function nonnegative_number(n)
+    return type(n) == "number" and n == n and n >= 0 and n < math.huge
+end
 local function copy(t)
     local r = {}; for k, v in pairs(t or {}) do r[k] = v end; return r
 end
@@ -142,7 +145,7 @@ local function validate_snapshot(snapshot, timestamp_ns)
         assert(type(state) == "table" and Quality.VALID_STATUS[state.status]
             and Quality.VALID_QUALITY[state.quality], "invalid recorded quality")
         for _, key in ipairs({ "timestamp_ns", "value_timestamp_ns", "duration_ns" }) do
-            assert(state[key] == nil or (uint(state[key]) and
+            assert(state[key] == nil or (nonnegative_number(state[key]) and
                 (key == "duration_ns" or state[key] <= timestamp_ns)), "invalid recorded source time")
         end
     end
