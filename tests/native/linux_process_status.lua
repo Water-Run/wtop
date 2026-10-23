@@ -66,6 +66,21 @@ for _,content in ipairs({
  'Cpus_allowed_list: 1,0\n','Cpus_allowed_list: 1,1\n','Cpus_allowed_list: count\n',
  'NSpid: '..string.rep('1 ',33)..'\n','NSpid: '..string.rep('1 ',34)..'\n',
 })do check(content)end
-assert(checked>4000 and declined>0 and decoded>=1000)
+-- Perturb ordinary records as well as generating mostly-invalid fields: the
+-- decoder must decline or match Lua after byte insertions, deletions and edits.
+math.randomseed(824107)
+local canonical='Uid: 1000 1000 1000 1000\nTgid: 100\nVmRSS: 4096 kB\nNSpid: 100 1\nNStgid: 100 1\nCpus_allowed_list: 0-15,20-31\nMems_allowed_list: 0\nvoluntary_ctxt_switches: 100\nnonvoluntary_ctxt_switches: 20\n'
+local alphabet={'0','1','9','-',',',':',' ', '\t','\r','\n','\0','x','\255'}
+for trial=1,5000 do
+ local content=canonical
+ for j=1,math.random(1,3)do
+  local at=math.random(#content);local byte=alphabet[math.random(#alphabet)]
+  if trial%3==0 then content=content:sub(1,at-1)..byte..content:sub(at)
+  elseif trial%3==1 then content=content:sub(1,at-1)..byte..content:sub(at+1)
+  else content=content:sub(1,at-1)..content:sub(at+1)end
+ end
+ check(content)
+end
+assert(checked>9000 and declined>0 and decoded>=1000)
 print(('metadata reduction equivalence: %d cases, %d safe declines; real status, all decoded fields/errors, duplicates, huge fields, Unicode/NUL, collisions and bounded overflow passed'):format(checked,declined))
 print(('direct metadata decode equivalence: %d accepted cases; native declines preserve Lua interpretation'):format(decoded))

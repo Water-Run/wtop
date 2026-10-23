@@ -71,6 +71,19 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 有界对比，不能证明 1000 进程、最低硬件或整体预算达标。提交后的
 完整 CI 尚待验收。证据见 `build/process-status-native-20261024/`。
 
+同份 `a840ebc` 源码在 Ubuntu 22.04／glibc 2.35 SDK 中重建
+ELF32 应用映像，实际模块与独立检查各通过 4,542 组对照及分配
+失败清理。Lua、模块、两个读取器和模块内嵌映像的最高 GLIBC
+要求均为 2.34，没有改变现有发布门槛。随后公开 Linux 3.2／
+Pentium III 虚拟机的八项检查、真实终端和 QEMU 实际退出零；
+状态、日志和应用摘要已逐项核对，容器已经停止。此项验证旧内核
+和虚拟指令集兼容，实体旧机器、测量精度与资源预算仍待验收。
+证据见同目录的 `I686-VM-ACCEPTANCE.json`。
+
+补充的 5,000 组字节变异将总输入数扩至 9,542；64 位独立程序的
+ASan／UBSan、32 位程序和实际模块均通过。此组已加入原生回归，
+上述 SDK 中原先 4,542 组的记录保持原样。
+
 ## 进程状态范围缓存实验（2026-10-24）
 
 当前普通负载的四次进程采样将周期状态解析列为可见成本。私有
@@ -116,6 +129,13 @@ CI 尚待完成。M4／macOS、Windows 11 与 Server 2008 的同份源码各六�
 `build/power-comparison-quality-20261024/`。
 
 ## 32 位旧内核与无 SSE2 虚拟 CPU（2026-10-24）
+
+`d20c317` 的全新 CI 在 i686 作业中通过了本节公开入口：173 个
+Lua 文件、八项来宾检查、真实终端和 QEMU 均退出零。下载状态与
+日志摘要已经逐项核对，该提交的十九项跨平台 CI 现已全部成功，
+包含独立下载包验收。证据见
+`build/legacy-vm-tooling-20261024/CI-d20-ACCEPTANCE.json` 与
+`build/power-comparison-ci-20261024/CI-ACCEPTANCE.json`。
 
 复现入口为 `make check-linux-i686 I686_LEGACY_ARGS=--legacy-kernel`。
 `tools/check_legacy_i686.py` 从已有 ELF32 开发树组装来宾，按固定
