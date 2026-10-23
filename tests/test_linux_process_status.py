@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check bounded status input reduction, Lua fallback semantics and OOM cleanup."""
+"""Check native status decoding, bounded reduction, Lua fallback and OOM cleanup."""
 import argparse,os,shlex,subprocess
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -17,5 +17,5 @@ def main():
  subprocess.run([str(binary),str(fixture)],cwd=ROOT,env=env,check=True,timeout=30)
  env={**os.environ,'LUA_PATH':str(ROOT/'src/?.lua')+';'+str(ROOT/'src/?/init.lua')+';;','LUA_CPATH':str(a.module.resolve().parent/'?.so')+';;'}
  subprocess.run([str(lua/'bin/lua'),str(fixture)],cwd=ROOT,env=env,check=True,timeout=30)
- print('Linux status reducer: native source, actual module export, full Lua field/error equivalence and allocation cleanup passed')
+ print('Linux status metadata: native decode/reduction, actual module exports, Lua field/error equivalence and allocation cleanup passed')
 if __name__=='__main__':main()

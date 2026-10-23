@@ -2376,6 +2376,7 @@ static const luaL_Reg functions[] = {
     {"process_stat_fields", l_process_stat_fields},
     {"process_stat_row_fields", l_process_stat_row_fields},
     {"process_status_metadata_input", wtop_linux_process_status_input},
+    {"process_status_metadata_fields", wtop_linux_process_status_fields},
     {"readlink", l_readlink},
     {"path_type", l_path_type},
     {"statvfs", l_statvfs},

@@ -2,6 +2,8 @@ package.path = "./src/?.lua;./src/?/init.lua;" .. package.path
 local Process = require("wtop.collectors.process")
 local Parsers = require("wtop.linux.parsers")
 local FS = require("wtop.linux.fs")
+local file = assert(io.open("tests/fixtures/proc/100.stat.1", "rb"))
+local original = file:read("*a"); file:close()
 
 -- Text remains safe for a terminal, including every single-byte input and
 -- strings that must take UTF-8 repair rather than the ordinary ASCII path.
@@ -19,8 +21,42 @@ for byte = 0, 255 do
     "unexpected process text byte: " .. byte)
 end
 
-local file = assert(io.open("tests/fixtures/proc/100.stat.1", "rb"))
-local original = file:read("*a"); file:close()
+-- Direct metadata decoding is optional. A decline keeps the existing parser's
+-- partial/error semantics, and supplemental identity checks still fence it.
+do
+ local Native=require("wtop.native")
+ local decode=Native.process_status_metadata_fields or Parsers.process_status
+ local direct_calls,reduced_calls,start,race=0,0,1000,false
+ local content="Uid:\t1000\t1000\t1000\t1000\nNSpid:\t100\t1\nCpus_allowed_list:\t0-1\nMems_allowed_list:\t0\n"
+ local provider={available=true,process_status_metadata_fields=function(value)
+  direct_calls=direct_calls+1;return decode(value)
+ end,process_status_metadata_input=function(value)reduced_calls=reduced_calls+1;return value end}
+ local fs={list=function()return{"100"}end}
+ function fs:read(path)
+  if path=="/proc/uptime"then return"100 0\n"end
+  if path=="/proc/100/stat"then return(original:gsub(" 1000 10485760 "," "..start.." 10485760 "))end
+  if path=="/proc/100/status"then if race then start=2000 end;return content end
+  return nil,{kind="missing"}
+ end
+ local function sample()
+  return Process.new({fs=fs,native=provider,clock_ticks_per_second=100,page_size_bytes=4096})
+   :sample({fs=fs,now_ns=function()return 1e9 end})
+ end
+ local first=sample();local row=assert(first.data.by_pid[100])
+ assert(direct_calls==1 and reduced_calls==0)
+ assert(row.uid==1000 and row.namespaces.inner_pid==1 and row.affinity.cpus_allowed_count==2)
+ provider.process_status_metadata_fields=function()direct_calls=direct_calls+1;return nil end
+ content="Uid:\t2000\t2000\t2000\t2000\nCpus_allowed_list:\t1,0\n"
+ local second=sample();assert(second.data.by_pid[100].uid==2000)
+ assert(second.data.by_pid[100].affinity.status=="partial" and reduced_calls==1)
+ content="Uid: 1 1 1 1\nUid: 2 2 2 2\n"
+ local malformed=sample();assert(malformed.data.supplemental_parse_errors==1)
+ assert(malformed.data.by_pid[100].uid==nil and malformed.data.by_pid[100].partial)
+ content="Uid: 3000 3000 3000 3000\n";race=true
+ local replaced=sample();assert(#replaced.data.list==0 and replaced.data.races==1)
+ assert(first.data.by_pid[100].uid==1000 and first.data.by_pid[100].affinity.cpus_allowed_count==2)
+end
+
 local function stat(pid)
   return original:gsub("^100 ", tostring(pid) .. " ")
 end

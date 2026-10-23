@@ -18,9 +18,14 @@ local function process_stat(provider, content)
   return Parsers.process_stat(content)
 end
 
--- A native reducer may avoid parsing unused status fields. It only selects
--- input; the existing Lua parser still validates all published values.
+-- Native decoding handles validated metadata. Unsupported inputs retain the
+-- reducer and full Lua parser's errors and partial-field interpretation.
 local function process_metadata(provider, content)
+  if type(content) == "string" and provider.available == true
+      and type(provider.process_status_metadata_fields) == "function" then
+    local parsed = provider.process_status_metadata_fields(content)
+    if type(parsed) == "table" then return parsed end
+  end
   if type(content) == "string" and provider.available == true
       and type(provider.process_status_metadata_input) == "function" then
     local reduced = provider.process_status_metadata_input(content)
