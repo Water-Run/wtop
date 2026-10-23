@@ -29,6 +29,19 @@ make check-linux-i686
 这是一条开发验证路径。构建环境应符合现有 libc 门槛；Ubuntu 22.04
 提供了本项目已使用的旧 glibc 环境。它不替代真实旧 32 位内核、旧 CPU
 或 Windows XP 的运行验证，也不增加已发布平台。
+
+安装 `qemu-system-x86` 和 `dpkg-deb` 后，可同时执行旧内核虚拟机检查：
+
+```sh
+make check-linux-i686 I686_LEGACY_ARGS=--legacy-kernel
+```
+
+该检查校验并启动固定的 Debian Linux 3.2 i386 内核，在断网、无宿主
+磁盘／设备直通的内存根文件系统中运行。Pentium III 虚拟 CPU 不含
+SSE2；检查覆盖 CLI、记录、历史回放、大整数及真实终端切页。来宾
+状态和串口日志位于输出目录的 `legacy-kernel` 下。此环境的编译器、
+静态 32 位 libc 和运行库应匹配已有 ELF32 构建；CI 使用 Ubuntu 22.04。
+虚拟机通过仍不代表实体旧机器的性能或传感器精度已验收。
 同时记录了干净源码 LuaRocks 安装结果与公开发布入口的缺口。
 
 构建没有运行时 LuaRock 依赖。`wtop_native.so` 提供交互式终端处理、poll、信号、原子写、受限子进程执行和一组小型 Linux 系统调用。原生文件读取器以非阻塞/不跟随符号链接模式打开，只接受常规文件，默认上限 4 MiB、显式最大 64 MiB，并拒绝符号链接、设备文件、FIFO 和超限内容，同时仍支持以常规文件形式呈现的 procfs/sysfs 伪文件。

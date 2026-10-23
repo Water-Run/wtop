@@ -57,6 +57,8 @@ def main():
     parser.add_argument("--output", type=pathlib.Path, default=ROOT / "build/linux-i686")
     parser.add_argument("--cc", default="gcc", help="compiler executable with multilib support")
     parser.add_argument("--jobs", type=int, default=2)
+    parser.add_argument("--legacy-kernel", action="store_true",
+                        help="also run the Linux 3.2/Pentium III QEMU development guest")
     args = parser.parse_args()
     if not sys.platform.startswith("linux") or not 1 <= args.jobs <= 64:
         parser.error("Linux and --jobs in 1..64 are required")
@@ -193,6 +195,10 @@ def main():
         ascii_env = dict(env, LANG="C", LC_ALL="C")
         run("C_locale", [lua, "-e", 'local n=require("wtop.native"); '
             'assert(n.wcwidth(65)==1 and n.wcwidth(0x4E2D)==-1)'], tree, ascii_env)
+        if args.legacy_kernel:
+            run("legacy_kernel", ["python3", str(ROOT / "tools/check_legacy_i686.py"),
+                "--runtime-tree", str(tree), "--output", str(output / "legacy-kernel"),
+                "--cc", str(cc)], tree, env)
         state.update(terminal=True, success=True, current=None)
         save()
         print("LINUX_I686_DEVELOPMENT_CHECK_PASSED: " + str(output), flush=True)

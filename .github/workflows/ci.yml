@@ -42,9 +42,9 @@ jobs:
       - name: Install the multilib development toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-multilib libc6-dev-i386
+          sudo apt-get install -y --no-install-recommends gcc-multilib libc6-dev-i386 qemu-system-x86
       - name: Build and execute the isolated ELF32 checks
-        run: make check-linux-i686 I686_OUTPUT=build/linux-i686
+        run: make check-linux-i686 I686_OUTPUT=build/linux-i686 I686_LEGACY_ARGS=--legacy-kernel
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -52,6 +52,8 @@ jobs:
           path: |
             build/linux-i686/status.json
             build/linux-i686/*.log
+            build/linux-i686/legacy-kernel/status.json
+            build/linux-i686/legacy-kernel/*.log
           if-no-files-found: warn
 
   macos-bundles:

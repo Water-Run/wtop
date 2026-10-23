@@ -567,9 +567,10 @@ test-native-gpu-worker-sanitized: sanitize-native $(LUA_STAMP)
 
 .PHONY: test-build-identity test-recording-replay
 I686_OUTPUT ?= $(CURDIR)/build/linux-i686
+I686_LEGACY_ARGS ?=
 .PHONY: check-linux-i686
 check-linux-i686: resource-check-full
-	@python3 tools/check_linux_i686.py --output '$(I686_OUTPUT)'
+	@python3 tools/check_linux_i686.py --output '$(I686_OUTPUT)' $(I686_LEGACY_ARGS)
 
 test-build-identity: resource-check
 	@python3 tests/test_build_identity_refresh.py

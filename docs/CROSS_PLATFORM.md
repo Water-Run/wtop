@@ -42,6 +42,14 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
 
 ## 32 位旧内核与无 SSE2 虚拟 CPU（2026-10-24）
 
+复现入口为 `make check-linux-i686 I686_LEGACY_ARGS=--legacy-kernel`。
+`tools/check_legacy_i686.py` 从已有 ELF32 开发树组装来宾，按固定
+摘要获取内核，检查同 ABI 运行库，并分别保存构建、QEMU 和来宾
+结果。`tests/native/legacy_linux_init.c` 只在来宾 PID 1 运行，等待
+实际概览／进程表后再退出。公开脚本在独立 Ubuntu 22.04／glibc
+2.35 SDK 和 QEMU 6.2 上重新生成全部输入并实际退出零；八项检查、
+数据断言及终端通过。新增 CI 配置尚待精确提交验收。
+
 系统级 QEMU TCG 启动了独立的 32 位 Linux 内核：
 [Debian 官方归档的 i386 软件包](https://archive.debian.org/debian-security/pool/updates/main/l/linux/)
 `linux-image-3.2.0-6-686-pae_3.2.102-1_i386.deb`，按官方 Packages 索引

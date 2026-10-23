@@ -2,6 +2,15 @@
 
 ## 开发概览（2026-10-24）
 
+旧内核验收现有可重复入口：`check-linux-i686` 的 `--legacy-kernel`
+选项校验固定内核包、构建静态来宾 init 和内存根文件系统，并运行
+无 SSE2 的 Pentium III／Linux 3.2 虚拟机。来宾等待真实终端帧后
+切页、退出，记录八项状态；脚本分别核对 QEMU 与来宾结果。公开
+脚本在 Ubuntu 22.04／glibc 2.35／QEMU 6.2 中实际退出零，静态 C
+通过严格编译。CI 的 i686 作业已配置此选项并上传独立日志；完整新
+提交仍待 CI 验收。证据见 `build/legacy-vm-tooling-20261024/` 与
+`build/linux-i686-20261024/legacy-public-status.json`。
+
 新增系统级旧内核验证：QEMU TCG／Pentium III、256 MiB 内存环境
 实际启动 Debian 的 32 位 Linux 3.2 内核。八个 CLI／数据检查及
 概览→进程页→退出通过；三帧记录、64 位大计数与假策略值保持。

@@ -289,6 +289,7 @@ local NOT_RELEASE_EVIDENCE = {
     "check_perf_budget.py",
     -- Isolated ELF32 development checks, not a shipped release document.
     "check_linux_i686.py",
+    "check_legacy_i686.py",
     "check_windows_x86.py", "embed_cpuid_helpers.py", "embed_gpu_worker.sh",
     "check_macos.py",
     "check_resources.sh",
