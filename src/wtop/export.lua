@@ -11,6 +11,7 @@ local GPUPowerSession = require("wtop.model.gpu_power_session")
 local SensorPower = require("wtop.model.sensor_power")
 local FanControl = require("wtop.model.fan_control")
 local SupplyInput = require("wtop.model.supply_input")
+local TypeC = require("wtop.model.typec")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
@@ -1477,6 +1478,40 @@ local function export_rfkill(rfkill)
     return result
 end
 
+local function export_typec(snapshot)
+    local data = snapshot.typec or {}
+    local result = copy_fields(data, { "source", "partial", "truncated" })
+    result.ports, result.pd_devices = json.array({}), json.array({})
+    local function arrays(row)
+        row.issues = json.array(row.issues)
+        for _, key in ipairs({ "data_roles", "power_roles", "usb_capabilities", "usb_modes" }) do
+            if row[key] then row[key] = json.array(row[key]) end
+        end
+        return row
+    end
+    local pd_ids, profiles_left = {}, TypeC.MAX_PROFILES
+    for index, pd in ipairs(data.pd_devices or {}) do
+        if index > TypeC.MAX_PD then result.truncated = true; break end
+        local row = arrays(TypeC.pd(snapshot, pd, math.min(64, profiles_left)))
+        row.profiles = json.array(row.profiles)
+        for _, profile in ipairs(row.profiles) do profile.issues = json.array(profile.issues) end
+        row.capability_status = json.object(row.capability_status)
+        profiles_left = profiles_left - #row.profiles
+        result.pd_devices[index] = row
+        result.truncated = result.truncated or row.truncated == true
+        if pd_ids[pd.id] == nil then pd_ids[pd.id] = TypeC.current(snapshot, pd) else pd_ids[pd.id] = false end
+    end
+    for index, port in ipairs(data.ports or {}) do
+        if index > TypeC.MAX_PORTS then result.truncated = true; break end
+        local row = arrays(TypeC.port(snapshot, port))
+        if row.pd_id and not pd_ids[row.pd_id] then row.pd_id = nil end
+        for _, key in ipairs({ "partner", "cable" }) do if row[key] then arrays(row[key]) end end
+        result.ports[index] = row
+    end
+    result.issues = export_issues(data.issues)
+    return result
+end
+
 local function export_thermal_zones(thermal)
     local result = copy_fields(thermal, { "source", "partial", "truncated" })
     result.zones = json.array({})
@@ -2279,6 +2314,7 @@ function M.snapshot(snapshot, options)
         tpm = export_tpm(snapshot.tpm),
         watchdog = export_watchdog(snapshot.watchdog),
         rfkill = export_rfkill(snapshot.rfkill),
+        typec = export_typec(snapshot),
         thermal_zones = export_thermal_zones(snapshot.thermal_zones),
         host_interfaces = export_host_interfaces(snapshot.host_interfaces),
         processor_firmware = export_processor_firmware(snapshot.processor_firmware),
@@ -3024,6 +3060,36 @@ function M.agent(snapshot, options)
                 providers = export_gpu_providers(full.gpus and full.gpus.providers),
             }),
             power = json.object({
+                typec_ports = (function()
+                    local rows = json.array({})
+                    for index, port in ipairs(full.typec and full.typec.ports or {}) do
+                        if index > device_limit then break end
+                        rows[index] = copy_object(port)
+                    end
+                    return rows
+                end)(),
+                typec_ports_total = #(full.typec and full.typec.ports or {}),
+                typec_truncated = full.typec and full.typec.truncated == true
+                    or #(full.typec and full.typec.ports or {}) > device_limit,
+                pd_devices = (function()
+                    local rows = json.array({})
+                    for index, pd in ipairs(full.typec and full.typec.pd_devices or {}) do
+                        if index > device_limit then break end
+                        local row = copy_object(pd)
+                        row.profiles = json.array({})
+                        for position, profile in ipairs(pd.profiles or {}) do
+                            if position > 8 then break end
+                            row.profiles[position] = copy_object(profile)
+                        end
+                        row.profiles_total = #(pd.profiles or {})
+                        row.truncated = row.truncated or row.profiles_total > #row.profiles
+                        rows[index] = row
+                    end
+                    return rows
+                end)(),
+                pd_devices_total = #(full.typec and full.typec.pd_devices or {}),
+                pd_devices_truncated = full.typec and full.typec.truncated == true
+                    or #(full.typec and full.typec.pd_devices or {}) > device_limit,
                 supplies = (function()
                     local rows = json.array({})
                     for index, supply in ipairs(full.power_supplies and full.power_supplies.supplies or {}) do

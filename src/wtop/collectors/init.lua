@@ -26,6 +26,7 @@ local constructors = {
   tpm = require("wtop.collectors.tpm"),
   watchdog = require("wtop.collectors.watchdog"),
   rfkill = require("wtop.collectors.rfkill"),
+  typec = require("wtop.collectors.typec"),
   thermal_zones = require("wtop.collectors.thermal_zones"),
   host_interfaces = require("wtop.collectors.host_interfaces"),
   processor_firmware = require("wtop.collectors.processor_firmware"),

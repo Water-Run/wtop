@@ -522,6 +522,49 @@ function M.render(snapshot)
     end
     table_section(lines, "External input read issues", { "Supply", "Attribute", "Status", "Source" },
         supply_issues, function(issue) return issue end, power)
+    local typec = object(snapshot.typec)
+    table_section(lines, "USB Type-C ports",
+        { "Port", "Reported data role", "Reported power role", "Reported power mode", "Type-C revision", "Supported PD revision", "Linked PD object", "Quality" },
+        typec.ports, function(port)
+            return { port.id, port.data_role, port.power_role, port.power_operation_mode,
+                port.usb_typec_revision, port.usb_power_delivery_revision, port.pd_id, port.quality }
+        end, typec)
+    local pd_profiles = {}
+    table_section(lines, "USB PD objects",
+        { "Object", "Revision", "Version", "Source capabilities", "Sink requirements", "Quality", "Source" },
+        typec.pd_devices, function(pd)
+            return { pd.id, pd.revision, pd.version, object(pd.capability_status).source,
+                object(pd.capability_status).sink, pd.quality, pd.source }
+        end, typec)
+    for _, pd in ipairs(list(typec.pd_devices)) do
+        for _, profile in ipairs(list(pd.profiles)) do pd_profiles[#pd_profiles + 1] = { pd = pd, profile = profile } end
+    end
+    table_section(lines, "USB PD declared profiles",
+        { "Object", "Direction", "PDO", "Voltage", "Minimum voltage", "Maximum voltage", "Maximum current", "Operating current", "Maximum power", "Operating power", "Current at 9–15 V", "Current at 15–20 V", "Quality" },
+        pd_profiles, function(item)
+            local p = item.profile
+            return { item.pd.id, p.direction, p.id, quantity(p.voltage_volts, 1, " V", 3),
+                quantity(p.minimum_voltage_volts, 1, " V", 3), quantity(p.maximum_voltage_volts, 1, " V", 3),
+                quantity(p.maximum_current_amperes, 1, " A", 3), quantity(p.operational_current_amperes, 1, " A", 3),
+                quantity(p.maximum_power_watts, 1, " W", 2), quantity(p.operational_power_watts, 1, " W", 2),
+                quantity(p.maximum_current_9V_to_15V_amperes, 1, " A", 3),
+                quantity(p.maximum_current_15V_to_20V_amperes, 1, " A", 3), p.quality }
+        end, typec)
+    local pd_flags = {}
+    for _, item in ipairs(pd_profiles) do
+        for _, key in ipairs({ "peak_current_code", "fast_role_swap_current_code", "dual_role_power",
+            "usb_suspend_supported", "higher_capability", "unconstrained_power", "usb_communication_capable",
+            "dual_role_data", "unchunked_extended_messages_supported", "pps_power_limited" }) do
+            if item.profile[key] ~= nil then pd_flags[#pd_flags + 1] = {
+                item.pd.id, item.profile.direction, item.profile.id, key, item.profile[key] } end
+        end
+    end
+    table_section(lines, "USB PD declaration flags", { "Object", "Direction", "PDO", "Field", "Value" },
+        pd_flags, function(row) return row end, typec)
+    if #list(typec.ports) + #list(typec.pd_devices) > 0 then
+        lines[#lines + 1] = "Type-C roles and PDOs describe driver state, supply capabilities or sink requirements; no selected contract or delivered power is inferred."
+        lines[#lines + 1] = ""
+    end
     local zones = object(snapshot.power)
     table_section(lines, "Power zones", { "Zone", "Domain", "Current power", "Sample window", "Quality", "Source" },
         zones.zones, function(zone)

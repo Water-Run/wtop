@@ -14,6 +14,121 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def typec_fixture(lua_prefix, directory):
+    """Materialize the shared ABI fixture; readlink exposes synthetic sysfs paths."""
+    script='package.path="./src/?.lua;./src/?/init.lua;./tests/?.lua;"..package.path;print(require("wtop.format.json").encode(require("support.typec").new()))'
+    fixture=json.loads(subprocess.check_output([str(lua_prefix.resolve()/'bin/lua'),'-e',script],cwd=ROOT,timeout=10))
+    physical=directory/'typec-devices';ports=directory/'typec-class';pd=directory/'pd-class'
+    ports.mkdir();pd.mkdir()
+    for name,value in fixture['files'].items():
+        if name.startswith('/sys/class/typec/'):
+            relative=Path(name).relative_to('/sys/class/typec');path=physical/'typec'/relative
+        else:
+            relative=Path(name).relative_to('/sys/class/usb_power_delivery');path=physical/'usb_power_delivery'/relative
+        path.parent.mkdir(parents=True,exist_ok=True);path.write_text(value)
+    for parent,category in [(ports,'typec'),(pd,'usb_power_delivery')]:
+        for child in (physical/category).iterdir():
+            parent.joinpath(child.name).symlink_to(child)
+    port=physical/'typec/port0';object_path=physical/'usb_power_delivery/pd7'
+    (port/'device').symlink_to(physical);(object_path/'device').symlink_to(physical)
+    (port/'usb_power_delivery').symlink_to(object_path)
+    control=directory/'typec-control';control.write_text('0\n');entered=directory/'typec-entered'
+    return {'WTOP_TYPEC_FIXTURE_ROOT':str(ports),'WTOP_PD_FIXTURE_ROOT':str(pd),
+            'WTOP_TYPEC_PHYSICAL_ROOT':str(physical),'WTOP_TYPEC_FIXTURE_CONTROL':str(control),
+            'WTOP_TYPEC_FIXTURE_ENTERED':str(entered)}
+
+def verify_typec_application(args, env, work):
+    """Production Type-C declarations and typed navigation, without hardware writes."""
+    command=([str(args.executable.resolve())] if args.executable else
+             [str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'src/wtop.lua')])
+    receipts={}
+    for mode in ['snapshot','agent','report','stream']:
+        extra=['--count','4','--interval','1000'] if mode=='stream' else []
+        run=subprocess.run(command+['--'+mode]+extra,cwd=ROOT,env=env,capture_output=True,timeout=35)
+        for suffix,body in [('out',run.stdout),('stderr',run.stderr)]:
+            path=work/('typec-'+mode+'.'+suffix);path.write_bytes(body);path.chmod(0o600)
+        run.check_returncode();receipts[mode]=hashlib.sha256(run.stdout).hexdigest()
+        if mode=='report':
+            assert b'USB Type-C ports' in run.stdout and b'USB PD objects' in run.stdout
+            assert b'45.00 W' in run.stdout and b'no selected contract' in run.stdout
+            assert b'spr_adjustable_voltage_supply' in run.stdout
+            continue
+        rows=[json.loads(line)for line in run.stdout.splitlines()]
+        assert len(rows)==(4 if mode=='stream' else 1)
+        for snapshot in rows:
+            data=snapshot['metrics']['power'] if mode=='agent' else snapshot['typec']
+            ports=data['typec_ports'] if mode=='agent' else data['ports']
+            assert len(ports)==1 and ports[0]['id']=='port0' and ports[0]['pd_id']=='pd7'
+            assert ports[0]['data_role']=='host' and ports[0]['usb_default_mode']=='usb4'
+            pd=data['pd_devices'][0];assert pd['declarations_only'] and pd['revision']=='3.1'
+            assert len(pd['profiles'])==(8 if mode=='agent' else 10)
+            for profile in pd['profiles']:
+                assert profile['declarations_only'] and 'power_watts' not in profile and 'usage_percent' not in profile
+            assert pd['profiles'][0]['voltage_volts']==5 and pd['profiles'][2]['maximum_power_watts']==45
+    saved=os.environ.copy();os.environ.update(env,WTOP_ROOT=str(ROOT),WTOP_LUA=str(args.lua_prefix.resolve()/'bin/lua'))
+    if args.executable:os.environ['WTOP_EXECUTABLE']=str(args.executable.resolve())
+    sys.path.insert(0,str(ROOT/'tests'));import pty_smoke as tty
+    original=tty._markers_visible;screens={};terminals=[]
+    def visible(markers,data,columns,rows):
+        if markers and markers[0].startswith('typec-'):
+            screen=tty.VirtualScreen(columns,rows);screen.feed(bytes(data));text=screen.text()
+            screens[hashlib.sha256(text.encode()).hexdigest()]=text
+            if markers==('typec-port',):return 'port0' in text and ('Reported data role' in text or '报告的数据角色' in text)
+            if markers==('typec-pd',):return 'pd7' in text and ('PD object revision' in text or 'PD 对象规范修订版' in text)
+            if markers==('typec-capture',):return True
+        return original(markers,data,columns,rows)
+    tty._markers_visible=visible
+    try:
+        for columns,rows,locale,ascii_mode in [(120,40,'en-US',False),(100,30,'zh-CN',False),(100,30,'en-US',True)]:
+            screens.clear()
+            script=[(b'9',None),(('sleep',2),None),(b'/',None),(b'id:typec:port0',None),(b'\r',None),
+                    (('sleep',.6),None),(b'\r',None),(('sleep',.4),('typec-port',)),
+                    (b'r',None),(('sleep',.4),('typec-pd',))]
+            for _ in range(24):script.extend([(b'\x1b[6~',None),(('sleep',.1),('typec-capture',))])
+            script.extend([(b'b',None),(('sleep',.3),('typec-port',)),(b'\x1b',None),
+                           (b'2',None),(('sleep',.2),('Command',)if locale=='en-US'else('命令',)),(b'q',None)])
+            terminal_env={'TERM':'dumb','COLORTERM':None,'LANG':'C','LC_ALL':'C','LC_CTYPE':'C'}if ascii_mode else None
+            raw=tty.run_session(columns,rows,exercise=False,cli_options=('--lang',locale,'--no-color'),
+                                terminal_environment=terminal_env,script=script)
+            stem='typec-'+str(columns)+'-'+locale+('-ascii'if ascii_mode else '')
+            for suffix,body in [('.pty',raw),('-screens.json',json.dumps(screens,ensure_ascii=False).encode())]:
+                path=work/(stem+suffix);path.write_bytes(body);path.chmod(0o600)
+            text=' '.join(' '.join(screens.values()).split())
+            for marker in ['fixed_supply','variable_supply','battery','programmable_supply','spr_adjustable_voltage_supply']:
+                assert marker in text,(locale,marker)
+            assert ('PDOs declare supply'if locale=='en-US'else'PDO 描述供电能力')in text
+            if ascii_mode:assert all(byte<128 for byte in raw)
+            terminals.append(dict(columns=columns,rows=rows,locale=locale,ascii=ascii_mode,typed_navigation=True,
+                                  pty_sha256=hashlib.sha256(raw).hexdigest()))
+    finally:tty._markers_visible=original;os.environ.clear();os.environ.update(saved)
+    control=Path(env['WTOP_TYPEC_FIXTURE_CONTROL']);entered=Path(env['WTOP_TYPEC_FIXTURE_ENTERED'])
+    control.write_text('1\n');entered.unlink(missing_ok=True);owned={}
+    def blocked_visible(markers,data,columns,rows):
+        if markers==('typec-blocked',):
+            try:
+                pid=int(entered.read_text());proc=Path('/proc',str(pid),'stat')
+                owned.update(pid=pid,birth=proc.read_text().rsplit(')',1)[1].split()[19])
+                return True
+            except (OSError,ValueError):return False
+        return original(markers,data,columns,rows)
+    tty._markers_visible=blocked_visible;os.environ.update(env,WTOP_ROOT=str(ROOT),WTOP_LUA=str(args.lua_prefix.resolve()/'bin/lua'))
+    if args.executable:os.environ['WTOP_EXECUTABLE']=str(args.executable.resolve())
+    try:
+        raw=tty.run_session(100,30,exercise=False,cli_options=('--lang','en-US','--no-color'),script=[
+            (b'9',None),(('sleep',.2),('typec-blocked',)),(b'2',None),
+            (('sleep',.2),('Command',)),(b'q',None)])
+        assert owned
+        proc=Path('/proc',str(owned['pid']),'stat')
+        assert not proc.exists()or proc.read_text().rsplit(')',1)[1].split()[19]!=owned['birth']
+    finally:control.write_text('0\n');tty._markers_visible=original;os.environ.clear();os.environ.update(saved)
+    (work/'typec-blocked.pty').write_bytes(raw)
+    blocked=dict(owned,actual_exit=0,driver_blocked_before_input=True,owned_reader_gone=True,
+                 pty_sha256=hashlib.sha256(raw).hexdigest())
+    (work/'TYPEC-application-acceptance.json').write_text(json.dumps(dict(status='passed',
+        scope='software Type-C/PD tree through production readers/CLI/TUI; not active USB-PD contract verification',
+        CLI_sha256=receipts,TTY=terminals,blocked_TTY=blocked),indent=2)+'\n')
+    print('TYPEC_APPLICATION_PASSED:4CLI/4stream,five PDO kinds,EN/ZH/ASCII typed port-to-PD/back navigation and blocked-driver process/quit/reap',flush=True)
+
 def verify_supply_input_application(args, env, work):
     """Software USB input through production collector, outputs and terminals."""
     command = ([str(args.executable.resolve())] if args.executable else
@@ -355,7 +470,12 @@ local f=assert(io.open(os.getenv("WTOP_TEST_EDID_OUTPUT"),"wb"));assert(f:write(
                    WTOP_SUPPLY_FIXTURE_ENTERED=str(supply_entered))
         subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/hardware_worker_smoke.lua'),
                         str(ROOT),str(control),str(entered),str(power)],cwd=ROOT,env=env,check=True,timeout=35)
+        typec_env={**env,**typec_fixture(args.lua_prefix,directory)}
+        subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/typec_worker_smoke.lua'),
+                        str(ROOT),typec_env['WTOP_TYPEC_FIXTURE_CONTROL'],typec_env['WTOP_TYPEC_FIXTURE_ENTERED']],
+                       cwd=ROOT,env=typec_env,check=True,timeout=25)
         if not args.native_only:
+            verify_typec_application(args, typec_env, work)
             verify_supply_input_application(args, env, work)
             verify_fan_control_application(args, env, work)
         firmware_env={**env,'WTOP_SMBIOS_FIXTURE_ROOT':str(firmware),

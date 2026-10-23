@@ -23,6 +23,7 @@ local Quality = require("wtop.model.quality")
 local Thermal = require("wtop.model.thermal")
 local SensorPower = require("wtop.model.sensor_power")
 local FanControl = require("wtop.model.fan_control")
+local TypeC = require("wtop.model.typec")
 local WorkloadNavigation = require("wtop.model.workload_navigation")
 local Terminal = require("wtop.terminal")
 local UI = require("wtop.ui")
@@ -3554,6 +3555,73 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         add("watchdog.governor", "Pre-timeout governor", device.pretimeout_governor)
         lines[#lines + 1] = translated(i18n, "watchdog.note",
             "Read-only sysfs status; no watchdog device was opened or kept alive.")
+    elseif node.kind == "typec_port" then
+        local port = TypeC.port(snapshot, device)
+        add("inspector.quality", "Quality", Technical.state(i18n, port.quality))
+        add("typec.data_role", "Reported data role", port.data_role)
+        add_list("typec.data_roles", "Available data roles", port.data_roles)
+        add("typec.power_role", "Reported power role", port.power_role)
+        add_list("typec.power_roles", "Available power roles", port.power_roles)
+        add("typec.port_type", "Configured port type", port.port_type)
+        add("typec.preferred_role", "Preferred power role", port.preferred_role)
+        add("typec.operation_mode", "Reported power mode", port.power_operation_mode)
+        add("typec.orientation", "Reported orientation", port.orientation)
+        add("typec.vconn", "VCONN source", port.vconn_source)
+        add("typec.typec_revision", "Supported Type-C revision", port.usb_typec_revision)
+        add("typec.pd_revision", "Supported PD revision", port.usb_power_delivery_revision)
+        add("typec.usb_default", "Default next USB mode", port.usb_default_mode)
+        add_list("typec.usb_capabilities", "Supported USB modes", port.usb_capabilities)
+        add("typec.partner_seen", "Partner object observed", port.partner_observed)
+        add("typec.cable_seen", "Cable object observed", port.cable_observed)
+        for _, kind in ipairs({ "partner", "cable" }) do
+            local child = port[kind]
+            if child then
+                add("typec.object", "Class object", child.id)
+                add("typec.object_type", "Object type", child.type or child.accessory_mode)
+                add("typec.pd_revision", "Supported PD revision", child.usb_power_delivery_revision)
+                if child.plug_type then add("typec.plug_type", "Cable plug type", child.plug_type) end
+                if child.usb_mode then add("typec.usb_mode", "Partner USB mode", child.usb_mode) end
+            end
+        end
+        if port.pd_id then add("typec.related_pd", "Linked PD object", port.pd_id) end
+        lines[#lines + 1] = translated(i18n, "typec.note",
+            "Driver roles and capabilities; no selected contract or delivered power is inferred.")
+    elseif node.kind == "usb_pd" then
+        local pd = TypeC.pd(snapshot, device)
+        add("inspector.quality", "Quality", Technical.state(i18n, pd.quality))
+        add("typec.object_revision", "PD object revision", pd.revision)
+        add("typec.object_version", "PD object version", pd.version)
+        for _, direction in ipairs({ "source", "sink" }) do
+            local label = direction == "source" and "typec.source_profiles" or "typec.sink_profiles"
+            add(label, direction == "source" and "Source capabilities" or "Sink requirements",
+                Technical.state(i18n, pd.capability_status[direction]))
+        end
+        for _, profile in ipairs(pd.profiles) do
+            lines[#lines + 1] = ""
+            add("typec.profile", "Declared PDO", profile.direction .. " · " .. profile.id)
+            for _, spec in ipairs({
+                { "voltage_volts", "typec.voltage", "Declared voltage", "volts" },
+                { "minimum_voltage_volts", "typec.minimum_voltage", "Minimum declared voltage", "volts" },
+                { "maximum_voltage_volts", "typec.maximum_voltage", "Maximum declared voltage", "volts" },
+                { "maximum_current_amperes", "typec.maximum_current", "Maximum declared current", "amperes" },
+                { "operational_current_amperes", "typec.operational_current", "Required operating current", "amperes" },
+                { "maximum_power_watts", "typec.maximum_power", "Maximum declared power", "watts" },
+                { "operational_power_watts", "typec.operational_power", "Required operating power", "watts" },
+                { "maximum_current_9V_to_15V_amperes", "typec.current_9_15", "Maximum current at 9–15 V", "amperes" },
+                { "maximum_current_15V_to_20V_amperes", "typec.current_15_20", "Maximum current at 15–20 V", "amperes" },
+            }) do
+                if profile[spec[1]] ~= nil then add(spec[2], spec[3], profile[spec[1]], spec[4]) end
+            end
+            for _, key in ipairs({ "peak_current_code", "fast_role_swap_current_code", "dual_role_power",
+                "usb_suspend_supported", "higher_capability", "unconstrained_power", "usb_communication_capable",
+                "dual_role_data", "unchunked_extended_messages_supported", "pps_power_limited" }) do
+                if profile[key] ~= nil then add("typec.flag." .. key, key, profile[key]) end
+            end
+            add("inspector.quality", "Quality", Technical.state(i18n, profile.quality))
+            add("metrics.source", "Source", profile.source)
+        end
+        lines[#lines + 1] = translated(i18n, "typec.pdo_note",
+            "PDOs declare supply capabilities or sink requirements, not active limits or live readings.")
     elseif node.kind == "rfkill" then
         add("rfkill.name", "Switch name", device.name)
         add("rfkill.type", "Radio type", device.type)

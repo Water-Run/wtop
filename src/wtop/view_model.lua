@@ -2548,6 +2548,7 @@ local COLLECTOR_RESOURCE = {
     tpm = "tpm",
     watchdog = "watchdog",
     rfkill = "rfkill",
+    typec = "typec",
     thermal_zones = "thermal_zones",
     host_interfaces = "host_interfaces",
     processor_firmware = "processor_firmware",

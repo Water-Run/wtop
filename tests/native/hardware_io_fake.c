@@ -41,6 +41,20 @@ __attribute__((constructor)) static void setup(void) {
         enabled=n>0&&!strcmp(command,"wtop-hardware-reader");}
 }
 static const char *redirect(const char *path,char output[8192]) {
+    const char *typec=getenv("WTOP_TYPEC_FIXTURE_ROOT"),*pd=getenv("WTOP_PD_FIXTURE_ROOT");
+    const char *physical=getenv("WTOP_TYPEC_PHYSICAL_ROOT");
+    const char *typec_prefix="/sys/class/typec",*pd_prefix="/sys/class/usb_power_delivery";
+    const char *physical_prefix="/sys/devices/wtop-typec";
+    const char *special_roots[]={typec,pd,physical};
+    const char *special_prefixes[]={typec_prefix,pd_prefix,physical_prefix};
+    if(enabled){
+        for(unsigned i=0;i<3;i++){
+            size_t n=strlen(special_prefixes[i]);
+            if(special_roots[i]&&!strncmp(path,special_prefixes[i],n)&&(path[n]=='/'||!path[n])){
+                if(snprintf(output,8192,"%s%s",special_roots[i],path+n)<8192)return output;
+            }
+        }
+    }
     const char *supply=getenv("WTOP_SUPPLY_FIXTURE_ROOT");
     const char *supply_prefix="/sys/class/power_supply";
     size_t supply_size=strlen(supply_prefix);
@@ -88,6 +102,9 @@ int open(const char *path,int flags,...) {
         return mode_fd;
     }
     char mapped[8192];int fd=real_open(redirect(path,mapped),flags,mode);
+    if(enabled&&fd>=0&&strstr(path,"/data_role")&&getenv("WTOP_TYPEC_FIXTURE_CONTROL")){
+        target_fd=fd;target_kind=7;
+    }
     if(enabled&&fd>=0&&strstr(path,"/power_now")&&getenv("WTOP_SUPPLY_FIXTURE_CONTROL")){
         target_fd=fd;target_kind=6;
     }
@@ -108,7 +125,25 @@ int open(const char *path,int flags,...) {
 }
 int close(int fd) {if(fd==target_fd)target_fd=-1;if(fd==mode_fd)mode_fd=-1;return real_close(fd);}
 DIR *opendir(const char *path) {char mapped[8192];return real_opendir(redirect(path,mapped));}
-ssize_t readlink(const char *path,char *buffer,size_t size) {char mapped[8192];return real_readlink(redirect(path,mapped),buffer,size);}
+ssize_t readlink(const char *path,char *buffer,size_t size) {
+    char mapped[8192];const char *actual=redirect(path,mapped);
+    if(size==0)return real_readlink(actual,buffer,size);
+    const char *physical=enabled?getenv("WTOP_TYPEC_PHYSICAL_ROOT"):NULL;
+    if(physical){
+        char target[8192];ssize_t n=real_readlink(actual,target,sizeof(target)-1);
+        if(n<0)return n;
+        target[n]='\0';size_t prefix=strlen(physical);
+        if(!strncmp(target,physical,prefix)&&(target[prefix]=='/'||!target[prefix])){
+            char converted[8192];int length=snprintf(converted,sizeof(converted),"/sys/devices/wtop-typec%s",target+prefix);
+            if(length<0||(size_t)length>=sizeof(converted)){errno=ENAMETOOLONG;return -1;}
+            size_t count=(size_t)length<size?(size_t)length:size;
+            memcpy(buffer,converted,count);return (ssize_t)count;
+        }
+        size_t count=(size_t)n<size?(size_t)n:size;
+        memcpy(buffer,target,count);return (ssize_t)count;
+    }
+    return real_readlink(actual,buffer,size);
+}
 static void mode_metadata(struct stat *value) {
     memset(value,0,sizeof(*value));value->st_mode=S_IFCHR|0600;
     value->st_dev=1;value->st_ino=7;value->st_rdev=makedev(226,1);
@@ -153,13 +188,13 @@ int ioctl(int fd,unsigned long request,...) {
     errno=ENOTTY;return -1;
 }
 static int blocked(void) {
-    const char *path=getenv(target_kind==6?"WTOP_SUPPLY_FIXTURE_CONTROL":target_kind==5?"WTOP_DISPLAY_FIXTURE_CONTROL":target_kind==4?"WTOP_SPD_FIXTURE_CONTROL":target_kind==3?"WTOP_DRM_FIXTURE_CONTROL":target_kind==2?"WTOP_SMBIOS_FIXTURE_CONTROL":"WTOP_HARDWARE_FIXTURE_CONTROL");if(!path)return 0;
+    const char *path=getenv(target_kind==7?"WTOP_TYPEC_FIXTURE_CONTROL":target_kind==6?"WTOP_SUPPLY_FIXTURE_CONTROL":target_kind==5?"WTOP_DISPLAY_FIXTURE_CONTROL":target_kind==4?"WTOP_SPD_FIXTURE_CONTROL":target_kind==3?"WTOP_DRM_FIXTURE_CONTROL":target_kind==2?"WTOP_SMBIOS_FIXTURE_CONTROL":"WTOP_HARDWARE_FIXTURE_CONTROL");if(!path)return 0;
     int fd=real_open(path,O_RDONLY|O_CLOEXEC);if(fd<0)return 0;
     char value=0;ssize_t size=real_read(fd,&value,1);real_close(fd);return size==1&&value=='1';
 }
 ssize_t read(int fd,void *buffer,size_t size) {
     if(enabled&&fd==target_fd&&blocked()){
-        write_pid(getenv(target_kind==6?"WTOP_SUPPLY_FIXTURE_ENTERED":target_kind==5?"WTOP_DISPLAY_FIXTURE_ENTERED":target_kind==4?"WTOP_SPD_FIXTURE_ENTERED":target_kind==3?"WTOP_DRM_FIXTURE_ENTERED":target_kind==2?"WTOP_SMBIOS_FIXTURE_ENTERED":"WTOP_HARDWARE_FIXTURE_ENTERED"),0);
+        write_pid(getenv(target_kind==7?"WTOP_TYPEC_FIXTURE_ENTERED":target_kind==6?"WTOP_SUPPLY_FIXTURE_ENTERED":target_kind==5?"WTOP_DISPLAY_FIXTURE_ENTERED":target_kind==4?"WTOP_SPD_FIXTURE_ENTERED":target_kind==3?"WTOP_DRM_FIXTURE_ENTERED":target_kind==2?"WTOP_SMBIOS_FIXTURE_ENTERED":"WTOP_HARDWARE_FIXTURE_ENTERED"),0);
         while(blocked()){struct timespec delay={0,10000000};(void)nanosleep(&delay,NULL);}
     }
     return real_read(fd,buffer,size);

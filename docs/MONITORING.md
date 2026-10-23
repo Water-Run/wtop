@@ -57,6 +57,7 @@ CLI 默认 `--interval 1000`。活动页面使用基准间隔与采集器下限�
 | 硬件清单 | PCI/USB 设备与 USB 接口、接口驱动/类别/端点数、PCI 链路、MSI/MSI-X 向量及观察到的中断计数、IOMMU 组成员及可见 PCI 同组引用、SR-IOV PF/VF 引用及可用时的 PCIe AER 错误计数；Linux 磁盘/分区、网卡父子树及按设备号关联的挂载；设备详情关联传感器，`inventory.topology` 导出同一关系。Windows/macOS 缺少路径时平面展示 | sysfs + `pci.ids` / SetupAPI / IOKit，复用磁盘/网络/挂载快照 | 总线 30 s / 120 s；其余按各采集器间隔 |
 | cgroup v2 | CPU/max/weight、内存/Swap/事件/上限、I/O 速率、进程数；线程化子组的 TID 数、PID/事件、PSI、cpuset | `/sys/fs/cgroup` | 2 s / 10 s |
 | 系统标识 | 主机名/域名/架构、内核类型/版本/构建/命令行(密钥与机器标识参数已脱敏)、来自 os-release 的发行版、运行时间与启动时间、虚拟化与容器检测、SELinux/AppArmor/lockdown 状态、DMI 机器/主板/固件白名单字段（占位字符串丢弃）、描述符/PID/线程上限、熵、内核全局计数器、Swap 设备、时区 | `/proc/sys/kernel`, `/proc/uptime`, `/proc/stat`, `/proc/swaps`, `/proc/vmstat`, `/etc/os-release`, `/sys/class/dmi/id` | 5 s / 30 s |
+| Type-C / PD | 端口报告的角色、支持协议和下次默认 USB 模式，已观察伙伴／线缆；明确 PD 链接；固定、可变、电池、PPS 与 SPR AVS 的供电声明／受电需求。保留单位与质量，不推断活动合约、当前功率或电源归属；原生模块支持时隔离读取 | `/sys/class/typec`、`/sys/class/usb_power_delivery` | 5 s / 30 s |
 | 电源 | 电池与 UPS 的状态、电量和健康度、能量、功耗、电压、循环次数与剩余时间；外接电源在线状态、USB 模式、电压／电流、支持范围和明确输入限制；仅同一 USB 输入的直接功率与配置功率上限计算占比，缺失读数保持未知 | `/sys/class/power_supply` | 2 s / 15 s |
 | GPU | DRM 设备/节点标识、PCI 名称/链路元数据、选定的 AMD 繁忙度/显存、AMD/i915/xe 频率、DRM fdinfo 设备/进程数据 | `/sys/class/drm`, `/proc/<pid>/fdinfo`, 有界的本地 `pci.ids` | 1 s / 5 s |
 

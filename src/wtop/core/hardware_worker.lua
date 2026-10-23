@@ -7,6 +7,7 @@ local Native = require("wtop.native")
 local constructors = {
     hwmon = function(o) return require("wtop.collectors.hwmon").new(o) end,
     power_supply = function(o) return require("wtop.collectors.power_supply").new(o) end,
+    typec = function(o) return require("wtop.collectors.typec").new(o) end,
     ram_bandwidth = function(o) return require("wtop.collectors.ram_bandwidth").new(o) end,
     spd = function(o) return require("wtop.collectors.spd").new(o) end,
     cpufreq = function(o) return require("wtop.collectors.cpufreq").new(o) end,

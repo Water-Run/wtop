@@ -72,7 +72,136 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "supplies": {
+            "typec_ports": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "data_roles": {
+                  "type": "array",
+                  "maxItems": 16,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "power_roles": {
+                  "type": "array",
+                  "maxItems": 16,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                },
+                "usb_capabilities": {
+                  "type": "array",
+                  "maxItems": 16,
+                  "items": {
+                    "type": "string",
+                    "maxLength": 32
+                  }
+                }
+              }
+            }
+          },
+          "typec_ports_total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "typec_truncated": {
+            "type": "boolean"
+          },
+          "pd_devices": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "declarations_only"
+              ],
+              "properties": {
+                "declarations_only": {
+                  "type": "boolean",
+                  "const": true
+                },
+                "profiles": {
+                  "type": "array",
+                  "maxItems": 8,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "required": [
+                      "declarations_only"
+                    ],
+                    "properties": {
+                      "declarations_only": {
+                        "type": "boolean",
+                        "const": true
+                      },
+                      "position": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 255
+                      },
+                      "direction": {
+                        "enum": [
+                          "source",
+                          "sink"
+                        ]
+                      },
+                      "voltage_volts": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "minimum_voltage_volts": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "maximum_voltage_volts": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "maximum_current_amperes": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "operational_current_amperes": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "maximum_power_watts": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "operational_power_watts": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "maximum_current_9V_to_15V_amperes": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "maximum_current_15V_to_20V_amperes": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "pd_devices_total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pd_devices_truncated": {
+            "type": "boolean"
+          },
+          "supplies": {
               "type": "array",
               "maxItems": 5,
               "description": "External supplies. Programmable voltage/current can be settings; direct input readings and caps remain separate from CPU or outlet power.",

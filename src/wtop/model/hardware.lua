@@ -3,6 +3,7 @@
 local M = {}
 local Quality = require("wtop.model.quality")
 local GUID = require("wtop.core.guid")
+local TypeC = require("wtop.model.typec")
 
 local function identifier(value)
   return type(value) == "string" and value ~= "" and #value <= 4096 and value or nil
@@ -104,6 +105,8 @@ local KIND_LABELS = {
     os_tpm = { "tpm.device", "OS TPM {id}" },
     watchdog = { "watchdog.device", "Watchdog {id}" },
     rfkill = { "rfkill.device", "RF switch {id}" },
+    typec_port = { "typec.port", "Type-C port {id}" },
+    usb_pd = { "typec.pd", "USB PD object {id}" },
     thermal_zone = { "thermal_zone.device", "Thermal zone {id}" },
     cooling_device = { "cooling_device.device", "Cooling device {id}" },
     host_interface = { "host_interface.device", "Management host interface {id}" },
@@ -1160,6 +1163,30 @@ function M.build(snapshot)
     else result.partial = true end
   end
   local watchdogs = type(snapshot.watchdog) == "table" and snapshot.watchdog or {}
+  local typec = type(snapshot.typec) == "table" and snapshot.typec or {}
+  result.truncated = result.truncated or typec.truncated == true
+  result.partial = result.partial or typec.partial == true
+  for _, spec in ipairs({ { "ports", TypeC.MAX_PORTS, "typec_port", "typec:" },
+      { "pd_devices", TypeC.MAX_PD, "usb_pd", "usb-pd:" } }) do
+    for index, device in ipairs(type(typec[spec[1]]) == "table" and typec[spec[1]] or {}) do
+      if index > spec[2] then result.truncated = true; break end
+      if type(device) == "table" and identifier(device.id) then
+        local parent = TypeC.current(snapshot, device) and M.target_id(device.device_path, result.by_id) or nil
+        if parent and (not result.by_id[parent] or result.by_id[parent].ambiguous) then parent = nil end
+        local node = add_node("typec", device.id, device, spec[4] .. device.id, parent, "typec", device.id)
+        if node then node.kind = spec[3] end
+      else result.partial = true end
+    end
+  end
+  for _, port in ipairs(type(typec.ports) == "table" and typec.ports or {}) do
+    local source = result.by_id["typec:" .. tostring(port.id)]
+    local target = port.pd_id and result.by_id["usb-pd:" .. tostring(port.pd_id)]
+    if source and target and not source.ambiguous and not target.ambiguous
+        and TypeC.current(snapshot, source.device) and TypeC.current(snapshot, target.device) then
+      source.associated_ids[#source.associated_ids + 1] = target.id
+      target.associated_ids[#target.associated_ids + 1] = source.id
+    end
+  end
   local watchdog_list = type(watchdogs.devices) == "table" and watchdogs.devices or {}
   result.truncated = result.truncated or watchdogs.truncated == true
   result.partial = result.partial or watchdogs.partial == true

@@ -21,6 +21,7 @@ local REPORT_COLLECTORS = {
     tpm = true,
     watchdog = true,
     rfkill = true,
+    typec = true,
     thermal_zones = true,
     host_interfaces = true,
     processor_firmware = true, edac = true, spd = true, disk = true, disk_health = true,

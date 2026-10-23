@@ -175,6 +175,14 @@ Linux GPU 的 `top.gpus[].observations` 按来源记录观测时间、接收时�
 界面可优先使用同一当前设备的有效 hwmon 功耗通道；厂商原始观测及其质量
 仍在导出中保留，通道读数和上限可在 `sensors` 中核对。
 
+Type-C 与 PD 清单位于 Snapshot 的 `typec.ports`／`pd_devices`，以及 Agent
+的 `metrics.power.typec_ports`／`pd_devices`。Agent 每组最多五项，每个 PD
+对象保留八个 PDO，并给出保留计数与截断标志。`declarations_only` 固定为
+true：供电能力、受电要求、峰值／快速切换类别码不当作当前功率、活动
+合约或健康告警。PDO 电气量按内核毫伏／毫安／毫瓦单位归一化，数值
+不会由其他字段相乘推算。只有唯一、明确且当前有效的内核链接才提供
+端口的 `pd_id`；失败、过期和可见身份／角色变化会撤销该关联。
+
 外部电源位于 Snapshot 的 `power_supplies.supplies` 与 Agent 的
 `metrics.power.supplies`（最多五项，另有总数与截断标志）。保留 USB 当前／
 支持模式、电压／电流和明确输入限制；可编程电压／电流可能是设置值。

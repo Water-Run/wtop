@@ -40,6 +40,27 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
    启动 TUI 及结构化输出命令。Windows XP 兼容性是代码和构建目标;在没有
    XP 运行时测试的情况下,它仍未验证,不得作为经过测试的发布承诺对外呈现。
 
+## Type-C 与 PD 测绘（2026-10-23）
+
+端口的报告角色、协议版本、下次默认 USB 模式、已观察伙伴／线缆，
+以及明确的 PD 关联已接入 System 树、详情／相关设备导航、Snapshot、
+Agent 与报告。五类源／受电 PDO 按各自单位读取，保留电压、电流、
+功率声明与类别码。它们不作为当前功率、活动合约或健康信号。
+目录／记录数有界，过期和可见身份／角色／链接变化撤销关联。当前
+原生模块隔离读取，旧模块只有明确支持该来源时才启用隔离。
+
+本机实际读取一个端口和一个 PD 对象，明确链接已核对；PD 档位目录
+缺失，未把支持的协议版本当成活动供电合约。双 Lua 各六个相关文件
+与原生超时／回收／恢复检查通过。首次应用验收发现报告采集名单
+遗漏，已修正，原始记录保留。最终完整原生检查、169 个 Lua 5.5
+文件和完整终端矩阵通过；四种 CLI／四帧流输出、三种中英／ASCII
+终端导航及实际阻塞期间的进程操作／退出／回收通过。本机两次真实
+端口 ENASCII／中文详情及明确 PD 往返导航通过。新提交的 CI 与精确包
+跨平台验收尚未完成。
+字段依据 [Type-C ABI](https://github.com/torvalds/linux/blob/master/Documentation/ABI/testing/sysfs-class-typec)
+和 [PD ABI](https://github.com/torvalds/linux/blob/master/Documentation/ABI/testing/sysfs-class-usb_power_delivery)。
+证据见 `build/typec-pd-20261023/`。
+
 ## 外部电源输入遥测（2026-10-23）
 
 Linux 电源类的适配器与 USB 输入已接入 `p` 详情、System 电源控件、
@@ -5900,7 +5921,7 @@ Windows/macOS 的 NUMA 原生提供方仍待实现，本轮没有新增这些平
   Lua 5.5.1 与系统 Lua 5.4.8 下通过。本次沙箱的实时网络命名空间
   只暴露 `lo`；源码 Snapshot 的 `lo` 队列为 RX 1、TX 1，与 sysfs
   对应目录一致。多队列网卡仍缺少本机实测。
-- 当前源码套件包含 168 个 Lua 测试文件；此前矩阵和按日期记载的
+- 当前源码套件包含 169 个 Lua 测试文件；此前矩阵和按日期记载的
   120 文件运行是当时的验证结果，不计作本轮新增测试的覆盖证据。
 - `make check test-55 test-pty-quick` 通过，121 个 Lua 文件均通过；
   源码和 onedir 的硬件详情 PTY 场景也通过。onedir Snapshot 导出
