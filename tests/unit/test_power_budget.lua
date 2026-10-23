@@ -161,7 +161,7 @@ assert(Export.snapshot(snap).power.zones[1].constraints[2].usage_percent == nil)
 mmio.control_enabled, mmio.controls_enabled = nil, nil
 assert(model(snap).rows[4].controls == "unknown")
 mmio.control_enabled, mmio.controls_enabled = true, true
-for _, quality in ipairs({ "gap", "stale", "denied", "reset", "unavailable", "error" }) do
+for _, quality in ipairs({ "gap", "stale", "denied", "reset", "unavailable", "error", "held", "missing" }) do
     mmio.power_quality = quality
     assert(model(snap).rows[4].usage == "—", quality)
 end
@@ -262,6 +262,51 @@ mixed_power.gpus.devices[1].metric_observations.power_limit_watts.quality="fresh
 mixed_power.gpus.devices[1].metric_observations.power_watts.retained=false
 mixed_power.gpus.devices[1].metric_observations.power_limit_watts.retained=false
 assert(mixed_row().power=="30.0 W");near(mixed_row().power_percent,75)
+mixed_power.gpus.devices[1].metric_observations.power_watts.quality="missing"
+assert(mixed_row().power=="15.0 W");near(mixed_row().power_percent,75)
+mixed_power.gpus.devices[1].metric_observations.power_watts.quality="fresh"
+
+-- Both inputs must be current. An old cap cannot turn current watts into a
+-- current percentage, and per-metric failures cannot hide behind group quality.
+local paired = { id = "gpu-paired", metrics = { power_watts = 30, power_limit_watts = 40,
+    power_source = "nvml", power_limit_source = "nvml" }, quality = { power = "fresh" },
+    metric_observations = { power_watts = { quality = "fresh" },
+        power_limit_watts = { quality = "fresh" } } }
+local paired_snapshot = { gpus = { devices = { paired } },
+    quality = { gpus = { status = "ok", quality = "partial" } } }
+local function paired_check(expected)
+    local row = ViewModel.build(engine, paired_snapshot, en, {}, "gpu").gpu_table.rows[1]
+    local full = Export.snapshot(paired_snapshot).gpus.devices[1]
+    local agent = Export.agent(paired_snapshot).top.gpus[1]
+    for _, value in ipairs({ row, full.metrics, agent.metrics }) do
+        local percent = value == row and value.power_percent or value.power_limit_percent
+        if expected then near(percent, expected) else assert(percent == nil, "noncurrent GPU power ratio") end
+        if not expected then assert(value.power_headroom_watts == nil) end
+    end
+    assert(full.metrics.power_watts == paired.metrics.power_watts and full.metrics.power_limit_watts == 40)
+end
+paired_check(75)
+for _, key in ipairs({ "power_watts", "power_limit_watts" }) do
+    local observation = paired.metric_observations[key]
+    for _, state in ipairs({ "stale", "denied", "error", "unavailable", "gap", "reset", "held", "missing", "unknown" }) do
+        observation.quality = state
+        paired_check(nil)
+    end
+    observation.quality, observation.retained = "fresh", true
+    paired_check(nil)
+    observation.retained = nil
+    paired_check(75)
+end
+paired.metrics.power_watts = 0
+paired_check(0)
+paired.metrics.power_watts = 30
+paired.metrics.power_limit_percent, paired.metrics.power_headroom_watts = 75, 10
+paired.metric_observations.power_limit_watts.quality = "missing"
+paired_check(nil) -- Re-exporting a recorded snapshot must revoke its old derived values.
+paired.metrics.power_limit_percent, paired.metrics.power_headroom_watts = nil, nil
+paired.metric_observations.power_limit_watts.quality = "fresh"
+paired.metric_observations = nil
+paired_check(75) -- Older snapshots without observations keep their supported interpretation.
 
 for _, provider in ipairs({ "nvml", "amdsmi" }) do
     local existing = { id = "0000:01:00.0", card = "card0", metrics = {},

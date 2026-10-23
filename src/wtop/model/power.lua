@@ -1,5 +1,6 @@
 -- Comparisons use a configured cap for the same measurement domain. They
 -- describe the sampled power, not a hardware throttling verdict.
+local Quality = require("wtop.model.quality")
 local M = {}
 
 function M.reading(value)
@@ -24,7 +25,7 @@ function M.compare(watts, limit, enabled)
 end
 
 local unusable = { denied = true, unavailable = true, stale = true, gap = true,
-    reset = true, error = true, unknown = true, held = true }
+    reset = true, error = true, unknown = true, held = true, missing = true }
 
 function M.state(quality)
     if type(quality) == "table" then
@@ -123,6 +124,25 @@ function M.gpu(metrics, channel, quality)
     if not M.unusable(quality) then comparison = M.compare(watts, cap) end
     return { watts = watts, limit = cap, source = source, limit_source = cap_source,
         comparison = comparison }
+end
+
+-- Vendor watts and the configured cap have independent observations. Keep the
+-- original numbers, but only derive a budget from two current inputs.
+function M.gpu_device(device, channel, quality)
+    local metrics = device.metrics or {}
+    local vendor = M.reading(metrics.power_watts) ~= nil
+    local state = vendor and M.unusable(device.quality) and device.quality or quality
+    local budget = M.gpu(metrics, channel, state)
+    if vendor then
+        for _, key in ipairs({ "power_watts", "power_limit_watts" }) do
+            local observation = device.metric_observations and device.metric_observations[key]
+            if M.unusable(Quality.gpu_metric_quality(device, key, "power"))
+                or type(observation) == "table" and observation.retained then
+                budget.comparison = nil
+            end
+        end
+    end
+    return budget
 end
 
 return M

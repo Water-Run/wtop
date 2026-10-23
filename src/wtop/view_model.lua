@@ -1194,7 +1194,7 @@ local function gpu_rows(snapshot, format, i18n)
             and Quality.current_source(snapshot.quality,"sensors")
         local use_sensor = vendor_power and Power.unusable(vendor_state) and sensor_current
             and gpu.identity_quality ~= "stale" and Quality.current_source(snapshot.quality,"gpus")
-        local power_budget = Power.gpu(metrics, power_channel,
+        local power_budget = Power.gpu_device(gpu, power_channel,
             vendor_power and vendor_state or power_state)
         if use_sensor then power_budget=Power.gpu({},power_channel,sensor_state);vendor_power=false end
         local power_from_sensor = power_channel and not vendor_power

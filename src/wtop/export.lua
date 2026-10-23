@@ -949,8 +949,8 @@ local function export_gpus(gpus, quality, now_ns)
         exported.metric_observations = export_gpu_observations(device.metric_observations)
         exported.power_sessions = json.array(GPUPowerSession.public(device, now_ns, quality))
         exported.performance_limits = export_performance_limits(device.performance_limits, nil, false, quality)
-        local power_budget = Power.gpu(device.metrics, nil,
-            Power.unusable(device.quality) and device.quality or quality)
+        local power_budget = Power.gpu_device(device, nil, quality)
+        exported.metrics.power_limit_percent, exported.metrics.power_headroom_watts = nil, nil
         if power_budget.comparison then
             exported.metrics.power_limit_percent = power_budget.comparison.percent
             exported.metrics.power_headroom_watts = power_budget.comparison.headroom_watts
