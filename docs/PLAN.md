@@ -9,7 +9,9 @@ Server 2008／Cygwin 中直接解压后，两个入口均实际退出 126；
 `tools/package_windows.py archive`，同时保留隐藏载荷与 SHA-256。
 本地六项回归、PE 门禁、载荷／发布归档、工作流与两项 Lua 守卫
 通过；Windows 11 原生 Python 通过六项回归和两个实际入口。
-此项只验证归档元数据，新源码的完整 CI 尚待提交后验收。证据见
+新下载的 `2d1891c` Windows CI 构建也已保留全部载荷字节重新封装，
+Server 2008 的两个入口分别通过版本查询与快照导出。新源码的完整
+CI 尚待提交后验收。证据见
 `build/windows-archive-acl-20261024/LOCAL-ACCEPTANCE.json`。
 
 新增 NVML PCIe 观测：当前链路代数／宽度、设备与系统共同支持的
