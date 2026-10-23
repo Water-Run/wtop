@@ -168,7 +168,8 @@ UUID 与原生设备身份边界，不将 RAPL 图形域归入某块显卡。
 Linux GPU 的 `top.gpus[].observations` 按来源记录观测时间、接收时间和
 是否保留；`metric_observations` 将这些信息关联到具体指标。
 提供方等待、失败或枚举不完整时，保留的旧指标明确标为 `stale`。
-`metrics.gpu.maximum_utilization_percent` 汇总当前可用读数，过期设备不会
+`metrics.gpu.maximum_utilization_percent` 汇总当前可用读数；断点、复位、
+保留和缺失读数不参与汇总。没有当前利用率时，该字段缺席。过期设备不会
 挤掉 `top.gpus` 中有当前利用率或其他当前读数的设备，也不生成当前功耗百分比。
 完整 Snapshot 的设备携带同样的元数据；整体只有旧 GPU 观测时，资源的
 `value_timestamp_ns` 保留原观测时间。

@@ -425,4 +425,49 @@ assert(liar_sensors == nil or next(liar_sensors) == nil,
     "and its self-contradictory payload is not installed: " .. type(liar_sensors))
 liar:stop()
 
+-- Invalid finite rates are sampling gaps, not flat high-load chart segments.
+-- A valid sibling GPU and a fresh CPU total survive aggregate source gaps.
+do
+    local history_engine = Engine.new({ collectors = {}, history_capacity = 4, safe_mode = true })
+    local invalid = { "gap", "reset", "held", "missing", "stale", "denied", "error", "unavailable" }
+    for _, quality in ipairs(invalid) do
+        local s = { timestamp_ns = 2000000000,
+            cpu = { total = { utilization = 99, quality = quality } },
+            gpus = { devices = {
+                { metrics = { utilization_percent = 100 },
+                    metric_observations = { utilization_percent = { quality = quality } } },
+            } }, quality = {
+                cpu = { status = "ok", quality = "fresh", value_timestamp_ns = 1000000000 },
+                gpus = { status = "ok", quality = "fresh", value_timestamp_ns = 1000000000 },
+            } }
+        history_engine:_record_history(s, { cpu = s.quality.cpu, gpu = s.quality.gpus })
+        local cpu_values, gpu_values = history_engine:history_values("cpu"), history_engine:history_values("gpu")
+        assert(cpu_values[cpu_values.n] == false, "CPU retained rate entered history: " .. quality)
+        assert(gpu_values[gpu_values.n] == false, "GPU retained rate entered history: " .. quality)
+        assert(cpu_values.timestamps_ns[cpu_values.n] == 1000000000)
+        assert(s.cpu.total.utilization == 99 and s.gpus.devices[1].metrics.utilization_percent == 100)
+        s.cpu.total.quality = "fresh"
+        s.gpus.devices[2] = { metrics = { utilization_percent = 20 }, quality = { utilization = "fresh" } }
+        s.quality.cpu.quality, s.quality.gpus.quality = "gap", "gap"
+        history_engine:_record_history(s, { cpu = s.quality.cpu, gpu = s.quality.gpus })
+        cpu_values, gpu_values = history_engine:history_values("cpu"), history_engine:history_values("gpu")
+        assert(cpu_values[cpu_values.n] == 99 and gpu_values[gpu_values.n] == 20)
+        s.cpu.total.quality = nil
+        s.quality.gpus.quality = "stale"
+        history_engine:_record_history(s, { cpu = s.quality.cpu, gpu = s.quality.gpus })
+        cpu_values, gpu_values = history_engine:history_values("cpu"), history_engine:history_values("gpu")
+        assert(cpu_values[cpu_values.n] == false and gpu_values[gpu_values.n] == false)
+    end
+    for _, quality in ipairs({ "fresh", "measured", "estimated", "partial", "truncated" }) do
+        local s = { timestamp_ns = 2000000000,
+            cpu = { total = { utilization = 0, quality = quality } },
+            gpus = { devices = { { metrics = { utilization_percent = 0 }, quality = { utilization = quality } } } },
+            quality = { cpu = { status = "ok", quality = "gap" }, gpus = { status = "ok", quality = "gap" } } }
+        history_engine:_record_history(s, { cpu = s.quality.cpu, gpu = s.quality.gpus })
+        local c, g = history_engine:history_values("cpu"), history_engine:history_values("gpu")
+        assert(c[c.n] == 0 and g[g.n] == 0, "valid zero was turned into a chart gap: " .. quality)
+    end
+    history_engine:stop()
+end
+
 return true

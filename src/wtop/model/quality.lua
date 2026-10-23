@@ -107,10 +107,26 @@ M.UNUSABLE_FOR_ALERT = {
   stale = true, error = true, denied = true, unavailable = true,
 }
 
+local NONCURRENT_METRIC = { gap = true, reset = true, held = true, missing = true }
+
+-- Per-metric quality can invalidate a finite retained value. Aggregate source
+-- gaps are different: an unaffected device or CPU total may still be current.
+-- Missing quality retains compatibility with older snapshots.
+function M.current_metric(quality)
+  return not M.UNUSABLE_FOR_ALERT[quality] and not NONCURRENT_METRIC[quality]
+end
+
 function M.current_source(quality, resource)
   local state = type(quality) == "table" and quality[resource] or nil
   return type(state) ~= "table" or ((state.status == nil or state.status == "ok")
     and not M.UNUSABLE_FOR_ALERT[state.quality])
+end
+
+function M.cpu_total_current(snapshot)
+  local total = snapshot.cpu and snapshot.cpu.total or {}
+  local source = snapshot.quality and snapshot.quality.cpu
+  return M.current_source(snapshot.quality, "cpu")
+    and M.current_metric(total.quality or (source and source.quality))
 end
 
 function M.gpu_metric_quality(device, metric, group)

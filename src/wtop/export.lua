@@ -2374,14 +2374,14 @@ end
 -- only decision-relevant metrics, bounded top lists, quality and signals.
 local GPU_CURRENT_METRICS = {power_watts="power",temperature_celsius="temperature",
     frequency_current_hz="frequency",memory_used_bytes="memory"}
-local function gpu_score(device)
+local function gpu_score(device, current)
     local metrics=device.metrics or {}
     local utilization=metrics.utilization_percent
-    if finite_number(utilization) and not Quality.UNUSABLE_FOR_ALERT[
-        Quality.gpu_metric_quality(device,"utilization_percent","utilization")] then return utilization end
+    if current and finite_number(utilization) and Quality.current_metric(
+        Quality.gpu_metric_quality(device,"utilization_percent","utilization")) then return utilization end
     for key,group in pairs(GPU_CURRENT_METRICS) do
-        if finite_number(metrics[key]) and not Quality.UNUSABLE_FOR_ALERT[
-            Quality.gpu_metric_quality(device,key,group)] then return -1 end
+        if current and finite_number(metrics[key]) and Quality.current_metric(
+            Quality.gpu_metric_quality(device,key,group)) then return -1 end
     end
     if device.identity_quality=="fresh" or device.identity_quality=="estimated" then return -2 end
     return -3
@@ -2600,14 +2600,16 @@ function M.agent(snapshot, options)
         local utilization = device.metrics and device.metrics.utilization_percent
         if finite_number(utilization) then
             local quality = Quality.gpu_metric_quality(device, "utilization_percent", "utilization")
-            if not Quality.UNUSABLE_FOR_ALERT[quality] then
+            if Quality.current_metric(quality) then
                 maximum_current_gpu_utilization = math.max(
                     maximum_current_gpu_utilization or utilization, utilization)
             end
         end
     end
     if current_source("gpus") then maximum_gpu_utilization = maximum_current_gpu_utilization end
-    local ranked_gpus = top_by(gpu_devices, device_limit, gpu_score)
+    local ranked_gpus = top_by(gpu_devices, device_limit, function(device)
+        return gpu_score(device, current_source("gpus"))
+    end)
     for index, device in ipairs(ranked_gpus) do
         local output = copy_fields(device, {
             "id", "card", "vendor", "vendor_name", "model_name", "driver", "quality", "partial", "identity_quality",

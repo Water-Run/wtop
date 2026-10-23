@@ -639,6 +639,7 @@ end
 
 function Engine:_record_history(snapshot, completed)
     local cpu = snapshot.cpu and snapshot.cpu.total and snapshot.cpu.total.utilization
+    if not Quality.cpu_total_current(snapshot) then cpu = nil end
     local memory
     if snapshot.memory and finite_number(snapshot.memory.total_bytes)
         and snapshot.memory.total_bytes > 0 and finite_number(snapshot.memory.used_bytes) then
@@ -649,8 +650,9 @@ function Engine:_record_history(snapshot, completed)
     local gpu
     for _, device in ipairs(snapshot.gpus and snapshot.gpus.devices or {}) do
         local utilization = device.metrics and device.metrics.utilization_percent
-        if finite_number(utilization) and not Quality.UNUSABLE_FOR_ALERT[
-            Quality.gpu_metric_quality(device, "utilization_percent", "utilization")] then
+        if Quality.current_source(snapshot.quality, "gpus") and finite_number(utilization)
+            and Quality.current_metric(
+                Quality.gpu_metric_quality(device, "utilization_percent", "utilization")) then
             gpu = gpu and math.max(gpu, utilization) or utilization
         end
     end

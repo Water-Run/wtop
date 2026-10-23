@@ -395,6 +395,26 @@ assert(bounded_agent.top.gpus[1].pci.subsystem_vendor_name == "Example OEM")
 assert(bounded_agent.top.gpus[1].metrics.utilization_source == "drm_fdinfo")
 assert(bounded_agent.top.gpus[1].metrics.process_memory_bytes == 64 * 1024 * 1024)
 
+for _, quality in ipairs({ "gap", "reset", "held", "missing", "stale", "denied", "error", "unavailable" }) do
+    local s = { quality = { gpus = { status = "ok", quality = "gap" } }, gpus = { devices = {
+        { id = "invalid", metrics = { utilization_percent = 100, power_watts = 500 },
+            metric_observations = { utilization_percent = { quality = quality }, power_watts = { quality = quality } } },
+        { id = "current", metrics = { utilization_percent = 10 }, quality = { utilization = "fresh" } },
+    } } }
+    local a = Export.agent(s, { device_limit = 1 })
+    assert(a.metrics.gpu.maximum_utilization_percent == 10, quality)
+    assert(a.top.gpus[1].id == "current", "invalid utilization displaced a current GPU: " .. quality)
+    s.gpus.devices[2] = nil
+    a = Export.agent(s, { device_limit = 1 })
+    assert(a.metrics.gpu.maximum_utilization_percent == nil, quality)
+    assert(a.top.gpus[1].metrics.utilization_percent == 100, "raw observation was discarded")
+    s.gpus.devices[2] = { id = "power-only", metrics = { power_watts = 15 }, quality = { power = "fresh" } }
+    a = Export.agent(s, { device_limit = 1 })
+    assert(a.top.gpus[1].id == "power-only", "invalid secondary metric displaced a current GPU: " .. quality)
+    s.quality.gpus.quality = "stale"
+    assert(Export.agent(s).metrics.gpu.maximum_utilization_percent == nil)
+end
+
 -- Public Agent options cannot exceed the top-list maxima promised by the v1
 -- schema, even when an embedding asks for a larger projection.
 local oversized_snapshot = {

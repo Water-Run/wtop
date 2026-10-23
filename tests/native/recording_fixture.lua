@@ -46,6 +46,10 @@ for n = 1, 3 do
             snapshot.disks = { devices={ { name="retained-disk", busy_percent=100, busy_quality="reset" } } }
             snapshot.gpus = { devices={ { id="retained-gpu", metrics={utilization_percent=100},
                 metric_observations={utilization_percent={quality="missing"}} } } }
+            for _, key in ipairs({"disks","gpus"}) do
+                snapshot.quality[key] = {status="ok",quality="fresh",timestamp_ns=snapshot.timestamp_ns,
+                    value_timestamp_ns=snapshot.timestamp_ns}
+            end
         end
         if n == 3 then
             for _, key in ipairs({"sensors","memory","mounts","inventory"}) do

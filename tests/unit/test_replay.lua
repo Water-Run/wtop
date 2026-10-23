@@ -13,7 +13,11 @@ local writer = Recording.writer({ write=function(s) return file:write(s) end,
 for n = 1, 260 do
     local snapshot = Snapshot.new(n, n * 100000000)
     snapshot.cpu = { total={ utilization=n % 100 }, cores={ [0]={ id=0 } } }
+    snapshot.cpu.total.quality = n == 256 and "held" or "fresh"
+    snapshot.gpus = { devices={ { id="recorded-gpu", metrics={utilization_percent=n % 100},
+        metric_observations={utilization_percent={quality=n == 256 and "missing" or "fresh"}} } } }
     snapshot.quality.cpu = { status="ok", quality="fresh", timestamp_ns=snapshot.timestamp_ns }
+    snapshot.quality.gpus = { status="ok", quality="fresh", timestamp_ns=snapshot.timestamp_ns }
     writer:append(snapshot, snapshot.timestamp_ns, 1700000000000000000 + n * 100000000)
 end
 writer:close(); assert(file:close())
@@ -48,6 +52,11 @@ engine:seek(257)
 assert(engine.paused and engine.snapshot.sequence == 257 and engine:history_values("cpu").n == 1)
 assert(engine.clock:now_ns() == 25700000000)
 engine:step(-1); assert(engine.frame_number == 256)
+assert(engine:history_values("cpu")[1] == false and engine:history_values("gpu")[1] == false,
+    "replay must leave chart gaps for retained CPU and missing GPU rates")
+assert(engine.snapshot.cpu.total.utilization == 56
+    and engine.snapshot.gpus.devices[1].metrics.utilization_percent == 56,
+    "replay must preserve invalid original measurements")
 engine:seek(260); assert(engine.frame_number == 260 and engine.paused)
 engine:set_paused(false); assert(engine.paused and engine:next_delay_ms(100) == 100)
 engine:step(10); assert(engine.frame_number == 260)
