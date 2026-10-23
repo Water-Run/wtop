@@ -56,16 +56,20 @@ def run(folder: Path) -> None:
                    "LUA_CPATH": str(folder / "?.dll") + ";;",
                    "WTOP_STORAGE_FAULT_ROOT": str(case), "WTOP_STORAGE_FAULT_TARGET": target,
                    "WTOP_STORAGE_FAULT_DIRECT": "1" if mode == "direct" else "0",
-                   "WTOP_STORAGE_ALLOW_UNAVAILABLE": "1"}
+                   "WTOP_STORAGE_ALLOW_UNAVAILABLE": "1",
+                   "WTOP_STORAGE_COLD_ONCE": "1" if mode == "warm" else "0"}
             started = time.monotonic()
             result = subprocess.run([str(folder / "lua.exe"), "storage_lifecycle.lua", mode],
                                     cwd=folder, env=env, capture_output=True, timeout=45)
             (case / "parent.log").write_bytes(result.stdout + result.stderr)
+            if result.returncode != (19 if mode == "quit" else 0):
+                sys.stderr.write((case / "parent.log").read_text(encoding="utf-8", errors="replace")[-8192:])
             assert result.returncode == (19 if mode == "quit" else 0), case / "parent.log"
             if mode == "warm":
                 proof = json.loads((case / "result.json").read_text())
                 assert all(proof[key] for key in ["retained_timestamp", "healthy_sources_advance",
-                                                  "reaped_before_lease", "new_reader_recovered"])
+                                                  "reaped_before_lease", "new_reader_recovered",
+                                                  "cold_start_timeout_recovered"])
             elif mode == "quit":
                 marker = json.loads((case / (target + ".blocked")).read_text())
                 assert isinstance(marker["birth"], str) and marker["birth"].isdigit()

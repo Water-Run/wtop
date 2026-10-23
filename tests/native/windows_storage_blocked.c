@@ -13,7 +13,7 @@ static int ends_with(const WCHAR *value, const WCHAR *suffix) {
     size_t length=wcslen(value),tail=wcslen(suffix);
     return length>=tail&&!wcscmp(value+length-tail,suffix);
 }
-static void marker(const char *root,const char *kind,const char *state) {
+static void marker(const char *root,const char *kind,const char *state,unsigned lease_ms) {
     char path[1024],data[256];FILETIME created,exited,kernel,user;
     if(!GetProcessTimes(GetCurrentProcess(),&created,&exited,&kernel,&user))ExitProcess(91);
     unsigned long long birth=(unsigned long long)created.dwHighDateTime<<32|created.dwLowDateTime;
@@ -21,8 +21,8 @@ static void marker(const char *root,const char *kind,const char *state) {
     if(size<0||(size_t)size>=sizeof(path))ExitProcess(92);
     HANDLE file=CreateFileA(path,GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,CREATE_ALWAYS,0,NULL);
     if(file==INVALID_HANDLE_VALUE)ExitProcess(93);
-    size=snprintf(data,sizeof(data),"{\"pid\":%lu,\"birth\":\"%llu\",\"lease_ms\":10000}\n",
-        (unsigned long)GetCurrentProcessId(),birth);
+    size=snprintf(data,sizeof(data),"{\"pid\":%lu,\"birth\":\"%llu\",\"lease_ms\":%u}\n",
+        (unsigned long)GetCurrentProcessId(),birth,lease_ms);
     DWORD written=0;
     if(size<0||(size_t)size>=sizeof(data)||!WriteFile(file,data,(DWORD)size,&written,NULL)
         ||written!=(DWORD)size){CloseHandle(file);ExitProcess(94);}
@@ -43,12 +43,23 @@ static BOOL WINAPI delayed_ioctl(HANDLE h,DWORD code,LPVOID input,DWORD input_si
         int match=(health&&code==IOCTL_STORAGE_QUERY_PROPERTY&&input_size>=8
             &&((DWORD *)input)[0]==0)||(disk&&code==IOCTL_DISK_PERFORMANCE);
         if(match) {
-            marker(root,target,"seen");
+            marker(root,target,"seen",10000);
             int n=snprintf(trigger,sizeof(trigger),"%s/trigger",root);
             if(n<0||(size_t)n>=sizeof(trigger))ExitProcess(95);
+            char cold[8],claim[1024];
+            if(GetEnvironmentVariableA("WTOP_STORAGE_COLD_ONCE",cold,sizeof(cold))&&cold[0]=='1'
+                &&GetFileAttributesA(trigger)==INVALID_FILE_ATTRIBUTES) {
+                int length=snprintf(claim,sizeof(claim),"%s/%s.cold",root,target);
+                if(length<0||(size_t)length>=sizeof(claim))ExitProcess(96);
+                HANDLE first=CreateFileA(claim,GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,
+                    NULL,CREATE_NEW,0,NULL);
+                if(first!=INVALID_HANDLE_VALUE) {
+                    CloseHandle(first);marker(root,target,"cold",2500);Sleep(2500);
+                }
+            }
             if(!blocked_once&&GetFileAttributesA(trigger)!=INVALID_FILE_ATTRIBUTES) {
                 blocked_once=1;
-                marker(root,target,"blocked");
+                marker(root,target,"blocked",10000);
                 Sleep(10000);
             }
         }

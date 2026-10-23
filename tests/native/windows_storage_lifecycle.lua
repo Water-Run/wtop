@@ -24,13 +24,26 @@ local readers={disk=P.new("disk",{native=N}),disk_health=H.new({native=N}),
 local bad=target=="health"and"disk_health"or"disk"
 local slots={disk="disks",disk_health="disk_health",cpufreq="cpu_frequency",gpu="gpus"}
 local allow_unavailable=os.getenv("WTOP_STORAGE_ALLOW_UNAVAILABLE")=="1"
+local warmup_deadline=N.monotonic_ns()+20000000000
 local function waitgood(reader,id)
- local deadline=N.monotonic_ns()+7000000000
- repeat local r=reader:sample(ctx);if r.status=="ok"or(allow_unavailable and(id=="gpu"or id=="cpufreq")and r.status=="unavailable")then return r end
-  assert(r.reason=="hardware_query_pending"or r.sampling_pending,r.reason);N.sleep_ms(10)
- until N.monotonic_ns()>deadline;error("warmup failed")
+ local previous_reason
+ repeat
+  local r=reader:sample(ctx)
+  if r.status=="ok"or(allow_unavailable and(id=="gpu"or id=="cpufreq")and r.status=="unavailable")then return r end
+  if r.reason~=previous_reason then print("warmup",id,r.status,r.reason);previous_reason=r.reason end
+  assert(r.reason=="hardware_query_pending"or r.reason=="hardware_query_timeout"or r.sampling_pending,
+   "warmup "..id..": "..tostring(r.reason));N.sleep_ms(10)
+ until N.monotonic_ns()>warmup_deadline
+ error("warmup failed: "..id.." (last reason "..tostring(previous_reason)..")")
 end
 local results={};for id,r in pairs(readers)do results[id]=waitgood(r,id)end
+local cold=read("cold")
+if mode=="warm"then
+ assert(cold and cold.lease_ms==2500,"cold-start timeout was not injected")
+ local ok=os.execute("process-reaped.exe "..cold.pid.." "..cold.birth.." 1000")
+ assert(ok,"cold-start reader was not reaped before recovery")
+ print("cold startup recovered",target,cold.pid,cold.birth)
+end
 local snapshot=S.merge(nil,results,1,N.monotonic_ns())
 local original=snapshot[slots[bad]];local observed=snapshot.quality[slots[bad]].value_timestamp_ns
 local healthy={};for id in pairs(readers)do if id~=bad then healthy[id]={observed=snapshot.quality[slots[id]].value_timestamp_ns,attempted=snapshot.quality[slots[id]].timestamp_ns} end end
@@ -66,7 +79,7 @@ until N.monotonic_ns()-began>12000000000
 assert(recovered,"reader did not recover")
 local seen=assert(read("seen"));assert(seen.pid~=blocked.pid or seen.birth~=blocked.birth)
 for _,r in pairs(readers)do if r.close then r:close()end end
-local out={target=target,retained_timestamp=true,healthy_sources_advance=true,reaped_before_lease=true,
+local out={target=target,cold_start_timeout_recovered=true,cold=cold,retained_timestamp=true,healthy_sources_advance=true,reaped_before_lease=true,
  new_reader_recovered=true,blocked=blocked,recovered=seen}
 local f=assert(io.open(root.."/result.json","wb"));f:write(assert(require("wtop.format.json").encode(out)));f:close()
 print("isolated API lifecycle passed",target)
