@@ -604,6 +604,7 @@ check: resource-check native locales test-build-identity test-recording-replay t
 	@python3 tests/test_windows_payload.py --lua '$(LUA)'
 	@python3 tests/test_macos_artifact.py
 	@python3 tests/test_release_archive.py
+	@python3 tests/test_windows_archive.py
 
 test: resource-check-full test-55 test-pty
 

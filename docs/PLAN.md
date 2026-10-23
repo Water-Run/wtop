@@ -2,6 +2,16 @@
 
 ## 开发概览（2026-10-24）
 
+修复 Windows 开发 ZIP 的解压加载权限。已验收的旧归档在
+Server 2008／Cygwin 中直接解压后，两个入口均实际退出 126；
+统一 EXE／DLL 的 ZIP 执行权限后，相同 26 个文件的字节保持不变，
+新目录解压的两个入口均退出零，无需 chmod。归档入口统一到
+`tools/package_windows.py archive`，同时保留隐藏载荷与 SHA-256。
+本地六项回归、PE 门禁、载荷／发布归档、工作流与两项 Lua 守卫
+通过；Windows 11 原生 Python 通过六项回归和两个实际入口。
+此项只验证归档元数据，新源码的完整 CI 尚待提交后验收。证据见
+`build/windows-archive-acl-20261024/LOCAL-ACCEPTANCE.json`。
+
 新增 NVML PCIe 观测：当前链路代数／宽度、设备与系统共同支持的
 最大链路，以及收发短窗口速率。保留 API 的 KB/s 单位与约 20 ms
 窗口，不据此计算链路利用率或降频原因。GPU 页 `x` 打开纯快照详情，

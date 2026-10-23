@@ -8,6 +8,7 @@ import hashlib
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tempfile
 import urllib.request
@@ -20,6 +21,58 @@ INSTALLER = "luainstaller-1.5.0-1.src.rock"
 INSTALLER_SHA256 = "5d57d07e539107cc13e171e2b0a5919be692898c2627acfda4bcd12694055545"
 INSTALLER_URL = "https://github.com/Water-Run/luainstaller/releases/download/v1.5.0/" + INSTALLER
 ONEFILE_SOURCE_SHA256 = "67edbb961affcc496ad99a1bcdd342f07e0a2c488bed6de3442b8ac23e989a68"
+VENDOR_NOTICES = ("NVML-NVIDIA.txt", "Level-Zero-MIT.txt", "AMD-ADL-MIT.txt", "DRM-EDID-MIT.txt", "LZ4-BSD-2-Clause.txt")
+WINDOWS_ARCHIVE_REQUIRED = ("wtop/wtop.exe", "wtop/lua55.dll", "wtop/.luai/native/wtop_native.dll",
+                            "wtop-onefile.exe", "LICENSE", "wtop/LICENSE", *VENDOR_NOTICES)
+
+
+def create_archive(source: Path, output: Path) -> None:
+    """Preserve all payload bytes and declare executable modes independently of Windows stat."""
+    source, output = source.resolve(), output.resolve()
+    if any(ord(c) < 32 for c in output.name):
+        raise ValueError("unsafe Windows archive filename")
+    if output == source or source in output.parents:
+        raise ValueError("archive output must not be inside its payload")
+    if not source.is_dir() or any(not (source / name).is_file() for name in WINDOWS_ARCHIVE_REQUIRED):
+        raise ValueError("Windows archive is missing required payload or notices")
+    files, total = [], 0
+    for path in sorted(source.rglob("*")):
+        if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+            raise ValueError("Windows archive contains a symlink or junction")
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise ValueError("Windows archive contains a non-regular file")
+        name = path.relative_to(source).as_posix()
+        if any(ord(c) < 32 for c in name) or "\\" in name or ":" in name:
+            raise ValueError("unsafe Windows archive path")
+        size = path.stat().st_size
+        total += size
+        if size > 128 * 1024 * 1024 or total > 512 * 1024 * 1024 or len(files) >= 8192:
+            raise ValueError("Windows archive exceeds its payload bound")
+        executable = path.suffix.lower() in (".exe", ".dll")
+        if executable:
+            with path.open("rb") as stream:
+                if stream.read(2) != b"MZ":
+                    raise ValueError("Windows archive executable is not a PE image: " + name)
+        files.append((path, name, 0o755 if executable else 0o644))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=output.parent, prefix=".wtop-windows-", delete=False) as temporary:
+        staging = Path(temporary.name)
+    try:
+        with zipfile.ZipFile(staging, "w", zipfile.ZIP_DEFLATED, allowZip64=False) as archive:
+            for path, name, mode in files:
+                entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                entry.create_system = 3
+                entry.external_attr = (stat.S_IFREG | mode) << 16
+                entry.compress_type = zipfile.ZIP_DEFLATED
+                with path.open("rb") as source_file, archive.open(entry, "w") as target:
+                    shutil.copyfileobj(source_file, target)
+        staging.replace(output)
+    finally:
+        staging.unlink(missing_ok=True)
+    checksum = hashlib.sha256(output.read_bytes()).hexdigest()
+    output.with_name(output.name + ".sha256").write_text(checksum + "  " + output.name + "\n", encoding="utf-8")
 
 
 def installer_archive(root: Path) -> Path:
@@ -42,7 +95,7 @@ def installer_archive(root: Path) -> Path:
 
 
 def copy_vendor_notices(root: Path, output_root: Path) -> None:
-    for name in ("NVML-NVIDIA.txt", "Level-Zero-MIT.txt", "AMD-ADL-MIT.txt", "DRM-EDID-MIT.txt", "LZ4-BSD-2-Clause.txt"):
+    for name in VENDOR_NOTICES:
         notice = root / "native" / "licenses" / name
         shutil.copy2(notice, output_root / name)
         directory = output_root / "wtop"
@@ -137,13 +190,21 @@ def build(root: Path, kind: str, compiler: str | None = None, verbose: bool = Fa
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("kind", choices=("dir", "file"))
+    parser.add_argument("kind", choices=("dir", "file", "archive"))
+    parser.add_argument("--source", type=Path, help="archive an existing Windows bundle directory")
+    parser.add_argument("--output", type=Path, help="Windows ZIP destination")
     parser.add_argument("--compiler", help="native x86 MinGW compiler targeting MSVCRT (or set LUAI_CC)")
     parser.add_argument("--verbose", action="store_true", help="include compiler diagnostics")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
+    if args.kind != "archive" and (args.source or args.output):
+        parser.error("--source and --output are only for archive creation")
     try:
-        output = build(root, args.kind, args.compiler, args.verbose)
+        if args.kind == "archive":
+            output = args.output or root / "dist/wtop-windows-x86.zip"
+            create_archive(args.source or root / "dist/windows-bundle", output)
+        else:
+            output = build(root, args.kind, args.compiler, args.verbose)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         parser.exit(1, "wtop: Windows packaging failed: " + str(error) + "\n")
     print("wtop: Windows bundle ready: " + str(output))

@@ -40,6 +40,25 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
    启动 TUI 及结构化输出命令。Windows XP 兼容性是代码和构建目标;在没有
    XP 运行时测试的情况下,它仍未验证,不得作为经过测试的发布承诺对外呈现。
 
+## Windows ZIP 解压后的加载权限（2026-10-24）
+
+在 Server 2008 的 Cygwin 中直接解压已验收的 `52f4dde` 开发 ZIP，
+目录入口和单文件入口均因权限不足退出 126。原归档使用 Windows
+文件属性，Cygwin 解压后 EXE 没有执行权限，DLL 也不能正常加载。
+
+`tools/package_windows.py archive` 现在统一写入 Unix 来源属性，
+EXE／DLL 为 0755，其他文件为 0644，保留隐藏文件、固定时间戳并
+生成 SHA-256 文件。Windows CI 使用同一入口；归档测试同时进入
+`make check` 与 Windows 的原生 Python 步骤。
+
+修正后的 ZIP 包含相同的 26 个文件，逐文件字节完全一致。在
+Server 2008 的新目录中直接解压，两个入口的 `--version` 均退出零，
+未执行 chmod。Windows 11 的原生 Python 3.13 通过全部六项归档
+回归，解压后的两个入口也退出零。进程退出和日志摘要已核对。
+这组实验隔离验证归档元数据，程序载荷仍为 `52f4dde`，不替代新
+PCIe 代码的验收，也不证明 XP 已通过。证据见
+`build/windows-archive-acl-20261024/LOCAL-ACCEPTANCE.json`。
+
 ## NVML PCIe 链路和短窗口流量（2026-10-24）
 
 NVML 读取器增加五个可选查询入口，保留当前链路代数／宽度、

@@ -204,18 +204,10 @@ jobs:
       - name: Archive the complete development packages
         shell: pwsh
         run: |
-          @'
-          from pathlib import Path
-          import zipfile
-          root = Path('dist/windows-bundle')
-          with zipfile.ZipFile('dist/wtop-windows-x86.zip', 'w', zipfile.ZIP_DEFLATED, allowZip64=False) as archive:
-              for path in sorted(root.rglob('*')):
-                  if path.is_file():
-                      archive.write(path, path.relative_to(root).as_posix())
-          '@ | python -
+          python tests/test_windows_archive.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $hash = (Get-FileHash dist/wtop-windows-x86.zip -Algorithm SHA256).Hash.ToLower()
-          "$hash  wtop-windows-x86.zip" | Set-Content -Encoding ascii dist/wtop-windows-x86.zip.sha256
+          python tools/package_windows.py archive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

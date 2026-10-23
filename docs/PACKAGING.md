@@ -540,7 +540,12 @@ Windows 上保留该目录及项目的 `tools/`、`native/`、`tests/`、`VERSIO
 ```powershell
 python tools/package_windows.py dir --compiler C:\w64devkit\bin\gcc.exe
 python tools/package_windows.py file --compiler C:\w64devkit\bin\gcc.exe
+python tools/package_windows.py archive
 ```
+
+最后一步生成 `dist/wtop-windows-x86.zip` 及其 SHA-256 文件，保留隐藏
+载荷目录，并为 EXE／DLL 写入执行权限，使 Cygwin 解压后也能直接
+加载。归档现有目录时可用 `--source` 和 `--output` 指定输入与输出。
 
 单文件的内嵌载荷编译需要较大的构建进程地址空间。原版 w64devkit 1.23.0
 i686 的 `cc1.exe` 在当前项目上会耗尽 2 GiB；Windows CI 在核对官方压缩包
