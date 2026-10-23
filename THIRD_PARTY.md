@@ -5,12 +5,18 @@ it; the repository carries no other third-party runtime code.
 
 | Component | Version | License | Role |
 | --- | --- | --- | --- |
+| [LZ4](https://github.com/lz4/lz4/tree/v1.10.0/lib) | 1.10.0 | BSD-2-Clause © Yann Collet | Independent compressed measurement blocks; bundled in the native module without a host library dependency |
 | [PUC Lua](https://www.lua.org/) | 5.5.1 | MIT © 1994–2026 Lua.org, PUC-Rio | The runtime. Bundled with the onedir/onefile and platform development bundles; also embedded in the Linux hardware reader |
 | [NVIDIA NVML interface declarations](https://github.com/NVIDIA/go-nvml) | 13.4.92 | NVIDIA NVML header license | Runtime API declarations and SDK test excerpts; the NVIDIA implementation is loaded from the host |
 | [AMD SMI public interface declarations](https://github.com/ROCm/amdsmi) | ROCm 5.7.1–7.2.4 | MIT © Advanced Micro Devices, Inc. | Complete versioned ABI declarations; the vendor library is loaded from the host |
 | [Level Zero Sysman interface declarations](https://github.com/oneapi-src/level-zero) | 1.5.0–1.34.0 | MIT © 2019–2026 Intel Corporation | Complete ABI layouts and SDK test declarations; the implementation is loaded in the isolated reader |
 | [CTA VIC reference data from Linux DRM](https://github.com/torvalds/linux/blob/b8c60e8fc6f755c2cdf7164931afdbfa670c6646/drivers/gpu/drm/drm_edid.c) | `b8c60e8f` | MIT © Luc Verhaegen, Intel Corporation, Red Hat, Inc., Dennis Munsie | Reference format facts for cached CTA declarations |
 | [luainstaller](https://github.com/Water-Run/luainstaller/releases/tag/v1.5.0) | 1.5.0 | LGPL-3.0-or-later | Packaging tool; generated launchers and license notices ship in the onedir/onefile bundles |
+
+The LZ4 library sources retain their upstream notice under `native/vendor/lz4/`.
+The notice is embedded in the native module and shipped as `LZ4-BSD-2-Clause.txt`
+with platform packages, under `.luai/licenses/` in directory bundles and
+`doc/licenses/` for Linux LuaRocks installations.
 
 Throughout this file, a path in `backticks` is one the release actually
 contains. A path in quotes is being talked about, not shipped.

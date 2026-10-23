@@ -4695,11 +4695,19 @@ local HELP_SECTIONS = {
     },
 }
 
-local function help_lines(i18n, width, linux_host)
+local function help_lines(i18n, width, linux_host, replay)
     local title = i18n:t("app.title")
     local lines = {
         title ~= "app.title" and title or "wtop — system monitor",
     }
+    if replay then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = translated(i18n, "replay.title", "Replay")
+        lines[#lines + 1] = translated(i18n, "replay.controls",
+            "Space play/pause · Alt-Left/Right step · Alt-Home/End first/last · f speed")
+        lines[#lines + 1] = translated(i18n, "replay.no_live_reads",
+            "Live inspection and process actions are unavailable during replay")
+    end
     -- Two columns when the overlay is wide enough for them, one when it is not.
     local key_width = 0
     for _, group in ipairs(HELP_SECTIONS) do
@@ -5259,6 +5267,7 @@ local function utf8_next_offset(value, position)
 end
 
 local function make_inspectors(engine)
+    if engine.replay then return Inspectors.Registry.new() end
     local host = native.uname()
     if host and host.sysname == "Windows" and type(native.collect_disk_health) == "function" then
         local registry = Inspectors.Registry.new()
@@ -5526,11 +5535,11 @@ end
 
 local function run_loop(options, backend, renderer, engine, translator)
     local terminal_capabilities = backend.capabilities()
-    local host = native.uname()
+    local host = engine.replay and { sysname=engine.platform } or native.uname()
     local linux_host = host ~= nil and host.sysname == "Linux"
     local console_cells = terminal_capabilities.native_presentation
         and console_cells_function() or nil
-    local action_choices = host and host.sysname == "Windows"
+    local action_choices = engine.replay and {} or host and host.sysname == "Windows"
         and WINDOWS_ACTION_CHOICES or (host and host.sysname == "Darwin"
             and {} or SIGNAL_CHOICES)
     local default_orders = Workspace.default_orders()
@@ -5627,8 +5636,10 @@ local function run_loop(options, backend, renderer, engine, translator)
     local decoder = UI.Input.Decoder.new()
     local inspector_registry = make_inspectors(engine)
     local storage_overlay_builder
+    local journal_path = "/usr/bin/journalctl"
+    if not engine.replay then journal_path = system.find_executable("journalctl") or journal_path end
     local journal_reader = Journal.new({ runner = engine.context.runner, clock = engine.clock,
-        journalctl = system.find_executable("journalctl") or "/usr/bin/journalctl" })
+        journalctl = journal_path })
     local collector_capabilities = engine:probe()
     engine:tick_visible()
     local combined_capabilities = merge(collector_capabilities, {
@@ -5637,7 +5648,7 @@ local function run_loop(options, backend, renderer, engine, translator)
     local process_offset = 0
     local frequency_index = UpdateFrequency.nearest_index(engine.interval_ms or options.interval_ms or 1000)
         or UpdateFrequency.DEFAULT_INDEX
-    local paused = false
+    local paused = engine.paused == true
     local running = true
     local overlay
     local overlay_builder
@@ -5947,15 +5958,21 @@ local function run_loop(options, backend, renderer, engine, translator)
     end
 
     local function brand_label()
+        local brand = engine.replay and ("wtop [" .. translated(translator, "replay.title", "Replay") .. "]") or "wtop"
         local host = engine.snapshot.system and engine.snapshot.system.host
             and engine.snapshot.system.host.hostname
         if type(host) == "string" and host ~= "" then
-            return "wtop " .. host
+            return brand .. " " .. host
         end
-        return "wtop"
+        return brand
     end
 
     local function current_frequency_label()
+        if engine.replay then
+            return translated(translator, "replay.position", "{frame}/{total} @ {speed}x", {
+                frame=engine.frame_number, total=engine.reader.count, speed=tostring(engine.speed),
+            })
+        end
         local level = assert(UpdateFrequency.level(frequency_index))
         local level_name = translated(translator, level.label_id, level.fallback)
         return translated(translator, "sampling.update_frequency",
@@ -5963,6 +5980,7 @@ local function run_loop(options, backend, renderer, engine, translator)
     end
 
     local function cycle_frequency(delta)
+        if engine.replay then engine:cycle_speed(); dirty = true; return end
         frequency_index = assert(UpdateFrequency.cycle(frequency_index, delta or 1))
         local level = assert(UpdateFrequency.level(frequency_index))
         assert(engine:set_interval(level.interval_ms))
@@ -6013,7 +6031,7 @@ local function run_loop(options, backend, renderer, engine, translator)
         if is_thread then
             id = WorkloadNavigation.thread_target_id(process,
                 thread_target.thread, thread_target.detail, thread_selection)
-        elseif linux_host then
+        elseif linux_host and not engine.replay then
             id = ProcessCgroup.target_id(process)
         else
             id = WorkloadNavigation.target_id(process, kind)
@@ -6055,6 +6073,10 @@ local function run_loop(options, backend, renderer, engine, translator)
     end
 
     local function jump_to_network(process)
+        if engine.replay then
+            status_message = translated(translator, "replay.no_live_reads", "Live inspection is unavailable during replay")
+            return false
+        end
         if not process then
             status_message = translated(translator, "process.no_selection", "No process selected")
             return false
@@ -6409,13 +6431,18 @@ local function run_loop(options, backend, renderer, engine, translator)
     local function open_process_detail(resolve)
         process_detail = { resolve = resolve }
         local builder = function()
-            return process_detail_lines(process_with_io_detail(resolve()), translator, linux_host)
+            local process = resolve()
+            return process_detail_lines(engine.replay and process or process_with_io_detail(process), translator, linux_host)
         end
         process_detail.builder = builder
         show_overlay(builder, { process = true })
     end
 
     local function open_process_fds()
+        if engine.replay then
+            status_message = translated(translator, "replay.no_live_reads", "Live inspection is unavailable during replay")
+            return
+        end
         if not linux_host or not process_detail then return end
         local resolve = process_detail.resolve
         local process = resolve and resolve()
@@ -6440,6 +6467,10 @@ local function run_loop(options, backend, renderer, engine, translator)
     end
 
     local function open_connection_owner(connection, owner)
+        if engine.replay then
+            status_message = translated(translator, "replay.no_live_reads", "Live inspection is unavailable during replay")
+            return false
+        end
         if not linux_host then
             status_message = translated(translator, "network.owner_linux_only",
                 "Socket owner drill-down is available on Linux")
@@ -6767,6 +6798,11 @@ local function run_loop(options, backend, renderer, engine, translator)
     end
 
     local function open_inspector(inspector_id, title, empty_key, empty_fallback, extra_context)
+        if engine.replay then
+            show_overlay({ translated(translator, "replay.title", "Replay"), "",
+                translated(translator, "replay.no_live_reads", "Live inspection is unavailable during replay") })
+            return
+        end
         local context = inspector_context(engine)
         context = merge(context, extra_context)
         local entities, enumerate_error = inspector_registry:enumerate(inspector_id, context)
@@ -6959,6 +6995,7 @@ local function run_loop(options, backend, renderer, engine, translator)
     end
 
     local function render_frame()
+        if engine.replay then combined_capabilities = merge(engine.capabilities, { inspectors={} }) end
         if workload_jump_id and workspace:content_page() ~= "workloads" then
             workload_jump_id = nil
             workload_jump_prior_quality = nil
@@ -7244,11 +7281,12 @@ local function run_loop(options, backend, renderer, engine, translator)
             table.insert(status.hints, 1,
                 { key = "p", id = "power.title", fallback = "Power and limits", command = "power" })
         end
-        if not linux_host then
+        if not linux_host or engine.replay then
             -- The SMART, bandwidth, and sshd inspectors are Linux-only.
             local kept = {}
             for _, hint in ipairs(status.hints or {}) do
-                if (hint.command ~= "smart" or engine._storage_inspector) and hint.command ~= "bandwidth"
+                if (not engine.replay or (hint.command ~= "signal" and hint.command ~= "connection_owner"))
+                    and (hint.command ~= "smart" or engine._storage_inspector) and hint.command ~= "bandwidth"
                     and hint.command ~= "sshd" and hint.command ~= "systemd" and hint.command ~= "sessions" then
                     kept[#kept + 1] = hint
                 end
@@ -7298,6 +7336,14 @@ local function run_loop(options, backend, renderer, engine, translator)
                         tid = tostring(thread_selection.tid or "?"),
                     })
             status.warning = true
+        end
+        if engine.replay and not search_edit then
+            status.message = status_message or translated(translator, "replay.controls",
+                "Space play/pause · Alt-Left/Right step · Alt-Home/End first/last · f speed")
+            if engine.reader.truncated then
+                status.message = translated(translator, "replay.incomplete", "Interrupted recording: complete measurements only")
+                    .. " · " .. status.message
+            end
         end
         local grid, metadata = workspace:render(columns, rows, {
             capabilities = terminal_capabilities,
@@ -7400,6 +7446,14 @@ local function run_loop(options, backend, renderer, engine, translator)
         -- confirmation, search editor, or inspector overlay owns the input.
         if event.type == "key" and event.ctrl and event.key == "c" then
             running = false
+            return
+        end
+        if engine.replay and event.type == "key" and event.alt
+            and (event.key == "left" or event.key == "right" or event.key == "home" or event.key == "end") then
+            if event.key == "home" then engine:seek(1)
+            elseif event.key == "end" then engine:seek(engine.reader.count)
+            else engine:step(event.key == "left" and -1 or 1) end
+            paused, dirty, force = true, true, true
             return
         end
         if widget_picker then
@@ -9105,7 +9159,7 @@ local function run_loop(options, backend, renderer, engine, translator)
                 end
             end
             local threaded = node and node.cgroup_type == "threaded"
-            local thread_scan = threaded and node.threads and type(node.threads.tids) == "table"
+            local thread_scan = not engine.replay and threaded and node.threads and type(node.threads.tids) == "table"
                 and ThreadMembers.resolve(FS.default, node.id, node.threads.tids) or nil
             local members = threaded and thread_scan and thread_scan.pids
                 or node and node.processes and node.processes.pids or nil
@@ -9448,7 +9502,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             workspace:toggle_edit()
             dirty = true
         elseif key == "?" or key == "f1" then
-            show_overlay(help_lines(translator, columns, linux_host))
+            show_overlay(help_lines(translator, columns, linux_host and not engine.replay, engine.replay))
             dirty = true
         elseif key == "!" then
             show_overlay(function()
@@ -9475,7 +9529,10 @@ local function run_loop(options, backend, renderer, engine, translator)
             dirty = true
         elseif key == "k" and workspace:content_page() == "processes" then
             local process = selected_process()
-            if #action_choices == 0 then
+            if engine.replay then
+                status_message = translated(translator, "replay.no_live_reads",
+                    "Live inspection and process actions are unavailable during replay")
+            elseif #action_choices == 0 then
                 status_message = translated(translator, "process.actions_unavailable",
                     "Process actions are unavailable on this platform")
             elseif process then
@@ -9620,6 +9677,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             last_presented_ns = native.monotonic_ns()
         end
         local _, completed = engine:tick(false)
+        if engine.replay then paused = engine.paused end
         if engine._bandwidth_live and running
             and engine._bandwidth_live:poll(engine.context, engine.clock:now_ns()) then dirty = true end
         if next(completed) then
@@ -9632,7 +9690,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             local now = native.monotonic_ns()
             local interval_ns = (engine.interval_ms or options.interval_ms or 1000)
                 * 1000000
-            if input_activity or force or now - last_presented_ns >= interval_ns then
+            if input_activity or force or engine.replay or now - last_presented_ns >= interval_ns then
                 models = render_frame()
                 last_presented_ns = native.monotonic_ns()
             end
@@ -9737,10 +9795,13 @@ function M.run(options)
     local frequency_index = UpdateFrequency.nearest_index(options.interval_ms or 1000)
         or UpdateFrequency.DEFAULT_INDEX
     local initial_frequency = assert(UpdateFrequency.level(frequency_index))
-    local engine = Engine.new({
-        interval_ms = initial_frequency.interval_ms,
-        safe_mode = options.safe_mode,
-    })
+    local engine
+    if options.replay_path then
+        engine = require("wtop.replay").new(options.replay_path, { frame=options.replay_frame })
+        options.platform = engine.platform
+    else
+        engine = Engine.new({ interval_ms=initial_frequency.interval_ms, safe_mode=options.safe_mode })
+    end
     local started = false
     local ok, result = xpcall(function()
         local start_ok, start_error = backend.start({ color = options.color, mouse = options.mouse })

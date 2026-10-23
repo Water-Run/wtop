@@ -218,6 +218,75 @@ function M.stream(options)
     return 0
 end
 
+function M.record(options)
+    if not native.available or type(native.write) ~= "function" then
+        error("recording requires the native output transport", 2)
+    end
+    if native.isatty(1) then error("redirect recording output to a file: wtop --record > sample.wtop", 2) end
+    local resolved = resolve_options(options)
+    local engine = new_engine(resolved)
+    local writer
+    local ok, why = xpcall(function()
+        local host = assert(native.uname(), "recording platform is unavailable")
+        local capabilities = engine:probe()
+        local recorded_privilege = {}
+        for key, value in pairs(Export.privilege(resolved.privilege)) do recorded_privilege[key] = value end
+        writer = require("wtop.recording").writer({ write=native.write,
+            include_remote_addresses=options.include_remote_addresses,
+            max_bytes=(options.record_limit_mib or 256) * 1024 * 1024,
+            metadata={ platform=host.sysname, interval_ms=resolved.interval_ms,
+                version=require("wtop.version").version, revision=require("wtop.version").revision,
+                host=host, privilege=recorded_privilege, capabilities=capabilities } })
+        engine.context.scan_process_io_rate = true
+        engine.context.scan_routes = true
+        engine:tick(true)
+        local emitted = 0
+        while not options.stream_count or emitted < options.stream_count do
+            local slept, sleep_error = native.sleep_ms(resolved.interval_ms)
+            assert(slept, "recording delay failed: " .. tostring(sleep_error))
+            if emitted == 0 then engine.context.force_process_io_refresh = true end
+            local snapshot = engine:tick(false)
+            engine.context.force_process_io_refresh = false
+            local appended = writer:append(snapshot, engine.clock:now_ns(), engine.clock.wall_ns(), capabilities)
+            if not appended then
+                io.stderr:write("wtop: recording size or frame limit reached\n")
+                break
+            end
+            emitted = emitted + 1
+        end
+        writer:close()
+    end, debug.traceback)
+    engine:stop()
+    if not ok then error(why, 0) end
+    return 0
+end
+
+function M.replay(options)
+    local engine = require("wtop.replay").new(options.replay_path, { frame=options.replay_frame })
+    local ok, why = xpcall(function()
+        local header = engine.reader.header
+        local export_options = { host=header.host or { sysname=header.platform },
+            captured_unix_ns=engine.clock.wall_ns(), privilege=header.privilege,
+            capabilities=engine.capabilities, include_remote_addresses=options.include_remote_addresses,
+            process_limit=options.command == "report" and 0 or 50 }
+        local result = options.command == "agent" and Export.agent(engine.snapshot, export_options)
+            or Export.snapshot(engine.snapshot, export_options)
+        result.observation = { mode="recorded", frame=engine.frame_number, frames=engine.reader.count,
+            complete=engine.reader.complete, recorded_version=header.version, recorded_revision=header.revision }
+        if options.command == "report" then
+            local rendered = "> Recorded measurement: frame " .. engine.frame_number .. "/" .. engine.reader.count
+                .. ".\n\n" .. require("wtop.report").render(result)
+            local written, error_text = io.write(rendered)
+            assert(written, "replay report write failed: " .. tostring(error_text))
+        else
+            write_json(result)
+        end
+    end, debug.traceback)
+    engine:stop()
+    if not ok then error(why, 0) end
+    return 0
+end
+
 function M.agent(options)
     local collected, resolved = collect(options)
     local result = Export.agent(collected.snapshot, {
@@ -316,7 +385,10 @@ end
 
 function M.run(options)
     local Tui = require("wtop.tui")
-    return Tui.run(resolve_options(options))
+    local resolved = resolve_options(options)
+    resolved.replay_path = options and options.replay_path
+    resolved.replay_frame = options and options.replay_frame
+    return Tui.run(resolved)
 end
 
 M.resolve_options = resolve_options

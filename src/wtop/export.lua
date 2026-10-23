@@ -667,19 +667,7 @@ end
 local function export_connection_id(connection, include_remote_addresses)
     local id = connection and connection.id
     if include_remote_addresses or type(id) ~= "string" then return id end
-    local remote_address = connection.remote_address
-    if type(remote_address) ~= "string" or remote_address == "" then return id end
-    local masked = mask_remote_address(remote_address)
-    local remote_endpoint = connection.family == "ipv6"
-        and ("[" .. masked .. "]:" .. tostring(connection.remote_port or 0))
-        or (masked .. ":" .. tostring(connection.remote_port or 0))
-    local local_endpoint = connection.local_endpoint and connection.local_endpoint.text
-        or tostring(connection.local_address or "") .. ":" .. tostring(connection.local_port or 0)
-    local duplicate_suffix = id:match("(#%d+)$") or ""
-    return table.concat({
-        tostring(connection.table or connection.protocol or "inet"), "masked",
-        local_endpoint, remote_endpoint, tostring(connection.state_code or connection.state or ""),
-    }, ":") .. duplicate_suffix
+    return Privacy.masked_connection_id(connection)
 end
 
 local function export_connections(connections, limit, include_remote_addresses)
@@ -2267,7 +2255,7 @@ end
 function M.snapshot(snapshot, options)
     if type(snapshot) ~= "table" then snapshot = {} end
     if type(options) ~= "table" then options = {} end
-    local uname = native.uname()
+    local uname = type(options.host) == "table" and options.host or native.uname()
     local configuration = copy_fields(options.configuration, { "state", "reason" })
     return json.object({
         schema = "dev.waterrun.wtop.snapshot/v1",
@@ -2275,7 +2263,8 @@ function M.snapshot(snapshot, options)
         host = copy_object(uname or { sysname = "Linux" }),
         sequence = snapshot.sequence,
         captured_monotonic_ns = snapshot.timestamp_ns,
-        captured_unix_ns = native.realtime_ns(),
+        captured_unix_ns = (math.type(options.captured_unix_ns) == "integer" and options.captured_unix_ns >= 0)
+            and options.captured_unix_ns or native.realtime_ns(),
         configuration = configuration,
         privilege = M.privilege(options.privilege),
         quality = export_quality(snapshot.quality, snapshot.timestamp_ns),
@@ -2399,6 +2388,8 @@ function M.agent(snapshot, options)
         workload_limit = workload_limit,
         configuration = options.configuration,
         privilege = options.privilege,
+        host = options.host,
+        captured_unix_ns = options.captured_unix_ns,
     })
     local frequency_total, frequency_weight, frequency_source = 0, 0, nil
     local frequency_estimated, frequency_incomplete = false, false

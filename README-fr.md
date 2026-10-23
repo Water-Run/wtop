@@ -16,10 +16,14 @@ jusqu'à une simple fenêtre `cmd.exe` sans couleur.
 wtop                # moniteur interactif
 wtop --snapshot     # un instantané JSON, pour les scripts
 wtop --stream --count 60 > samples.jsonl  # 60 instantanés JSON
+wtop --record --count 60 > samples.wtop  # enregistrer les mesures complètes
+wtop --replay samples.wtop              # les consulter hors ligne
 wtop --report       # résumé matériel Markdown en anglais
 wtop --memory-bandwidth  # bande passante mémoire en JSON, à la demande (Linux)
 wtop --diagnose     # ce que wtop peut lire sur cette machine
 ```
+
+Les enregistrements conservent les heures de mesure d’origine. Pendant la relecture, Espace lance ou suspend, Alt-Gauche/Droite avance d’une mesure, Alt-Début/Fin rejoint la première ou la dernière, et `f` change la vitesse. Les inspections en direct et les actions sur les processus sont désactivées.
 
 ## Systèmes pris en charge
 
@@ -154,11 +158,15 @@ unique dans `dist/macos-bundle/`.
 |---|---|
 | `--snapshot` | Affiche un instantané JSON puis quitte |
 | `--stream` | Émet des instantanés JSON ligne par ligne jusqu'à l'interruption |
-| `--count N` | Avec `--stream`, s'arrête après N instantanés |
+| `--record` | Écrit un enregistrement sur la sortie standard redirigée |
+| `--replay FILE` | Relit un enregistrement hors ligne ; accepte aussi `--snapshot`, `--agent` et `--report` |
+| `--replay-frame N` | Avec `--replay`, commence à la mesure N |
+| `--record-limit-mib N` | Limite de taille, 256 MiB par défaut |
+| `--count N` | Avec `--stream` ou `--record`, s’arrête après N mesures |
 | `--report` | Affiche un résumé matériel Markdown en anglais |
 | `--memory-bandwidth` | Mesure une fois la bande passante mémoire en JSON (Linux ; accès à perf requis) |
 | `--memory-pmu NAME` | Avec `--memory-bandwidth`, choisit un PMU ou les liste avec `list` |
-| `--unmask-remote-addresses` | Avec `--snapshot` ou `--stream` : exporte les adresses de socket distantes complètes |
+| `--unmask-remote-addresses` | Avec `--snapshot`, `--stream` ou `--record` : conserve les adresses de socket distantes complètes |
 | `--agent` | JSON compact pour les scripts et les agents LLM |
 | `--diagnose` | Indique quelles sources de données fonctionnent ici |
 | `--lang LOCALE` | Langue de l'interface, par ex. `fr-FR`, `zh-CN`, `ru-RU` |

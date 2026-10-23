@@ -8,6 +8,11 @@ _meta:
   catalog_version: 1
 
 messages:
+  replay.title: "재생"
+  replay.position: "{frame}/{total} @ {speed}x"
+  replay.controls: "스페이스 재생/일시정지 · Alt-왼쪽/오른쪽 한 프레임 · Alt-Home/End 처음/끝 · f 속도"
+  replay.incomplete: "기록 중단: 완전한 측정만 재생"
+  replay.no_live_reads: "재생 중에는 실시간 검사와 프로세스 작업을 실행할 수 없습니다"
   typec.data_role: "보고된 데이터 역할"
   typec.data_roles: "사용 가능한 데이터 역할"
   typec.power_role: "보고된 전원 역할"

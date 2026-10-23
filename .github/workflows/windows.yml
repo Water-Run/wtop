@@ -191,6 +191,8 @@ jobs:
           foreach ($exe in 'dist/windows-bundle/wtop/wtop.exe', 'dist/windows-bundle/wtop-onefile.exe') {
             python tests/installed_smoke.py --executable $exe --version $version --platform Windows
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            python tests/test_recording_replay.py --executable $exe
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             python tests/windows_console_smoke.py --executable $exe --harness build/console_harness.exe
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }

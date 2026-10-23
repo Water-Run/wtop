@@ -800,6 +800,8 @@ static int l_collect_system_info(lua_State *L) {
     return 1;
 }
 
+#include "wtop_recording.h"
+
 static const luaL_Reg functions[] = {
     {"terminal_start", l_terminal_start},
     {"terminal_stop", l_terminal_stop},
@@ -820,6 +822,9 @@ static const luaL_Reg functions[] = {
     {"path_type", l_path_type},
     {"mkdir", l_mkdir},
     {"atomic_write", l_atomic_write},
+    {"recording_open", l_recording_open},
+    {"recording_compress", l_recording_compress},
+    {"recording_decompress", l_recording_decompress},
     {"wcwidth", l_wcwidth},
     {"collect_cpu", wtop_collect_cpu},
     {"collect_cpu_info", wtop_collect_cpu_info},

@@ -109,6 +109,7 @@ NATIVE_HEADERS += native/wtop_linux_perf.h
 NATIVE_HEADERS += native/wtop_fs_errors.h
 NATIVE_HEADERS += native/wtop_worker_image_cache.h
 NATIVE_HEADERS += native/wtop_windows_display_mode.h
+NATIVE_HEADERS += native/wtop_recording.h native/wtop_recording_license.h native/vendor/lz4/lz4.c native/vendor/lz4/lz4.h native/licenses/LZ4-BSD-2-Clause.txt
 NATIVE_REVISION_HEADER := $(NATIVE_DIR)/build_revision.h
 NATIVE_VERSION_HEADER := $(NATIVE_DIR)/build_version.h
 LUA_PATH_DEV := $(CURDIR)/src/?.lua;$(CURDIR)/src/?/init.lua;;
@@ -161,7 +162,7 @@ CFLAGS_NATIVE += -std=c17 -fPIC -Wall -Wextra -Werror
 .NOTPARALLEL: all native locales check test test-all test-fast test-54 test-55 test-pty test-pty-quick test-luarocks \
 	benchmark-check \
 	toolchain luainstaller luarocks-bootstrap luarocks-install bundle-dir bundle-file \
-	test-bundle-dir test-bundle-file test-rootless-onefile test-release-notices check-native-warnings \
+	test-bundle-dir test-bundle-file test-rootless-onefile test-release-notices check-native-warnings test-recording-replay \
 	release-archive test-release-archive test-downloaded-archive sanitize-native test-sanitized
 
 .PHONY: all resource-check resource-check-full resource-check-benchmark toolchain luainstaller native locales check test test-all test-fast \
@@ -559,7 +560,12 @@ test-native-gpu-worker-sanitized: sanitize-native $(LUA_STAMP)
 		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' \
 		--output build/native-gpu-worker-san --native-only
 
-check: resource-check native locales test-native-terminal-signals test-native-cpu-limits test-native-io-oom test-native-nvme-health test-native-wifi test-native-drm-modes test-native-usb-endpoints test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid test-native-process-status test-native-perf-counts test-native-tui-input test-native-directory-hints test-native-worker-images
+.PHONY: test-recording-replay
+test-recording-replay: native locales
+	@python3 tests/test_recording_replay.py --lua '$(LUA)'
+	@python3 tests/test_recording_replay_tty.py --lua '$(LUA)' --guard
+
+check: resource-check native locales test-recording-replay test-native-terminal-signals test-native-cpu-limits test-native-io-oom test-native-nvme-health test-native-wifi test-native-drm-modes test-native-usb-endpoints test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid test-native-process-status test-native-perf-counts test-native-tui-input test-native-directory-hints test-native-worker-images
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAC) -p $$(find src tools tests -type f -name '*.lua' -print)
 	@sh -n tools/*.sh
 	@python3 -c 'import pathlib; [compile(path.read_bytes(), str(path), "exec") for path in pathlib.Path("tests").rglob("*.py")]'
@@ -818,6 +824,7 @@ bundle-dir: build-id native locales luainstaller
 	@cp native/licenses/NVML-NVIDIA.txt dist/wtop/.luai/licenses/NVML-NVIDIA.txt
 	@cp native/licenses/Level-Zero-MIT.txt dist/wtop/.luai/licenses/Level-Zero-MIT.txt
 	@cp native/licenses/DRM-EDID-MIT.txt dist/wtop/.luai/licenses/DRM-EDID-MIT.txt
+	@cp native/licenses/LZ4-BSD-2-Clause.txt dist/wtop/.luai/licenses/LZ4-BSD-2-Clause.txt
 	@find dist/wtop -type d -exec chmod 0755 {} +
 	@find dist/wtop -type f -exec chmod a+r {} +
 	@chmod 0755 dist/wtop/wtop
@@ -855,7 +862,7 @@ test-bundle-file: resource-check-full bundle-file
 # not the other.
 test-release-notices: resource-check-full sbom checksums
 	@for required in $(RELEASE_LICENCE) THIRD_PARTY_NOTICES.md \
-		.luai/licenses/Lua-MIT.txt .luai/licenses/AMD-SMI-MIT.txt .luai/licenses/NVML-NVIDIA.txt .luai/licenses/Level-Zero-MIT.txt .luai/licenses/DRM-EDID-MIT.txt .luai/licenses/LGPL-3.0-or-later.txt; do \
+		.luai/licenses/Lua-MIT.txt .luai/licenses/AMD-SMI-MIT.txt .luai/licenses/NVML-NVIDIA.txt .luai/licenses/Level-Zero-MIT.txt .luai/licenses/DRM-EDID-MIT.txt .luai/licenses/LZ4-BSD-2-Clause.txt .luai/licenses/LGPL-3.0-or-later.txt; do \
 		test -f "dist/wtop/$$required" || { \
 			echo "wtop: the onedir bundle does not carry $$required, and the"; \
 			echo "     release is documented as being distributed under terms"; \
@@ -978,11 +985,13 @@ bundle-file: native
 test-bundle-dir: bundle-dir
 	@python3 tests/installed_smoke.py --executable dist/macos-bundle/wtop/wtop \
 		--version "$$(cat VERSION)" --platform Darwin
+	@python3 tests/test_recording_replay.py --executable dist/macos-bundle/wtop/wtop
 	@WTOP_EXECUTABLE='$(CURDIR)/dist/macos-bundle/wtop/wtop' WTOP_ROOT='$(CURDIR)' \
 		WTOP_PTY_PROFILE=quick python3 tests/pty_smoke.py
 test-bundle-file: bundle-file
 	@python3 tests/installed_smoke.py --executable dist/macos-bundle/wtop-onefile \
 		--version "$$(cat VERSION)" --platform Darwin
+	@python3 tests/test_recording_replay.py --executable dist/macos-bundle/wtop-onefile
 	@WTOP_EXECUTABLE='$(CURDIR)/dist/macos-bundle/wtop-onefile' WTOP_ROOT='$(CURDIR)' \
 		WTOP_PTY_PROFILE=quick python3 tests/pty_smoke.py
 

@@ -8,6 +8,11 @@ _meta:
   catalog_version: 1
 
 messages:
+  replay.title: "Воспроизведение"
+  replay.position: "{frame}/{total} @ {speed}x"
+  replay.controls: "Пробел пуск/пауза · Alt-Влево/Вправо кадр · Alt-Home/End первый/последний · f скорость"
+  replay.incomplete: "Запись прервана: только полные измерения"
+  replay.no_live_reads: "Проверки в реальном времени и действия с процессами недоступны при воспроизведении"
   typec.data_role: "Заявленная роль данных"
   typec.data_roles: "Доступные роли данных"
   typec.power_role: "Заявленная роль питания"

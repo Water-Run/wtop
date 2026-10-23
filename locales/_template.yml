@@ -8,6 +8,11 @@ _meta:
   catalog_version: 1
 
 messages:
+  replay.title: "Replay"
+  replay.position: "{frame}/{total} @ {speed}x"
+  replay.controls: "Space play/pause · Alt-Left/Right step · Alt-Home/End first/last · f speed"
+  replay.incomplete: "Interrupted recording: complete measurements only"
+  replay.no_live_reads: "Live inspection and process actions are unavailable during replay"
   typec.data_role: "Reported data role"
   typec.data_roles: "Available data roles"
   typec.power_role: "Reported power role"

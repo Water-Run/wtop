@@ -289,6 +289,7 @@ ATA 原始属性没有通用温度单位，也不据此合成健康通过/失败
 
 ```bash
 wtop --snapshot
+wtop --replay samples.wtop --replay-frame 2 --agent
 ```
 
 它返回 `dev.waterrun.wtop.snapshot/v1`,包含额外的采集器字段和更长的列表。除 `--agent` 所汇总的资源外,快照还携带 `system`(主机名、内核、发行版、固件、虚拟化、安全模块、内核限制与计数器、Swap 设备、时区)和 `power_supplies`(电池的电量、相对设计容量的健康度与剩余续航,以及市电适配器)。网络接口额外携带其 IPv4/IPv6 `addresses` 和原始 `counters`。
@@ -355,3 +356,8 @@ Linux 的 `backend=drm-sysfs` 继续提供缓存连接器与 EDID；可用时另
 `refresh_kind=nominal` 的刷新率；内核的整数近似值单列为
 `approx_refresh_hz`。未指定的时序不补成零 Hz；旧模式保留原时间并标记
 stale。桌面缩放、平面旋转、实测刷新、输出色深和 HDR 不由这些字段推断。
+
+离线 `--agent` 回放保留录制主机与当时的时间。可选 `observation` 对象的
+`mode` 为 `recorded`，并给出 `frame`、`frames` 和 `complete`；版本／修订
+字段说明记录的产生版本。实时 Agent 输出不带此对象。回放不启动采集器，
+也不从回放主机补充未记录的指标。

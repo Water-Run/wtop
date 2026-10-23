@@ -30,4 +30,19 @@ function M.masked_endpoint_text(endpoint)
     return masked .. ":" .. tostring(endpoint.port)
 end
 
+function M.masked_connection_id(connection)
+    local id = connection and connection.id
+    local address = connection and connection.remote_address
+    if type(id) ~= "string" or type(address) ~= "string" or address == "" then return id end
+    local masked = M.mask_address(address)
+    local remote = connection.family == "ipv6"
+        and ("[" .. masked .. "]:" .. tostring(connection.remote_port or 0))
+        or (masked .. ":" .. tostring(connection.remote_port or 0))
+    local local_endpoint = connection.local_endpoint and connection.local_endpoint.text
+        or tostring(connection.local_address or "") .. ":" .. tostring(connection.local_port or 0)
+    return table.concat({ tostring(connection.table or connection.protocol or "inet"), "masked",
+        local_endpoint, remote, tostring(connection.state_code or connection.state or "") }, ":")
+        .. (id:match("(#%d+)$") or "")
+end
+
 return M

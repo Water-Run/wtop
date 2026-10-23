@@ -2190,6 +2190,8 @@ int wtop_windows_hardware_open(lua_State *L);
 int wtop_windows_hardware_query(lua_State *L);
 int wtop_windows_hardware_close(lua_State *L);
 
+#include "wtop_recording.h"
+
 static const luaL_Reg functions[] = {
     {"gpu_worker_open", wtop_windows_gpu_open},
     {"gpu_worker_query", wtop_windows_gpu_query},
@@ -2223,6 +2225,9 @@ static const luaL_Reg functions[] = {
     {"path_type", l_path_type},
     {"mkdir", l_mkdir},
     {"atomic_write", l_atomic_write},
+    {"recording_open", l_recording_open},
+    {"recording_compress", l_recording_compress},
+    {"recording_decompress", l_recording_decompress},
     {"wcwidth", l_wcwidth},
     {"console_cells", l_console_cells},
     {"user_locale", l_user_locale},

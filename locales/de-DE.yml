@@ -8,6 +8,11 @@ _meta:
   catalog_version: 1
 
 messages:
+  replay.title: "Wiedergabe"
+  replay.position: "{frame}/{total} @ {speed}x"
+  replay.controls: "Leertaste Start/Pause · Alt-Links/Rechts Schritt · Alt-Pos1/Ende Anfang/Ende · f Tempo"
+  replay.incomplete: "Aufzeichnung unterbrochen: nur vollständige Messungen"
+  replay.no_live_reads: "Live-Prüfungen und Prozessaktionen sind bei der Wiedergabe nicht verfügbar"
   typec.data_role: "Gemeldete Datenrolle"
   typec.data_roles: "Verfügbare Datenrollen"
   typec.power_role: "Gemeldete Stromrolle"

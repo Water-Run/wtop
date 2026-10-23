@@ -34,7 +34,9 @@ LUA_PATH="$project_dir/src/?.lua;$project_dir/src/?/init.lua;;" \
 LUA_CPATH="$project_dir/dist/macos/?.so;;" "$@" -- --version
 cp "$project_dir/LICENSE" "$output_root/LICENSE"
 cp "$project_dir/native/licenses/DRM-EDID-MIT.txt" "$output_root/DRM-EDID-MIT.txt"
+cp "$project_dir/native/licenses/LZ4-BSD-2-Clause.txt" "$output_root/LZ4-BSD-2-Clause.txt"
 if [ "$kind" = dir ]; then
     cp "$project_dir/native/licenses/DRM-EDID-MIT.txt" "$output/.luai/licenses/DRM-EDID-MIT.txt"
+    cp "$project_dir/native/licenses/LZ4-BSD-2-Clause.txt" "$output/.luai/licenses/LZ4-BSD-2-Clause.txt"
 fi
 if [ "$kind" = dir ]; then cp "$project_dir/LICENSE" "$output/LICENSE"; fi

@@ -8,6 +8,11 @@ _meta:
   catalog_version: 1
 
 messages:
+  replay.title: "Reprodução"
+  replay.position: "{frame}/{total} @ {speed}x"
+  replay.controls: "Espaço reproduzir/pausar · Alt-Esq/Dir passo · Alt-Home/End primeiro/último · f velocidade"
+  replay.incomplete: "Gravação interrompida: apenas medições completas"
+  replay.no_live_reads: "Inspeções ao vivo e ações em processos ficam indisponíveis durante a reprodução"
   typec.data_role: "Papel de dados informado"
   typec.data_roles: "Papéis de dados disponíveis"
   typec.power_role: "Papel de energia informado"

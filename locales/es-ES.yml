@@ -8,6 +8,11 @@ _meta:
   catalog_version: 1
 
 messages:
+  replay.title: "Reproducción"
+  replay.position: "{frame}/{total} @ {speed}x"
+  replay.controls: "Espacio reproducir/pausar · Alt-Izq/Der paso · Alt-Inicio/Fin primero/último · f velocidad"
+  replay.incomplete: "Grabación interrumpida: solo mediciones completas"
+  replay.no_live_reads: "Las inspecciones en vivo y acciones sobre procesos no están disponibles durante la reproducción"
   typec.data_role: "Rol de datos indicado"
   typec.data_roles: "Roles de datos disponibles"
   typec.power_role: "Rol de alimentación indicado"

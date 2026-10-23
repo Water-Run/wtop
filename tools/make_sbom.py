@@ -110,6 +110,8 @@ LICENCE_TEXTS = (
      "the complete Level Zero Sysman public interface declarations"),
     ("MIT-DRM-EDID", ".luai/licenses/DRM-EDID-MIT.txt",
      "the CTA VIC reference facts adapted from Linux drm_edid.c"),
+    ("BSD-2-Clause-LZ4", ".luai/licenses/LZ4-BSD-2-Clause.txt",
+     "the bundled LZ4 recording compression library"),
     ("LGPL-3.0-or-later", ".luai/licenses/LGPL-3.0-or-later.txt",
      "the packaging tool the generated launcher derives from"),
 )
@@ -341,6 +343,10 @@ def main() -> int:
                   "runtime inside both artifacts instead."
                   + notice_sentence(licences["MIT"]),
                   properties=licence_properties(licences["MIT"])),
+        component("lz4@1.10.0", "lz4", "1.10.0", "BSD-2-Clause",
+                  "LZ4 block compression bundled in the native module for measurement recordings."
+                  + notice_sentence(licences["BSD-2-Clause-LZ4"]),
+                  properties=licence_properties(licences["BSD-2-Clause-LZ4"])),
         component("luainstaller@%s" % LUAINSTALLER_VERSION, "luainstaller",
                   LUAINSTALLER_VERSION, "LGPL-3.0-or-later",
                   "Build-time packaging tool; not present in the produced "
@@ -368,7 +374,8 @@ def main() -> int:
         "components": components,
         "dependencies": [
             {"ref": launcher_ref, "dependsOn": [module_ref, lua_ref, "cta-vic-reference@b8c60e8f"]},
-            {"ref": module_ref, "dependsOn": ["amd-smi-abi@ROCm-5.7.1-7.2.4", "nvml-interface@13.4.92", "level-zero-abi@1.5.0-1.34.0"]},
+            {"ref": module_ref, "dependsOn": ["amd-smi-abi@ROCm-5.7.1-7.2.4", "nvml-interface@13.4.92", "level-zero-abi@1.5.0-1.34.0", "lz4@1.10.0"]},
+            {"ref": "lz4@1.10.0", "dependsOn": []},
             {"ref": "amd-smi-abi@ROCm-5.7.1-7.2.4", "dependsOn": []},
             {"ref": "nvml-interface@13.4.92", "dependsOn": []},
             {"ref": "level-zero-abi@1.5.0-1.34.0", "dependsOn": []},

@@ -8,6 +8,11 @@ _meta:
   catalog_version: 1
 
 messages:
+  replay.title: "回放"
+  replay.position: "{frame}/{total} 幀 @ {speed}x"
+  replay.controls: "空白鍵播放／暫停 · Alt-左／右逐幀 · Alt-Home／End 首／末幀 · f 倍速"
+  replay.incomplete: "記錄已中斷：只回放完整測量"
+  replay.no_live_reads: "回放期間不執行即時檢查或程序操作"
   typec.data_role: "回報的資料角色"
   typec.data_roles: "可用資料角色"
   typec.power_role: "回報的電源角色"

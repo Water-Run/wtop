@@ -86,6 +86,7 @@ local LICENCES = {
     { path = ".luai/licenses/NVML-NVIDIA.txt", bytes = "NVIDIA interface fixture\n" },
     { path = ".luai/licenses/Level-Zero-MIT.txt", bytes = "Level Zero interface MIT fixture\n" },
     { path = ".luai/licenses/DRM-EDID-MIT.txt", bytes = "DRM EDID reference data MIT fixture\n" },
+    { path = ".luai/licenses/LZ4-BSD-2-Clause.txt", bytes = "LZ4 BSD-2-Clause fixture\n" },
     { path = ".luai/licenses/LGPL-3.0-or-later.txt",
       bytes = "LGPL-3.0-or-later fixture text\n" },
 }
@@ -538,6 +539,15 @@ assert(amd_report:find("AMD-SMI-MIT.txt", 1, true), "the missing AMD notice is n
 assert(properties_of("cta_vic_reference", "path") == ".luai/licenses/DRM-EDID-MIT.txt")
 assert(properties_of("cta_vic_reference", "sha256")
     == sha256(fixture .. "/bundle/.luai/licenses/DRM-EDID-MIT.txt"))
+assert(properties_of("lz4", "path") == ".luai/licenses/LZ4-BSD-2-Clause.txt")
+assert(properties_of("lz4", "sha256") == sha256(fixture .. "/bundle/.luai/licenses/LZ4-BSD-2-Clause.txt"))
+local missing_lz4 = fixture .. "/missing-lz4"
+os.execute("cp -a " .. fixture .. "/bundle " .. missing_lz4)
+assert(os.remove(missing_lz4 .. "/.luai/licenses/LZ4-BSD-2-Clause.txt"))
+local lz4_report = refuses("a release without the LZ4 notice",
+    "python3 tools/make_sbom.py --onedir " .. missing_lz4
+        .. " --onefile " .. fixture .. "/wtop-onefile --output " .. fixture .. "/missing-lz4.json")
+assert(lz4_report:find("LZ4-BSD-2-Clause.txt", 1, true))
 local missing_cta = fixture .. "/missing-cta"
 os.execute("cp -a " .. fixture .. "/bundle " .. missing_cta)
 assert(os.remove(missing_cta .. "/.luai/licenses/DRM-EDID-MIT.txt"))

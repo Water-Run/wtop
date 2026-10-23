@@ -8,6 +8,11 @@ _meta:
   catalog_version: 1
 
 messages:
+  replay.title: "Relecture"
+  replay.position: "{frame}/{total} @ {speed}x"
+  replay.controls: "Espace lecture/pause · Alt-Gauche/Droite pas · Alt-Début/Fin premier/dernier · f vitesse"
+  replay.incomplete: "Enregistrement interrompu : mesures complètes uniquement"
+  replay.no_live_reads: "Les inspections en direct et les actions sur les processus sont indisponibles pendant la relecture"
   typec.data_role: "Rôle de données rapporté"
   typec.data_roles: "Rôles de données disponibles"
   typec.power_role: "Rôle électrique rapporté"

@@ -8,6 +8,11 @@ _meta:
   catalog_version: 1
 
 messages:
+  replay.title: "再生"
+  replay.position: "{frame}/{total} @ {speed}x"
+  replay.controls: "空白 再生／一時停止 · Alt-左／右 コマ送り · Alt-Home／End 最初／最後 · f 速度"
+  replay.incomplete: "記録が中断：完全な測定のみ再生"
+  replay.no_live_reads: "再生中はライブ検査とプロセス操作を実行できません"
   typec.data_role: "報告されたデータ役割"
   typec.data_roles: "利用可能なデータ役割"
   typec.power_role: "報告された電源役割"

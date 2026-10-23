@@ -2338,6 +2338,8 @@ static int l_wcwidth(lua_State *L) {
 #ifdef WTOP_HARDWARE_WORKER
 int wtop_linux_read_cpuid(lua_State *L);
 #endif
+#include "wtop_recording.h"
+
 static const luaL_Reg functions[] = {
 #ifdef WTOP_HARDWARE_WORKER
     {"read_cpuid", wtop_linux_read_cpuid},
@@ -2357,6 +2359,9 @@ static const luaL_Reg functions[] = {
     {"access", l_access},
     {"mkdir", l_mkdir},
     {"atomic_write", l_atomic_write},
+    {"recording_open", l_recording_open},
+    {"recording_compress", l_recording_compress},
+    {"recording_decompress", l_recording_decompress},
     {"listdir", l_listdir},
     {"listdir_hints", l_listdir_hints},
     {"readfile", l_readfile},

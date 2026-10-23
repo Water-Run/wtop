@@ -20,12 +20,17 @@ Options:
       --diagnose         Print capability diagnostics and exit
       --snapshot         Print one machine-readable snapshot and exit
       --stream           Print snapshots as JSON Lines until stopped
-      --count N          With --stream: stop after N records (1..1000000)
+      --record           Write a replay recording to redirected stdout
+      --replay FILE      Open a recording in the offline interactive viewer
+      --replay-frame N   Start at frame N; also works with --snapshot/--agent/--report
+      --record-limit-mib N
+                         With --record: size limit (1..16384, default 256 MiB)
+      --count N          With --stream or --record: stop after N records (1..1000000)
       --report           Print a readable hardware report in Markdown
       --memory-bandwidth Print one on-demand memory bandwidth measurement as JSON
       --memory-pmu NAME  With --memory-bandwidth: select a PMU, or list available PMUs
       --unmask-remote-addresses
-                         With --snapshot or --stream: export full remote socket addresses
+                         With --snapshot, --stream or --record: keep full remote socket addresses
       --agent            Print compact LLM/agent context JSON and exit
       --sudo             Restart through sudo on Linux
       --elevate          Alias for --sudo
@@ -95,6 +100,31 @@ function M.parse(argv)
         elseif item == "--stream" then
             local ok, command_error = select_command("stream", item)
             if not ok then return nil, command_error end
+        elseif item == "--record" then
+            local ok, command_error = select_command("record", item)
+            if not ok then return nil, command_error end
+        elseif item == "--replay" then
+            if options.replay_path ~= nil then return nil, "--replay cannot be repeated" end
+            local value, next_index, parse_error = option_value(argv, index, item)
+            if parse_error then return nil, parse_error end
+            if value == "" or value:find("\0", 1, true) then return nil, "invalid recording path" end
+            options.replay_path, index = value, next_index
+        elseif item == "--replay-frame" then
+            if options.replay_frame ~= nil then return nil, "--replay-frame cannot be repeated" end
+            local value, next_index, parse_error = option_value(argv, index, item)
+            if parse_error then return nil, parse_error end
+            local n = value:match("^%d+$") and tonumber(value)
+            if not n or n % 1 ~= 0 or n < 1 or n > 1000000 then return nil, "--replay-frame must be an integer from 1 to 1000000" end
+            options.replay_frame, index = n, next_index
+        elseif item == "--record-limit-mib" then
+            if options.record_limit_mib ~= nil then return nil, "--record-limit-mib cannot be repeated" end
+            local value, next_index, parse_error = option_value(argv, index, item)
+            if parse_error then return nil, parse_error end
+            local n = value:match("^%d+$") and tonumber(value)
+            if not n or n % 1 ~= 0 or n < 1 or n > 16384 then
+                return nil, "--record-limit-mib must be an integer from 1 to 16384"
+            end
+            options.record_limit_mib, index = n, next_index
         elseif item == "--count" then
             if options.stream_count ~= nil then return nil, "--count cannot be repeated" end
             local value, next_index, parse_error = option_value(argv, index, item)
@@ -192,12 +222,19 @@ function M.parse(argv)
         index = index + 1
     end
     if options.include_remote_addresses
-        and options.command ~= "snapshot" and options.command ~= "stream" then
-        return nil, "--unmask-remote-addresses requires --snapshot or --stream"
+        and options.command ~= "snapshot" and options.command ~= "stream" and options.command ~= "record" then
+        return nil, "--unmask-remote-addresses requires --snapshot, --stream or --record"
     end
-    if options.stream_count and options.command ~= "stream" then
-        return nil, "--count requires --stream"
+    if options.stream_count and options.command ~= "stream" and options.command ~= "record" then
+        return nil, "--count requires --stream or --record"
     end
+    if options.record_limit_mib and options.command ~= "record" then return nil, "--record-limit-mib requires --record" end
+    if options.replay_path then
+        if options.elevate then return nil, "--replay does not use elevation" end
+        if not ({ tui=true, snapshot=true, agent=true, report=true })[options.command] then
+            return nil, "--replay supports interactive mode, --snapshot, --agent or --report"
+        end
+    elseif options.replay_frame then return nil, "--replay-frame requires --replay" end
     if options.memory_pmu and options.command ~= "memory_bandwidth" then
         return nil, "--memory-pmu requires --memory-bandwidth"
     end
@@ -318,12 +355,16 @@ function M.run(argv, dependencies)
         end
         io.write("\n")
         return 0
+    elseif options.replay_path and options.command ~= "tui" then
+        return require("wtop.application").replay(options)
     elseif options.command == "diagnose" then
         return run_diagnose(options)
     elseif options.command == "snapshot" then
         return run_snapshot(options)
     elseif options.command == "stream" then
         return run_stream(options)
+    elseif options.command == "record" then
+        return require("wtop.application").record(options)
     elseif options.command == "report" then
         return run_report(options)
     elseif options.command == "memory_bandwidth" then

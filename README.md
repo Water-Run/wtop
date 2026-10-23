@@ -15,10 +15,14 @@ no color at all.
 wtop                # interactive monitor
 wtop --snapshot     # one JSON snapshot, for scripts
 wtop --stream --count 60 > samples.jsonl  # 60 JSON snapshots
+wtop --record --count 60 > samples.wtop  # record full measurements
+wtop --replay samples.wtop              # inspect them offline
 wtop --report       # English hardware summary in Markdown
 wtop --memory-bandwidth  # on-demand memory bandwidth as JSON (Linux)
 wtop --diagnose     # what wtop can see on this machine
 ```
+
+Recordings retain the original measurement times. In replay, Space plays or pauses, Alt-Left/Right steps, Alt-Home/End jumps to the first or last frame, and `f` changes speed. Live inspection and process actions are disabled.
 
 ## Where it runs
 
@@ -148,11 +152,15 @@ in `dist/macos-bundle/`.
 |---|---|
 | `--snapshot` | Print one JSON snapshot and exit |
 | `--stream` | Print snapshots as JSON Lines until interrupted |
-| `--count N` | With `--stream`, stop after N snapshots |
+| `--record` | Write a replay recording to redirected stdout |
+| `--replay FILE` | Open a recording offline; also supports `--snapshot`, `--agent` and `--report` |
+| `--replay-frame N` | With `--replay`, start at frame N |
+| `--record-limit-mib N` | Recording size limit, default 256 MiB |
+| `--count N` | With `--stream` or `--record`, stop after N measurements |
 | `--report` | Print an English hardware summary in Markdown |
 | `--memory-bandwidth` | Measure memory bandwidth once as JSON (Linux; requires perf access) |
 | `--memory-pmu NAME` | Select a PMU, or use `list` to list PMUs, with `--memory-bandwidth` |
-| `--unmask-remote-addresses` | With `--snapshot` or `--stream`: export full remote socket addresses |
+| `--unmask-remote-addresses` | With `--snapshot`, `--stream` or `--record`: keep full remote socket addresses |
 | `--agent` | Print compact JSON context for scripts and LLM agents |
 | `--diagnose` | Show which data sources work on this machine |
 | `--lang LOCALE` | Interface language, e.g. `zh-CN`, `fr-FR`, `ru-RU` |

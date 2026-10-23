@@ -1,0 +1,19 @@
+{
+  "upstream": "https://github.com/lz4/lz4",
+  "tag": "v1.10.0",
+  "license": "BSD-2-Clause",
+  "files": {
+    "lz4.c": {
+      "url": "https://raw.githubusercontent.com/lz4/lz4/v1.10.0/lib/lz4.c",
+      "sha256": "9396f7de527bc8435de9c7569fb7998e56545a84b4f3c2d808c0235c01774539"
+    },
+    "lz4.h": {
+      "url": "https://raw.githubusercontent.com/lz4/lz4/v1.10.0/lib/lz4.h",
+      "sha256": "26b82efc53d1570f3b54eef02e9c4764c1ad374ff03cac04e2ced5ea4d4c552f"
+    },
+    "LICENSE": {
+      "url": "https://raw.githubusercontent.com/lz4/lz4/v1.10.0/lib/LICENSE",
+      "sha256": "8b58c446121a109ccf32edc094bba3010a3d85e4ee3702950db55e4d3e87736c"
+    }
+  }
+}
