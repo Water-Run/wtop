@@ -26,8 +26,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build the XP-targeted Lua and native module
         run: |
+          # The hosted mirror has repeatedly exhausted this job before compilation.
+          # Keep signed Ubuntu packages while avoiding that mirror and unused POSIX toolchains.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt
+          fi
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686 binutils-mingw-w64-i686 gcc-mingw-w64-x86-64
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-i686-win32 binutils-mingw-w64-i686 gcc-mingw-w64-x86-64-win32
           ./tools/build_windows_x86.sh
           mkdir ci-inputs
           i686-w64-mingw32-gcc -std=c17 -O2 -Wall -Wextra -Werror -static-libgcc \
