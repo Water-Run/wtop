@@ -20,6 +20,11 @@ Server 2008 接续的 24 项 32／64 位读取器用例通过；后者最初因
 证据，不是实体 NVIDIA 精度验证。完整新提交的 CI 尚待验收。
 证据见 `build/gpu-pcie-20261024/`。
 
+原生状态解码提交 `70b8d48` 的十九项跨平台 CI 已全部成功；
+全新 i686 的 173 文件、旧内核虚拟机及日志摘要也已核对。观察
+任务实际退出零。证据见 `build/native-status-ci-20261024/CI-ACCEPTANCE.json`
+与 `build/process-status-native-20261024/CI-70-I686-ACCEPTANCE.json`。
+
 Linux 进程状态增加原生直接解码：UID、RSS、上下文切换、PID 命名
 空间链与 CPU／NUMA 允许范围经过有界校验，异常或不支持的输入
 继续走原有缩减器／Lua 解析。每次状态读取后的身份复核保留，不引入

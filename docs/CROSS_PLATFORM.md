@@ -78,6 +78,12 @@ Windows 数据来自独立 SDK 夹具，不能证明实体 NVIDIA 流量精度�
 
 ## Linux 原生进程状态解码（2026-10-24）
 
+`70b8d48` 的十九项跨平台 CI 已全部成功，包含独立下载包验收。
+全新 i686 工具执行完 173 个 Lua 文件与旧内核虚拟机门，状态和
+日志摘要一致；观察任务实际退出零。证据见
+`build/native-status-ci-20261024/CI-ACCEPTANCE.json` 与
+`build/process-status-native-20261024/CI-70-I686-ACCEPTANCE.json`。
+
 普通进程状态现在可直接解码为 UID、RSS、上下文切换、命名空间链
 与 CPU／NUMA 允许范围。输入仍限 256 KiB，键清单和链／范围校验
 有界；重复未知键、异常格式或越界输入交回既有 Lua 解析，保留
