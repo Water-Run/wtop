@@ -214,16 +214,21 @@ $(LUAI_STAMP): tools/bootstrap_luainstaller.sh tools/luainstaller-1.5.0.sha256 $
 # VERSION is a prerequisite and not an afterthought: the script writes the
 # revision header whether or not the version changed, so depending on it alone
 # would leave a version bump rebuilding nothing.
-$(NATIVE_REVISION_HEADER): tools/write_build_id.sh VERSION
+.PHONY: force-build-identity
+force-build-identity:
+
+# Git refs and dirty state can change without touching a source dependency.
+# The generator preserves timestamps when the identity is unchanged.
+$(NATIVE_REVISION_HEADER): tools/write_build_id.sh VERSION force-build-identity
 	@mkdir -p $(NATIVE_DIR)
-	@./tools/write_build_id.sh
+	@./tools/write_build_id.sh --refresh
 
 # Written by the same invocation, immediately after the revision header, so it is
 # never the older of the two.  The recipe re-runs the generator if it is missing
 # rather than failing: the header is an output, and an output that was deleted
 # should be rebuilt, not diagnosed.
 $(NATIVE_VERSION_HEADER): $(NATIVE_REVISION_HEADER)
-	@test -f $@ || ./tools/write_build_id.sh
+	@test -f $@ || ./tools/write_build_id.sh --refresh
 
 $(GPU_WORKER): $(GPU_WORKER_INPUTS) Makefile
 	@mkdir -p $(NATIVE_DIR)
@@ -232,7 +237,7 @@ $(GPU_WORKER): $(GPU_WORKER_INPUTS) Makefile
 $(GPU_WORKER_HEADER): $(GPU_WORKER) tools/embed_gpu_worker.sh
 	@sh tools/embed_gpu_worker.sh $(GPU_WORKER) $@
 
-$(HARDWARE_LUA_HEADER): tools/embed_hardware_lua.lua $(HARDWARE_LUA_INPUTS) $(LUA_STAMP)
+$(HARDWARE_LUA_HEADER): $(NATIVE_REVISION_HEADER) tools/embed_hardware_lua.lua $(HARDWARE_LUA_INPUTS) $(LUA_STAMP)
 	@mkdir -p $(NATIVE_DIR)
 	@$(LUA) tools/embed_hardware_lua.lua $@.tmp
 	@mv $@.tmp $@
@@ -560,14 +565,17 @@ test-native-gpu-worker-sanitized: sanitize-native $(LUA_STAMP)
 		--cflags='$(SANITIZER_CFLAGS)' --module '$(SANITIZED_MODULE)' \
 		--output build/native-gpu-worker-san --native-only
 
-.PHONY: test-recording-replay
+.PHONY: test-build-identity test-recording-replay
+test-build-identity: resource-check
+	@python3 tests/test_build_identity_refresh.py
+
 test-recording-replay: native locales
 	@python3 tests/test_recording_replay.py --lua '$(LUA)'
 	@python3 tests/test_recording_replay_tty.py --lua '$(LUA)' --guard
 	@python3 tests/test_health_tty.py --lua '$(LUA)' --guard
 	@python3 tests/test_runtime_pm_tty.py --lua '$(LUA)' --guard
 
-check: resource-check native locales test-recording-replay test-native-terminal-signals test-native-cpu-limits test-native-io-oom test-native-nvme-health test-native-wifi test-native-drm-modes test-native-usb-endpoints test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid test-native-process-status test-native-perf-counts test-native-tui-input test-native-directory-hints test-native-worker-images
+check: resource-check native locales test-build-identity test-recording-replay test-native-terminal-signals test-native-cpu-limits test-native-io-oom test-native-nvme-health test-native-wifi test-native-drm-modes test-native-usb-endpoints test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid test-native-process-status test-native-perf-counts test-native-tui-input test-native-directory-hints test-native-worker-images
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAC) -p $$(find src tools tests -type f -name '*.lua' -print)
 	@sh -n tools/*.sh
 	@python3 -c 'import pathlib; [compile(path.read_bytes(), str(path), "exec") for path in pathlib.Path("tests").rglob("*.py")]'

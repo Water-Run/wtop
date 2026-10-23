@@ -62,6 +62,18 @@ assert(constants.build_revision == build_id.revision,
         .. " while the Lua tree reports " .. build_id.revision
         .. "; one of the two halves is stale")
 
+local git_metadata = io.open(".git", "rb")
+if git_metadata then
+    git_metadata:close()
+    local expected, status = run("git describe --always --dirty --tags")
+    if status == 0 then
+        expected = expected:gsub("%s+$", "")
+        assert(constants.build_revision == expected,
+            "matching Lua/native identities are stale: built " .. constants.build_revision
+                .. ", current checkout " .. expected .. "; run make native")
+    end
+end
+
 -- The generated header is what makes the two comparable, so it has to say the
 -- same thing the Lua module does.  Reading it directly catches the case where
 -- the header was regenerated after the module was compiled, which the two
