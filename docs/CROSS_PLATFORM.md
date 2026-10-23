@@ -55,8 +55,17 @@ Agent 与报告。五类源／受电 PDO 按各自单位读取，保留电压、
 遗漏，已修正，原始记录保留。最终完整原生检查、169 个 Lua 5.5
 文件和完整终端矩阵通过；四种 CLI／四帧流输出、三种中英／ASCII
 终端导航及实际阻塞期间的进程操作／退出／回收通过。本机两次真实
-端口 ENASCII／中文详情及明确 PD 往返导航通过。新提交的 CI 与精确包
-跨平台验收尚未完成。
+端口 ENASCII／中文详情及明确 PD 往返导航通过。提交 `9dfd303` 的
+十八项 CI、四平台归档的摘要／载荷／部署基线和执行日志已核对。
+Lua 5.5／5.4／ARM 各 169 文件、消毒器子集 168 文件通过。两种 Linux
+包通过十六项标准命令、八帧软件档位流输出、六次中英／ASCII 终端、
+两次实际阻塞读取期间的操作／退出／回收与四组通用终端，另有四次
+本机真实端口到 PD 的往返导航。三台实机各六个共享文件、四十八项
+原生命令、M4 四次终端及 Windows 四次经典控制台通过。macOS／Windows
+尚无原生 Type-C 来源，清单为空不代表物理端口不存在。十九个已记录
+本地进程身份均已消失。活动合约与实体 PDO 正向读取仍未验证；真实 XP、
+资源预算、完整厂商覆盖与正式跨平台发行继续开放。最终审计见同目录
+`FINAL-ACCEPTANCE.json`。
 字段依据 [Type-C ABI](https://github.com/torvalds/linux/blob/master/Documentation/ABI/testing/sysfs-class-typec)
 和 [PD ABI](https://github.com/torvalds/linux/blob/master/Documentation/ABI/testing/sysfs-class-usb_power_delivery)。
 证据见 `build/typec-pd-20261023/`。
