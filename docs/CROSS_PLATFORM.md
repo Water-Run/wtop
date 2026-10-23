@@ -60,8 +60,19 @@ Linux 设备清单增加只读运行时 PM 状态、内核 PCI D 状态、累计
 本机实测的四个 D3cold 假许可完整保留，采集前后观察到的策略一致，
 一个 D3cold 设备仍保持该状态。系统调用跟踪中 875 次 sysfs／设备
 路径打开均没有写标志；这只证明本次观察，不证明功率精度或整体预算。
-私有实测记录脚本的采样间隔参数错误已修正，初始日志保留。CI 与
-最终包验收尚在进行。
+私有实测记录脚本的采样间隔参数错误已修正，初始日志保留。
+
+`52f4dde` 的主 CI 16 项与 Windows 两项全部成功，四份归档均来自
+同一提交。Lua 5.5／5.4／ARM 各 173 文件及 ASan／UBSan 172 文件
+执行日志核对通过；三台主机各六个共享源码文件通过。Linux 两种包的
+16 条标准 CLI、M4／Win11／Server 2008 两种包的 48 条标准 CLI，
+以及合计 56 条新字段 Snapshot／Agent／报告命令通过。Linux 与 M4
+各八次新字段终端、两个 Windows 主机共四次经典电源管理控制台通过，
+保留原 Linux 记录的 D0／运行时暂停、D3cold、假许可、64 位计数与
+过期语义。旧录制回放、健康视图、通用交互与归档的摘要、负载、系统
+版本要求和许可证检查也通过。最终审计退出零，十八个已知本地进程
+身份均已退出。完整硬件覆盖、测量精度、整体资源预算、真实 XP 与
+正式跨平台发行尚未完成。
 
 接口依据：[内核运行时 PM ABI](https://raw.githubusercontent.com/torvalds/linux/master/Documentation/ABI/testing/sysfs-devices-power)、
 [PCI ABI](https://raw.githubusercontent.com/torvalds/linux/master/Documentation/ABI/testing/sysfs-bus-pci)。
