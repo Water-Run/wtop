@@ -4142,6 +4142,11 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
     elseif device.speed_mbps then
         add("inventory.link", "Link", format_value(device.speed_mbps, i18n) .. " Mb/s")
     end
+    if node.bus == "pci" or node.bus == "usb" then
+        require("wtop.ui.runtime_pm").append(device.runtime_pm,
+            snapshot.quality and snapshot.quality.inventory, now_ns or snapshot.timestamp_ns,
+            add, lines, i18n)
+    end
     if node.bus == "block" then
         local identity = type(device.identity) == "table" and device.identity or {}
         add("inventory.identifier", "ID", node.resource_id)

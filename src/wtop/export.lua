@@ -10,6 +10,7 @@ local PowerSession = require("wtop.model.power_session")
 local GPUPowerSession = require("wtop.model.gpu_power_session")
 local SensorPower = require("wtop.model.sensor_power")
 local FanControl = require("wtop.model.fan_control")
+local RuntimePM = require("wtop.model.runtime_pm")
 local SupplyInput = require("wtop.model.supply_input")
 local TypeC = require("wtop.model.typec")
 local CPULimits = require("wtop.model.cpu_limits")
@@ -2142,8 +2143,15 @@ local function export_inventory(snapshot)
         "parent_address", "parent_bus", "source", "driver", "numa_node", "link_speed_gtps",
         "link_width", "max_link_speed_gtps", "max_link_width", "iommu_group_id",
     }, 256)
+    local function power(device)
+        local row = RuntimePM.public(device.runtime_pm,
+            snapshot.quality and snapshot.quality.inventory, snapshot.timestamp_ns)
+        if row then row.errors = json.object(row.errors) end
+        return row
+    end
     for index, device in ipairs(pci.devices or {}) do
         if index > 256 then break end
+        pci_devices[index].runtime_pm = power(device)
         pci_devices[index].aer = export_pci_aer(device.aer)
         pci_devices[index].msi = export_pci_msi(device.msi)
         if type(device.sriov) == "table" then
@@ -2152,6 +2160,14 @@ local function export_inventory(snapshot)
                 "physical_function_address",
             })
         end
+    end
+    local usb_devices = devices(usb.devices, {
+        "id", "bus", "device", "vendor_id", "product_id", "manufacturer", "product",
+        "parent_id", "parent_bus", "source", "driver", "speed_mbps",
+    }, 128)
+    for index, device in ipairs(usb.devices or {}) do
+        if index > 128 then break end
+        usb_devices[index].runtime_pm = power(device)
     end
     local iommu_groups = json.array({})
     for index, group in ipairs(pci.iommu_groups or {}) do
@@ -2228,11 +2244,7 @@ local function export_inventory(snapshot)
             truncated = pci.truncated,
         }),
         usb = json.object({
-            devices = devices(usb.devices, {
-                "id", "bus", "device", "vendor_id", "product_id",
-                "manufacturer", "product",
-                "parent_id", "parent_bus", "source", "driver", "speed_mbps",
-            }, 128),
+            devices = usb_devices,
             interfaces = usb_interfaces,
             total = usb_device_total_known and usb.total or nil,
             interface_total = usb_interface_total_known and usb.interface_total or nil,
@@ -2767,6 +2779,17 @@ function M.agent(snapshot, options)
     if usb_metric.interface_total_known and finite_number(usb_inventory.interface_total) and usb_inventory.interface_total >= 0 then
         usb_metric.interfaces_total = usb_inventory.interface_total
     end
+    local device_power = RuntimePM.summary(full.inventory, full.quality and full.quality.inventory,
+        snapshot and snapshot.timestamp_ns, device_limit)
+    local top_device_power
+    if device_power then
+        top_device_power = json.array(device_power.devices)
+        for _, row in ipairs(top_device_power) do row.errors = json.object(row.errors) end
+        device_power.devices = nil
+        device_power.runtime_status_counts = json.object(device_power.runtime_status_counts)
+        device_power.pci_state_counts = json.object(device_power.pci_state_counts)
+        device_power = json.object(device_power)
+    end
     return json.object({
         schema = "dev.waterrun.wtop.agent/v1",
         producer = full.producer,
@@ -2827,6 +2850,7 @@ function M.agent(snapshot, options)
                 swap_used_percent = swap_used_percent,
             }),
             usb = usb_metric,
+            device_power = device_power,
             pressure = pressure_metrics,
             storage = json.object({
                 read_bytes_per_second = sum_field(disk_devices, "read_bytes_per_second"),
@@ -2947,6 +2971,7 @@ function M.agent(snapshot, options)
             interfaces = top_interfaces,
             wifi = top_wifi,
             usb_interfaces = top_usb_interfaces,
+            device_power = top_device_power,
             workloads = top_workloads,
             gpus = gpu_summaries,
             sensors = top_temperatures,

@@ -565,6 +565,7 @@ test-recording-replay: native locales
 	@python3 tests/test_recording_replay.py --lua '$(LUA)'
 	@python3 tests/test_recording_replay_tty.py --lua '$(LUA)' --guard
 	@python3 tests/test_health_tty.py --lua '$(LUA)' --guard
+	@python3 tests/test_runtime_pm_tty.py --lua '$(LUA)' --guard
 
 check: resource-check native locales test-recording-replay test-native-terminal-signals test-native-cpu-limits test-native-io-oom test-native-nvme-health test-native-wifi test-native-drm-modes test-native-usb-endpoints test-native-amdsmi test-native-levelzero test-native-nvml test-native-nvml-worker test-native-gpu-worker test-native-hardware-worker test-native-drm-worker test-native-cpu-clocks test-native-cpuid test-native-process-status test-native-perf-counts test-native-tui-input test-native-directory-hints test-native-worker-images
 	LUA_PATH='$(LUA_PATH_DEV)' LUA_CPATH='$(LUA_CPATH_DEV)' $(LUAC) -p $$(find src tools tests -type f -name '*.lua' -print)

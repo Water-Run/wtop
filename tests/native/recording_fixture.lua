@@ -48,6 +48,21 @@ for n = 1, 3 do
             snapshot.quality.cpu.value_timestamp_ns=1000000000
         end
     end
+    if arg[2] == "runtime-pm" then
+        local observed = math.min(n,2)*1000000000
+        local pm = {status="ok",source="/sys/bus/pci/devices/0000:00:02.0",runtime_status="suspended",
+            pci_state=n==1 and"D0"or"D3cold",control="auto",active_time_ms=4294967297,
+            suspended_time_ms=17000+math.min(n,2)*1000,autosuspend_delay_ms=-1,d3cold_allowed=n~=1,
+            capture_started_ns=observed-1000000,capture_finished_ns=observed,observed_at_ns=observed,errors={}}
+        snapshot.inventory={pci={devices={{address="0000:00:02.0",vendor_id=0x8086,device_id=0x1234,
+            class_id=0x030000,revision=1,vendor_name="Recorded PCI",device_name="PM demo",runtime_pm=pm}}},
+            usb={devices={{id="1-2",vendor_id=0x8087,product_id=0x26,bus=1,device=3,product="USB PM demo",
+                runtime_pm={status="ok",source="/sys/bus/usb/devices/1-2",runtime_status="active",control="on",
+                    active_time_ms=24000,suspended_time_ms=0,capture_started_ns=observed-1000000,
+                    capture_finished_ns=observed,observed_at_ns=observed,errors={}}}}}}
+        snapshot.quality.inventory={status=n==3 and"error"or"ok",quality=n==3 and"stale"or"fresh",
+            timestamp_ns=snapshot.timestamp_ns,value_timestamp_ns=observed}
+    end
     writer:append(snapshot, snapshot.timestamp_ns, 1700000000000000000 + snapshot.timestamp_ns)
 end
 writer:close(); assert(file:close())

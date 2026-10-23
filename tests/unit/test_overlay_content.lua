@@ -259,7 +259,12 @@ local function build(i18n, name)
     return TUI.hardware_detail_lines({ inventory = { pci = { devices = {
       { address = "0000:01:00.0", vendor_name = LONG, device_name = LONG,
         driver = LONG, source = LONG, numa_node = 0, link_speed_gtps = 16,
-        link_width = 8, max_link_speed_gtps = 32, max_link_width = 16 },
+        link_width = 8, max_link_speed_gtps = 32, max_link_width = 16,
+        runtime_pm = { status="partial", source=LONG, runtime_status="suspended", pci_state="D0",
+          control="auto", active_time_ms=123456789, suspended_time_ms=987654321,
+          autosuspend_delay_ms=-1, d3cold_allowed=false, state_changed=true,
+          capture_started_ns=900000000, capture_finished_ns=1000000000,
+          observed_at_ns=1000000000, errors={capture="gap", autosuspend_delay_ms="unavailable"} } },
     } } } }, "pci:0000:01:00.0", i18n, 1000000000)
   elseif name == "route_detail_lines" then
     return TUI.route_detail_lines({ network = { routes = {

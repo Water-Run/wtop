@@ -8,6 +8,7 @@ local Common = require("wtop.collectors.common")
 local PciNames = require("wtop.linux.pci_names")
 local Parsers = require("wtop.linux.parsers")
 local UsbEndpoints = require("wtop.format.usb_endpoints")
+local RuntimePM = require("wtop.collectors.runtime_pm")
 
 local Inventory = {}
 Inventory.__index = Inventory
@@ -281,7 +282,7 @@ local function read_aer(fs, path)
   return aer
 end
 
-local function read_pci_device(self, fs, base, address, msi_budget, affinity_budget)
+local function read_pci_device(self, fs, base, address, msi_budget, affinity_budget, context)
   local path = base .. "/" .. address
   local vendor_id = hex_id(fs, path .. "/vendor")
   if not vendor_id then return nil end
@@ -310,6 +311,14 @@ local function read_pci_device(self, fs, base, address, msi_budget, affinity_bud
     msi = read_msi(fs, path, msi_budget, affinity_budget),
     sriov = read_sriov(fs, path),
     aer = read_aer(fs, path),
+    runtime_pm = RuntimePM.read(fs, path, context, true, function()
+      return device_id ~= nil
+        and hex_id(fs, path .. "/vendor") == vendor_id
+        and hex_id(fs, path .. "/device") == device_id
+        and hex_id(fs, path .. "/class") == class_id
+        and hex_id(fs, path .. "/revision") == revision
+        and link(fs, path) == target
+    end),
   }
 end
 
@@ -465,13 +474,14 @@ local function attach_msi_counts(fs, devices, previous_pci, previous, context)
   end
 end
 
-local function read_usb_device(fs, base, name)
+local function read_usb_device(fs, base, name, context)
   local path = base .. "/" .. name
   local vendor_id = hex_id(fs, path .. "/idVendor")
   if not vendor_id then return nil end
   local product_id = hex_id(fs, path .. "/idProduct")
   local bus = decimal(fs, path .. "/busnum")
   local number = decimal(fs, path .. "/devnum")
+  local target = link(fs, path)
   return {
     id = Common.safe_text(name, 64),
     bus = bus,
@@ -481,9 +491,17 @@ local function read_usb_device(fs, base, name)
     manufacturer = text(fs, path .. "/manufacturer"),
     product = text(fs, path .. "/product"),
     source = path,
-    parent_id = parent(link(fs, path), name),
+    parent_id = parent(target, name),
     driver = driver(fs, path),
     speed_mbps = speed(fs, path .. "/speed"),
+    runtime_pm = RuntimePM.read(fs, path, context, false, function()
+      return product_id ~= nil
+        and hex_id(fs, path .. "/idVendor") == vendor_id
+        and hex_id(fs, path .. "/idProduct") == product_id
+        and decimal(fs, path .. "/busnum") == bus
+        and decimal(fs, path .. "/devnum") == number
+        and link(fs, path) == target
+    end),
   }
 end
 
@@ -621,7 +639,7 @@ function Inventory:sample(context, previous)
         break
       end
       local device = read_pci_device(self, fs, self.pci_base, address,
-        msi_budget, affinity_budget)
+        msi_budget, affinity_budget, context)
       if device then pci_devices[#pci_devices + 1] = device else pci_unreadable = true end
     end
   end
@@ -642,7 +660,7 @@ function Inventory:sample(context, previous)
       end
       if type(name) == "string" and (name:match("^usb%d+$")
           or name:match("^%d+%-%d+[%.%d]*$")) then
-        local device = read_usb_device(fs, self.usb_base, name)
+        local device = read_usb_device(fs, self.usb_base, name, context)
         if device then
           usb_total = usb_total + 1
           if #usb_devices >= MAX_USB_DEVICES then

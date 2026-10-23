@@ -1057,6 +1057,27 @@ function M.render(snapshot)
         usb.devices, function(device)
             return { device.id, device.manufacturer, device.product, device.driver }
         end, usb)
+    local device_power = {}
+    for _, bus in ipairs({ "pci", "usb" }) do
+        for _, device in ipairs(list(object(inventory[bus]).devices)) do
+            if type(device.runtime_pm) == "table" then
+                device_power[#device_power + 1] = { id=bus .. ":" .. tostring(device.address or device.id),
+                    power=device.runtime_pm }
+            end
+        end
+    end
+    if #device_power > 0 then
+        table_section(lines, "Device power management",
+            { "Device", "Runtime PM", "Kernel PCI state", "Policy", "Active ms", "Suspended ms",
+              "Autosuspend ms", "D3cold allowed", "Quality" }, device_power, function(row)
+                local power = row.power
+                return { row.id, power.runtime_status, power.pci_state, power.control,
+                    power.active_time_ms, power.suspended_time_ms, power.autosuspend_delay_ms,
+                    power.d3cold_allowed, power.quality }
+            end)
+        lines[#lines + 1] = "Runtime PM, kernel PCI state and policy are separate reports. Times are cumulative kernel accounting, not utilization or power. States were observed during the inventory scan."
+        lines[#lines + 1] = ""
+    end
     table_section(lines, "USB interfaces", { "ID", "Interface", "Class", "Driver" },
         usb.interfaces, function(interface)
             return { interface.id, interface.interface, interface.class_id,

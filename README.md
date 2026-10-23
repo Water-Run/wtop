@@ -63,6 +63,7 @@ build target but hasn't been tested on a real XP machine yet.
 - Display details include cached CTA video, audio, color and HDR/VRR declarations when available. These describe capabilities, not the current signal.
 - Linux development builds show the kernel's configured output mode and nominal refresh separately from cached monitor specifications.
 - macOS development builds show online displays, current mode dimensions and nominal refresh rates in System.
+- Linux development builds show PCI/USB runtime power states, kernel PCI power states and cumulative activity times in device details.
 - On x86 Linux, development builds show CPUID capabilities alongside the kernel’s CPU topology and cache reports.
 - Windows development builds can use Intel Sysman for GPU power, reported caps, clocks and throttling reasons.
 - Supported AMD Windows drivers can provide chip power, temperature, clocks and fan speed through ADL.
