@@ -287,6 +287,8 @@ local NOT_RELEASE_EVIDENCE = {
     -- Host-specific performance verdict, not a universal release document;
     -- no target-machine budget has been fixed for test-all yet.
     "check_perf_budget.py",
+    -- Isolated ELF32 development checks, not a shipped release document.
+    "check_linux_i686.py",
     "check_windows_x86.py", "embed_cpuid_helpers.py", "embed_gpu_worker.sh",
     "check_macos.py",
     "check_resources.sh",
@@ -931,8 +933,15 @@ local function resolved_outputs(makefile_text, invocation)
                 else
                     from = name .. "=" .. path .. " on the command line"
                 end
+                local overridden = path ~= variable_of(makefile_text, name)
+                -- This target's output is an isolated build directory. Its
+                -- verdict is status.json; publishing the SDK/tree would turn
+                -- a development check into an unintended binary artifact.
+                if target == "check-linux-i686" and name == "I686_OUTPUT" then
+                    path = path:gsub("/+$", "") .. "/status.json"
+                end
                 resolved[name] = { path = path, from = from,
-                                   via_override = path ~= variable_of(makefile_text, name) }
+                                   via_override = overridden }
             end
         end
         for _, entry in pairs(resolved) do

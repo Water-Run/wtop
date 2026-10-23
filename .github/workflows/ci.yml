@@ -33,6 +33,27 @@ env:
   WTOP_SKIP_RESOURCE_CHECK: "1"
 
 jobs:
+  linux-i686:
+    name: Linux i686 development runtime
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the multilib development toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-multilib libc6-dev-i386
+      - name: Build and execute the isolated ELF32 checks
+        run: make check-linux-i686 I686_OUTPUT=build/linux-i686
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-i686-development-evidence
+          path: |
+            build/linux-i686/status.json
+            build/linux-i686/*.log
+          if-no-files-found: warn
+
   macos-bundles:
     name: macOS arm64 bundles
     runs-on: macos-15
