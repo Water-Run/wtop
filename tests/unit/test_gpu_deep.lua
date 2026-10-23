@@ -904,4 +904,61 @@ assert(not nameless_device.partial and next(nameless_device.issues) == nil,
   "an absent optional attribute is not a read that failed")
 gpu_reason_is(nameless, "a gpu sample whose device identity was composed")
 
+-- OS device capabilities and NVML device/system maxima are distinct sources.
+do
+  local View = require("wtop.view_model")
+  local PCIe = require("wtop.model.gpu_pcie")
+  local TUI = require("wtop.tui")
+  local Export = require("wtop.export")
+  local Report = require("wtop.report")
+  local en = assert(require("wtop.i18n").new({locale="en-US"}))
+  local device = {id="os-pcie",card="card0",source="/sys/class/drm/card0",
+    identity_quality="fresh",pci={current_link_speed="8.0 GT/s PCIe",current_link_width=4,
+      maximum_link_speed="16.0 GT/s PCIe",maximum_link_width=16},metrics={},
+    observations={drm={source="drm",quality="fresh",observed_at_ns=1000000000}}}
+  local snapshot = {timestamp_ns=2000000000,gpus={devices={device}},
+    quality={gpus={status="ok",quality="fresh"}}}
+  local row = View.gpu_pcie_rows(snapshot,en)[1]
+  assert(row.system_current=="8.0 GT/s PCIe x4", "OS link missing from GPU PCIe inspector")
+  assert(row.system_maximum=="16.0 GT/s PCIe x16" and row.system_age_ns==1000000000)
+  assert(row.available and not row.driver_available and row.current=="—")
+  assert(table.concat(TUI.gpu_pcie_lines(snapshot,en),"\n"):find("OS device capability: 16.0 GT/s PCIe x16",1,true))
+  assert(Report.render(Export.snapshot(snapshot)):find("GPU OS PCIe links",1,true))
+  assert(Export.agent(snapshot).top.gpus[1].pci.current_link_width==4)
+  device.metrics={pcie_current_generation=3,pcie_current_width=8,pcie_maximum_generation=4,
+    pcie_maximum_width=8,pcie_source="nvml",pcie_tx_kilobytes_per_second=0}
+  device.quality={pcie="fresh"}
+  device.observations.drm.retained=true
+  row=View.gpu_pcie_rows(snapshot,en)[1]
+  assert(row.system_current:find(en:t("status.stale"),1,true) and row.current=="Gen3 x8" and row.maximum=="Gen4 x8")
+  assert(row.tx=="0 KB/s", "retained OS link invalidated fresh NVML traffic")
+  local system=PCIe.system(snapshot,device)
+  assert(system.quality=="stale" and system.current_width==4)
+  device.observations.drm.retained=false
+  for _,quality in ipairs({"gap","reset","held","missing","denied","error","unavailable"}) do
+    device.observations.drm.quality=quality
+    assert(PCIe.system(snapshot,device).quality==quality)
+  end
+  device.observations.drm.quality="fresh"
+  snapshot.timestamp_ns=9007199254740994;device.observations.drm.observed_at_ns=9007199254740993
+  assert(PCIe.system(snapshot,device).age_ns==1)
+  snapshot.timestamp_ns=2e9;device.observations.drm.observed_at_ns=3e9
+  assert(PCIe.system(snapshot,device).quality=="gap")
+  device.observations.drm.observed_at_ns=1e9;snapshot.timestamp_ns=17e9
+  assert(PCIe.system(snapshot,device).quality=="stale")
+  snapshot.timestamp_ns=2e9;snapshot.quality.gpus={status="error",quality="stale"}
+  assert(PCIe.system(snapshot,device).quality=="stale")
+  snapshot.quality.gpus={status="ok",quality="fresh"};device.identity_quality="stale"
+  assert(PCIe.system(snapshot,device).quality=="stale")
+  device.identity_quality="fresh";device.observations=nil
+  assert(PCIe.system(snapshot,device).quality=="unknown", "legacy OS link acquired invented freshness")
+  for _,value in ipairs({"Unknown","N/A","",string.rep("s",257),"8 GT/s\nforged"}) do
+    device.pci.current_link_speed=value;device.pci.current_link_width=255
+    system=PCIe.system(snapshot,device)
+    assert(system.current_speed==nil and system.current_width==nil)
+  end
+  device.pci={current_link_width=0,maximum_link_width=0/0}
+  assert(PCIe.system(snapshot,device)==nil)
+end
+
 return true

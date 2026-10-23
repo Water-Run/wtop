@@ -46,14 +46,20 @@ def main():
             body = result.stdout.split(b"\nREPLAY_NO_LIVE_READS_PASSED")[0]
             if mode == "report":
                 assert b"GPU PCIe links" in body and b"12345 (" + (b"fresh" if frame == 1 else b"stale") + b")" in body
+                assert b"GPU OS PCIe links" in body and b"5.0 GT/s PCIe" in body and b"16.0 GT/s PCIe" in body
             else:
                 document = json.loads(body)
                 gpu = document["gpus"]["devices"][0] if mode == "snapshot" else document["top"]["gpus"][0]
                 assert gpu["metrics"]["pcie_tx_kilobytes_per_second"] == 12345
                 assert gpu["metrics"]["pcie_rx_kilobytes_per_second"] == 0
                 assert gpu["metrics"]["pcie_current_generation"] == 3 and gpu["metrics"]["pcie_maximum_width"] == 16
+                assert gpu["pci"]["current_link_width"] == 4 and gpu["pci"]["maximum_link_speed"] == "16.0 GT/s PCIe"
+                devices = document["gpus"]["devices"] if mode == "snapshot" else document["top"]["gpus"]
+                os_gpu = next(device for device in devices if device["card"] == "card1")
+                assert os_gpu["pci"]["current_link_width"] == 2 and not os_gpu["metrics"].get("pcie_current_generation")
                 if frame == 2:
                     assert gpu["metric_observations"]["pcie_tx_kilobytes_per_second"]["retained"]
+                    assert gpu["observations"]["drm"]["retained"] and gpu["observations"]["drm"]["observed_at_ns"] == 1000000000
                 if mode == "agent":
                     from json_contract_smoke import validate
                     validate(document, "agent")
@@ -75,14 +81,20 @@ def main():
         screen = tty.VirtualScreen(columns, rows)
         screen.feed(bytes(data))
         text, key = screen.text(), markers[0]
+        if key == "pcie-os-only":
+            match = "Recorded OS-only GPU" in text and "5.0 GT/s PCIe x2" in text and "8.0 GT/s PCIe x4" in text
+            if match:
+                screens[key + "-" + str(columns)] = text
+            return match
         tx = next((line for line in text.splitlines() if "PCIe TX" in line or "PCIe 发送" in line), "")
         rx = next((line for line in text.splitlines() if "PCIe RX" in line or "PCIe 接收" in line), "")
+        os_link = next((line for line in text.splitlines() if "OS current link" in line or "系统当前链路" in line), "")
         def stale(value):
             return "stale" in value.lower() or "过期" in value
-        match = "GPU PCIe" in text and "12345" in text.replace(",", "") and "0 KB/s" in rx and (
-            key == "pcie-good" and "Gen3 x8" in text and "Gen4 x16" in text and not stale(tx)
-            or key == "pcie-tx-stale" and stale(tx) and not stale(rx)
-            or key == "pcie-source-stale" and stale(tx) and stale(rx))
+        match = "GPU PCIe" in text and "8.0 GT/s PCIe x4" in os_link and "12345" in text.replace(",", "") and "0 KB/s" in rx and (
+            key == "pcie-good" and "Gen3 x8" in text and "Gen4 x16" in text and not stale(tx) and not stale(os_link)
+            or key == "pcie-tx-stale" and stale(tx) and not stale(rx) and stale(os_link)
+            or key == "pcie-source-stale" and stale(tx) and stale(rx) and stale(os_link))
         if match:
             screens[key + "-" + str(columns)] = text
         return match
@@ -93,6 +105,7 @@ def main():
             raw = tty.run_session(columns, 40, exercise=False,
                 cli_options=("--replay", str(fixture), "--lang", locale, "--no-color"),
                 script=[(b"7", None), (b"x", None), (("sleep", .1), ("pcie-good",)),
+                        (b"\x1b[6~", None), (("sleep", .1), ("pcie-os-only",)), (b"\x1b[5~", None),
                         (b"\x1b[1;3C", None), (("sleep", .1), ("pcie-tx-stale",)),
                         (b"\x1b[1;3C", None), (("sleep", .1), ("pcie-source-stale",)), (b"\x1b", None), (b"q", None)],
                 terminal_environment={"TERM": "dumb", "COLORTERM": None, "LANG": "C", "LC_ALL": "C", "LC_CTYPE": "C"} if ascii_mode else None)

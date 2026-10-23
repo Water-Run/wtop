@@ -686,10 +686,20 @@ local function gpu_pcie_lines(snapshot, i18n)
             lines[#lines + 1] = inspector_text("  " .. translated(i18n, key, fallback) .. ": " .. tostring(value or "—"), INSPECTOR_ROW_WIDTH)
         end
         if not row.available then field("inspector.quality", "Quality", Technical.state(i18n, "unavailable")) end
-        field("gpu.pcie_current", "Current link", row.current)
-        field("gpu.pcie_maximum", "Device/system maximum", row.maximum)
-        field("gpu.pcie_tx", "PCIe TX", row.tx)
-        field("gpu.pcie_rx", "PCIe RX", row.rx)
+        if row.system_current then
+            field("gpu.pcie_os_current", "OS current link", row.system_current)
+            field("gpu.pcie_os_maximum", "OS device capability", row.system_maximum)
+            if row.system_source then field("gpu.pcie_os_source", "OS source", row.system_source) end
+            if row.system_age_ns then
+                field("gpu.pcie_os_age", "OS sample age", format_value(row.system_age_ns, i18n, "nanoseconds"))
+            end
+        end
+        if row.driver_available or not row.available then
+            field("gpu.pcie_current", "Current link", row.current)
+            field("gpu.pcie_maximum", "Device/system maximum", row.maximum)
+            field("gpu.pcie_tx", "PCIe TX", row.tx)
+            field("gpu.pcie_rx", "PCIe RX", row.rx)
+        end
         if row.source then field("metrics.source", "Source", row.source) end
         if row.interval_ns and row.interval_ns > 0 then
             field("power.interval", "Sample window", format_value(row.interval_ns, i18n, "nanoseconds"))

@@ -18,8 +18,7 @@ function M.reading(key, value)
         and value >= bounds[1] and value <= bounds[2] then return value end
 end
 
-function M.state(snapshot, device, key)
-    local observation = device.metric_observations and device.metric_observations[key]
+local function observation_age(snapshot, observation)
     local now = snapshot.timestamp_ns or snapshot.captured_monotonic_ns
     local observed = observation and observation.observed_at_ns
     local age, clock_state
@@ -27,12 +26,48 @@ function M.state(snapshot, device, key)
         if Power.reading(now) == nil or Power.reading(observed) == nil or observed > now then clock_state = "gap"
         else age = now - observed; if age > 15000000000 then clock_state = "stale" end end
     end
+    return age, clock_state
+end
+
+function M.state(snapshot, device, key)
+    local observation = device.metric_observations and device.metric_observations[key]
+    local age, clock_state = observation_age(snapshot, observation)
     local source = snapshot.quality and snapshot.quality.gpus
     if not Quality.current_source(snapshot.quality, "gpus") then return Power.state(source), age end
     if device.identity_quality == "stale" or observation and observation.retained then return "stale", age end
     local state = Quality.gpu_metric_quality(device, key, "pcie")
     if Power.unusable(state) then return state, age end
     return clock_state or state or "unknown", age
+end
+
+local function system_speed(value)
+    if type(value) ~= "string" or #value == 0 or #value > 256 or value:find("%c") then return end
+    if value:lower() ~= "unknown" and value:lower() ~= "n/a" then return value end
+end
+
+local function system_width(value)
+    if Power.reading(value) ~= nil and value % 1 == 0 and value >= 1 and value <= 1024
+        and value ~= 255 then return value end
+end
+
+-- Linux sysfs max_link_* describes this device's capability. It is not the
+-- NVML device/system maximum. No probing or generation inference happens here.
+function M.system(snapshot, device)
+    local pci = device.pci or {}
+    local result = { current_speed = system_speed(pci.current_link_speed),
+        current_width = system_width(pci.current_link_width),
+        maximum_speed = system_speed(pci.maximum_link_speed),
+        maximum_width = system_width(pci.maximum_link_width), source = device.source }
+    if not (result.current_speed or result.current_width or result.maximum_speed or result.maximum_width) then return end
+    local observation = device.observations and device.observations.drm
+    local age, clock_state = observation_age(snapshot, observation)
+    local source = snapshot.quality and snapshot.quality.gpus
+    local quality = observation and observation.quality or "unknown"
+    if not Quality.current_source(snapshot.quality, "gpus") then quality = Power.state(source)
+    elseif device.identity_quality == "stale" or observation and observation.retained then quality = "stale"
+    elseif not Power.unusable(quality) then quality = clock_state or quality end
+    result.quality, result.age_ns = quality, age
+    return result
 end
 
 function M.has_data(device)

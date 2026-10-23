@@ -435,6 +435,19 @@ function M.render(snapshot)
 
     local gpu_power_sessions = {}
     local gpu_pcie = {}
+    local system_pcie = {}
+    for index, device in ipairs(list(gpus.devices)) do
+        if index > 64 then break end
+        local link = GPUPCIe.system(snapshot, device)
+        if link then system_pcie[#system_pcie + 1] = {device=device,link=link} end
+    end
+    table_section(lines, "GPU OS PCIe links", { "Device", "Current speed", "Current lanes",
+        "Device maximum speed", "Device maximum lanes", "Quality", "Age", "Source" }, system_pcie,
+        function(entry)
+            local link = entry.link
+            return { entry.device.card or entry.device.id, link.current_speed, link.current_width,
+                link.maximum_speed, link.maximum_width, link.quality, quantity(link.age_ns,1e9," s",3), link.source }
+        end, { truncated = gpus.truncated or #list(gpus.devices) > 64 })
     for _, device in ipairs(list(gpus.devices)) do
         if #gpu_pcie >= 64 then break end
         if GPUPCIe.has_data(device) then gpu_pcie[#gpu_pcie + 1] = device end

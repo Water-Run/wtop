@@ -68,7 +68,15 @@ for n = 1, 3 do
         for key in pairs(metrics)do observations[key]={source="nvml",quality="fresh",observed_at_ns=math.min(n,2)*1000000000}end
         if n==2 then observations.pcie_tx_kilobytes_per_second={source="nvml",quality="stale",retained=true,observed_at_ns=1e9}end
         snapshot.gpus={devices={{id="card0",card="card0",model_name="Recorded PCIe GPU",identity_quality="fresh",
-            metrics=metrics,quality={pcie="fresh"},metric_observations=observations}}}
+            source="/sys/class/drm/card0",pci={current_link_speed="8.0 GT/s PCIe",current_link_width=4,
+                maximum_link_speed="16.0 GT/s PCIe",maximum_link_width=16},
+            observations={drm={source="drm",quality=n>=2 and"stale"or"fresh",retained=n>=2,
+                observed_at_ns=1e9}},
+            metrics=metrics,quality={pcie="fresh"},metric_observations=observations},
+            {id="card1",card="card1",model_name="Recorded OS-only GPU",identity_quality="fresh",
+            source="/sys/class/drm/card1",pci={current_link_speed="5.0 GT/s PCIe",current_link_width=2,
+                maximum_link_speed="8.0 GT/s PCIe",maximum_link_width=4},metrics={},
+            observations={drm={source="drm",quality="fresh",observed_at_ns=math.min(n,2)*1e9}}}}}
         snapshot.quality.gpus={status=n==3 and"error"or"ok",quality=n==3 and"stale"or"fresh",
             timestamp_ns=snapshot.timestamp_ns,value_timestamp_ns=n==3 and 2e9 or snapshot.timestamp_ns}
     end

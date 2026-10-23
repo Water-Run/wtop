@@ -312,7 +312,10 @@ local function build(i18n, name)
     return TUI.gpu_device_clock_detail_lines(gpu_device, i18n)
   elseif name == "gpu_pcie_lines" then
     return TUI.gpu_pcie_lines({timestamp_ns=1500000000,gpus={devices={{
-      card="card0",model_name="NVIDIA PCIe device",quality={pcie="fresh"},metrics={
+      card="card0",model_name="NVIDIA PCIe device",quality={pcie="fresh"},
+      source="/sys/class/drm/card0",pci={current_link_speed="8.0 GT/s PCIe",current_link_width=4,
+        maximum_link_speed="16.0 GT/s PCIe",maximum_link_width=16},
+      observations={drm={source="drm",quality="stale",retained=true,observed_at_ns=1e9}},metrics={
         pcie_current_generation=3,pcie_current_width=8,pcie_maximum_generation=4,pcie_maximum_width=16,
         pcie_tx_kilobytes_per_second=12345,pcie_rx_kilobytes_per_second=0,pcie_throughput_interval_ns=20000000,
         pcie_source="nvml"},metric_observations={pcie_tx_kilobytes_per_second={quality="stale",retained=true,observed_at_ns=1e9}}}}}},i18n)
