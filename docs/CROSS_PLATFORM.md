@@ -58,7 +58,14 @@ Snapshot、Agent 和报告。读取电压／电流、支持范围、USB 当前�
 与 System 页入口通过。原生读取器验证挂起、过期占比撤销、独立来源、
 超时回收与恢复；四种 CLI、四帧流输出、中英／ASCII 三种终端和真实
 驱动挂起期间的导航／退出通过。首轮 `p` 缺少电源采集需求的失败记录
-保留，修正后通过。新提交的 CI 与跨平台精确包验收尚未完成。字段依据
+保留，修正后通过。提交 `4ab3039` 的十八项 CI、四平台归档与执行日志已核对。
+Lua 5.5／5.4／ARM 各 168 文件、消毒器子集 167 文件通过。两种 Linux
+包完成十六项标准命令、八帧流输出、六次中英／ASCII 终端及两次实际
+阻塞读取期间的导航／退出／回收验证，另有四组通用终端／工作负载导航。
+三台实机各六个共享文件、四十八项原生命令、M4 四次终端和 Windows
+四次经典控制台通过。三台接口没有提供外部电源记录；本机两个电源
+记录与 sysfs 状态一致，USB-C 离线，没有正向实际输入功率与上限验证。
+最终审计见同目录 `FINAL-ACCEPTANCE.json`。字段依据
 [Linux power_supply ABI](https://github.com/torvalds/linux/blob/master/Documentation/ABI/testing/sysfs-class-power)。
 证据见 `build/supply-input-20261023/`。
 
