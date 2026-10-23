@@ -860,9 +860,11 @@ test-bundle-dir: resource-check-full bundle-dir
 	@test -z "$$(find dist/wtop -type d ! -perm -005 -print -quit)"
 	@test -z "$$(find dist/wtop -type f ! -perm -004 -print -quit)"
 	@test -x dist/wtop/wtop
+	@python3 tests/test_gpu_pcie_tty.py --lua '$(LUA)' --executable dist/wtop/wtop
 	@WTOP_EXECUTABLE='$(CURDIR)/dist/wtop/wtop' WTOP_ROOT='$(CURDIR)' python3 tests/pty_smoke.py
 
 test-bundle-file: resource-check-full bundle-file
+	@python3 tests/test_gpu_pcie_tty.py --lua '$(LUA)' --executable dist/wtop-onefile
 	@WTOP_EXECUTABLE='$(CURDIR)/dist/wtop-onefile' WTOP_ROOT='$(CURDIR)' python3 tests/pty_smoke.py
 
 # The release ships programs and the terms they are distributed under, and both
@@ -1004,12 +1006,14 @@ test-bundle-dir: bundle-dir
 	@python3 tests/installed_smoke.py --executable dist/macos-bundle/wtop/wtop \
 		--version "$$(cat VERSION)" --platform Darwin
 	@python3 tests/test_recording_replay.py --executable dist/macos-bundle/wtop/wtop
+	@python3 tests/test_gpu_pcie_tty.py --lua '$(LUA)' --executable dist/macos-bundle/wtop/wtop
 	@WTOP_EXECUTABLE='$(CURDIR)/dist/macos-bundle/wtop/wtop' WTOP_ROOT='$(CURDIR)' \
 		WTOP_PTY_PROFILE=quick python3 tests/pty_smoke.py
 test-bundle-file: bundle-file
 	@python3 tests/installed_smoke.py --executable dist/macos-bundle/wtop-onefile \
 		--version "$$(cat VERSION)" --platform Darwin
 	@python3 tests/test_recording_replay.py --executable dist/macos-bundle/wtop-onefile
+	@python3 tests/test_gpu_pcie_tty.py --lua '$(LUA)' --executable dist/macos-bundle/wtop-onefile
 	@WTOP_EXECUTABLE='$(CURDIR)/dist/macos-bundle/wtop-onefile' WTOP_ROOT='$(CURDIR)' \
 		WTOP_PTY_PROFILE=quick python3 tests/pty_smoke.py
 

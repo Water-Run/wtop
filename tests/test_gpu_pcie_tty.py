@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,23 +20,43 @@ def main():
     parser.add_argument("--lua", type=Path, default=ROOT / ".tools/lua-5.5.1/bin/lua")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--guard", action="store_true")
+    parser.add_argument("--executable", type=Path, help="check an existing development bundle")
+    parser.add_argument("--recording", type=Path, help="use an existing PCIe fixture without a source Lua runtime")
+    parser.add_argument("--cli-only", action="store_true", help="check nine exports without POSIX terminal APIs")
     args = parser.parse_args()
+    if args.guard and args.executable:
+        parser.error("--guard instruments source Lua; use the source run separately from the bundle check")
+    if args.executable and not args.executable.is_file():
+        parser.error("--executable must name an existing bundle entry")
     temporary = tempfile.TemporaryDirectory(prefix="wtop-pcie-replay-")
     output = args.output_dir.resolve() if args.output_dir else Path(temporary.name)
     if args.output_dir:
         output.mkdir(parents=True, exist_ok=False)
     lua = args.lua.resolve()
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith(("LUA_PATH", "LUA_CPATH", "LUA_INIT"))}
-    env.update(LUA_PATH=str(ROOT / "src/?.lua") + ";" + str(ROOT / "src/?/init.lua") + ";;",
-               LUA_CPATH=str(ROOT / "build/native/?.so") + ";;")
+    source_env = dict(env, LUA_PATH=str(ROOT / "src/?.lua") + ";" + str(ROOT / "src/?/init.lua") + ";;",
+                      LUA_CPATH=str(ROOT / "build/native/?.so") + ";;")
     fixture = output / "pcie.wtop"
-    subprocess.run([str(lua), str(ROOT / "tests/native/recording_fixture.lua"), str(fixture), "gpu-pcie"],
-                   cwd=ROOT, env=env, check=True, timeout=30)
+    if args.recording:
+        shutil.copyfile(args.recording, fixture)
+    else:
+        subprocess.run([str(lua), str(ROOT / "tests/native/recording_fixture.lua"), str(fixture), "gpu-pcie"],
+                       cwd=ROOT, env=source_env, check=True, timeout=30)
     runner = ROOT / ("tests/native/replay_no_live.lua" if args.guard else "src/wtop.lua")
+    command = [str(args.executable.resolve())] if args.executable else [str(lua), str(runner)]
+    if not args.executable:
+        env = source_env
     cases = []
+    def receipt():
+        document = {"status": "passed", "cases": cases, "guard": args.guard,
+                    "fixture_SHA256": hashlib.sha256(fixture.read_bytes()).hexdigest()}
+        if args.executable:
+            document.update(executable=str(args.executable.resolve()),
+                            entry_SHA256=hashlib.sha256(args.executable.read_bytes()).hexdigest())
+        (output / "acceptance.json").write_text(json.dumps(document, indent=2) + "\n")
     for frame in range(1, 4):
         for mode in ["snapshot", "agent", "report"]:
-            result = subprocess.run([str(lua), str(runner), "--replay", str(fixture), "--replay-frame", str(frame), "--" + mode],
+            result = subprocess.run(command + ["--replay", str(fixture), "--replay-frame", str(frame), "--" + mode],
                                     cwd=ROOT, env=env, capture_output=True, timeout=30)
             name = str(frame) + "-" + mode
             (output / (name + ".out")).write_bytes(result.stdout)
@@ -65,11 +86,20 @@ def main():
                     validate(document, "agent")
             cases.append({"frame": frame, "mode": mode, "actual_exit": result.returncode,
                           "SHA256": hashlib.sha256(result.stdout).hexdigest()})
+    if args.cli_only:
+        receipt()
+        print("GPU_PCIE_CLI_PASSED: nine exports; bundle=" + str(bool(args.executable)))
+        temporary.cleanup()
+        return
     os.environ.update(WTOP_ROOT=str(ROOT), WTOP_LUA=str(lua))
     wrapper = output / "pcie-replay"
-    wrapper.write_text("#!/bin/sh\nexport LUA_PATH=" + shlex.quote(env["LUA_PATH"]) + "\nexport LUA_CPATH="
-                       + shlex.quote(env["LUA_CPATH"]) + "\nexec " + shlex.quote(str(lua)) + " "
-                       + shlex.quote(str(runner)) + ' "$@"\n')
+    exports = "" if args.executable else ("export LUA_PATH=" + shlex.quote(env["LUA_PATH"])
+        + "\nexport LUA_CPATH=" + shlex.quote(env["LUA_CPATH"]) + "\n")
+    if args.executable:
+        for key in list(os.environ):
+            if key.upper().startswith(("LUA_PATH", "LUA_CPATH", "LUA_INIT")):
+                del os.environ[key]
+    wrapper.write_text("#!/bin/sh\n" + exports + "exec " + shlex.join(command) + ' "$@"\n')
     wrapper.chmod(0o700)
     os.environ["WTOP_EXECUTABLE"] = str(wrapper)
     import pty_smoke as tty
@@ -143,7 +173,7 @@ def main():
     finally:
         tty._markers_visible = original
         (output / "screens.json").write_text(json.dumps(screens, ensure_ascii=False, indent=2) + "\n")
-    (output / "acceptance.json").write_text(json.dumps({"status": "passed", "cases": cases}, indent=2) + "\n")
+    receipt()
     print("GPU_PCIE_REPLAY_PASSED: nine exports, three EN/ZH/ASCII detail and two EN/ZH main-table TTY sessions; guard=" + str(args.guard))
     temporary.cleanup()
 

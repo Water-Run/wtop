@@ -547,6 +547,12 @@ python tools/package_windows.py archive
 载荷目录，并为 EXE／DLL 写入执行权限，使 Cygwin 解压后也能直接
 加载。归档现有目录时可用 `--source` 和 `--output` 指定输入与输出。
 
+Linux 与 macOS 的两个 `test-bundle-*` 目标还会用实际开发包运行
+PCIe 历史导出与终端检查；Windows CI 对两个包运行九条导出检查。
+单独复验时可用 `tests/test_gpu_pcie_tty.py --executable <入口>`，
+已有测试记录可通过 `--recording` 指定。Windows 使用 `--cli-only`，
+无需 POSIX 终端接口；源码的 `--guard` 检查另行运行。
+
 单文件的内嵌载荷编译需要较大的构建进程地址空间。原版 w64devkit 1.23.0
 i686 的 `cc1.exe` 在当前项目上会耗尽 2 GiB；Windows CI 在核对官方压缩包
 摘要后，用 MSVC `editbin /LARGEADDRESSAWARE` 修改临时解包出的 `cc1.exe`，
