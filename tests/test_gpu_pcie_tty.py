@@ -81,6 +81,19 @@ def main():
         screen = tty.VirtualScreen(columns, rows)
         screen.feed(bytes(data))
         text, key = screen.text(), markers[0]
+        if key.startswith("pcie-main-"):
+            screens["observed-" + key + "-" + str(columns)] = text
+            headers = next((cells for cells in screen.characters if "PCIe" in "".join(cells) and "Card" in "".join(cells)), [])
+            start = next((index for index in range(len(headers) - 3) if "".join(headers[index:index + 4]) == "PCIe"), None)
+            row = next((cells for cells in screen.characters if "card0" in "".join(cells)), [])
+            # A narrow PCIe cell prioritizes the quality prefix and can clip
+            # its numeric suffix. Check that cell in terminal coordinates.
+            cell = "".join(row[start:start + 9]) if start is not None else ""
+            stale = "stale" in cell.lower() or "过期" in cell
+            match = bool(cell) and (stale if key != "pcie-main-fresh" else "8.0" in cell and not stale)
+            if match:
+                screens[key + "-" + str(columns)] = text
+            return match
         if key == "pcie-os-only":
             match = "Recorded OS-only GPU" in text and "5.0 GT/s PCIe x2" in text and "8.0 GT/s PCIe x4" in text
             if match:
@@ -116,11 +129,22 @@ def main():
             (output / (locale + ("-ascii" if ascii_mode else "") + ".pty")).write_bytes(raw)
             cases.append({"locale": locale, "ASCII": ascii_mode, "actual_exit": 0,
                           "guard": args.guard, "SHA256": hashlib.sha256(raw).hexdigest()})
+        for locale in ["en-US", "zh-CN"]:
+            raw = tty.run_session(240, 40, exercise=False,
+                cli_options=("--replay", str(fixture), "--lang", locale, "--no-color"),
+                script=[(b"7", None), (("sleep", .1), ("pcie-main-fresh",)),
+                        (b"\x1b[1;3C", None), (("sleep", .1), ("pcie-main-retained",)),
+                        (b"\x1b[1;3C", None), (("sleep", .1), ("pcie-main-source-stale",)), (b"q", None)])
+            if args.guard:
+                assert b"REPLAY_NO_LIVE_READS_PASSED" in raw
+            (output / (locale + "-main.pty")).write_bytes(raw)
+            cases.append({"locale": locale, "columns": 240, "main_table": True, "actual_exit": 0,
+                          "guard": args.guard, "SHA256": hashlib.sha256(raw).hexdigest()})
     finally:
         tty._markers_visible = original
         (output / "screens.json").write_text(json.dumps(screens, ensure_ascii=False, indent=2) + "\n")
     (output / "acceptance.json").write_text(json.dumps({"status": "passed", "cases": cases}, indent=2) + "\n")
-    print("GPU_PCIE_REPLAY_PASSED: nine exports and three EN/ZH/ASCII TTY sessions; guard=" + str(args.guard))
+    print("GPU_PCIE_REPLAY_PASSED: nine exports, three EN/ZH/ASCII detail and two EN/ZH main-table TTY sessions; guard=" + str(args.guard))
     temporary.cleanup()
 
 

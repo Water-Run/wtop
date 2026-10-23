@@ -919,7 +919,10 @@ do
   local snapshot = {timestamp_ns=2000000000,gpus={devices={device}},
     quality={gpus={status="ok",quality="fresh"}}}
   local row = View.gpu_pcie_rows(snapshot,en)[1]
+  local engine = {history_values=function() return {} end}
+  local function main_link() return View.build(engine,snapshot,en,{},"gpu").gpu_table.rows[1].pcie end
   assert(row.system_current=="8.0 GT/s PCIe x4", "OS link missing from GPU PCIe inspector")
+  assert(main_link()=="8.0 GT/s PCIe x4")
   assert(row.system_maximum=="16.0 GT/s PCIe x16" and row.system_age_ns==1000000000)
   assert(row.available and not row.driver_available and row.current=="—")
   assert(table.concat(TUI.gpu_pcie_lines(snapshot,en),"\n"):find("OS device capability: 16.0 GT/s PCIe x16",1,true))
@@ -931,6 +934,7 @@ do
   device.observations.drm.retained=true
   row=View.gpu_pcie_rows(snapshot,en)[1]
   assert(row.system_current:find(en:t("status.stale"),1,true) and row.current=="Gen3 x8" and row.maximum=="Gen4 x8")
+  assert(main_link():find(en:t("status.stale"),1,true), "main GPU table presented a retained OS link as current")
   assert(row.tx=="0 KB/s", "retained OS link invalidated fresh NVML traffic")
   local system=PCIe.system(snapshot,device)
   assert(system.quality=="stale" and system.current_width==4)
@@ -952,10 +956,12 @@ do
   assert(PCIe.system(snapshot,device).quality=="stale")
   device.identity_quality="fresh";device.observations=nil
   assert(PCIe.system(snapshot,device).quality=="unknown", "legacy OS link acquired invented freshness")
+  assert(main_link():find(en:t("status.unknown"),1,true), "main GPU table invented legacy OS freshness")
   for _,value in ipairs({"Unknown","N/A","",string.rep("s",257),"8 GT/s\nforged"}) do
     device.pci.current_link_speed=value;device.pci.current_link_width=255
     system=PCIe.system(snapshot,device)
     assert(system.current_speed==nil and system.current_width==nil)
+    assert(main_link()=="Gen3 x8", "invalid OS link prevented the NVML fallback")
   end
   device.pci={current_link_width=0,maximum_link_width=0/0}
   assert(PCIe.system(snapshot,device)==nil)

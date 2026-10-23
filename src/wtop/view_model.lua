@@ -1145,6 +1145,15 @@ function M.performance_limit_rows(snapshot, i18n)
     return rows, total
 end
 
+local function gpu_system_link(system, speed, width, format, i18n)
+    if not speed and not width then return end
+    local text = (speed or "—") .. (width and (" x" .. number(format, width, 0)) or "")
+    if Power.unusable(system.quality) or system.quality == "unknown" then
+        text = Technical.state(i18n, system.quality) .. " · " .. text
+    end
+    return text
+end
+
 local function gpu_rows(snapshot, format, i18n)
     local rows = {}
     local joins = M.gpu_sensor_join(snapshot)
@@ -1233,11 +1242,9 @@ local function gpu_rows(snapshot, format, i18n)
             and not Power.unusable(Quality.gpu_metric_quality(gpu, "memory_used_bytes", "memory")) then
             memory_text = qualified(memory_text, memory_total, "memory_total_bytes", "memory")
         end
-        local pci = gpu.pci or {}
-        local pcie = pci.current_link_speed
-        if pci.current_link_width then
-            pcie = (pcie and (pcie .. " ") or "") .. "x" .. tostring(pci.current_link_width)
-        end
+        local system_link = GPUPCIe.system(snapshot, gpu)
+        local pcie = system_link and gpu_system_link(system_link,
+            system_link.current_speed, system_link.current_width, format, i18n)
         if not pcie and (metrics.pcie_current_generation ~= nil or metrics.pcie_current_width ~= nil) then
             local parts = {}
             for _, field in ipairs({ { "pcie_current_generation", "Gen" }, { "pcie_current_width", "x" } }) do
@@ -1383,19 +1390,11 @@ function M.gpu_pcie_rows(snapshot, i18n)
             if field_age ~= nil then age = math.max(age or 0, field_age) end
         end
         local system = GPUPCIe.system(snapshot, device)
-        local function system_link(speed, width)
-            if not speed and not width then return "—" end
-            local text = (speed or "—") .. (width and (" x" .. number(format, width, 0)) or "")
-            if Power.unusable(system.quality) or system.quality == "unknown" then
-                text = Technical.state(i18n, system.quality) .. " · " .. text
-            end
-            return text
-        end
         rows[#rows + 1] = { card = device.card or device.id, name = device.model_name or device.vendor_name or device.id,
             source = metrics.pcie_source, available = GPUPCIe.has_data(device) or system ~= nil,
             driver_available = GPUPCIe.has_data(device), age_ns = age,
-            system_current = system and system_link(system.current_speed, system.current_width),
-            system_maximum = system and system_link(system.maximum_speed, system.maximum_width),
+            system_current = system and (gpu_system_link(system, system.current_speed, system.current_width, format, i18n) or "—"),
+            system_maximum = system and (gpu_system_link(system, system.maximum_speed, system.maximum_width, format, i18n) or "—"),
             system_source = system and system.source, system_age_ns = system and system.age_ns,
             current = link("pcie_current_generation", "pcie_current_width"),
             maximum = link("pcie_maximum_generation", "pcie_maximum_width"),

@@ -123,7 +123,8 @@ assert(Report.render(exported):find("GPU PCIe links",1,true))
 local e={history_values=function()return{}end}
 assert(View.build(e,s,en,{},"gpu").gpu_table.rows[1].pcie=="Gen3 x8")
 gpu.pci={current_link_speed="8 GT/s",current_link_width=4}
-assert(View.build(e,s,en,{},"gpu").gpu_table.rows[1].pcie=="8 GT/s x4","NVML overwrote kernel link")
+assert(View.build(e,s,en,{},"gpu").gpu_table.rows[1].pcie==en:t("status.unknown").." · 8 GT/s x4",
+ "legacy kernel link lost priority or acquired invented freshness")
 for _,locale in ipairs(I18n.available())do
  local i=assert(I18n.new({locale=locale}));local lines=table.concat(TUI.gpu_pcie_lines(s,i),"\n")
  assert(lines:find(i:t("gpu.pcie_title"),1,true)and lines:find("Gen4 x16",1,true)and lines:find("KB/s",1,true))
