@@ -67,6 +67,7 @@ def main() -> None:
                 "health-count": "!7" in text,
                 "health-active": title and active and flags and "demo-sensor" in text,
                 "health-quiet": title and quiet and not active and not flags,
+                "health-gauges": not title and "2/3" in text and "99%" not in text,
                 "health-stale": title and unavailable and retained and not active and not flags and not quiet,
                 "health-tiny": title,
                 "health-bottom": "Current observations only." in text,
@@ -83,7 +84,8 @@ def main() -> None:
                     terminal_environment={"TERM": "dumb", "COLORTERM": None, "LANG": "C", "LC_ALL": "C"} if ascii_mode else None,
                     script=[(("sleep", .1), ("health-count",)), (b"!", None),
                         (("sleep", .1), ("health-active",)), (b"\x1b[1;3C", None),
-                        (("sleep", .1), ("health-quiet",)), (b"\x1b[1;3C", None),
+                        (("sleep", .1), ("health-quiet",)), (b"\x1b", None), (b"1", None),
+                        (("sleep", .1), ("health-gauges",)), (b"!", None), (b"\x1b[1;3C", None),
                         (("sleep", .1), ("health-stale",)), (b"\x1b[1;3H", None),
                         (("sleep", .1), ("health-active",)), (b"\x1b", None), (b"q", None)])
                 if args.guard:

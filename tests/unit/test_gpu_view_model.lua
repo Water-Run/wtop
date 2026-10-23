@@ -147,4 +147,45 @@ local workspace = Workspace.new({ active_tab = "gpu", i18n = translator })
 local order = table.concat(workspace:orders().gpu, ",")
 assert(order:find("gpu_process_table", 1, true))
 
+-- Current gauges must agree with history/Agent rather than painting retained
+-- raw rates. The generic GPU summary uses the highest current device value.
+for _, q in ipairs({ "gap", "reset", "held", "missing", "stale", "denied", "error", "unavailable" }) do
+  local s = { cpu = { total = { utilization = 99, quality = q }, cores = {
+      { name = "cpu0", utilization = 99, user = 90, quality = q },
+      { name = "cpu1", utilization = 20, quality = "fresh" },
+    } }, gpus = { devices = {
+      { id = "invalid", metrics = { utilization_percent = 100 },
+        metric_observations = { utilization_percent = { quality = q } } },
+    } }, quality = { cpu = { status = "ok", quality = "fresh" },
+      gpus = { status = "ok", quality = "fresh" } } }
+  local m = ViewModel.build(engine, s, translator, {}, "compute")
+  assert(m.cpu_overview.value == nil and m.cpu_total.value == nil, q)
+  assert(m.cpu_overview.display_value == "—" and m.cpu_overview.quality == q, q)
+  assert(m.gpu_overview.value == nil and m.gpu_summary.value == nil, q)
+  assert(m.gpu_summary.display_value == "—" and m.gpu_summary.quality == q, q)
+  assert(m.core_bars.items[1].value == nil and m.core_bars.items[1].display_value == "—", q)
+  assert(m.core_table.rows[1].total_value == nil and m.core_table.rows[1].user == "—", q)
+  assert(m.core_bars.items[2].value == 20 and m.core_table.rows[2].total_value == 20)
+  s.cpu.total.quality = "fresh"
+  s.quality.cpu.quality, s.quality.gpus.quality = "gap", "gap"
+  s.gpus.devices[2] = { metrics = { utilization_percent = 20 }, quality = { utilization = "fresh" } }
+  s.gpus.devices[3] = { metrics = { utilization_percent = 30 }, quality = { utilization = "fresh" } }
+  m = ViewModel.build(engine, s, translator, {}, "compute")
+  assert(m.cpu_total.value == 99 and m.cpu_total.quality == "fresh")
+  assert(m.gpu_summary.value == 30 and m.gpu_overview.value == 30 and m.gpu_summary.quality == "fresh")
+  assert(s.cpu.total.utilization == 99 and s.gpus.devices[1].metrics.utilization_percent == 100)
+  s.quality.cpu.status, s.quality.gpus.status = "error", "error"
+  m = ViewModel.build(engine, s, translator, {}, "compute")
+  assert(m.cpu_total.value == nil and m.gpu_summary.value == nil)
+  assert(m.cpu_total.quality == "error" and m.gpu_summary.quality == "error")
+end
+for _, q in ipairs({ false, "fresh", "measured", "estimated", "partial", "truncated" }) do
+  local s = { cpu = { total = { utilization = 0, quality = q or nil }, cores = {
+      { name = "cpu0", utilization = 0, quality = q or nil },
+    } }, gpus = { devices = { { metrics = { utilization_percent = 0 },
+      quality = { utilization = q or nil } } } } }
+  local m = ViewModel.build(engine, s, translator, {}, "compute")
+  assert(m.cpu_total.value == 0 and m.gpu_summary.value == 0 and m.core_bars.items[1].value == 0)
+end
+
 return true

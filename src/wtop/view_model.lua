@@ -206,6 +206,20 @@ local function quality(snapshot, resource)
     return state and state.quality or "unavailable"
 end
 
+local function metric_quality(snapshot, resource, value_quality)
+    local state = snapshot.quality and snapshot.quality[resource]
+    if not Quality.current_source(snapshot.quality, resource) then
+        return state.status and state.status ~= "ok" and state.status or state.quality
+    end
+    return value_quality or quality(snapshot, resource)
+end
+
+local function cpu_row_current(snapshot, row)
+    local state = snapshot.quality and snapshot.quality.cpu
+    return Quality.current_source(snapshot.quality, "cpu")
+        and Quality.current_metric(row.quality or (state and state.quality))
+end
+
 local function network_source_status(snapshot, i18n)
     local state = snapshot.quality and snapshot.quality.network
     if type(state) ~= "table" then return nil end
@@ -582,18 +596,19 @@ local function core_rows(snapshot, format, i18n)
     for _, row in ipairs(snapshot.cpu_clocks and snapshot.cpu_clocks.cpus or {}) do clocks[row.id] = row end
     local current = Quality.current_source(snapshot.quality, "cpu_clocks")
     for _, core in ipairs(snapshot.cpu and snapshot.cpu.cores or {}) do
+        local usable = cpu_row_current(snapshot, core)
         local id = type(core.name)=="string" and tonumber(core.name:match("^cpu(%d+)$"))
         local clock = id and clocks[id]
         local clock_quality = clock and (current and clock.quality or "stale")
         rows[#rows + 1] = {
             core = core.name,
-            total = percent(format, core.utilization),
-            total_value = core.utilization,
-            user = percent(format, core.user),
-            system = percent(format, core.system),
-            iowait = percent(format, core.iowait),
-            irq = percent(format, core.irq),
-            steal = percent(format, core.steal),
+            total = percent(format, usable and core.utilization or nil),
+            total_value = usable and core.utilization or nil,
+            user = percent(format, usable and core.user or nil),
+            system = percent(format, usable and core.system or nil),
+            iowait = percent(format, usable and core.iowait or nil),
+            irq = percent(format, usable and core.irq or nil),
+            steal = percent(format, usable and core.steal or nil),
             effective = clock and (clock_quality=="fresh" and frequency(format,clock.effective_hz)
                 or Technical.state(i18n,clock_quality)) or "—",
             effective_value = clock and current and clock.quality=="fresh" and clock.effective_hz or nil,
@@ -2464,11 +2479,13 @@ local function core_bar_items(snapshot, format)
     local items = {}
     for _, core in ipairs(snapshot.cpu and snapshot.cpu.cores or {}) do
         if #items >= 256 then break end
+        local usable = cpu_row_current(snapshot, core)
+        local value = usable and core.utilization or nil
         items[#items + 1] = {
             label = (core.name or "cpu"):gsub("^cpu", ""),
-            value = core.utilization,
-            display_value = type(core.utilization) == "number"
-                and string.format("%.0f%%", core.utilization) or "—",
+            value = value,
+            display_value = type(value) == "number"
+                and string.format("%.0f%%", value) or "—",
         }
     end
     return items
@@ -2986,6 +3003,9 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
     end
 
     local cpu_value = snapshot.cpu and snapshot.cpu.total and snapshot.cpu.total.utilization
+    if not Quality.cpu_total_current(snapshot) then cpu_value = nil end
+    local cpu_quality = metric_quality(snapshot, "cpu", snapshot.cpu and snapshot.cpu.total
+        and snapshot.cpu.total.quality)
     local memory_value
     if snapshot.memory and snapshot.memory.total_bytes and snapshot.memory.total_bytes > 0 then
         memory_value = snapshot.memory.used_bytes * 100 / snapshot.memory.total_bytes
@@ -3005,7 +3025,19 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
     local network_receive = Engine.sum_interfaces(snapshot.network and snapshot.network.interfaces, "rx_bytes_per_second")
     local network_transmit = Engine.sum_interfaces(snapshot.network and snapshot.network.interfaces, "tx_bytes_per_second")
     local gpu_devices = snapshot.gpus and snapshot.gpus.devices or {}
-    local first_gpu = gpu_devices[1] and gpu_devices[1].metrics or {}
+    local gpu_value, gpu_quality
+    for _, gpu in ipairs(gpu_devices) do
+        local value = gpu.metrics and gpu.metrics.utilization_percent
+        local q = metric_quality(snapshot, "gpus",
+            Quality.gpu_metric_quality(gpu, "utilization_percent", "utilization"))
+        if Quality.current_source(snapshot.quality, "gpus") and type(value) == "number"
+            and value == value and value > -math.huge and value < math.huge
+            and Quality.current_metric(Quality.gpu_metric_quality(gpu, "utilization_percent", "utilization"))
+            and (gpu_value == nil or value > gpu_value) then
+            gpu_value, gpu_quality = value, q
+        elseif gpu_value == nil and gpu_quality == nil then gpu_quality = q end
+    end
+    gpu_quality = gpu_quality or quality(snapshot, "gpus")
     local process_count = snapshot.processes and snapshot.processes.process_candidates
         or #(snapshot.processes and snapshot.processes.list or {})
 
@@ -3238,7 +3270,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             value = cpu_value,
             display_value = percent(format, cpu_value),
             history = history("cpu"),
-            quality = quality(snapshot, "cpu"), min = 0, max = 100,
+            quality = cpu_quality, min = 0, max = 100,
             thresholds = { warn = 70, critical = 90 },
             axis_format = percent_axis,
         },
@@ -3281,10 +3313,10 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
         },
         gpu_overview = {
             label = translated(i18n, "metrics.gpu", "GPU"),
-            value = first_gpu.utilization_percent,
+            value = gpu_value,
             display_value = #gpu_devices == 0 and translated(i18n, "ui.no_data", "No data")
-                or percent(format, first_gpu.utilization_percent),
-            history = history("gpu"), quality = quality(snapshot, "gpus"), min = 0, max = 100,
+                or percent(format, gpu_value),
+            history = history("gpu"), quality = gpu_quality, min = 0, max = 100,
             thresholds = { warn = 70, critical = 90 },
             axis_format = percent_axis,
         },
@@ -3322,7 +3354,7 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             label = translated(i18n, "metrics.utilization", "Utilization"),
             value = cpu_value,
             display_value = percent(format, cpu_value),
-            history = history("cpu"), quality = quality(snapshot, "cpu"), min = 0, max = 100,
+            history = history("cpu"), quality = cpu_quality, min = 0, max = 100,
             thresholds = { warn = 70, critical = 90 },
             axis_format = percent_axis,
         },
@@ -3703,10 +3735,10 @@ function M.build(engine, snapshot, i18n, capabilities, active_tab, process_contr
             secondary_value = graphics_power,
             secondary_values = graphics_power_compact,
             label = translated(i18n, "metrics.gpu", "GPU"),
-            value = first_gpu.utilization_percent,
+            value = gpu_value,
             display_value = #gpu_devices == 0 and translated(i18n, "ui.no_data", "No data")
-                or percent(format, first_gpu.utilization_percent),
-            history = history("gpu"), quality = quality(snapshot, "gpus"), min = 0, max = 100,
+                or percent(format, gpu_value),
+            history = history("gpu"), quality = gpu_quality, min = 0, max = 100,
             thresholds = { warn = 70, critical = 90 },
             axis_format = percent_axis,
         },
