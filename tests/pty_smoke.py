@@ -430,11 +430,9 @@ def _run_session(
         assert final_page in PAGE_MARKERS
         actions = [(PAGE_KEYS[final_page].encode("ascii"), None), (b"q", None)]
     elif frequency_click:
-        click_x = max(1, columns - 2)
         actions = [
-            (f"\x1b[<0;{click_x};1M".encode("ascii"), None),
-            (f"\x1b[<0;{click_x};1m".encode("ascii"), None),
-            (b"q", None),
+            (("frequency_click",), ("更新频率：中",)),
+            (b"q", ("更新频率：中高",)),
         ]
     else:
         actions = [(b"q", None)]
@@ -536,6 +534,17 @@ def _run_session(
                     # whole session. The busiest host PID may disappear or
                     # legitimately expose no threads to the current user.
                     os.write(master, ("/pid:%d\r" % pid).encode("ascii"))
+                elif isinstance(action, tuple) and action[0] == "frequency_click":
+                    # The rightmost cells may contain pause or warning context.
+                    # Click the visible label itself, in terminal cells.
+                    screen = VirtualScreen(columns, rows)
+                    screen.feed(bytes(output))
+                    cells = screen.characters[0]
+                    click_x = next((x + 1 for x in range(columns)
+                        if "".join(cells[x:]).startswith("更新频率：")), None)
+                    assert click_x is not None, "frequency label is not on screen"
+                    os.write(master, (f"\x1b[<0;{click_x};1M"
+                        f"\x1b[<0;{click_x};1m").encode("ascii"))
                 else:
                     os.write(master, action)
                 action_index += 1

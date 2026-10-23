@@ -15,7 +15,7 @@ local TypeC = require("wtop.model.typec")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
-local NVMeWarnings = require("wtop.model.nvme_warnings")
+local Health = require("wtop.model.health")
 local WiFi = require("wtop.model.wifi")
 local UsbEndpoints = require("wtop.format.usb_endpoints")
 local NVMe = require("wtop.linux.nvme_diagnostics")
@@ -2320,7 +2320,6 @@ function M.snapshot(snapshot, options)
     })
 end
 
-local severity_rank = { ok = 0, warning = 1, critical = 2 }
 
 local function percentage(part, total)
     if not finite_number(part) or not finite_number(total) or total <= 0 then return nil end
@@ -2442,39 +2441,13 @@ function M.agent(snapshot, options)
         end
     end
 
+    local health = Health.summary(snapshot)
     local signals = json.array({})
-    local highest = "ok"
-    local function add_signal(resource, code, severity, value, unit, message)
-        signals[#signals + 1] = json.object({
-            resource = resource,
-            code = code,
-            severity = severity,
-            value = value,
-            unit = unit,
-            message = message,
-        })
-        if severity_rank[severity] > severity_rank[highest] then highest = severity end
+    for _, signal in ipairs(health.signals) do
+        signals[#signals + 1] = copy_fields(signal, { "resource", "code", "severity",
+            "value", "unit", "message" })
     end
-    for _, signal in ipairs(NVMeWarnings.summary(snapshot).signals) do
-        add_signal(signal.resource, signal.code, signal.severity, nil, nil, signal.message)
-    end
-    -- A failed collector leaves its last usable numbers in the snapshot for
-    -- context.  Those numbers must not create a new current-condition alarm.
-    -- A missing quality record is tolerated for direct, partial projections;
-    -- an explicit failed or stale record is never treated as current evidence.
-    local function current_source(source)
-        return Quality.current_source(full.quality, source)
-    end
-    local function threshold(resource, code, value, warning, critical, unit, message, source)
-        if not current_source(source or resource) then return end
-        if not finite_number(value) then return end
-        if value >= critical then
-            add_signal(resource, code, "critical", value, unit, message)
-        elseif value >= warning then
-            add_signal(resource, code, "warning", value, unit, message)
-        end
-    end
-
+    local function current_source(source) return Quality.current_source(full.quality, source) end
     local cpu_total = full.cpu and full.cpu.total or {}
     local cpu_load = full.cpu and full.cpu.load or {}
     local cpu_identity = full.cpu_info and full.cpu_info.identity or {}
@@ -2494,31 +2467,15 @@ function M.agent(snapshot, options)
             "logical_cpu_count",
         })
     end
-    threshold("cpu", "high_utilization", cpu_total.utilization, 75, 90, "percent",
-        "CPU utilization is elevated")
-    threshold("cpu", "high_iowait", cpu_total.iowait, 10, 20, "percent",
-        "CPU time waiting for I/O is elevated")
-    if logical_cpus > 0 and finite_number(cpu_load.one) then
-        threshold("cpu", "high_load", cpu_load.one / logical_cpus, 1, 1.5, "load_per_cpu",
-            "One-minute load exceeds logical CPU capacity")
-    end
-
     local memory = full.memory or {}
     local memory_used_percent = percentage(memory.used_bytes, memory.total_bytes)
     local swap_used_percent = percentage(memory.swap_used_bytes, memory.swap_total_bytes)
-    threshold("memory", "high_usage", memory_used_percent, 85, 95, "percent",
-        "Memory usage is elevated")
-
     local pressure_metrics = json.object({})
     for _, resource in ipairs({ "cpu", "memory", "io" }) do
         local pressure = full.pressure and full.pressure[resource] or {}
         local some = pressure.some and pressure.some.avg10
         local complete = pressure.full and pressure.full.avg10
         pressure_metrics[resource] = json.object({ some_avg10 = some, full_avg10 = complete })
-        threshold(resource, "sustained_pressure", some, 5, 20, "percent",
-            resource .. " pressure stalls are elevated", "pressure")
-        threshold(resource, "full_pressure", complete, 1, 5, "percent",
-            resource .. " full stalls are elevated", "pressure")
     end
 
     local disk_devices = full.disks and full.disks.devices or {}
@@ -2553,57 +2510,6 @@ function M.agent(snapshot, options)
             top_disks[index].nvme_health.observed_at_ns = health.observed_at_ns
         end
     end
-    local busiest_current_disk
-    for _, device in ipairs(disk_devices) do
-        if finite_number(device.busy_percent)
-            and device.busy_quality ~= "estimated"
-            and not Quality.UNUSABLE_FOR_ALERT[device.busy_quality]
-            and not Quality.UNUSABLE_FOR_ALERT[device.quality] then
-            busiest_current_disk = math.max(busiest_current_disk or device.busy_percent,
-                device.busy_percent)
-        end
-    end
-    threshold("storage", "device_busy", busiest_current_disk, 80, 95, "percent",
-        "A block device reports high busy time", "disks")
-    local nvme_no_path_failure = false
-    if current_source("disks") then
-        for _, device in ipairs(disk_devices) do
-            local nvme = type(device.nvme) == "table" and device.nvme or nil
-            local counters = nvme and type(nvme.counters) == "table" and nvme.counters or nil
-            local failure = counters and counters.io_failures_no_path
-            if type(failure) == "table" and failure.status == "ok"
-                and failure.delta_quality == "fresh"
-                and finite_number(failure.new) and failure.new > 0 then
-                nvme_no_path_failure = true
-                break
-            end
-        end
-    end
-    if nvme_no_path_failure then
-        add_signal("disks", "nvme_no_path_io_failure", "warning", nil, nil,
-            "NVMe no-path I/O failure counter increased")
-    end
-    local md_degraded = false
-    local active_md_states = { active = true, clean = true,
-        ["active-idle"] = true, readonly = true, ["read-auto"] = true }
-    if current_source("disks") then
-        for _, device in ipairs(disk_devices) do
-            local stack = type(device.stack) == "table" and device.stack or nil
-            if stack and stack.kind == "md" and stack.status == "ok"
-                and active_md_states[stack.array_state]
-                and finite_number(stack.raid_disks) and stack.raid_disks > 0
-                and finite_number(stack.degraded) and stack.degraded > 0
-                and stack.degraded <= stack.raid_disks then
-                md_degraded = true
-                break
-            end
-        end
-    end
-    if md_degraded then
-        add_signal("disks", "md_array_degraded", "warning", nil, nil,
-            "An active MD array reports missing devices")
-    end
-
     local interfaces = full.network and full.network.interfaces or {}
     local ranked_interfaces = top_by(interfaces, device_limit, function(interface)
         local rates = interface.rates or {}
@@ -2727,16 +2633,12 @@ function M.agent(snapshot, options)
         output.frequencies = export_gpu_frequencies(device.frequencies)
         gpu_summaries[index] = output
     end
-    threshold("gpu", "high_utilization", maximum_current_gpu_utilization,
-        85, 97, "percent",
-        "GPU utilization is elevated", "gpus")
-
     local temperature_count, fan_count, sensor_power_count = 0, 0, 0
     local fan_controls, fan_controls_total, fan_controls_truncated = json.array({}), 0, false
     local energy_power, energy_power_count = json.array({}), 0
     local hwmon_power, hwmon_power_count = json.array({}), 0
     local top_temperatures = json.array({})
-    local threshold_temperature, closest_critical
+    local closest_critical
     for _, device in ipairs(full.sensors and full.sensors.devices or {}) do
         fan_controls_truncated = fan_controls_truncated or device.fan_controls_truncated == true
         for _, control in ipairs(device.fan_controls or {}) do
@@ -2783,27 +2685,6 @@ function M.agent(snapshot, options)
                     or temperature.headroom_celsius < closest_critical.headroom_celsius) then
                     closest_critical = temperature
                 end
-                local critical = temperature.thresholds and (temperature.thresholds.crit
-                    or temperature.thresholds.emergency)
-                local warning = temperature.thresholds and temperature.thresholds.max
-                local severity
-                if finite_number(critical) and temperature.temperature_celsius >= critical then
-                    severity = "critical"
-                elseif finite_number(warning) and temperature.temperature_celsius >= warning then
-                    severity = "warning"
-                end
-                if severity and Thermal.input_current(snapshot, device, channel)
-                    and (not threshold_temperature
-                    or severity_rank[severity] > severity_rank[threshold_temperature.severity]
-                    or (severity == threshold_temperature.severity
-                        and temperature.temperature_celsius
-                            > threshold_temperature.temperature_celsius))
-                then
-                    threshold_temperature = {
-                        severity = severity,
-                        temperature_celsius = temperature.temperature_celsius,
-                    }
-                end
                 table.sort(top_temperatures, function(left, right)
                     if left.temperature_celsius == right.temperature_celsius then
                         return tostring(left.device_id or "") .. tostring(left.channel_id or "")
@@ -2820,48 +2701,6 @@ function M.agent(snapshot, options)
         end
     end
     local hottest = top_temperatures[1]
-    if threshold_temperature and current_source("sensors") then
-        local critical = threshold_temperature.severity == "critical"
-        add_signal("sensors", "temperature_threshold", threshold_temperature.severity,
-            threshold_temperature.temperature_celsius, "celsius",
-            critical and "A temperature sensor reached its critical threshold"
-                or "A temperature sensor exceeded its maximum threshold")
-    end
-
-    -- AER device and root-port counters can observe the same PCIe event, so
-    -- their changes are evidence of a report, not additive event totals.  One
-    -- signal per severity is enough to direct an operator to the reporting
-    -- links; the detailed counters remain in the full snapshot.  A retained
-    -- inventory or a first/reset sample cannot create a new-event signal.
-    local aer_fatal, aer_nonfatal = false, false
-    local function increased(change)
-        return type(change) == "table" and change.quality == "fresh"
-            and finite_number(change.new_reports) and change.new_reports > 0
-    end
-    if current_source("inventory") then
-        for _, device in ipairs(full.inventory and full.inventory.pci
-                and full.inventory.pci.devices or {}) do
-            local aer = type(device.aer) == "table" and device.aer or nil
-            if aer then
-                local root_changes = aer.rootport and aer.rootport.changes
-                aer_fatal = aer_fatal
-                    or increased(aer.fatal and aer.fatal.change)
-                    or increased(root_changes and root_changes.fatal)
-                aer_nonfatal = aer_nonfatal
-                    or increased(aer.nonfatal and aer.nonfatal.change)
-                    or increased(root_changes and root_changes.nonfatal)
-            end
-        end
-    end
-    if aer_fatal then
-        add_signal("inventory", "pcie_aer_fatal", "critical", nil, nil,
-            "New fatal PCIe AER reports were observed; the reporting link may not be the failing endpoint")
-    end
-    if aer_nonfatal then
-        add_signal("inventory", "pcie_aer_nonfatal", "warning", nil, nil,
-            "New nonfatal PCIe AER reports were observed; inspect the reporting links")
-    end
-
     local top_workloads = json.array({})
     for index, workload in ipairs(full.workloads and full.workloads.items or {}) do
         top_workloads[index] = copy_fields(workload, {
@@ -2890,27 +2729,6 @@ function M.agent(snapshot, options)
             "status", "quality", "reason", "value_timestamp_ns", "value_age_ms",
         })
         data_quality[#data_quality].resource = resource
-        local status = quality and quality.status
-        local freshness = quality and quality.quality
-        local failure_severity = Quality.SOURCE_FAILURE_SEVERITY[resource]
-        if status and status ~= "ok" then
-            if failure_severity then
-                add_signal(resource, "data_unavailable", failure_severity, nil, nil,
-                    "A monitoring source could not be read")
-            end
-        elseif freshness == "stale" and failure_severity then
-            add_signal(resource, "data_stale", "warning", nil, nil,
-                "A monitoring source is showing a retained value")
-        elseif failure_severity == "critical" and (freshness == "gap"
-                or freshness == "reset") then
-            add_signal(resource, "data_gap", "warning", nil, nil,
-                "A core monitoring rate could not be calculated")
-        elseif failure_severity == "critical" and (freshness == "partial"
-                or freshness == "truncated" or freshness == "error"
-                or freshness == "denied" or freshness == "unavailable") then
-            add_signal(resource, "data_incomplete", "warning", nil, nil,
-                "Part of a core monitoring source is unavailable")
-        end
     end
 
     local unavailable_sources = json.array({})
@@ -2927,18 +2745,6 @@ function M.agent(snapshot, options)
         end
     end
 
-    table.sort(signals, function(left, right)
-        local left_rank, right_rank = severity_rank[left.severity], severity_rank[right.severity]
-        if left_rank ~= right_rank then return left_rank > right_rank end
-        if left.resource ~= right.resource then return left.resource < right.resource end
-        return left.code < right.code
-    end)
-
-    local observed = 0
-    for _, value in ipairs({cpu_total.utilization, memory_used_percent}) do
-        if finite_number(value) then observed = observed + 1 end
-    end
-    local state = (#signals == 0 and observed == 0) and "unknown" or highest
     local top_usb_interfaces, usb_metric = json.array({}), json.object({})
     local usb_inventory = full.inventory and full.inventory.usb or {}
     for index, interface in ipairs(usb_inventory.interfaces or {}) do
@@ -2969,7 +2775,7 @@ function M.agent(snapshot, options)
         captured_unix_ns = full.captured_unix_ns,
         captured_monotonic_ns = full.captured_monotonic_ns,
         privilege = full.privilege,
-        overall = json.object({ state = state, signal_count = #signals }),
+        overall = json.object({ state = health.state, signal_count = #signals }),
         metrics = json.object({
             cpu = json.object({
                 utilization_percent = cpu_total.utilization,

@@ -185,6 +185,21 @@ local function build(i18n, name)
       disks = { devices = { { id = "259:0", name = "nvme0n1", _health_key = "key" } } },
       disk_health = { devices = { { id = "259:0", _health_key = "key", quality = "fresh",
         observed_at_ns = 1000000000, nvme = { critical_warning = 0xff } } } } }, i18n)
+  elseif name == "health_lines" then
+    return TUI.health_lines({ timestamp_ns = 1000000000,
+      cpu = { total = { utilization = 98, iowait = 25 } },
+      memory = { used_bytes = 96, total_bytes = 100 },
+      mounts = { mounts = { { kind = "local", mount_point = "/" .. LONG,
+        capacity = { used_percent = 99 }, quality = "fresh" } } },
+      sensors = { devices = { { name = LONG, channels = {
+        { id = "temperature:1", label = LONG, type = "temperature", unit = "celsius",
+          input = 101, quality = "fresh", thresholds = { crit = 100 }, alarm = true },
+        { id = "fan:1", type = "fan", fault = true, quality = "fresh" },
+      } } } },
+      quality = { disk_health = { status = "ok", quality = "fresh", value_timestamp_ns = 1000000000 } },
+      disks = { devices = { { id = "259:0", name = "nvme0n1", _health_key = "key" } } },
+      disk_health = { devices = { { id = "259:0", _health_key = "key", quality = "fresh",
+        observed_at_ns = 1000000000, nvme = { critical_warning = 0xff } } } } }, i18n)
   elseif name == "systemd_unit_lines" then
     return TUI.systemd_unit_lines({ status = "ok", quality = "partial",
       reason = "systemd_data_incomplete", source = "/usr/bin/systemctl", timestamp_ns = 0,
@@ -324,6 +339,7 @@ local FIXTURED = {
   "thread_detail_lines", "thread_picker_lines",
   "widget_picker_lines", "workspace_lines", "power_detail_lines",
   "nvme_warning_lines",
+  "health_lines",
   "wifi_link_lines",
 }
 table.sort(FIXTURED)

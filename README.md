@@ -139,6 +139,7 @@ in `dist/macos-bundle/`.
 | `s` in journal or sshd details | Show a log summary on Linux |
 | `f` | Change the update rate |
 | `p` on Overview, Compute or GPU | Live power, caps, percentages, bars, session statistics and limit reasons |
+| `!` | Current health warnings, sensor flags and NVMe details |
 | `B` | Switch block and Braille charts |
 | `z` / `Z` | Show more / less time in charts |
 | `L` | Change language |

@@ -20,6 +20,7 @@ local NVMe = require("wtop.linux.nvme_diagnostics")
 local ThreadMembers = require("wtop.linux.thread_members")
 local ProcessCgroup = require("wtop.linux.process_cgroup")
 local Quality = require("wtop.model.quality")
+local Health = require("wtop.model.health")
 local Thermal = require("wtop.model.thermal")
 local SensorPower = require("wtop.model.sensor_power")
 local FanControl = require("wtop.model.fan_control")
@@ -4574,7 +4575,7 @@ local HELP_SECTIONS = {
             { "← →", "help.cycle_tabs", "previous / next tab" },
             { "Tab ⇧Tab", "help.focus_widget", "move focus between visible widgets" },
             { "?  F1", "help.toggle", "show or hide this help" },
-            { "!", "nvme.warning.title", "NVMe health warnings" },
+            { "!", "health.title", "Health and warnings" },
             { "q", "help.quit", "close overlay, or quit from the main view" },
             { "Ctrl-C", "help.force_quit", "always quit" },
         },
@@ -5311,36 +5312,9 @@ local function inspector_context(engine)
     })
 end
 
--- The header counts actionable failures and high local capacity, not every
--- optional capability the user chose not to grant.  The source tier and stale
--- value rule are shared with Agent so the same host cannot be healthy in JSON
--- while the TUI reports three urgent firmware alerts.
+-- One set of current observations supplies Agent, the header and warning details.
 local function alert_count(snapshot)
-    snapshot = type(snapshot) == "table" and snapshot or {}
-    local count = 0
-    for resource, state in pairs(snapshot.quality or {}) do
-        if type(state) == "table" and state.status and state.status ~= "ok"
-            and Quality.SOURCE_FAILURE_SEVERITY[resource] then
-            count = count + 1
-        end
-    end
-    local memory = snapshot.memory
-    if Quality.current_source(snapshot.quality, "memory")
-        and type(memory) == "table" and type(memory.total_bytes) == "number"
-        and memory.total_bytes > 0 and type(memory.used_bytes) == "number"
-        and memory.used_bytes * 100 / memory.total_bytes >= 92 then
-        count = count + 1
-    end
-    if Quality.current_source(snapshot.quality, "mounts") then
-        for _, mount in ipairs(snapshot.mounts and snapshot.mounts.mounts or {}) do
-            local used = mount.capacity and mount.capacity.used_percent
-            if mount.kind == "local" and type(used) == "number" and used >= 92
-                and not Quality.UNUSABLE_FOR_ALERT[mount.quality] then
-                count = count + 1
-            end
-        end
-    end
-    return count + #require("wtop.model.nvme_warnings").summary(snapshot).signals
+    return #Health.summary(snapshot).signals
 end
 
 local function wifi_link_lines(snapshot, i18n)
@@ -5433,6 +5407,50 @@ local function nvme_warning_lines(snapshot, i18n)
     end
     if summary.partial then lines[#lines + 1] = Technical.state(i18n, "partial") end
     lines[#lines + 1] = ""
+    lines[#lines + 1] = translated(i18n, "inspector.close_hint", "Esc/Enter closes")
+    return lines
+end
+
+local HEALTH_RESOURCES = {
+    cpu = { "metrics.cpu", "CPU" }, memory = { "metrics.memory", "Memory" },
+    io = { "metrics.io_pressure", "I/O pressure" },
+    storage = { "metrics.storage", "Storage" }, disks = { "metrics.storage", "Storage" },
+    disk_health = { "metrics.storage", "Storage" }, mounts = { "metrics.storage", "Storage" },
+    gpu = { "metrics.gpu", "GPU" }, sensors = { "widgets.sensors", "Sensors" },
+    inventory = { "metrics.system", "System" }, system = { "metrics.system", "System" },
+    network = { "metrics.network", "Network" }, processes = { "metrics.processes", "Processes" },
+}
+
+local function health_lines(snapshot, i18n)
+    local summary = Health.summary(snapshot)
+    local lines = { translated(i18n, "health.title", "Health and warnings"), "" }
+    if #summary.signals == 0 then
+        lines[#lines + 1] = summary.state == "unknown"
+            and translated(i18n, "health.unknown", "No core observations are available")
+            or translated(i18n, "health.none", "No warnings in current observations")
+    end
+    for _, row in ipairs(summary.signals) do
+        local resource = HEALTH_RESOURCES[row.resource]
+        local label = resource and translated(i18n, resource[1], resource[2]) or row.resource
+        local severity = translated(i18n, "health." .. row.severity,
+            row.severity == "critical" and "Critical" or "Warning")
+        local description = translated(i18n, "health." .. row.code, row.message)
+        local value = row.value ~= nil and " · " .. format_value(row.value, i18n, row.unit) or ""
+        lines[#lines + 1] = inspector_text(severity .. " · " .. label .. " · "
+            .. description .. value, INSPECTOR_ROW_WIDTH)
+        if row.subject then
+            lines[#lines + 1] = "  " .. inspector_text(row.subject, INSPECTOR_ROW_WIDTH - 2)
+        end
+    end
+    -- Retain the controller warning bits and per-device explanations behind !.
+    local nvme = require("wtop.model.nvme_warnings").summary(snapshot)
+    if #nvme.observations > 0 then
+        lines[#lines + 1] = ""
+        local detail = nvme_warning_lines(snapshot, i18n)
+        for index = 1, #detail - 2 do lines[#lines + 1] = detail[index] end
+    end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = translated(i18n, "health.note", "Current observations only.")
     lines[#lines + 1] = translated(i18n, "inspector.close_hint", "Esc/Enter closes")
     return lines
 end
@@ -7131,6 +7149,7 @@ local function run_loop(options, backend, renderer, engine, translator)
                 end
             end
         end
+        local current_alerts = alert_count(engine.snapshot)
         local status = {
             message = status_message or recovered_note,
             error = persisted_error,
@@ -7281,6 +7300,10 @@ local function run_loop(options, backend, renderer, engine, translator)
             table.insert(status.hints, 1,
                 { key = "p", id = "power.title", fallback = "Power and limits", command = "power" })
         end
+        if current_alerts > 0 then
+            table.insert(status.hints, 1,
+                { key = "!", id = "health.title", fallback = "Health and warnings" })
+        end
         if not linux_host or engine.replay then
             -- The SMART, bandwidth, and sshd inspectors are Linux-only.
             local kept = {}
@@ -7355,7 +7378,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             paused = paused,
             frequency_label = current_frequency_label(),
             brand = brand_label(),
-            alert_count = alert_count(engine.snapshot),
+            alert_count = current_alerts,
             status = status,
             width_fn = native.available and width_function or nil,
             ascii_unit_width = native.available,
@@ -9507,8 +9530,9 @@ local function run_loop(options, backend, renderer, engine, translator)
             dirty = true
         elseif key == "!" then
             show_overlay(function()
-                return nvme_warning_lines(engine.snapshot, translator)
-            end, { disk = true, disk_health = true })
+                return health_lines(engine.snapshot, translator)
+            end, { disk = true, disk_health = true, hwmon = true, inventory = true,
+                gpu = true, pressure = true, mounts = true })
             dirty = true
         elseif key == "p" and (workspace:content_page() == "overview"
             or workspace:content_page() == "compute" or workspace:content_page() == "gpu"
@@ -9828,6 +9852,7 @@ end
 M.draw_overlay = draw_overlay
 M.alert_count = alert_count
 M.nvme_warning_lines = nvme_warning_lines
+M.health_lines = health_lines
 M.wifi_link_lines = wifi_link_lines
 M.process_sampling_plan = process_sampling_plan
 M.thread_detail_request = thread_detail_request

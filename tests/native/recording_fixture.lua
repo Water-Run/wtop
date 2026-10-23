@@ -21,6 +21,33 @@ for n = 1, 3 do
             value_timestamp_ns=snapshot.timestamp_ns}
     end
     if n == 3 then snapshot.quality.power.status="error";snapshot.quality.power.quality="stale" end
+    if arg[2] == "health" then
+        local alarm = n ~= 2
+        snapshot.cpu.total.utilization = alarm and 98 or 20
+        snapshot.memory.used_bytes = snapshot.memory.total_bytes * (alarm and 0.96 or 0.4)
+        snapshot.sensors = { devices = { { id="demo-sensor", name="demo-sensor", channels={
+            { id="temperature:1", label="CPU package", type="temperature", unit="celsius",
+                input=alarm and 101 or 60, quality="fresh", thresholds={crit=100}, alarm=alarm },
+            { id="fan:1", label="Fan input", type="fan", unit="rpm",
+                quality="fresh", fault=alarm },
+        } } } }
+        snapshot.mounts = { mounts = { { id="demo-volume", mount_point="/recorded-data",
+            kind="local", quality="fresh", capacity={used_percent=alarm and 99 or 40} } } }
+        snapshot.inventory = { pci={devices={ {address="0000:00:01.0",aer={fatal={
+            change={quality="fresh",new_reports=alarm and 1 or 0} } } } }} }
+        for _, key in ipairs({"sensors","mounts","inventory"}) do
+            snapshot.quality[key] = {status="ok",quality="fresh",timestamp_ns=snapshot.timestamp_ns,
+                value_timestamp_ns=snapshot.timestamp_ns}
+        end
+        if n == 3 then
+            for _, key in ipairs({"sensors","memory","mounts","inventory"}) do
+                snapshot.quality[key].quality="stale"
+                snapshot.quality[key].value_timestamp_ns=1000000000
+            end
+            snapshot.quality.cpu.status="error";snapshot.quality.cpu.quality="stale"
+            snapshot.quality.cpu.value_timestamp_ns=1000000000
+        end
+    end
     writer:append(snapshot, snapshot.timestamp_ns, 1700000000000000000 + snapshot.timestamp_ns)
 end
 writer:close(); assert(file:close())
