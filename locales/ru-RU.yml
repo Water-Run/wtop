@@ -8,6 +8,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  supply_input.title: "Внешние источники питания"
+  supply_input.usb_type: "Режим USB"
+  supply_input.usb_types: "Поддерживаемые режимы USB"
+  supply_input.voltage: "Сообщённое/заданное напряжение"
+  supply_input.current: "Сообщённый/заданный ток"
+  supply_input.voltage_range: "Поддерживаемый диапазон напряжения"
+  supply_input.current_max: "Максимальный поддерживаемый ток"
+  supply_input.input_voltage_limit: "Заданный предел входного напряжения"
+  supply_input.input_current_limit: "Заданный предел входного тока"
+  supply_input.input_power_limit: "Заданный предел входной мощности"
+  supply_input.note: "Программируемые напряжение и ток — настройки; пределы относятся к этому входу."
+  supply_input.comparison_note: "Входная мощность / заданный предел; не мощность CPU и не потребление из розетки."
   fan_control.title: "Настройки вентилятора"
   fan_control.raw: "Исходное значение"
   fan_control.method: "Способ управления"

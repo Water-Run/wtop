@@ -175,6 +175,14 @@ Linux GPU 的 `top.gpus[].observations` 按来源记录观测时间、接收时�
 界面可优先使用同一当前设备的有效 hwmon 功耗通道；厂商原始观测及其质量
 仍在导出中保留，通道读数和上限可在 `sensors` 中核对。
 
+外部电源位于 Snapshot 的 `power_supplies.supplies` 与 Agent 的
+`metrics.power.supplies`（最多五项，另有总数与截断标志）。保留 USB 当前／
+支持模式、电压／电流和明确输入限制；可编程电压／电流可能是设置值。
+`input_limit_percent` 只比较同一在线 USB 输入的直接 `power_watts` 与
+`input_power_limit_watts`，不由电压、电流或支持范围推算。失败、过期、
+断线和读取时身份／协商变化不提供当前占比；这些字段不加入 CPU 或平台
+功耗总量，也不产生限频或健康信号。每项保留来源、质量、观察时间和字段错误。
+
 Linux hwmon 设备的 `fan_controls` 与实测 `channels` 分开。控制值范围为
 0–255，当前可用时的 `setting_percent` 将它换算为 0–100%；`enable_code`
 保留驱动的自动模式编号，`control_method` 给出通用方式。`output_mode`

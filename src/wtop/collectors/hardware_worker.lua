@@ -5,15 +5,17 @@ local Native = require("wtop.native")
 local M = {}
 local Proxy = {}
 Proxy.__index = Proxy
-M.sources = { ram_bandwidth = true, hwmon = true, cpufreq = true, powercap = true, cpu_limits = true,
+M.sources = { power_supply = true, ram_bandwidth = true, hwmon = true, cpufreq = true, powercap = true, cpu_limits = true,
     thermal_throttle = true, cpuidle = true, thermal_zones = true, smbios_input = true, gpu_drm = true,
     cpu_clocks = true, cpuid = true, spd = true, disk_health = true, wifi = true, displays = true }
 
-function M.available(native)
+function M.available(native, source)
     native = native or Native
     return native.available and type(native.hardware_worker_open) == "function"
         and type(native.hardware_worker_query) == "function"
         and type(native.hardware_worker_close) == "function"
+        and (source == nil or type(native.hardware_worker_sources) == "table"
+            and native.hardware_worker_sources[source] == true)
 end
 
 function M.new(collector, options, native)

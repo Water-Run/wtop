@@ -8,6 +8,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  supply_input.title: "Fontes de alimentação externas"
+  supply_input.usb_type: "Modo USB"
+  supply_input.usb_types: "Modos USB compatíveis"
+  supply_input.voltage: "Tensão informada/configurada"
+  supply_input.current: "Corrente informada/configurada"
+  supply_input.voltage_range: "Faixa de tensão suportada"
+  supply_input.current_max: "Corrente máxima suportada"
+  supply_input.input_voltage_limit: "Limite de tensão de entrada configurado"
+  supply_input.input_current_limit: "Limite de corrente de entrada configurado"
+  supply_input.input_power_limit: "Limite de potência de entrada configurado"
+  supply_input.note: "Tensão e corrente programáveis são ajustes; os limites se referem a esta entrada."
+  supply_input.comparison_note: "Potência de entrada / limite configurado; não é potência da CPU nem consumo na tomada."
   fan_control.title: "Configurações de ventilação"
   fan_control.raw: "Valor bruto"
   fan_control.method: "Método de controle"

@@ -669,6 +669,7 @@ local SENSOR_DETAIL_LIMIT = 256
 
 local function power_detail_lines(snapshot, i18n)
     local zones, gpus, total = ViewModel.power_detail_rows(snapshot, i18n)
+    local supplies = ViewModel.supply_input_rows(snapshot, i18n)
     local lines = {
         translated(i18n, "power.title", "Power and limits"),
         translated(i18n, "inspector.close_hint", "Esc/Enter closes"),
@@ -845,6 +846,55 @@ local function power_detail_lines(snapshot, i18n)
             lines[#lines + 1] = translated(i18n, "power.api_average_note", "Driver averages may overlap; no energy is integrated.")
         end
     end
+    if #supplies > 0 then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = translated(i18n, "supply_input.title", "External power supplies")
+        lines[#lines + 1] = translated(i18n, "supply_input.note",
+            "Programmable voltage/current are settings; limits describe this input.")
+        lines[#lines + 1] = translated(i18n, "supply_input.comparison_note",
+            "Input reading / configured input cap; not CPU or outlet power.")
+    end
+    for _, row in ipairs(supplies) do
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = inspector_text(tostring(row.name or row.id) .. " ["
+            .. Technical.state(i18n, row.quality) .. "]", INSPECTOR_ROW_WIDTH)
+        local state = row.online == nil and translated(i18n, "system.unknown", "unknown")
+            or row.online == false and translated(i18n, "system.offline", "offline")
+            or row.online_mode == "programmable" and translated(i18n, "system.online_programmable", "online (programmable)")
+            or translated(i18n, "system.online", "online")
+        field("inspector.status", "Status", state)
+        if row.scope then field("limits.scope", "Scope", row.scope) end
+        if row.usb_type then field("supply_input.usb_type", "USB mode", row.usb_type) end
+        if #row.usb_types > 0 then
+            field("supply_input.usb_types", "Supported USB modes", table.concat(row.usb_types, ", "))
+        end
+        field("supply_input.voltage", "Reported/set voltage", format_value(row.voltage_volts, i18n, "volts"))
+        field("supply_input.current", "Reported/set current", format_value(row.current_amperes, i18n, "amperes"))
+        if row.minimum_voltage_volts ~= nil or row.maximum_voltage_volts ~= nil then
+            field("supply_input.voltage_range", "Supported voltage range",
+                format_value(row.minimum_voltage_volts, i18n, "volts") .. " / "
+                .. format_value(row.maximum_voltage_volts, i18n, "volts"))
+        end
+        if row.maximum_current_amperes ~= nil then
+            field("supply_input.current_max", "Supported current maximum", format_value(row.maximum_current_amperes, i18n, "amperes"))
+        end
+        for _, item in ipairs({
+            { "input_voltage_limit_volts", "supply_input.input_voltage_limit", "Configured input voltage limit", "volts" },
+            { "input_current_limit_amperes", "supply_input.input_current_limit", "Configured input current limit", "amperes" },
+            { "input_power_limit_watts", "supply_input.input_power_limit", "Configured input power limit", "watts" },
+        }) do
+            if row[item[1]] ~= nil then field(item[2], item[3], format_value(row[item[1]], i18n, item[4])) end
+        end
+        if row.power_watts ~= nil then field("metrics.power", "Power", format_value(row.power_watts, i18n, "watts")) end
+        if row.input_power_limit_watts ~= nil then field("power.of_limit", "% of cap", row.usage) end
+        field("metrics.source", "Source", row.source)
+        local keys = {}; for key in pairs(row.errors) do keys[#keys + 1] = key end; table.sort(keys)
+        for _, key in ipairs(keys) do
+            local issue = row.errors[key]
+            field("inspector.reason", "Reason", key .. ": " .. Technical.state(i18n, issue.status))
+            field("metrics.source", "Source", issue.source)
+        end
+    end
     local has_history = false
     for _, row in ipairs(limit_rows) do
         lines[#lines + 1] = ""
@@ -877,7 +927,7 @@ local function power_detail_lines(snapshot, i18n)
     if total > #zones then
         lines[#lines + 1] = translated(i18n, "ui.rows_capped", "showing {visible} of {total}",
             { visible = #zones, total = total })
-    elseif #zones == 0 and #gpus == 0 and #limit_rows == 0 then
+    elseif #zones == 0 and #gpus == 0 and #limit_rows == 0 and #supplies == 0 then
         lines[#lines + 1] = translated(i18n, "ui.no_data", "No data")
     end
     return lines
@@ -7122,7 +7172,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             }
         end
         if workspace:content_page() == "overview" or workspace:content_page() == "compute"
-            or workspace:content_page() == "gpu" then
+            or workspace:content_page() == "gpu" or workspace:content_page() == "system" then
             table.insert(status.hints, 1,
                 { key = "p", id = "power.title", fallback = "Power and limits", command = "power" })
         end
@@ -9338,10 +9388,11 @@ local function run_loop(options, backend, renderer, engine, translator)
             end, { disk = true, disk_health = true })
             dirty = true
         elseif key == "p" and (workspace:content_page() == "overview"
-            or workspace:content_page() == "compute" or workspace:content_page() == "gpu") then
+            or workspace:content_page() == "compute" or workspace:content_page() == "gpu"
+            or workspace:content_page() == "system") then
             show_overlay(function()
                 return power_detail_lines(engine.snapshot, translator)
-            end, { powercap = true, cpu_limits = true, gpu = true, hwmon = true })
+            end, { powercap = true, cpu_limits = true, gpu = true, hwmon = true, power_supply = true })
             dirty = true
         elseif key == "h" then
             show_overlay(function()

@@ -14,6 +14,102 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def verify_supply_input_application(args, env, work):
+    """Software USB input through production collector, outputs and terminals."""
+    command = ([str(args.executable.resolve())] if args.executable else
+               [str(args.lua_prefix.resolve()/'bin/lua'), str(ROOT/'src/wtop.lua')])
+    receipts, terminals = {}, []
+    with tempfile.TemporaryDirectory(prefix='supply-input-', dir=work) as temporary:
+        tree = Path(temporary); device = tree/'USB0'; device.mkdir()
+        for name, value in {'type':'USB', 'online':'1', 'scope':'Device',
+            'usb_type':'C [PD] PD_PPS', 'voltage_now':'20000000', 'current_now':'3000000',
+            'voltage_max':'28000000', 'current_max':'5000000',
+            'power_now':'60000000', 'input_power_limit':'80000000'}.items():
+            (device/name).write_text(value+'\n')
+        environment = {**env, 'WTOP_SUPPLY_FIXTURE_ROOT':str(tree)}
+        for mode in ['snapshot', 'agent', 'report', 'stream']:
+            extra = ['--count', '4', '--interval', '1000'] if mode == 'stream' else []
+            run = subprocess.run(command+['--'+mode]+extra, cwd=ROOT, env=environment, capture_output=True, timeout=35)
+            for suffix, body in [('out',run.stdout), ('stderr',run.stderr)]:
+                path=work/('supply-input-'+mode+'.'+suffix);path.write_bytes(body);path.chmod(0o600)
+            run.check_returncode();receipts[mode]=hashlib.sha256(run.stdout).hexdigest()
+            if mode == 'report':
+                assert b'External power supplies' in run.stdout and b'75.0%' in run.stdout
+                assert b'separate from CPU or outlet power' in run.stdout
+                continue
+            rows = [json.loads(line) for line in run.stdout.splitlines()]
+            assert len(rows) == (4 if mode == 'stream' else 1)
+            for snapshot in rows:
+                supplies = snapshot['metrics']['power']['supplies'] if mode == 'agent' else snapshot['power_supplies']['supplies']
+                assert len(supplies)==1
+                row=supplies[0]
+                assert row['id']=='USB0' and row['voltage_volts']==20 and row['current_amperes']==3
+                assert row['usb_type']=='PD' and row['power_watts']==60 and row['input_power_limit_watts']==80
+                assert row['input_limit_percent']==75 and row['input_headroom_watts']==20
+        saved=os.environ.copy();os.environ.update(environment,WTOP_ROOT=str(ROOT),WTOP_LUA=str(args.lua_prefix.resolve()/'bin/lua'))
+        if args.executable:os.environ['WTOP_EXECUTABLE']=str(args.executable.resolve())
+        sys.path.insert(0,str(ROOT/'tests'));import pty_smoke as tty
+        original=tty._markers_visible;screens={}
+        def visible(markers,data,columns,rows):
+            if markers==('supply-input-capture',):
+                screen=tty.VirtualScreen(columns,rows);screen.feed(bytes(data));text=screen.text()
+                screens[hashlib.sha256(text.encode()).hexdigest()]=text;return True
+            return original(markers,data,columns,rows)
+        tty._markers_visible=visible
+        try:
+            for columns,rows,locale,ascii_mode in [(100,30,'en-US',False),(80,24,'zh-CN',False),(100,30,'en-US',True)]:
+                screens.clear()
+                script=[(('sleep',2),None),(b'p',None),(('sleep',.5),('supply-input-capture',))]
+                for _ in range(12):script.extend([(b'\x1b[6~',None),(('sleep',.15),('supply-input-capture',))])
+                script.extend([(b'\x1b',None),(b'2',None),(('sleep',.3),('Command',) if locale=='en-US' else ('命令',)),(b'q',None)])
+                terminal_environment={'TERM':'dumb','COLORTERM':None,'LANG':'C','LC_ALL':'C','LC_CTYPE':'C'} if ascii_mode else None
+                raw=tty.run_session(columns,rows,exercise=False,cli_options=('--lang',locale,'--no-color'),
+                    terminal_environment=terminal_environment,script=script)
+                stem='supply-input-'+str(columns)+'-'+locale+('-ascii' if ascii_mode else '')
+                for suffix,body in [('.pty',raw),('-screens.json',json.dumps(screens,ensure_ascii=False).encode())]:
+                    path=work/(stem+suffix);path.write_bytes(body);path.chmod(0o600)
+                text=' '.join(' '.join(screens.values()).split())
+                for marker in ['USB0','PD_PPS','[######--]']:
+                    assert marker in text,(locale,marker)
+                assert re.search(r'75(?:[.,]0)?%', text), (locale, '75 percent')
+                assert ('limits describe this input' if locale=='en-US' else '限制属于此输入端') in text
+                if ascii_mode:assert all(byte<128 for byte in raw)
+                terminals.append(dict(columns=columns,rows=rows,locale=locale,ascii=ascii_mode,pty_sha256=hashlib.sha256(raw).hexdigest()))
+        finally:tty._markers_visible=original;os.environ.clear();os.environ.update(saved)
+        control=work/'supply-input-blocked-control';control.write_text('1\n')
+        entered=work/'supply-input-blocked-entered';entered.unlink(missing_ok=True)
+        blocked_environment={**environment,'WTOP_SUPPLY_FIXTURE_CONTROL':str(control),
+                             'WTOP_SUPPLY_FIXTURE_ENTERED':str(entered)}
+        owned={}
+        def blocked_visible(markers,data,columns,rows):
+            if markers==('input-driver-blocked',):
+                if not entered.exists():return False
+                pid=int(entered.read_text());proc=Path('/proc',str(pid),'stat')
+                if not proc.exists():return False
+                owned.update(pid=pid,birth=proc.read_text().rsplit(')',1)[1].split()[19])
+                return True
+            return original(markers,data,columns,rows)
+        tty._markers_visible=blocked_visible
+        os.environ.update(blocked_environment,WTOP_ROOT=str(ROOT),WTOP_LUA=str(args.lua_prefix.resolve()/'bin/lua'))
+        if args.executable:os.environ['WTOP_EXECUTABLE']=str(args.executable.resolve())
+        try:
+            blocked_raw=tty.run_session(100,30,exercise=False,cli_options=('--lang','en-US','--no-color'),script=[
+                (('sleep',1),('CPU','Memory')),(b'p',None),(('sleep',.2),('input-driver-blocked',)),
+                (b'\x1b',None),(b'2',None),(('sleep',.2),('Command',)),(b'q',None)])
+            assert owned, 'no actual blocked USB reader observed'
+            proc=Path('/proc',str(owned['pid']),'stat')
+            assert not proc.exists() or proc.read_text().rsplit(')',1)[1].split()[19]!=owned['birth']
+        finally:
+            control.write_text('0\n');tty._markers_visible=original;os.environ.clear();os.environ.update(saved)
+        (work/'supply-input-blocked.pty').write_bytes(blocked_raw)
+        blocked_proof=dict(owned,actual_exit=0,driver_blocked_before_input=True,process_navigation_and_quit=True,
+                           owned_reader_gone=True,pty_sha256=hashlib.sha256(blocked_raw).hexdigest())
+    (work/'SUPPLY-INPUT-application-acceptance.json').write_text(json.dumps(dict(status='passed',
+        scope='software USB fixture through production reader/CLI/TUI; not physical USB power verification',
+        CLI_sha256=receipts,TTY=terminals,blocked_TTY=blocked_proof),indent=2)+'\n')
+    print('SUPPLY_INPUT_APPLICATION_PASSED:readonly USB units/modes,4CLI modes/4stream frames,English/Chinese/ASCII input-cap bars and separate CPU/outlet domains',flush=True)
+    print('SUPPLY_INPUT_BLOCKED_TTY_PASSED:live USB reader blocked before input, process navigation/quit responsive and owned reader reaped',flush=True)
+
 def verify_fan_control_application(args, env, work):
     """Standard PWM readback through the real worker, CLI and terminal."""
     command = ([str(args.executable.resolve())] if args.executable else
@@ -195,6 +291,12 @@ def main() -> None:
                            'pwm1_mode':'1\n','pwm1_freq':'25000\n','pwm1_auto_channels_temp':'5\n'}.items():
             (device/name).write_text(value)
         control=directory/'control'; control.write_text('0\n'); entered=directory/'entered'
+        supply_root=directory/'power-supplies';supply_device=supply_root/'USB0';supply_device.mkdir(parents=True)
+        for name,value in {'type':'USB','online':'1','usb_type':'C [PD] PD_PPS',
+                           'power_now':'60000000','input_power_limit':'80000000'}.items():
+            (supply_device/name).write_text(value+'\n')
+        supply_control=directory/'supply-control';supply_control.write_text('0\n')
+        supply_entered=directory/'supply-entered'
         power=directory/'power'; zone=power/'intel-rapl:0';zone.mkdir(parents=True)
         (power/'intel-rapl').mkdir();(power/'intel-rapl'/'enabled').write_text('1\n')
         for name,value in {'name':'package-0\n','energy_uj':'1000000\n',
@@ -249,9 +351,12 @@ local f=assert(io.open(os.getenv("WTOP_TEST_EDID_OUTPUT"),"wb"));assert(f:write(
              'LUA_CPATH':str(args.module.resolve().parent/'?.so')+';;',
              'WTOP_HARDWARE_FIXTURE_ROOT':str(tree),'WTOP_HARDWARE_FIXTURE_CONTROL':str(control),
              'WTOP_HARDWARE_FIXTURE_ENTERED':str(entered)}
+        env.update(WTOP_SUPPLY_FIXTURE_ROOT=str(supply_root),WTOP_SUPPLY_FIXTURE_CONTROL=str(supply_control),
+                   WTOP_SUPPLY_FIXTURE_ENTERED=str(supply_entered))
         subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/hardware_worker_smoke.lua'),
-                        str(ROOT),str(control),str(entered),str(power)],cwd=ROOT,env=env,check=True,timeout=20)
+                        str(ROOT),str(control),str(entered),str(power)],cwd=ROOT,env=env,check=True,timeout=35)
         if not args.native_only:
+            verify_supply_input_application(args, env, work)
             verify_fan_control_application(args, env, work)
         firmware_env={**env,'WTOP_SMBIOS_FIXTURE_ROOT':str(firmware),
                       'WTOP_SMBIOS_FIXTURE_CONTROL':str(firmware_control),

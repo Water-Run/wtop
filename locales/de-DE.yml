@@ -8,6 +8,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  supply_input.title: "Externe Stromversorgungen"
+  supply_input.usb_type: "USB-Modus"
+  supply_input.usb_types: "Unterstützte USB-Modi"
+  supply_input.voltage: "Gemeldete/eingestellte Spannung"
+  supply_input.current: "Gemeldeter/eingestellter Strom"
+  supply_input.voltage_range: "Unterstützter Spannungsbereich"
+  supply_input.current_max: "Unterstützter Maximalstrom"
+  supply_input.input_voltage_limit: "Konfigurierte Eingangsspannungsgrenze"
+  supply_input.input_current_limit: "Konfigurierte Eingangsstromgrenze"
+  supply_input.input_power_limit: "Konfigurierte Eingangsleistungsgrenze"
+  supply_input.note: "Programmierbare Spannung und Strom sind Einstellungen; die Grenzen gelten für diesen Eingang."
+  supply_input.comparison_note: "Eingangsleistung / konfigurierte Grenze; keine CPU- oder Steckdosenleistung."
   fan_control.title: "Lüftersteuerung"
   fan_control.raw: "Roher Steuerwert"
   fan_control.method: "Steuerungsart"

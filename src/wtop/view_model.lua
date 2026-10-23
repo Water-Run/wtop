@@ -14,6 +14,7 @@ local SensorPower = require("wtop.model.sensor_power")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local FanControl = require("wtop.model.fan_control")
+local SupplyInput = require("wtop.model.supply_input")
 local StorageHealth = require("wtop.model.storage_health")
 local Hardware = require("wtop.model.hardware")
 local HardwareFilter = require("wtop.model.hardware_filter")
@@ -1965,6 +1966,18 @@ function M.power_detail_rows(snapshot, i18n)
     return zones, gpu_rows(snapshot, i18n.format, i18n), total
 end
 
+function M.supply_input_rows(snapshot, i18n)
+    local rows = {}
+    for index, supply in ipairs(snapshot.power_supplies and snapshot.power_supplies.supplies or {}) do
+        if index > 16 then break end
+        local row = SupplyInput.public(snapshot, supply)
+        row.usage = power_usage(i18n.format, row.input_limit_percent
+            and { percent = row.input_limit_percent } or nil)
+        rows[#rows + 1] = row
+    end
+    return rows
+end
+
 -- ---------------------------------------------------------------------------
 -- Key/value builders
 --
@@ -2423,6 +2436,7 @@ local function battery_items(snapshot, format, i18n)
         }
     end
     for _, supply in ipairs(supplies.supplies or {}) do
+        local reading = SupplyInput.public(snapshot, supply)
         local online = supply.online
         local value
         if online ~= nil then value = online and 100 or 0 end
@@ -2432,6 +2446,10 @@ local function battery_items(snapshot, format, i18n)
             or supply.online_mode == "programmable"
                 and translated(i18n, "system.online_programmable", "online (programmable)")
             or translated(i18n, "system.online", "online")
+        if reading.usb_type then state = state .. " · " .. reading.usb_type end
+        if online and not Power.unusable(reading.quality) and reading.power_watts ~= nil then
+            state = state .. " · " .. number(format, reading.power_watts, 2) .. " W"
+        end
         items[#items + 1] = {
             label = supply.name,
             value = value,

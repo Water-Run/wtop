@@ -8,6 +8,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  supply_input.title: "외부 전원"
+  supply_input.usb_type: "USB 모드"
+  supply_input.usb_types: "지원 USB 모드"
+  supply_input.voltage: "보고／설정 전압"
+  supply_input.current: "보고／설정 전류"
+  supply_input.voltage_range: "지원 전압 범위"
+  supply_input.current_max: "지원 최대 전류"
+  supply_input.input_voltage_limit: "설정된 입력 전압 제한"
+  supply_input.input_current_limit: "설정된 입력 전류 제한"
+  supply_input.input_power_limit: "설정된 입력 전력 제한"
+  supply_input.note: "프로그래밍 가능한 전압／전류는 설정값입니다. 제한은 이 입력에 적용됩니다."
+  supply_input.comparison_note: "입력 전력／설정된 입력 제한이며 CPU 또는 콘센트 전력이 아닙니다."
   fan_control.title: "팬 제어 설정"
   fan_control.raw: "원시 제어 값"
   fan_control.method: "제어 방식"

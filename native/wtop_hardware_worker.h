@@ -8,8 +8,8 @@ int wtop_hardware_worker_close(lua_State *L);
 #define WTOP_HARDWARE_COUNT 6
 #define WTOP_HARDWARE_NAMES "cpufreq","powercap","gpu","hwmon","network","displays"
 #else
-#define WTOP_HARDWARE_COUNT 16
+#define WTOP_HARDWARE_COUNT 17
 #define WTOP_HARDWARE_NAMES \
-    "hwmon","cpufreq","powercap","cpu_limits","thermal_throttle","cpuidle","thermal_zones","smbios_input","gpu_drm","cpu_clocks","cpuid","spd","disk_health","wifi","displays","ram_bandwidth"
+    "hwmon","cpufreq","powercap","cpu_limits","thermal_throttle","cpuidle","thermal_zones","smbios_input","gpu_drm","cpu_clocks","cpuid","spd","disk_health","wifi","displays","ram_bandwidth","power_supply"
 #endif
 #endif

@@ -8,6 +8,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  supply_input.title: "外部電源"
+  supply_input.usb_type: "USB モード"
+  supply_input.usb_types: "対応 USB モード"
+  supply_input.voltage: "報告値／設定電圧"
+  supply_input.current: "報告値／設定電流"
+  supply_input.voltage_range: "対応電圧範囲"
+  supply_input.current_max: "対応最大電流"
+  supply_input.input_voltage_limit: "設定入力電圧制限"
+  supply_input.input_current_limit: "設定入力電流制限"
+  supply_input.input_power_limit: "設定入力電力制限"
+  supply_input.note: "可変電圧・電流は設定値です。制限はこの入力に適用されます。"
+  supply_input.comparison_note: "入力電力／設定入力制限。CPU やコンセントの電力ではありません。"
   fan_control.title: "ファン制御設定"
   fan_control.raw: "制御の生の値"
   fan_control.method: "制御方式"

@@ -10,6 +10,7 @@ local PowerSession = require("wtop.model.power_session")
 local GPUPowerSession = require("wtop.model.gpu_power_session")
 local SensorPower = require("wtop.model.sensor_power")
 local FanControl = require("wtop.model.fan_control")
+local SupplyInput = require("wtop.model.supply_input")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
 local StorageHealth = require("wtop.model.storage_health")
@@ -1930,7 +1931,8 @@ local function export_system(system)
     })
 end
 
-local function export_power_supplies(supplies)
+local function export_power_supplies(snapshot)
+    local supplies = snapshot.power_supplies
     if type(supplies) ~= "table" or next(supplies) == nil then return json.object({}) end
     local function device_list(source, fields)
         local result = json.array({})
@@ -1948,8 +1950,16 @@ local function export_power_supplies(supplies)
             "power_watts", "voltage_volts", "temperature_celsius",
             "time_remaining_seconds", "time_to_full_seconds", "capacity_level",
         }),
-        supplies = device_list(supplies.supplies,
-            { "id", "name", "type", "online", "online_mode", "present" }),
+        supplies = (function()
+            local rows = json.array({})
+            for index, supply in ipairs(supplies.supplies or {}) do
+                if index > 16 then break end
+                local row = SupplyInput.public(snapshot, supply)
+                row.errors, row.usb_types = json.object(row.errors), json.array(row.usb_types)
+                rows[index] = row
+            end
+            return rows
+        end)(),
         summary = copy_fields(supplies.summary, { "count", "capacity_percent", "power_watts", "state" }),
         on_ac_power = supplies.on_ac_power,
         skipped_devices = supplies.skipped_devices,
@@ -2279,7 +2289,7 @@ function M.snapshot(snapshot, options)
         mounts = export_mounts(snapshot.mounts),
         workloads = export_workloads(snapshot.workloads, options.workload_limit),
         system = export_system(snapshot.system),
-        power_supplies = export_power_supplies(snapshot.power_supplies),
+        power_supplies = export_power_supplies(snapshot),
         inventory = export_inventory(snapshot),
         displays = export_displays(snapshot.displays, 128, snapshot.quality and snapshot.quality.displays),
     })
@@ -3014,6 +3024,17 @@ function M.agent(snapshot, options)
                 providers = export_gpu_providers(full.gpus and full.gpus.providers),
             }),
             power = json.object({
+                supplies = (function()
+                    local rows = json.array({})
+                    for index, supply in ipairs(full.power_supplies and full.power_supplies.supplies or {}) do
+                        if index > device_limit then break end
+                        rows[index] = copy_object(supply)
+                    end
+                    return rows
+                end)(),
+                supplies_total = #(full.power_supplies and full.power_supplies.supplies or {}),
+                supplies_truncated = full.power_supplies and full.power_supplies.truncated == true
+                    or #(full.power_supplies and full.power_supplies.supplies or {}) > device_limit,
                 graphics_domains = graphics_domains,
                 graphics_domains_truncated = (full.power and full.power.graphics_domains_truncated == true)
                     or #(full.power and full.power.graphics_domains or {}) > #graphics_domains,

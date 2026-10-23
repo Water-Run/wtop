@@ -8,6 +8,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  supply_input.title: "外部電源"
+  supply_input.usb_type: "USB 模式"
+  supply_input.usb_types: "支援的 USB 模式"
+  supply_input.voltage: "回報／設定電壓"
+  supply_input.current: "回報／設定電流"
+  supply_input.voltage_range: "支援的電壓範圍"
+  supply_input.current_max: "支援的最大電流"
+  supply_input.input_voltage_limit: "設定輸入電壓上限"
+  supply_input.input_current_limit: "設定輸入電流上限"
+  supply_input.input_power_limit: "設定輸入功率上限"
+  supply_input.note: "可程式化電壓／電流是設定值；限制屬於此輸入端。"
+  supply_input.comparison_note: "輸入功率／設定輸入上限，不代表 CPU 或插座功耗。"
   fan_control.title: "風扇控制設定"
   fan_control.raw: "原始控制值"
   fan_control.method: "控制方式"

@@ -1,5 +1,6 @@
 /* Read-only test filesystem redirect and a warmed driver read that stops
- * returning. Only exec'd hardware readers are affected by this preload. */
+ * returning. Hardware redirects affect only exec'd readers; the explicit
+ * supply fixture also covers the foreground power-supply collector. */
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <sys/types.h>
@@ -40,6 +41,12 @@ __attribute__((constructor)) static void setup(void) {
         enabled=n>0&&!strcmp(command,"wtop-hardware-reader");}
 }
 static const char *redirect(const char *path,char output[8192]) {
+    const char *supply=getenv("WTOP_SUPPLY_FIXTURE_ROOT");
+    const char *supply_prefix="/sys/class/power_supply";
+    size_t supply_size=strlen(supply_prefix);
+    if(supply&&!strncmp(path,supply_prefix,supply_size)&&(path[supply_size]=='/'||!path[supply_size])){
+        if(snprintf(output,8192,"%s%s",supply,path+supply_size)<8192)return output;
+    }
     const char *root=getenv("WTOP_HARDWARE_FIXTURE_ROOT");const char *prefix="/sys/class/hwmon";
     const char *firmware=getenv("WTOP_SMBIOS_FIXTURE_ROOT");
     if(firmware&&!strncmp(path,"/sys/firmware/dmi/tables",24)){
@@ -81,6 +88,9 @@ int open(const char *path,int flags,...) {
         return mode_fd;
     }
     char mapped[8192];int fd=real_open(redirect(path,mapped),flags,mode);
+    if(enabled&&fd>=0&&strstr(path,"/power_now")&&getenv("WTOP_SUPPLY_FIXTURE_CONTROL")){
+        target_fd=fd;target_kind=6;
+    }
     if(enabled&&fd>=0&&strstr(path,"/temp1_input")){target_fd=fd;target_kind=1;}
     if(enabled&&fd>=0&&!strcmp(path,"/sys/firmware/dmi/tables/DMI")&&getenv("WTOP_SMBIOS_FIXTURE_ROOT")){
         target_fd=fd;target_kind=2;write_pid(getenv("WTOP_SMBIOS_FIXTURE_READS"),1);
@@ -143,13 +153,13 @@ int ioctl(int fd,unsigned long request,...) {
     errno=ENOTTY;return -1;
 }
 static int blocked(void) {
-    const char *path=getenv(target_kind==5?"WTOP_DISPLAY_FIXTURE_CONTROL":target_kind==4?"WTOP_SPD_FIXTURE_CONTROL":target_kind==3?"WTOP_DRM_FIXTURE_CONTROL":target_kind==2?"WTOP_SMBIOS_FIXTURE_CONTROL":"WTOP_HARDWARE_FIXTURE_CONTROL");if(!path)return 0;
+    const char *path=getenv(target_kind==6?"WTOP_SUPPLY_FIXTURE_CONTROL":target_kind==5?"WTOP_DISPLAY_FIXTURE_CONTROL":target_kind==4?"WTOP_SPD_FIXTURE_CONTROL":target_kind==3?"WTOP_DRM_FIXTURE_CONTROL":target_kind==2?"WTOP_SMBIOS_FIXTURE_CONTROL":"WTOP_HARDWARE_FIXTURE_CONTROL");if(!path)return 0;
     int fd=real_open(path,O_RDONLY|O_CLOEXEC);if(fd<0)return 0;
     char value=0;ssize_t size=real_read(fd,&value,1);real_close(fd);return size==1&&value=='1';
 }
 ssize_t read(int fd,void *buffer,size_t size) {
     if(enabled&&fd==target_fd&&blocked()){
-        write_pid(getenv(target_kind==5?"WTOP_DISPLAY_FIXTURE_ENTERED":target_kind==4?"WTOP_SPD_FIXTURE_ENTERED":target_kind==3?"WTOP_DRM_FIXTURE_ENTERED":target_kind==2?"WTOP_SMBIOS_FIXTURE_ENTERED":"WTOP_HARDWARE_FIXTURE_ENTERED"),0);
+        write_pid(getenv(target_kind==6?"WTOP_SUPPLY_FIXTURE_ENTERED":target_kind==5?"WTOP_DISPLAY_FIXTURE_ENTERED":target_kind==4?"WTOP_SPD_FIXTURE_ENTERED":target_kind==3?"WTOP_DRM_FIXTURE_ENTERED":target_kind==2?"WTOP_SMBIOS_FIXTURE_ENTERED":"WTOP_HARDWARE_FIXTURE_ENTERED"),0);
         while(blocked()){struct timespec delay={0,10000000};(void)nanosleep(&delay,NULL);}
     }
     return real_read(fd,buffer,size);

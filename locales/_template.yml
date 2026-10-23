@@ -8,6 +8,18 @@ _meta:
   catalog_version: 1
 
 messages:
+  supply_input.title: "External power supplies"
+  supply_input.usb_type: "USB mode"
+  supply_input.usb_types: "Supported USB modes"
+  supply_input.voltage: "Reported/set voltage"
+  supply_input.current: "Reported/set current"
+  supply_input.voltage_range: "Supported voltage range"
+  supply_input.current_max: "Supported current maximum"
+  supply_input.input_voltage_limit: "Configured input voltage limit"
+  supply_input.input_current_limit: "Configured input current limit"
+  supply_input.input_power_limit: "Configured input power limit"
+  supply_input.note: "Programmable voltage/current are settings; limits describe this input."
+  supply_input.comparison_note: "Input reading / configured input cap; not CPU or outlet power."
   fan_control.title: "Fan control settings"
   fan_control.raw: "Raw control value"
   fan_control.method: "Control method"

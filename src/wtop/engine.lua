@@ -467,7 +467,8 @@ function Engine.new(options)
         and require("wtop.platform").id(native) == "linux"
         and HardwareWorker.available() then
         for id in pairs(HardwareWorker.sources) do
-            if collectors[id] and not collector_options[id] and not collector_options.common then
+            if collectors[id] and not collector_options[id] and not collector_options.common
+                and HardwareWorker.available(native, id) then
                 collectors[id] = HardwareWorker.new(collectors[id])
             end
         end

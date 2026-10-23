@@ -27,6 +27,36 @@ local control_fresh=assert(fresh.data.devices[1].fan_controls[1])
 assert(control_fresh.raw_value==128 and control_fresh.enable_code==1 and control_fresh.frequency_hz==25000)
 assert(control_fresh.output_mode_code==1 and control_fresh.temperature_channels_mask==5)
 assert(control_fresh.input==nil and control_fresh.session==nil)
+assert(Hardware.available(Native,"power_supply"))
+local supply=Hardware.new(require("wtop.collectors.power_supply").new())
+local supplied=settle(supply,3)
+assert(supplied.status=="ok" and supplied.data.supplies[1].power_watts==60)
+local supply_snapshot=Snapshot.merge(nil,{power_supply=supplied},1,Native.monotonic_ns())
+assert(require("wtop.export").snapshot(supply_snapshot).power_supplies.supplies[1].input_limit_percent==75)
+write(assert(os.getenv("WTOP_SUPPLY_FIXTURE_CONTROL")),"1\n")
+local supply_pending=supply:sample(context)
+assert(supply_pending.sampling_pending)
+supply_snapshot=Snapshot.merge(supply_snapshot,{power_supply=supply_pending},2,Native.monotonic_ns())
+local retained=require("wtop.export").snapshot(supply_snapshot).power_supplies.supplies[1]
+assert(retained.power_watts==60 and retained.input_limit_percent==nil and retained.quality=="stale")
+assert(settle(hwmon,3).status=="ok","blocked USB input stopped the hwmon reader")
+assert(settle(supply,3,"hardware_query_timeout").data==nil)
+local supply_file=assert(io.open(assert(os.getenv("WTOP_SUPPLY_FIXTURE_ENTERED")),"rb"))
+local supply_pid=assert(tonumber(supply_file:read("a")));supply_file:close()
+local supply_reap_deadline=Native.monotonic_ns()+1e9
+while Native.access("/proc/"..supply_pid,"f") do
+  assert(Native.monotonic_ns()<supply_reap_deadline,"USB reader not reaped");Native.sleep_ms(10)
+end
+write(os.getenv("WTOP_SUPPLY_FIXTURE_CONTROL"),"0\n")
+local supply_recovery_deadline=Native.monotonic_ns()+10e9
+local supply_recovered=settle(supply,7)
+while supply_recovered.reason=="hardware_query_timeout" do
+  assert(Native.monotonic_ns()<supply_recovery_deadline,"USB reader did not recover")
+  Native.sleep_ms(100);supply_recovered=settle(supply,7)
+end
+assert(supply_recovered.status=="ok" and supply_recovered.value_timestamp_ns>supplied.value_timestamp_ns)
+supply:close()
+print("ok: isolated USB input: real timestamps, stale percentage withdrawal, independent hwmon, timeout/reap and recovery")
 local sampled = fresh.value_timestamp_ns
 local first_power=settle(power,3)
 assert(first_power.status=="ok" and first_power.data.zones[1].power_watts==nil,

@@ -6,6 +6,7 @@
 local Capability = require("wtop.core.capability")
 local FS = require("wtop.linux.fs")
 local Common = require("wtop.collectors.common")
+local SupplyInput = require("wtop.collectors.supply_input")
 
 local PowerSupply = {}
 PowerSupply.__index = PowerSupply
@@ -62,7 +63,7 @@ local function first(...)
   return nil
 end
 
-local function read_device(fs, base, name)
+local function read_device(fs, base, name, context)
   local path = base .. "/" .. name
   local kind = text(fs, path .. "/type")
   if not kind then return nil end
@@ -77,12 +78,7 @@ local function read_device(fs, base, name)
 
   if kind == "Mains" or kind == "USB" or kind:match("^USB_")
       or kind == "Wireless" or kind == "Apple Brick ID" then
-    local online = integer(fs, path .. "/online")
-    if online == 0 then device.online = false
-    elseif online == 1 or online == 2 then device.online = true end
-    if online == 2 then device.online_mode = "programmable" end
-    device.quality = device.online == nil and "partial" or "fresh"
-    return device
+    return SupplyInput.read(fs, device, context)
   end
 
   device.status = text(fs, path .. "/status")
@@ -203,9 +199,9 @@ function PowerSupply:sample(context)
       truncated = true
       break
     end
-    local device = read_device(fs, self.base_path, name)
+    local device = read_device(fs, self.base_path, name, context)
     if device then
-      if device.quality == "partial" then partial = partial + 1 end
+      if device.quality == "partial" or device.quality == "gap" then partial = partial + 1 end
       if device.type == "Battery" or device.type == "UPS" then
         batteries[#batteries + 1] = device
       else

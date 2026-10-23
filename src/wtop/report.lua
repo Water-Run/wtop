@@ -492,6 +492,36 @@ function M.render(snapshot)
                 quantity(battery.health_percent, 1, "%", 1),
                 quantity(battery.energy_design_watt_hours, 1, " Wh", 2) }
         end, power)
+    table_section(lines, "External power supplies",
+        { "Supply", "Online", "USB mode", "Reported/set voltage", "Reported/set current", "Reported power", "Configured input cap", "% of input cap", "Quality" },
+        power.supplies, function(supply)
+            return { supply.name or supply.id, supply.online, supply.usb_type,
+                quantity(supply.voltage_volts, 1, " V", 3), quantity(supply.current_amperes, 1, " A", 3),
+                quantity(supply.power_watts, 1, " W", 2), quantity(supply.input_power_limit_watts, 1, " W", 2),
+                quantity(supply.input_limit_percent, 1, "%", 1), supply.quality }
+        end, power)
+    if #list(power.supplies) > 0 then
+        lines[#lines + 1] = "Programmable voltage/current can be settings. Input readings and configured input caps are separate from CPU or outlet power."
+        lines[#lines + 1] = ""
+    end
+    table_section(lines, "External input capabilities and settings",
+        { "Supply", "Scope", "Supported USB modes", "Minimum voltage", "Maximum voltage", "Maximum current", "Input voltage limit", "Input current limit", "Source" },
+        power.supplies, function(supply)
+            return { supply.name or supply.id, supply.scope, table.concat(list(supply.usb_types), ", "),
+                quantity(supply.minimum_voltage_volts, 1, " V", 3), quantity(supply.maximum_voltage_volts, 1, " V", 3),
+                quantity(supply.maximum_current_amperes, 1, " A", 3), quantity(supply.input_voltage_limit_volts, 1, " V", 3),
+                quantity(supply.input_current_limit_amperes, 1, " A", 3), supply.source }
+        end, power)
+    local supply_issues = {}
+    for _, supply in ipairs(list(power.supplies)) do
+        local keys = {}; for key in pairs(object(supply.errors)) do keys[#keys + 1] = key end; table.sort(keys)
+        for _, key in ipairs(keys) do
+            local issue = supply.errors[key]
+            supply_issues[#supply_issues + 1] = { supply.name or supply.id, key, issue.status, issue.source }
+        end
+    end
+    table_section(lines, "External input read issues", { "Supply", "Attribute", "Status", "Source" },
+        supply_issues, function(issue) return issue end, power)
     local zones = object(snapshot.power)
     table_section(lines, "Power zones", { "Zone", "Domain", "Current power", "Sample window", "Quality", "Source" },
         zones.zones, function(zone)

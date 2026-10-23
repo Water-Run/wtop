@@ -68,7 +68,93 @@
         "storage": { "$ref": "#/$defs/metricObject" },
         "network": { "$ref": "#/$defs/metricObject" },
         "gpu": { "$ref": "#/$defs/metricObject" },
-        "power": { "$ref": "#/$defs/metricObject" },
+        "power": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "supplies": {
+              "type": "array",
+              "maxItems": 5,
+              "description": "External supplies. Programmable voltage/current can be settings; direct input readings and caps remain separate from CPU or outlet power.",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "online": {
+                    "type": "boolean"
+                  },
+                  "online_mode": {
+                    "enum": [
+                      "programmable"
+                    ]
+                  },
+                  "usb_type": {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  "usb_types": {
+                    "type": "array",
+                    "maxItems": 16,
+                    "items": {
+                      "type": "string",
+                      "maxLength": 32
+                    }
+                  },
+                  "input_limit_percent": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "input_headroom_watts": {
+                    "type": "number"
+                  },
+                  "voltage_volts": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "current_amperes": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "minimum_voltage_volts": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "maximum_voltage_volts": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "maximum_current_amperes": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "power_watts": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "input_voltage_limit_volts": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "input_current_limit_amperes": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "input_power_limit_watts": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                }
+              }
+            },
+            "supplies_total": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "supplies_truncated": {
+              "type": "boolean"
+            }
+          }
+        },
         "sensors": {
           "type": "object",
           "additionalProperties": true,
