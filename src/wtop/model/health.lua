@@ -10,6 +10,11 @@ local ACTIVE_MD = { active = true, clean = true, ["active-idle"] = true,
 local SENSOR_TYPES = { temperature = true, voltage = true, current = true,
     power = true, energy = true, fan = true }
 local SENSOR_QUALITY = { fresh = true, measured = true, partial = true, estimated = true }
+local RATE_UNAVAILABLE = { gap = true, reset = true, held = true, missing = true }
+
+local function current_rate(quality)
+    return not Quality.UNUSABLE_FOR_ALERT[quality] and not RATE_UNAVAILABLE[quality]
+end
 
 local function finite(value)
     return type(value) == "number" and value == value
@@ -49,13 +54,21 @@ function M.summary(snapshot)
     end
     local cpu = snapshot.cpu or {}
     local total = cpu.total or {}
+    -- A newly online core can give the source a gap while the total remains
+    -- fresh. Prefer the total's own quality; legacy snapshots fall back to
+    -- the source. Source read failures still fence every threshold below.
+    local cpu_quality = snapshot.quality and snapshot.quality.cpu
+    local total_quality = total.quality or (cpu_quality and cpu_quality.quality)
+    local cpu_current = current("cpu") and current_rate(total_quality)
     local load = cpu.load or {}
     local topology = snapshot.cpu_info and snapshot.cpu_info.topology or {}
     local logical = topology.threads or #(cpu.cores or {})
-    threshold("cpu", "high_utilization", total.utilization, 75, 90, "percent",
-        "CPU utilization is elevated")
-    threshold("cpu", "high_iowait", total.iowait, 10, 20, "percent",
-        "CPU time waiting for I/O is elevated")
+    if cpu_current then
+        threshold("cpu", "high_utilization", total.utilization, 75, 90, "percent",
+            "CPU utilization is elevated")
+        threshold("cpu", "high_iowait", total.iowait, 10, 20, "percent",
+            "CPU time waiting for I/O is elevated")
+    end
     if finite(logical) and logical > 0 and finite(load.one) then
         threshold("cpu", "high_load", load.one / logical, 1, 1.5, "load_per_cpu",
             "One-minute load exceeds logical CPU capacity")
@@ -74,7 +87,7 @@ function M.summary(snapshot)
     local busiest, busiest_name, no_path, degraded
     for _, device in ipairs(snapshot.disks and snapshot.disks.devices or {}) do
         if finite(device.busy_percent) and device.busy_quality ~= "estimated"
-            and not Quality.UNUSABLE_FOR_ALERT[device.busy_quality]
+            and current_rate(device.busy_quality or device.quality)
             and not Quality.UNUSABLE_FOR_ALERT[device.quality]
             and (not busiest or device.busy_percent > busiest) then
             busiest, busiest_name = device.busy_percent, device.name or device.id
@@ -110,8 +123,8 @@ function M.summary(snapshot)
     local gpu_max, gpu_name
     for _, device in ipairs(snapshot.gpus and snapshot.gpus.devices or {}) do
         local value = device.metrics and device.metrics.utilization_percent
-        if finite(value) and not Quality.UNUSABLE_FOR_ALERT[
-                Quality.gpu_metric_quality(device, "utilization_percent", "utilization")]
+        if finite(value) and current_rate(
+                Quality.gpu_metric_quality(device, "utilization_percent", "utilization"))
             and (not gpu_max or value > gpu_max) then
             gpu_max, gpu_name = value, device.model_name or device.card or device.id
         end
@@ -204,8 +217,9 @@ function M.summary(snapshot)
         if left.resource ~= right.resource then return left.resource < right.resource end
         return left.code < right.code
     end)
-    return { signals = signals, state = #signals == 0 and not finite(total.utilization)
-        and not finite(memory_used) and "unknown" or highest }
+    local core_observed = cpu_current and finite(total.utilization)
+        or current("memory") and finite(memory_used)
+    return { signals = signals, state = #signals == 0 and not core_observed and "unknown" or highest }
 end
 
 return M

@@ -57,6 +57,72 @@ for _, quality in ipairs({ "gap", "reset", "partial", "truncated" }) do
     assert(#parity(s).signals == 1)
 end
 
+-- Rate quality belongs to the measured total, not to every core at once.
+-- Retained finite numbers must not become current load alarms or an OK verdict.
+for _, quality in ipairs({ "gap", "reset", "held", "missing", "stale", "error", "denied", "unavailable" }) do
+    local s = { cpu = { total = { utilization = 99, iowait = 30, quality = quality },
+        load = { one = 2 }, cores = { {} } } }
+    assert(not signal(s, "high_utilization") and not signal(s, "high_iowait"), quality)
+    assert(signal(s, "high_load"), "instantaneous load must survive a rate gap: " .. quality)
+    s.cpu.load = nil
+    assert(parity(s).state == "unknown", "invalid CPU rate became an OK observation: " .. quality)
+    s.cpu.total.quality = nil
+    s.quality = { cpu = { status = "ok", quality = quality } }
+    assert(not signal(s, "high_utilization") and not signal(s, "high_iowait"), quality)
+    parity(s)
+end
+for _, quality in ipairs({ "fresh", "measured", "estimated", "partial", "truncated" }) do
+    local s = { cpu = { total = { utilization = 99, iowait = 30, quality = quality } },
+        quality = { cpu = { status = "ok", quality = "gap" } } }
+    assert(signal(s, "high_utilization") and signal(s, "high_iowait"), quality)
+    assert(signal(s, "data_gap"), "a valid total must not hide the per-core gap")
+    parity(s)
+    s.quality.cpu.status = "error"
+    assert(not signal(s, "high_utilization") and not signal(s, "high_iowait"))
+end
+assert(parity({ cpu = { total = { utilization = 20, quality = "held" } },
+    memory = { total_bytes = 100, used_bytes = 40 } }).state == "ok")
+assert(parity({ memory = { total_bytes = 100, used_bytes = 40 },
+    quality = { memory = { status = "ok", quality = "unavailable" } } }).state == "warning")
+
+-- Exercise the production Linux derivation: adding a core creates a source
+-- gap, while the independently differenced aggregate is still 99% busy.
+do
+    local CPU = require("wtop.collectors.cpu")
+    local stat = "cpu 0 0 0 100 0 0 0 0 0 0\ncpu0 0 0 0 100 0 0 0 0 0 0\n"
+    local fs = { read = function(_, path)
+        if path == "/proc/stat" then return stat end
+        return "0.0 0.0 0.0 1/2 3\n"
+    end }
+    local cpu = CPU.new({ fs = fs })
+    local first = cpu:sample({ now_ns = function() return 1000000000 end })
+    stat = "cpu 99 0 0 101 0 0 0 0 0 0\ncpu0 99 0 0 101 0 0 0 0 0 0\n"
+        .. "cpu1 0 0 0 0 0 0 0 0 0 0\n"
+    local next_sample = cpu:sample({ now_ns = function() return 2000000000 end }, first)
+    assert(next_sample.quality == "gap" and next_sample.data.total.quality == "fresh")
+    assert(next_sample.data.cores[2].quality == "gap")
+    local s = { cpu = next_sample.data, quality = { cpu = next_sample } }
+    assert(signal(s, "high_utilization").value == 99 and signal(s, "data_gap"))
+    parity(s)
+end
+
+for _, quality in ipairs({ "gap", "reset", "held", "missing", "stale", "error", "denied", "unavailable" }) do
+    local s = { disks = { devices = {
+        { name = "retained", busy_percent = 100, busy_quality = quality },
+        { name = "current", busy_percent = 90, busy_quality = "fresh" },
+    } }, gpus = { devices = {
+        { id = "retained", metrics = { utilization_percent = 100 },
+            metric_observations = { utilization_percent = { quality = quality } } },
+        { id = "current", metrics = { utilization_percent = 90 },
+            quality = { utilization = "fresh" } },
+    } } }
+    assert(signal(s, "device_busy").value == 90, quality)
+    assert(signal(s, "high_utilization", "gpu").value == 90, quality)
+    s.disks.devices[2], s.gpus.devices[2] = nil, nil
+    assert(not signal(s, "device_busy") and not signal(s, "high_utilization", "gpu"), quality)
+    parity(s)
+end
+
 local mounts = { mounts = { mounts = {
     { id = "net", kind = "network", mount_point = "/net", capacity = { used_percent = 100 } },
     { id = "old", kind = "local", quality = "stale", capacity = { used_percent = 100 } },
