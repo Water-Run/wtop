@@ -36,6 +36,8 @@ FIELD(nvml_field,nvmlFieldValue_t,scope,scopeId); FIELD(nvml_field,nvmlFieldValu
 FIELD(nvml_field,nvmlFieldValue_t,type,valueType); FIELD(nvml_field,nvmlFieldValue_t,status,nvmlReturn);
 FIELD(nvml_field,nvmlFieldValue_t,value,value);
 _Static_assert(sizeof(nvmlReturn_t) == 4 && sizeof(nvmlClockType_t) == 4 && sizeof(nvmlPstates_t) == 4, "NVML enum ABI");
+_Static_assert(sizeof(nvmlPcieUtilCounter_t) == 4 && NVML_PCIE_UTIL_TX_BYTES == 0
+    && NVML_PCIE_UTIL_RX_BYTES == 1, "NVML PCIe enum ABI");
 
 static int loads, unloads, absent, allocations_left = -1;
 static void *fixture_open(const char *name, int flags) {
@@ -110,6 +112,13 @@ int main(int argc, char **argv) {
         }
         if (scenario!=37) text_is(L,"power_quality", variant==1 ? "fresh" : scenario==41 ? "stale" : scenario==42 || scenario==43 ? "gap" : "fresh");
         number_is(L,"power_limit_watts",355.5);
+        if (variant==0 || variant==4) {
+            number_is(L,"pcie_current_generation",3); number_is(L,"pcie_maximum_generation",4);
+            number_is(L,"pcie_current_width",8); number_is(L,"pcie_maximum_width",16);
+            number_is(L,"pcie_tx_kilobytes_per_second",scenario==8?0:12345);
+            number_is(L,"pcie_rx_kilobytes_per_second",scenario==8?0:6789);
+            number_is(L,"pcie_throughput_interval_ns",20000000);
+        } else missing(L,"pcie_tx_kilobytes_per_second");
         number_is(L,"graphics_clock_hz",scenario==8 ? 0 : 2510000000.0);
         lua_getfield(L,3,"clock_events");
         if (scenario==12) { number_is(L,"status_code",4); if (variant==0) assert(!legacy()); }
@@ -134,6 +143,21 @@ close_vm:
         lua_close(L); assert(refs()==0 && loads==unloads && shutdowns()==1);
     }
     if (variant!=3) {
+        if (variant==0 || variant==4) for (int scenario=60;scenario<=64;++scenario) {
+            reset(scenario);lua_State *extra=new_vm();assert(call(extra,0)==LUA_OK);
+            lua_getfield(extra,1,"devices");lua_rawgeti(extra,-1,1);
+            if (scenario==60 || scenario==62) {
+                missing(extra,"pcie_tx_kilobytes_per_second");missing(extra,"pcie_rx_kilobytes_per_second");
+                missing(extra,"pcie_throughput_interval_ns");
+            } else {
+                if (scenario==63) missing(extra,"pcie_tx_kilobytes_per_second");
+                else number_is(extra,"pcie_tx_kilobytes_per_second",scenario==61?0:4294967294.0);
+                number_is(extra,"pcie_rx_kilobytes_per_second",scenario==61?0:scenario==64?4294967294.0:6789);
+            }
+            if (scenario==61) number_is(extra,"pcie_current_width",0);
+            if (scenario==62) {missing(extra,"pcie_current_generation");missing(extra,"pcie_current_width");}
+            lua_close(extra);assert(!refs() && loads==unloads);
+        }
         reset(0); lua_State *L=new_vm(); absent=1;
         assert(call(L,1)==LUA_OK && lua_isnil(L,1)); absent=0;
         assert(call(L,1)==LUA_OK && lua_istable(L,1));

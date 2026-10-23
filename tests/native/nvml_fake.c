@@ -192,6 +192,34 @@ nvmlReturn_t nvmlDeviceGetClockInfo(nvmlDevice_t device, nvmlClockType_t clock, 
     if (failed(device)) return 1;
     assert(clock == 0 || clock == 2); *out = mode == 7 ? UINT_MAX : mode == 8 ? 0 : clock == 0 ? 2510 : 1050; return 0;
 }
+#if WTOP_NVML_VARIANT == 0 || WTOP_NVML_VARIANT == 4
+nvmlReturn_t nvmlDeviceGetCurrPcieLinkGeneration(nvmlDevice_t device, unsigned int *out) {
+    if (failed(device) || mode == 7) return 3;
+    *out = mode == 62 ? UINT_MAX : 3; return 0;
+}
+nvmlReturn_t nvmlDeviceGetCurrPcieLinkWidth(nvmlDevice_t device, unsigned int *out) {
+    if (failed(device) || mode == 7) return 3;
+    *out = mode == 61 ? 0 : mode == 62 ? UINT_MAX : 8; return 0;
+}
+nvmlReturn_t nvmlDeviceGetMaxPcieLinkGeneration(nvmlDevice_t device, unsigned int *out) {
+    if (failed(device) || mode == 7) return 3;
+    *out = 4; return 0;
+}
+nvmlReturn_t nvmlDeviceGetMaxPcieLinkWidth(nvmlDevice_t device, unsigned int *out) {
+    if (failed(device) || mode == 7) return 3;
+    *out = 16; return 0;
+}
+nvmlReturn_t nvmlDeviceGetPcieThroughput(nvmlDevice_t device, nvmlPcieUtilCounter_t counter, unsigned int *out) {
+    if (failed(device) || mode == 7) return 3;
+    assert(counter == NVML_PCIE_UTIL_TX_BYTES || counter == NVML_PCIE_UTIL_RX_BYTES);
+    if (mode == 65) fixture_hang();
+    if (mode == 60) return 0; /* Success without filling the caller's value. */
+    if (mode == 63 && counter == NVML_PCIE_UTIL_TX_BYTES) return 4;
+    *out = mode == 8 || mode == 61 ? 0 : mode == 62 ? UINT_MAX
+        : mode == 64 ? UINT_MAX - 1 : counter == NVML_PCIE_UTIL_TX_BYTES ? 12345 : 6789;
+    return 0;
+}
+#endif
 nvmlReturn_t nvmlDeviceGetMaxClockInfo(nvmlDevice_t device, nvmlClockType_t clock, unsigned int *out) {
     if (failed(device)) return 1;
     assert(clock == 0); *out = mode == 7 ? UINT_MAX : 2900; return 0;

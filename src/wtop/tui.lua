@@ -669,6 +669,36 @@ end
 
 local SENSOR_DETAIL_LIMIT = 256
 
+local function gpu_pcie_lines(snapshot, i18n)
+    local lines = { translated(i18n, "gpu.pcie_title", "GPU PCIe links"),
+        translated(i18n, "inspector.close_hint", "Esc/Enter closes"), "",
+        translated(i18n, "gpu.pcie_note", "Traffic is sampled over about 20 ms (NVML KB/s). Maximum link reflects the device and system.") }
+    local rows, total = ViewModel.gpu_pcie_rows(snapshot, i18n)
+    if total > #rows or snapshot.gpus and snapshot.gpus.truncated then
+        lines[#lines + 1] = translated(i18n, "inspector.device_list_truncated", "Device list truncated for safety")
+            .. " · " .. translated(i18n, "ui.rows_capped", "showing {visible} of {total}", { visible = #rows, total = total })
+    end
+    if #rows == 0 then lines[#lines + 1] = translated(i18n, "gpu.pcie_none", "No PCIe measurements are reported") end
+    for _, row in ipairs(rows) do
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = inspector_text(tostring(row.card) .. " · " .. tostring(row.name), INSPECTOR_ROW_WIDTH)
+        local function field(key, fallback, value)
+            lines[#lines + 1] = inspector_text("  " .. translated(i18n, key, fallback) .. ": " .. tostring(value or "—"), INSPECTOR_ROW_WIDTH)
+        end
+        if not row.available then field("inspector.quality", "Quality", Technical.state(i18n, "unavailable")) end
+        field("gpu.pcie_current", "Current link", row.current)
+        field("gpu.pcie_maximum", "Device/system maximum", row.maximum)
+        field("gpu.pcie_tx", "PCIe TX", row.tx)
+        field("gpu.pcie_rx", "PCIe RX", row.rx)
+        if row.source then field("metrics.source", "Source", row.source) end
+        if row.interval_ns and row.interval_ns > 0 then
+            field("power.interval", "Sample window", format_value(row.interval_ns, i18n, "nanoseconds"))
+        end
+        if row.age_ns then field("systemd.sample_age", "Sample age", format_value(row.age_ns, i18n, "nanoseconds")) end
+    end
+    return lines
+end
+
 local function power_detail_lines(snapshot, i18n)
     local zones, gpus, total = ViewModel.power_detail_rows(snapshot, i18n)
     local supplies = ViewModel.supply_input_rows(snapshot, i18n)
@@ -4670,6 +4700,7 @@ local HELP_SECTIONS = {
                 "open the DRM clients, engines and memory regions behind that row" },
             { "k on GPU", "help.gpu_clocks",
                 "open a GPU device's own clock domains side by side" },
+            { "x on GPU", "help.gpu_pcie", "view the GPU PCIe link and sampled traffic" },
         },
     },
     {
@@ -7263,6 +7294,7 @@ local function run_loop(options, backend, renderer, engine, translator)
                 { key = "Enter", id = "actions.details", fallback = "Details",
                   command = "details" },
                 { key = "h", id = "widgets.sensors", fallback = "Sensors", command = "sensors" },
+                { key = "x", id = "gpu.pcie_short", fallback = "PCIe", command = "gpu_pcie" },
                 { key = "?", id = "actions.help", fallback = "Help", command = "help" },
                 { key = "q", id = "actions.quit", fallback = "Quit", command = "quit" },
             }
@@ -9111,6 +9143,9 @@ local function run_loop(options, backend, renderer, engine, translator)
                 end
                 dirty = true
             end
+        elseif key == "x" and workspace:content_page() == "gpu" then
+            show_overlay(function() return gpu_pcie_lines(engine.snapshot, translator) end, { gpu = true })
+            dirty = true
         elseif key == "k" and workspace:content_page() == "gpu" then
             -- The device's own clocks, which is a different question from
             -- either drill-down: `Enter` asks who is on this card, `i` asks
@@ -9646,7 +9681,7 @@ local function run_loop(options, backend, renderer, engine, translator)
             workload = "g",
             sockets = "n",
             virtual = "v", mask = "m", smart = "s", bandwidth = "b", sshd = "D", systemd = "d", sessions = "u",
-            sensors = "h", power = "p",
+            sensors = "h", power = "p", gpu_pcie = "x",
         }
         local key = keys[command]
         if not key then return false end
@@ -9864,6 +9899,7 @@ M.thread_detail_request = thread_detail_request
 M.inspector_lines = inspector_lines
 M.sensor_detail_lines = sensor_detail_lines
 M.power_detail_lines = power_detail_lines
+M.gpu_pcie_lines = gpu_pcie_lines
 M.hardware_detail_lines = hardware_detail_lines
 M.route_detail_lines = route_detail_lines
 M.process_detail_lines = process_detail_lines

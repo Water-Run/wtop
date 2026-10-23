@@ -146,6 +146,7 @@ unique dans `dist/macos-bundle/`.
 | `s` dans le journal ou les détails de sshd | Afficher un résumé du journal sous Linux |
 | `f` | Changer la fréquence de rafraîchissement |
 | `p` dans Vue d’ensemble, Calcul ou GPU | Puissance, limites, pourcentages, barres, statistiques de session et causes de limitation |
+| `x` dans GPU | Liaison PCIe et trafic échantillonné, si le pilote les fournit |
 | `!` | Alertes actuelles, indicateurs des capteurs et détails NVMe |
 | `B` | Basculer entre graphiques en blocs et en braille |
 | `z` / `Z` | Afficher plus / moins de temps dans les graphiques |

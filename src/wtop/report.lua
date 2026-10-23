@@ -1,6 +1,7 @@
 -- Human-readable hardware summary from the privacy-filtered Snapshot export.
 -- This module does no probing and never walks raw collector tables.
 local Common = require("wtop.collectors.common")
+local GPUPCIe = require("wtop.model.gpu_pcie")
 
 local M = {}
 
@@ -433,6 +434,26 @@ function M.render(snapshot)
         end, gpus)
 
     local gpu_power_sessions = {}
+    local gpu_pcie = {}
+    for _, device in ipairs(list(gpus.devices)) do
+        if #gpu_pcie >= 64 then break end
+        if GPUPCIe.has_data(device) then gpu_pcie[#gpu_pcie + 1] = device end
+    end
+    table_section(lines, "GPU PCIe links", { "Device", "Current generation", "Current lanes",
+        "Maximum generation", "Maximum lanes", "TX (NVML KB/s)", "RX (NVML KB/s)", "Window" }, gpu_pcie,
+        function(device)
+            local metrics = object(device.metrics)
+            local function reading(key)
+                local value = number(GPUPCIe.reading(key, metrics[key]))
+                if not value then return nil end
+                local quality = GPUPCIe.state(snapshot, device, key)
+                return value .. " (" .. quality .. ")"
+            end
+            return { device.card or device.id, reading("pcie_current_generation"), reading("pcie_current_width"),
+                reading("pcie_maximum_generation"), reading("pcie_maximum_width"),
+                reading("pcie_tx_kilobytes_per_second"), reading("pcie_rx_kilobytes_per_second"),
+                quantity(GPUPCIe.reading("pcie_throughput_interval_ns", metrics.pcie_throughput_interval_ns),1e6," ms",0) }
+        end, { truncated = gpus.truncated or #list(gpus.devices) > 64 })
     for _, device in ipairs(list(gpus.devices)) do
         for _, session in ipairs(list(device.power_sessions)) do
             gpu_power_sessions[#gpu_power_sessions + 1] = { device = device, session = session }

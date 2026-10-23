@@ -6,6 +6,7 @@
 -- only fills what is missing. A GPU without a DRM node (a headless compute
 -- card without nvidia-drm) becomes its own device entry.
 local Limits = require("wtop.collectors.gpu_limits")
+local PCIe = require("wtop.model.gpu_pcie")
 local M = {}
 
 local function finite_number(value)
@@ -260,11 +261,25 @@ function M.merge(devices, lookup, data, options)
       set_missing(metrics, "frequency_maximum_hz", entry.graphics_clock_maximum_hz)
       set_missing(metrics, "frequency_memory_hz", entry.memory_clock_hz)
       set_missing(metrics, "fan_speed_percent", entry.fan_speed_percent)
+      for _, key in ipairs(PCIe.fields) do
+        if PCIe.reading(key, entry[key]) ~= nil and set_missing(metrics, key, entry[key]) then
+          metrics.pcie_source = "nvml"
+        end
+      end
+      if metrics.pcie_source == "nvml" and (metrics.pcie_tx_kilobytes_per_second ~= nil
+          or metrics.pcie_rx_kilobytes_per_second ~= nil) then
+        set_missing(metrics, "pcie_throughput_interval_ns", PCIe.reading("pcie_throughput_interval_ns", entry.pcie_throughput_interval_ns))
+      end
       if metrics.performance_state == nil then
         metrics.performance_state = text(entry.performance_state, 8)
       end
       device.capabilities = device.capabilities or {}
       device.capabilities.nvml = true
+      if metrics.pcie_source == "nvml" then
+        device.capabilities.pcie = true
+        device.quality = type(device.quality) == "table" and device.quality or {}
+        device.quality.pcie = "fresh"
+      end
       local domain = Limits.nvml(entry.clock_events, data.sample_started_ns or options.now_ns)
       if domain then
         device.performance_limits = device.performance_limits or { domains = {} }

@@ -40,6 +40,8 @@
 typedef unsigned int nvmlReturn_t;
 typedef struct nvmlDevice_st *nvmlDevice_t;
 typedef unsigned int nvmlClockType_t, nvmlTemperatureSensors_t, nvmlPstates_t, nvmlValueType_t;
+typedef enum { NVML_PCIE_UTIL_TX_BYTES = 0, NVML_PCIE_UTIL_RX_BYTES = 1,
+    NVML_PCIE_UTIL_COUNT } nvmlPcieUtilCounter_t;
 #define NVML_DEVICE_PCI_BUS_ID_BUFFER_V2_SIZE 16
 #define NVML_DEVICE_PCI_BUS_ID_BUFFER_SIZE 32
 

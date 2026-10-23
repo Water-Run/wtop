@@ -188,6 +188,8 @@ typedef struct {
     nvml_sensor_function temperature;
     nvml_value_function power;
     nvml_value_function power_limit;
+    nvml_value_function pcie_generation, pcie_width, pcie_max_generation, pcie_max_width;
+    nvml_sensor_function pcie_throughput;
     nvml_sensor_function clock;
     nvml_sensor_function max_clock;
     nvml_value_function fan;
@@ -255,6 +257,11 @@ NVML_ABI static const char *nvml_open(nvml_api *a) {
     GET(temperature, nvml_sensor_function, "nvmlDeviceGetTemperature", NULL);
     GET(power, nvml_value_function, "nvmlDeviceGetPowerUsage", NULL);
     GET(power_limit, nvml_value_function, "nvmlDeviceGetEnforcedPowerLimit", NULL);
+    GET(pcie_generation, nvml_value_function, "nvmlDeviceGetCurrPcieLinkGeneration", NULL);
+    GET(pcie_width, nvml_value_function, "nvmlDeviceGetCurrPcieLinkWidth", NULL);
+    GET(pcie_max_generation, nvml_value_function, "nvmlDeviceGetMaxPcieLinkGeneration", NULL);
+    GET(pcie_max_width, nvml_value_function, "nvmlDeviceGetMaxPcieLinkWidth", NULL);
+    GET(pcie_throughput, nvml_sensor_function, "nvmlDeviceGetPcieThroughput", NULL);
     GET(clock, nvml_sensor_function, "nvmlDeviceGetClockInfo", NULL);
     GET(max_clock, nvml_sensor_function, "nvmlDeviceGetMaxClockInfo", NULL);
     GET(fan, nvml_value_function, "nvmlDeviceGetFanSpeed", NULL);
@@ -497,6 +504,31 @@ static const char *field_freshness(const nvml_field *field) {
     if (age < -1000000) return "gap";
     return age > 5000000 ? "stale" : "fresh";
 }
+/* NVML's maximum is the device/system combination, not the card in isolation.
+ * Preserve the SDK's KB/s unit and approximately 20 ms throughput window. */
+NVML_ABI static void device_pcie(gpu_output *L, nvml_api *a, nvml_device device) {
+    nvml_value_function functions[] = { a->pcie_generation, a->pcie_width,
+        a->pcie_max_generation, a->pcie_max_width };
+    const char *keys[] = { "pcie_current_generation", "pcie_current_width",
+        "pcie_maximum_generation", "pcie_maximum_width" };
+    for (unsigned int i = 0; i < 4; ++i) {
+        unsigned int value = UINT_MAX;
+        if (functions[i] && functions[i](device, &value) == 0
+            && ((i % 2 == 0 && value > 0 && value <= 32) || (i % 2 == 1 && value <= 64)))
+            integer_field(L, keys[i], value);
+    }
+    int rates = 0;
+    for (unsigned int direction = 0; direction < 2; ++direction) {
+        unsigned int value = UINT_MAX;
+        if (a->pcie_throughput && a->pcie_throughput(device, direction, &value) == 0 && value != UINT_MAX) {
+            integer_field(L, direction == 0 ? "pcie_tx_kilobytes_per_second"
+                : "pcie_rx_kilobytes_per_second", value);
+            rates = 1;
+        }
+    }
+    if (rates) integer_field(L, "pcie_throughput_interval_ns", 20000000);
+}
+
 NVML_ABI static void device_power(gpu_output *L, nvml_api *a, nvml_device device) {
     nvml_field fields[2]; memset(fields, 0xff, sizeof(fields));
     fields[0].field_id = 186; fields[1].field_id = 185;
@@ -610,6 +642,7 @@ NVML_ABI static const char *nvml_collect(nvml_api *a, gpu_output *L, int include
         if (a->temperature && a->temperature(device, 0, &value) == 0 && value < 1000)
             integer_field(L, "temperature_celsius", value);
         device_power(L, a, device);
+        device_pcie(L, a, device);
         value = UINT_MAX;
         if (a->clock && a->clock(device, 0, &value) == 0 && value < 100000)
             number_field(L, "graphics_clock_hz", value * 1000000.0);

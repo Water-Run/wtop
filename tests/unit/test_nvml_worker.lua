@@ -87,3 +87,75 @@ assert(snapshot.quality.gpus.quality=="stale")
 assert(Export.snapshot(snapshot).gpus.devices[1].performance_limits.domains[1].quality=="stale")
 engine:stop()
 print("ok: NVML delivery-time power freshness, process-only default, headless async discovery and capability/sample timestamps")
+
+do
+local View=require("wtop.view_model")
+local TUI=require("wtop.tui")
+local I18n=require("wtop.i18n")
+local Report=require("wtop.report")
+local PCIe=require("wtop.model.gpu_pcie")
+assert(PCIe.reading("pcie_current_generation",3.5)==nil and PCIe.reading("pcie_current_generation",0)==nil)
+assert(PCIe.reading("pcie_current_width",0)==0 and PCIe.reading("pcie_current_width",65)==nil)
+assert(PCIe.reading("pcie_tx_kilobytes_per_second",4294967294)==4294967294)
+assert(PCIe.reading("pcie_tx_kilobytes_per_second",4294967295)==nil)
+assert(PCIe.reading("pcie_rx_kilobytes_per_second",0/0)==nil)
+local now,failed=2000000000,false
+local c=GPU.new({fs=fs,scan_processes=false,amdsmi=false,levelzero=false,nvml=function()
+ if failed then return nil,"nvml_query_timeout"end
+ return {status="ok",sample_started_ns=1000000000,sample_finished_ns=1100000000,devices={{
+  index=0,uuid="GPU-pcie",pci_bdf="00000000:01:00.0",name="PCIe test GPU",utilization_percent=25,
+  pcie_current_generation=3,pcie_current_width=8,pcie_maximum_generation=4,pcie_maximum_width=16,
+  pcie_tx_kilobytes_per_second=12345,pcie_rx_kilobytes_per_second=0,pcie_throughput_interval_ns=20000000}}}
+end})
+local result=c:sample({fs=fs,now_ns=function()return now end})
+local s={timestamp_ns=now,gpus=result.data,quality={gpus={status="ok",quality="fresh"}}}
+local gpu=s.gpus.devices[1];assert(gpu.metrics.pcie_rx_kilobytes_per_second==0 and gpu.capabilities.pcie)
+assert(gpu.metric_observations.pcie_tx_kilobytes_per_second.observed_at_ns==1000000000)
+assert(gpu.metric_observations.pcie_tx_kilobytes_per_second.hardware_timestamp_available==false)
+local en=assert(I18n.new({locale="en-US"}))
+local row=View.gpu_pcie_rows(s,en)[1]
+assert(row.current=="Gen3 x8"and row.maximum=="Gen4 x16"and row.rx=="0 KB/s"and row.age_ns==1e9)
+assert(row.tx:find("12,345",1,true)or row.tx:find("12345",1,true))
+local exported=Export.snapshot(s);local agent=Export.agent(s)
+assert(exported.gpus.devices[1].metrics.pcie_tx_kilobytes_per_second==12345)
+assert(agent.top.gpus[1].metrics.pcie_rx_kilobytes_per_second==0 and agent.top.gpus[1].metrics.pcie_throughput_interval_ns==20000000)
+assert(Report.render(exported):find("GPU PCIe links",1,true))
+local e={history_values=function()return{}end}
+assert(View.build(e,s,en,{},"gpu").gpu_table.rows[1].pcie=="Gen3 x8")
+gpu.pci={current_link_speed="8 GT/s",current_link_width=4}
+assert(View.build(e,s,en,{},"gpu").gpu_table.rows[1].pcie=="8 GT/s x4","NVML overwrote kernel link")
+for _,locale in ipairs(I18n.available())do
+ local i=assert(I18n.new({locale=locale}));local lines=table.concat(TUI.gpu_pcie_lines(s,i),"\n")
+ assert(lines:find(i:t("gpu.pcie_title"),1,true)and lines:find("Gen4 x16",1,true)and lines:find("KB/s",1,true))
+end
+local observation=gpu.metric_observations.pcie_tx_kilobytes_per_second
+for _,quality in ipairs({"stale","gap","held","missing","reset","error","denied","unavailable"})do
+ observation.quality=quality;row=View.gpu_pcie_rows(s,en)[1]
+ assert(row.tx:find(en:t("status."..quality),1,true),quality)
+ assert(row.rx=="0 KB/s","one failed direction erased the other")
+ assert(Report.render(Export.snapshot(s)):find("12345 ("..quality..")",1,true))
+end
+observation.quality="fresh";observation.retained=true
+assert(PCIe.state(s,gpu,"pcie_tx_kilobytes_per_second")=="stale")
+observation.retained=false;s.timestamp_ns=9007199254740994;observation.observed_at_ns=9007199254740993
+local _,age=PCIe.state(s,gpu,"pcie_tx_kilobytes_per_second");assert(age==1)
+s.timestamp_ns=2e9;observation.observed_at_ns=3e9
+assert(PCIe.state(s,gpu,"pcie_tx_kilobytes_per_second")=="gap")
+observation.observed_at_ns=1e9;s.timestamp_ns=17e9
+assert(PCIe.state(s,gpu,"pcie_tx_kilobytes_per_second")=="stale")
+s.timestamp_ns=2e9;s.quality.gpus.quality="gap"
+assert(PCIe.state(s,gpu,"pcie_tx_kilobytes_per_second")=="fresh","unaffected metric lost to aggregate gap")
+s.quality.gpus={status="error",quality="stale"}
+assert(PCIe.state(s,gpu,"pcie_tx_kilobytes_per_second")=="stale")
+s.quality.gpus={status="ok",quality="fresh"};failed=true;now=3e9
+local retained=c:sample({fs=fs,now_ns=function()return now end},result)
+local old=retained.data and retained.data.devices[1]
+assert(old and old.metrics.pcie_rx_kilobytes_per_second==0 and old.metric_observations.pcie_rx_kilobytes_per_second.retained)
+assert(old.metric_observations.pcie_rx_kilobytes_per_second.observed_at_ns==1e9)
+assert(#View.gpu_pcie_rows({gpus={devices={}}},en)==0)
+local many={gpus={devices={}}};for n=1,65 do many.gpus.devices[n]=gpu end
+local rows,total=View.gpu_pcie_rows(many,en);assert(#rows==64 and total==65)
+assert(table.concat(TUI.gpu_pcie_lines(many,en),"\n"):find("64 of 65",1,true))
+c:stop()
+print("ok: PCIe raw SDK units/window, independent quality/zero, exact ages, retained captures, bounded detail, kernel precedence and shared exports")
+end

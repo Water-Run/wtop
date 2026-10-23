@@ -50,7 +50,7 @@ def build(runtime: Path, output: Path) -> None:
     (output/'fixture').mkdir()
     subprocess.run([cc,*flags,'-shared',*[str(ROOT/'native'/name) for name in units],str(obj),
                     str(runtime/'liblua55.dll.a'),'-lpsapi','-liphlpapi','-lsetupapi','-o',str(output/'fixture/wtop_native.dll')],check=True)
-    for name in ['lua.exe','lua55.dll']:shutil.copyfile(runtime/name,output/name)
+    for name in ['lua.exe','lua55.dll']:shutil.copy2(runtime/name,output/name)
     shutil.copytree(ROOT/'src',output/'src')
     for source,name in [('windows_nvml_cases.lua','cases.lua'),('windows_nvml_cache.lua','cache.lua'),('windows_gpu_scan.lua','scan.lua')]:
         shutil.copyfile(ROOT/'tests/native'/source,output/name)
@@ -61,7 +61,7 @@ def build(runtime: Path, output: Path) -> None:
 
 def run(folder: Path) -> None:
     assert os.name=='nt','execute the prepared fixtures on Windows'
-    variants={0:[0,1,2,3,7,8,9,10,11,12,13,14,15,16,17,18,19,*range(20,26),26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52],
+    variants={0:[0,1,2,3,7,8,9,10,11,12,13,14,15,16,17,18,19,*range(20,26),26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,60,61,62,63,64,65],
               1:[0,7,8,12,18,30,40],2:[0,7,8],3:[0]}
     rows=[]
     for bits,arch in [(32,'x86'),(64,'x64')]:
@@ -79,7 +79,7 @@ def run(folder: Path) -> None:
                 value=json.loads(match[1]);data=value.get('data');reason=value.get('reason')
                 assert 'driver stdout'not in text and b'driver stderr'not in result.stderr
                 if variant==3:assert reason=='nvml_symbols_missing' and not data
-                elif mode in [45,46,47,48]:assert reason=='nvml_query_timeout' and not data
+                elif mode in [45,46,47,48,65]:assert reason=='nvml_query_timeout' and not data
                 elif mode==51:assert reason=='nvml_worker_exited' and not data
                 elif mode==1:assert reason=='nvml_initialization_failed' and not data
                 elif mode in [2,3,34]:assert reason=='nvml_device_count_failed' and not data
@@ -98,6 +98,15 @@ def run(folder: Path) -> None:
                     if variant!=2 and mode not in [7,33]:assert device['power_limit_watts']==355.5
                     if variant==0 and mode==41:assert device['power_quality']=='stale'
                     if variant==0 and mode in [42,43]:assert device['power_quality']=='gap'
+                    if variant==0 and mode not in [7,33]:
+                        assert device['pcie_maximum_generation']==4 and device['pcie_maximum_width']==16
+                        if mode in [60,62]:
+                            assert 'pcie_tx_kilobytes_per_second'not in device and 'pcie_rx_kilobytes_per_second'not in device
+                        else:
+                            if mode==63:assert 'pcie_tx_kilobytes_per_second'not in device
+                            else:assert device['pcie_tx_kilobytes_per_second']==(0 if mode in [8,61]else 4294967294 if mode==64 else 12345)
+                            assert device['pcie_rx_kilobytes_per_second']==(0 if mode in [8,61]else 4294967294 if mode==64 else 6789)
+                            assert device['pcie_throughput_interval_ns']==20000000
                 rows.append({'bits':bits,'variant':variant,'mode':mode,'max_ms':value['maximum_foreground_ms']})
         # A fresh directory exercises simultaneous first creation of the image.
         profile=folder/'cache-profiles'/str(bits);profile.mkdir(parents=True)

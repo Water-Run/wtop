@@ -8,6 +8,15 @@ _meta:
   catalog_version: 1
 
 messages:
+  gpu.pcie_title: "GPU PCIe links"
+  gpu.pcie_short: "PCIe"
+  gpu.pcie_current: "Current link"
+  gpu.pcie_maximum: "Device/system maximum"
+  gpu.pcie_tx: "PCIe TX"
+  gpu.pcie_rx: "PCIe RX"
+  gpu.pcie_note: "Traffic is sampled over about 20 ms (NVML KB/s). Maximum link reflects the device and system."
+  gpu.pcie_none: "No PCIe measurements are reported"
+  help.gpu_pcie: "view the GPU PCIe link and sampled traffic"
   runtime_pm.title: "Device power management"
   runtime_pm.quality: "Observation quality"
   runtime_pm.status: "Runtime PM state"

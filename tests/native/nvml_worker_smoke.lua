@@ -19,7 +19,7 @@ repeat
   native.sleep_ms(30)
 until native.monotonic_ns() - beginning > 4e9
 assert(maximum_ms < 150, "foreground driver wait: " .. maximum_ms)
-if scenario == 45 or scenario == 46 or scenario == 47 or scenario == 48 then
+if scenario == 45 or scenario == 46 or scenario == 47 or scenario == 48 or scenario == 65 then
   assert(reason == "nvml_query_timeout", reason)
 elseif scenario == 51 then
   assert(reason == "nvml_worker_exited", reason)

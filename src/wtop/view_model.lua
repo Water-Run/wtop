@@ -10,6 +10,7 @@ local Power = require("wtop.model.power")
 local PowerDomains = require("wtop.model.power_domains")
 local PowerSession = require("wtop.model.power_session")
 local GPUPowerSession = require("wtop.model.gpu_power_session")
+local GPUPCIe = require("wtop.model.gpu_pcie")
 local SensorPower = require("wtop.model.sensor_power")
 local CPULimits = require("wtop.model.cpu_limits")
 local Thermal = require("wtop.model.thermal")
@@ -1237,6 +1238,18 @@ local function gpu_rows(snapshot, format, i18n)
         if pci.current_link_width then
             pcie = (pcie and (pcie .. " ") or "") .. "x" .. tostring(pci.current_link_width)
         end
+        if not pcie and (metrics.pcie_current_generation ~= nil or metrics.pcie_current_width ~= nil) then
+            local parts = {}
+            for _, field in ipairs({ { "pcie_current_generation", "Gen" }, { "pcie_current_width", "x" } }) do
+                if GPUPCIe.reading(field[1], metrics[field[1]]) ~= nil then
+                    local text = field[2] .. tostring(metrics[field[1]])
+                    local quality = GPUPCIe.state(snapshot, gpu, field[1])
+                    if Power.unusable(quality) or quality == "unknown" then text = Technical.state(i18n, quality) .. " · " .. text end
+                    parts[#parts + 1] = text
+                end
+            end
+            pcie = table.concat(parts, " ")
+        end
         -- A device can publish several independent clocks: a discrete card
         -- drives a graphics clock and a memory clock, and a multi-tile device
         -- drives one per tile.  The column carries the promoted clock, and
@@ -1344,6 +1357,40 @@ local function gpu_rows(snapshot, format, i18n)
         }
     end
     return rows
+end
+
+function M.gpu_pcie_rows(snapshot, i18n)
+    local rows = {}
+    local format = i18n.format
+    for index, device in ipairs(snapshot.gpus and snapshot.gpus.devices or {}) do
+        if index > 64 then break end
+        local metrics = device.metrics or {}
+        local function value(key, prefix, suffix)
+            local raw = GPUPCIe.reading(key, metrics[key])
+            if raw == nil then return "—" end
+            local text = (prefix or "") .. number(format, raw, 0) .. (suffix or "")
+            local quality = GPUPCIe.state(snapshot, device, key)
+            if Power.unusable(quality) or quality == "unknown" then text = Technical.state(i18n, quality) .. " · " .. text end
+            return text
+        end
+        local function link(generation, width)
+            if metrics[generation] == nil and metrics[width] == nil then return "—" end
+            return value(generation, "Gen") .. " " .. value(width, "x")
+        end
+        local age
+        for _, key in ipairs(GPUPCIe.fields) do
+            local _, field_age = GPUPCIe.state(snapshot, device, key)
+            if field_age ~= nil then age = math.max(age or 0, field_age) end
+        end
+        rows[#rows + 1] = { card = device.card or device.id, name = device.model_name or device.vendor_name or device.id,
+            source = metrics.pcie_source, available = GPUPCIe.has_data(device), age_ns = age,
+            current = link("pcie_current_generation", "pcie_current_width"),
+            maximum = link("pcie_maximum_generation", "pcie_maximum_width"),
+            tx = value("pcie_tx_kilobytes_per_second", nil, " KB/s"),
+            rx = value("pcie_rx_kilobytes_per_second", nil, " KB/s"),
+            interval_ns = GPUPCIe.reading("pcie_throughput_interval_ns", metrics.pcie_throughput_interval_ns) }
+    end
+    return rows, #(snapshot.gpus and snapshot.gpus.devices or {})
 end
 
 local function gpu_process_rows(snapshot, format)

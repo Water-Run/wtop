@@ -2632,6 +2632,8 @@ function M.agent(snapshot, options)
             "power_limit_percent", "power_headroom_watts", "power_instant_watts", "power_average_watts",
             "power_interval_ns", "power_average_interval_ns", "power_instant_timestamp_us", "power_average_timestamp_us",
             "power_instant_quality", "power_average_quality",
+            "pcie_current_generation", "pcie_current_width", "pcie_maximum_generation", "pcie_maximum_width",
+            "pcie_tx_kilobytes_per_second", "pcie_rx_kilobytes_per_second", "pcie_throughput_interval_ns", "pcie_source",
         })
         output.performance_limits = export_performance_limits(device.performance_limits, device_limit, true)
         output.observations = export_gpu_observations(device.observations)

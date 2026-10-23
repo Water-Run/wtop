@@ -60,6 +60,18 @@ for n = 1, 3 do
             snapshot.quality.cpu.value_timestamp_ns=1000000000
         end
     end
+    if arg[2] == "gpu-pcie" then
+        local metrics={utilization_percent=25,pcie_current_generation=3,pcie_current_width=8,
+            pcie_maximum_generation=4,pcie_maximum_width=16,pcie_tx_kilobytes_per_second=12345,
+            pcie_rx_kilobytes_per_second=0,pcie_throughput_interval_ns=20000000,pcie_source="nvml"}
+        local observations={}
+        for key in pairs(metrics)do observations[key]={source="nvml",quality="fresh",observed_at_ns=math.min(n,2)*1000000000}end
+        if n==2 then observations.pcie_tx_kilobytes_per_second={source="nvml",quality="stale",retained=true,observed_at_ns=1e9}end
+        snapshot.gpus={devices={{id="card0",card="card0",model_name="Recorded PCIe GPU",identity_quality="fresh",
+            metrics=metrics,quality={pcie="fresh"},metric_observations=observations}}}
+        snapshot.quality.gpus={status=n==3 and"error"or"ok",quality=n==3 and"stale"or"fresh",
+            timestamp_ns=snapshot.timestamp_ns,value_timestamp_ns=n==3 and 2e9 or snapshot.timestamp_ns}
+    end
     if arg[2] == "runtime-pm" then
         local observed = math.min(n,2)*1000000000
         local pm = {status="ok",source="/sys/bus/pci/devices/0000:00:02.0",runtime_status="suspended",

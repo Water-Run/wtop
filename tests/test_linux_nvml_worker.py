@@ -11,7 +11,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
-def tui_hang(lua: Path, env: dict[str, str], source: str = 'nvml') -> None:
+def tui_hang(lua: Path, env: dict[str, str], source: str = 'nvml', fault_mode: int | None = None) -> None:
     # The script gates each key on the current screen, so a stream of redraws
     # cannot pass as responsive navigation while the driver is stuck.
     os.environ.update(env)
@@ -19,6 +19,7 @@ def tui_hang(lua: Path, env: dict[str, str], source: str = 'nvml') -> None:
     fault={'nvml':('WTOP_NVML_FIXTURE_MODE','45'),
            'amdsmi':('WTOP_AMDSMI_FIXTURE_MODE','40'),
            'levelzero':('WTOP_LEVELZERO_FIXTURE_MODE','40')}[source]
+    if fault_mode is not None:fault=(fault[0],str(fault_mode))
     os.environ[fault[0]]=fault[1]
     sys.path.insert(0,str(ROOT/'tests'))
     import pty_smoke as pty
@@ -31,12 +32,13 @@ def tui_hang(lua: Path, env: dict[str, str], source: str = 'nvml') -> None:
     try:
         pty.run_session(120,40,exercise=False,cli_options=('--lang','en-US','--no-color'),script=[
             (('sleep',0.4),('CPU','Memory')),(b'2',('CPU','Memory')),
-            (b'9',('PID','Command')),(b'7',('Host','Kernel')),(b'p',None),
+            (b'9',('PID','Command')),(b'7',('Host','Kernel')),(b'x',None),
+            (b'\x1b',('GPU PCIe links',)),(b'p',None),
             (b'\x1b',('Power and limits','configured cap')),(b'1',None),
             (b'q',('CPU','Memory')),
         ])
     finally:pty._markers_visible=original
-    print('ok: hung '+source+' constructor leaves overview/process/system/GPU/power navigation and quit responsive')
+    print('ok: hung '+source+' driver leaves overview/process/system/GPU/PCIe/power navigation and quit responsive')
 
 def main() -> None:
     p=argparse.ArgumentParser(description=__doc__)
@@ -56,7 +58,7 @@ def main() -> None:
          'LUA_CPATH':str(args.module.resolve().parent/'?.so')+';;'}
     subprocess.run([str(fixture),str(args.module.resolve())],env=env,check=True,timeout=90)
     subprocess.run([str(fixture),str(args.module.resolve()),'--legacy-syscalls'],env=env,check=True,timeout=90)
-    for mode in ([] if args.native_only else [0,45,46,47,48,49,50,51,52,56,57,58]):
+    for mode in ([] if args.native_only else [0,45,46,47,48,49,50,51,52,56,57,58,65]):
         run_env={**env,'WTOP_NVML_FIXTURE_MODE':str(mode)}
         with tempfile.TemporaryFile() as private:
             private.write(b'parent-only test descriptor');private.flush()
@@ -65,7 +67,9 @@ def main() -> None:
             try:
                 subprocess.run([str(lua/'bin/lua'),str(ROOT/'tests/native/nvml_worker_smoke.lua'),str(mode)],cwd=ROOT,env=run_env,pass_fds=(20,),check=True,timeout=8)
             finally:os.close(20)
-    if not args.native_only:tui_hang(lua,env)
+    if not args.native_only:
+        tui_hang(lua,env)
+        tui_hang(lua,env,fault_mode=65)
     print('ok: isolated NVML process transport, persistent cursors, Lua OOM, hang/crash/noise and lifecycle')
 
 if __name__=='__main__':main()

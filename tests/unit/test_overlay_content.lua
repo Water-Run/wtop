@@ -310,6 +310,12 @@ local function build(i18n, name)
       { devices = { gpu_device }, index = 1, device = gpu_device }, i18n, true)
   elseif name == "gpu_device_clock_detail_lines" then
     return TUI.gpu_device_clock_detail_lines(gpu_device, i18n)
+  elseif name == "gpu_pcie_lines" then
+    return TUI.gpu_pcie_lines({timestamp_ns=1500000000,gpus={devices={{
+      card="card0",model_name="NVIDIA PCIe device",quality={pcie="fresh"},metrics={
+        pcie_current_generation=3,pcie_current_width=8,pcie_maximum_generation=4,pcie_maximum_width=16,
+        pcie_tx_kilobytes_per_second=12345,pcie_rx_kilobytes_per_second=0,pcie_throughput_interval_ns=20000000,
+        pcie_source="nvml"},metric_observations={pcie_tx_kilobytes_per_second={quality="stale",retained=true,observed_at_ns=1e9}}}}}},i18n)
   elseif name == "workspace_lines" then
     return TUI.workspace_lines({ index = 1, active = 1, names = { "default", "io" },
       truncated = false }, i18n, true)
@@ -332,7 +338,7 @@ end
 local FIXTURED = {
   "hardware_detail_lines",
   "entity_picker_lines", "gpu_client_detail_lines", "gpu_client_lines",
-  "gpu_device_clock_detail_lines", "gpu_device_clock_lines", "inspector_lines",
+  "gpu_device_clock_detail_lines", "gpu_device_clock_lines", "gpu_pcie_lines", "inspector_lines",
   "move_target_lines", "process_column_lines", "process_detail_lines",
   "process_fd_detail_lines", "process_fd_lines",
   "route_detail_lines",

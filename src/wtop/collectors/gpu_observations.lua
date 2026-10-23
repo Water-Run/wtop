@@ -14,6 +14,9 @@ local groups = {
   temperature_celsius = "temperature", power_watts = "power",
   hotspot_temperature_celsius = "temperature", graphics_voltage_volts = "voltage",
   fan_speed_percent = "fan", fan_speed_rpm = "fan",
+  pcie_current_generation = "pcie", pcie_current_width = "pcie",
+  pcie_maximum_generation = "pcie", pcie_maximum_width = "pcie",
+  pcie_tx_kilobytes_per_second = "pcie", pcie_rx_kilobytes_per_second = "pcie",
 }
 local function finite(value)
   return type(value)=="number" and value==value and value>=0 and value<math.huge
@@ -53,6 +56,10 @@ local function metadata(source,data,now,retained,reason)
     retained=retained or false,reason=reason}
 end
 local function metric_method(observation,source,device,key)
+  if source=="nvml" and (key=="pcie_tx_kilobytes_per_second" or key=="pcie_rx_kilobytes_per_second") then
+    observation.measurement="driver_window_average"
+    observation.hardware_timestamp_available=false
+  end
   if source=="adl"and device.adl then
     observation.method=device.adl.metric_methods and device.adl.metric_methods[key]
     if observation.method=="shared_memory"or observation.method=="query"then
