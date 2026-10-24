@@ -372,4 +372,55 @@ assert(not find(nothing, "调度策略") and not find(nothing, "队列等待"),
   "an unreadable schedstat and sched invent nothing at all")
 
 print("ok: per-thread scheduler (parsers, rates, TID recycling, overlay)")
+-- Long-running navigation must not retain a baseline for every task ever
+-- inspected. Keep recent activity when old identities exceed the cache bound;
+-- an evicted identity returns as a gap, rather than inheriting another rate.
+do
+  local history = Process.new({ read_status = false })
+  local function counters(value)
+    return { run_ns = value * 1000000, wait_ns = value * 1000, timeslices = value }
+  end
+  local first = history:_sched_rate("hot", counters(1), 1, 1000000000)
+  assert(first.quality == "gap")
+  for index = 1, 20000 do
+    local measured = history:_sched_rate("hot", counters(index + 1), 1,
+      (index + 1) * 1000000000)
+    assert(measured.quality == "fresh" and measured.wait_rate_ns == 1000,
+      "recently observed tasks must survive unrelated navigation")
+    history:_sched_rate("past-" .. index, counters(index), index,
+      (index + 1) * 1000000000)
+  end
+  local count = 0
+  for _ in pairs(history.sched_memo) do count = count + 1 end
+  assert(count <= 4096, "scheduler history grew past the fixed task bound: " .. count)
+  assert(history.sched_memo.hot and history.sched_memo["past-20000"]
+    and not history.sched_memo["past-1"],
+    "the oldest unused identities must yield to recent observations")
+  for _, index in ipairs({ 18000, 20000, 15906 }) do
+    local recent = history:_sched_rate("past-" .. index, counters(25000), index,
+      25000000000000)
+    assert(recent.quality == "fresh" and recent.interval_ns > 0,
+      "revisiting retained history must preserve its own interval")
+  end
+  local restored = history:_sched_rate("past-1", counters(30000), 1, 30000000000000)
+  assert(restored.quality == "gap" and restored.wait_rate_ns == nil,
+    "an evicted baseline cannot manufacture an interval")
+  assert(first.quality == "gap" and first.wait_rate_ns == nil,
+    "cache changes cannot mutate a previously published result")
+
+  -- Changing procfs providers invalidates both baseline identity and cache
+  -- bookkeeping. Refilling after the reset must have the same fixed bound.
+  local empty_fs = { list = function() return {} end,
+    read = function() return nil, { kind = "missing" } end }
+  history:sample({ fs = empty_fs, now_ns = function() return 1 end })
+  assert(next(history.sched_memo) == nil)
+  for index = 1, 5000 do
+    history:_sched_rate("new-" .. index, counters(index), index, index * 1000000000)
+  end
+  count = 0
+  for _ in pairs(history.sched_memo) do count = count + 1 end
+  assert(count <= 4096 and history.sched_memo["new-5000"],
+    "provider reset must also reset cache eviction state")
+end
+
 return true

@@ -49,6 +49,7 @@ local DEFAULT_MAX_DETAIL_THREADS = 1024
 local HARD_MAX_DETAIL_THREADS = 4096
 local MAX_DETAIL_FDS = 4096
 local MAX_BULK_IO_READS = 8192
+local MAX_SCHEDULER_HISTORY = 4096
 local BULK_IO_REFRESH_NS = 5 * 1000000000
 local BULK_IO_RATE_REFRESH_NS = 2 * 1000000000
 local NUMA_MAPS_MAX_BYTES = 2 * 1024 * 1024
@@ -266,10 +267,10 @@ function Process.new(options)
     -- asked to measure: the processes whose rows the operator can see, and the
     -- individual threads they opened.  Keyed by an identity string that carries
     -- the pid and tid, so a recycled id can never inherit a previous task's
-    -- counters.  Only what has actually been displayed or inspected is kept, so
-    -- this is bounded by the viewport and by curiosity rather than by the
-    -- process or thread count on the machine.
+    -- counters. Retain at most MAX_SCHEDULER_HISTORY recently observed tasks;
+    -- navigating through many identities cannot grow this history forever.
     sched_memo = {},
+    sched_memo_size = 0,
   }, Process)
 end
 
@@ -443,9 +444,9 @@ end
 --
 -- The previous reading is kept on the collector rather than in the sample
 -- because schedstat is read for the selected thread only.  Moving the cursor
--- away and back therefore resumes from the last time *this* thread was read,
--- and the rate covers the whole gap -- which is the interval the counters
--- actually span, and is stated rather than silently rescaled to one tick.
+-- away and back resumes from its last cached reading. The rate covers that
+-- whole interval, rather than rescaling to one tick. Once old history has
+-- been evicted, the next reading starts a new interval with gap quality.
 --
 -- The context-switch counters travel in the same slot even though they come
 -- from a different file, for two reasons.  They are the only per-thread signal
@@ -453,6 +454,31 @@ end
 -- something itself, and they cost nothing extra: the status file this thread is
 -- already read for its thread group carries them.  One slot and one interval
 -- also means the two families cannot end up describing different spans.
+local function remember_scheduler(self, identity, reading)
+  local memo = self.sched_memo
+  local previous = memo[identity]
+  if previous then
+    -- Remove this identity from its old recency position before putting the
+    -- new reading at the head. Links belong only to private baseline records.
+    if previous.newer then memo[previous.newer].older = previous.older
+    else self.sched_newest = previous.older end
+    if previous.older then memo[previous.older].newer = previous.newer
+    else self.sched_oldest = previous.newer end
+  elseif self.sched_memo_size == MAX_SCHEDULER_HISTORY then
+    local oldest = self.sched_oldest
+    self.sched_oldest = memo[oldest].newer
+    memo[self.sched_oldest].older = nil
+    memo[oldest] = nil
+  else
+    self.sched_memo_size = self.sched_memo_size + 1
+  end
+  reading.older = self.sched_newest
+  if self.sched_newest then memo[self.sched_newest].newer = identity
+  else self.sched_oldest = identity end
+  self.sched_newest = identity
+  memo[identity] = reading
+end
+
 function Process:_sched_rate(identity, parsed, starttime_ticks, now, switches)
   local key = self.sched_memo
   local result = {}
@@ -504,7 +530,7 @@ function Process:_sched_rate(identity, parsed, starttime_ticks, now, switches)
     result.quality = "fresh"
     result.interval_ns = elapsed_ns
   end
-  key[identity] = {
+  remember_scheduler(self, identity, {
     starttime_ticks = starttime_ticks,
     -- Recorded only from a real reading.  A kernel without CONFIG_SCHEDSTATS
     -- publishes no schedstat at all, and carrying a previous value forward
@@ -519,7 +545,7 @@ function Process:_sched_rate(identity, parsed, starttime_ticks, now, switches)
       involuntary = switches.involuntary,
     } or nil,
     at_ns = now,
-  }
+  })
   return result
 end
 
@@ -619,6 +645,8 @@ function Process:sample(context, previous)
     previous = nil
     self.io_bulk_last_ns = nil
     self.sched_memo = {}
+    self.sched_memo_size = 0
+    self.sched_newest, self.sched_oldest = nil, nil
   end
   local previous_data = Common.previous_data(previous)
   local elapsed_ns = previous_data and Common.elapsed_ns(now, previous.timestamp_ns) or nil
