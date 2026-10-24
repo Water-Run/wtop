@@ -118,6 +118,34 @@ assert(Wire.decode(Wire.encode({[0]=false}, {max_nodes=3}), {max_nodes=3})[0] ==
 assert(not pcall(Wire.decode, Wire.encode({[0]=false}), {max_nodes=2}))
 assert(not pcall(Wire.decode, "t", {max_bytes=0}))
 
+-- Optional historical privilege may be absent, but it cannot be a scalar.
+-- A checksum-valid malformed header must fail at the file boundary instead
+-- of reaching the exporter or being mistaken for playback-host identity.
+for _, value in ipairs({ false, true, 12, "root" }) do
+    local metadata = { schema="dev.waterrun.wtop.recording/v1", platform="Linux",
+        interval_ms=1000, encoding="typed-block/v1", privilege=value }
+    local payload = Wire.encode(metadata)
+    local malformed_header = Recording.MAGIC .. string.pack("<I4I4", #payload,
+        Recording.crc32(payload)) .. payload
+    local old_header_size = string.unpack("<I4", body, #Recording.MAGIC + 1)
+    local malformed_body = malformed_header .. body:sub(#Recording.MAGIC + 8 + old_header_size + 1)
+    local malformed, reason = Recording.open(temporary(malformed_body))
+    if malformed then malformed:close() end
+    assert(malformed == nil and reason:find("invalid recorded privilege", 1, true),
+        "scalar recorded privilege was accepted")
+    local writes = 0
+    local ok, why = pcall(Recording.writer, { metadata=metadata,
+        write=function() writes=writes+1;return true end })
+    assert(not ok and tostring(why):find("invalid recorded privilege", 1, true) and writes==0,
+        "invalid identity metadata must be refused before writing a header")
+end
+local no_identity = assert(Recording.open(temporary(body)))
+assert(no_identity.header.privilege == nil)
+local no_identity_export = require("wtop.export").snapshot(no_identity:frame(1).snapshot,
+    { privilege=no_identity.header.privilege })
+assert(no_identity_export.privilege.mode == "unknown")
+no_identity:close()
+
 local native = require("wtop.native")
 if type(native.recording_compress) == "function" then
     for _, size in ipairs({ 1, 15, 255, 4096, 65536, 1048576 }) do

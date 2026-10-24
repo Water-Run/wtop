@@ -74,6 +74,7 @@ function M.writer(options)
     assert(({ Linux=true, Darwin=true, Windows=true })[header.platform], "invalid recorded platform")
     assert(uint(header.interval_ms) and header.interval_ms >= 100 and header.interval_ms <= 10000,
         "invalid recorded interval")
+    assert(header.privilege == nil or type(header.privilege) == "table", "invalid recorded privilege")
     header.schema = "dev.waterrun.wtop.recording/v1"
     header.encoding = "typed-block/v1"
     header.remote_addresses_unmasked = options.include_remote_addresses == true
@@ -184,6 +185,7 @@ function M.open(path)
             "unsupported recording metadata")
         assert(header.capabilities == nil or type(header.capabilities) == "table", "invalid recording capabilities")
         assert(header.host == nil or type(header.host) == "table", "invalid recorded host")
+        assert(header.privilege == nil or type(header.privilege) == "table", "invalid recorded privilege")
         assert(header.version == nil or (type(header.version) == "string" and #header.version <= 128), "invalid recorded version")
         assert(header.revision == nil or (type(header.revision) == "string" and #header.revision <= 256), "invalid recorded revision")
         local self = setmetatable({ file=file, header=header, index={}, count=0,
