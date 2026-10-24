@@ -49,6 +49,8 @@ def validate_gpu_capture(data: bytes, actual_exit: int, page: int, locale: str, 
         assert b"8.0" in cell, (name, cell)
     detail = screens["gpu_detail"]
     labels = ["PCIe TX", "PCIe RX", "OS current link"] if locale == "en-US" else ["PCIe 发送", "PCIe 接收", "系统当前链路"]
+    missing = [label for label in labels if not any(label in line for line in detail.splitlines())]
+    assert not missing, (name, "missing GPU detail fields", missing, detail)
     lines = [next(line for line in detail.splitlines() if label in line) for label in labels]
     assert (stale_word in lines[0]) == (frame > 1), (name, lines[0])
     assert (stale_word in lines[1]) == (frame == 3), (name, lines[1])
@@ -79,7 +81,7 @@ def run_gpu_replay(executable: Path, harness: Path, recording: Path, output_dir:
                 command = subprocess.list2cmdline([str(executable.resolve()), "--replay", str(recording.resolve()),
                     "--replay-frame", str(frame), "--lang", locale, "--no-color"])
                 steps = ("resize:100x30,capture:15000:gpu_main:PCIe|card0,key:x,"
-                         "capture:10000:gpu_detail:GPU PCIe|8.0 GT/s PCIe x4|KB/s,"
+                         "capture:10000:gpu_detail:GPU PCIe|8.0 GT/s PCIe x4|0 KB/s,"
                          "vk:34,capture:10000:gpu_os:Recorded OS-only GPU|5.0 GT/s PCIe x2,"
                          "key:\\e,key:q,exit:10000")
                 result = subprocess.run([str(harness.resolve()), steps, command], env=environment,

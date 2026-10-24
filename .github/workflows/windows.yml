@@ -220,6 +220,7 @@ jobs:
             build/storage-fixtures/
             build/levelzero-fixtures/
             build/adl-fixtures/
+            build/pcie-*/
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 3
