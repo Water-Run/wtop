@@ -2,6 +2,14 @@
 
 ## 开发概览（2026-10-24）
 
+`026106c` 的十九项跨平台 CI 已全部成功，含三个独立下载包作业。
+全新 i686 的 173 个测试文件、Linux 3.2／Pentium III 虚拟机的
+八项检查与终端通过，23 份日志摘要及四个映像一致；观察任务
+实际退出零。调度采样身份修复、缓存上限和 Windows 控制台门
+完成该提交范围的验收；下述 Intel P-state 与权限导出改动随后
+整合，需要独立 CI。证据见 `build/process-scheduler-ci-20261024/CI-ACCEPTANCE.json`
+与 `I686-ACCEPTANCE.json`。
+
 Linux CPUFreq 增加 Intel P-state 全局配置与 `no_turbo` 睿频许可，
 以及策略基准频率和固件频率限制。设备详情、Snapshot、记录回放
 和硬件报告保留数据及来源；性能范围百分比不解释为利用率、瓦数
