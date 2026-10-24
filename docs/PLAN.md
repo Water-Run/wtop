@@ -2,6 +2,33 @@
 
 ## 开发概览（2026-10-24）
 
+Linux CPUFreq 增加 AMD P-state 的 active／passive／guided 模式、
+优选核心策略及硬件状态、相对 CPPC 性能与核心排序、最高参考频率、
+最低非线性频率，以及内核提供时的频率下限目标和级数。
+硬件详情、Snapshot、录制回放和硬件报告保留来源与质量。
+频率按 kHz 转为 Hz；相对等级不解释为百分比或瓦数，下限目标
+不解释为实时频率或已经撞墙。驱动／模式读取中变化标记缺口，
+旧内核缺项保持未知，零排序与零级数正常保留；其他驱动不读取
+AMD 专用文件。接口语义参考 [内核文档](https://docs.kernel.org/admin-guide/pm/amd-pstate.html)
+和 [驱动实现](https://github.com/torvalds/linux/blob/master/drivers/cpufreq/amd-pstate.c)。
+
+冻结候选双 Lua 各八个相关文件通过，旧采集器被新回归拒绝；
+M4／Windows 11／Server 2008 各五个共享文件通过。四条历史导出
+禁止实时硬件读取，源码两次及目录包／单文件包各两次终端检查通过，
+含 80×30 ASCII 无彩色、滚动与过期数据。两个实际 Linux 包另有
+八条导出通过公开 JSON 契约；嵌入读取器源码与冻结源码一致。
+本机 i7-13620H 的 16 个策略没有新增 AMD 读取。AMD 数据仅由夹具
+验证，尚无实体 AMD 校准；跨平台宿主通过共享路径不代表新增原生
+AMD 数据源。证据见 `build/amd-pstate-controls-20261024/LOCAL-ACCEPTANCE.json`。
+本节点在提交并核对 CI 后按用户要求暂停。
+
+`cd8aba2` 的十九项跨平台 CI 全部成功，三个独立下载包复验通过。
+i686 的 173 个文件、Linux 3.2／Pentium III 虚拟机八项检查与终端
+通过，终端记录 30,073 字节；23 份日志摘要和四个映像一致。
+CPU 身份字段投影完成该提交范围验收。证据见
+`build/cpu-roster-projection-ci-20261024/CI-ACCEPTANCE.json` 与
+`I686-ACCEPTANCE.json`。
+
 `bba8790` 的十九项跨平台 CI 全部成功，含三个独立下载包复验。
 i686 的 173 个测试文件、Linux 3.2／Pentium III 虚拟机八项检查
 及终端通过，23 份日志摘要和四个映像一致，观察任务实际退出零。

@@ -208,6 +208,35 @@ function M.render(snapshot)
         lines[#lines + 1] = ""
     end
 
+    local amd = object(cpu_frequency.amd_pstate)
+    if next(amd) then
+        table_section(lines, "AMD P-state controls", { "Field", "Value" }, {
+            { "Driver mode", amd.mode }, { "Preferred-core policy", amd.preferred_core },
+            { "Quality", amd.quality }, { "Source", amd.source },
+        }, function(row) return row end)
+    end
+    local amd_policies = {}
+    for _, policy in ipairs(cpu_frequency.policies or {}) do
+        if type(policy.amd_pstate) == "table" then amd_policies[#amd_policies + 1] = policy end
+    end
+    if #amd_policies > 0 then
+        table_section(lines, "AMD P-state references and controls",
+            { "Policy", "Highest CPPC performance", "Maximum reference", "Lowest nonlinear",
+                "Hardware preferred-core state", "Preferred rank", "Floor target", "Floor levels", "Quality", "Source" },
+            amd_policies, function(policy)
+                local value = policy.amd_pstate
+                return { policy.policy or policy.id, value.highest_performance,
+                    quantity(value.maximum_frequency_hz, 1000000000, " GHz", 2),
+                    quantity(value.lowest_nonlinear_frequency_hz, 1000000000, " GHz", 2),
+                    value.hardware_preferred_core, value.preferred_core_ranking,
+                    quantity(value.floor_frequency_hz, 1000000000, " GHz", 2),
+                    value.floor_level_count, value.quality, value.source }
+            end)
+        lines[#lines + 1] = "CPPC performance and preferred-core rank are relative levels, not percentages or watts; higher rank is preferred."
+        lines[#lines + 1] = "The configured floor is a target subject to power and thermal limits, not a guaranteed measured minimum; 0 floor levels means unlimited."
+        lines[#lines + 1] = ""
+    end
+
     local memory_items = {
         { "Installed memory", bytes(memory.total_bytes) },
         { "Available memory", bytes(memory.available_bytes) },

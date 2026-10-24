@@ -311,6 +311,128 @@ do
   fs.read = saved
 end
 
+-- AMD CPPC references are unitless levels or kHz, independent of configured
+-- scaling ceilings and measured current frequency. Optional old-kernel files
+-- may be absent; driver/mode changes must invalidate a mixed observation.
+do
+  local Export, TUI = require("wtop.export"), require("wtop.tui")
+  local I18n, Report = require("wtop.i18n"), require("wtop.report")
+  local base, amd = "/sys/devices/system/cpu/cpufreq", "/sys/devices/system/cpu/amd_pstate"
+  local spec = Hardware.cpufreq_policies()
+  spec.files[base .. "/boost"] = nil
+  spec.files[amd .. "/status"], spec.files[amd .. "/prefcore"] = "active\n", "disabled\n"
+  local values = { highest_perf="196", max_freq="5200000", lowest_nonlinear_freq="1756000",
+    hw_prefcore="enabled", prefcore_ranking="0", floor_freq="1200000", floor_count="0" }
+  for _, name in ipairs({ "policy0", "policy2", "policy3" }) do
+    spec.files[base .. "/" .. name .. "/scaling_driver"] = "amd-pstate-epp\n"
+    for key, value in pairs(values) do
+      spec.files[base .. "/" .. name .. "/amd_pstate_" .. key] = value .. "\n"
+    end
+  end
+  local fs = Fixture.new(spec)
+  local collector = Cpufreq.new({ fs=fs })
+  local function sample() return collector:sample({ now_ns=function() return 1000000000 end }) end
+  local result = sample()
+  assert(result.data.amd_pstate.mode == "active" and result.data.amd_pstate.preferred_core == false
+    and result.data.amd_pstate.quality == "fresh" and result.data.intel_pstate == nil)
+  local policy = result.data.policies[1]
+  local value = assert(policy.amd_pstate)
+  assert(value.highest_performance == 196 and value.maximum_frequency_hz == 5200000000
+    and value.lowest_nonlinear_frequency_hz == 1756000000 and value.hardware_preferred_core == true
+    and value.preferred_core_ranking == 0 and value.floor_frequency_hz == 1200000000
+    and value.floor_level_count == 0 and value.quality == "fresh" and value.consistent)
+  assert(policy.frequencies.scaling_maximum_hz == 4700000000 and result.data.boost == nil
+    and policy.boost == nil, "AMD references must not invent boost or replace configured limits")
+  local state = { timestamp_ns=1000000000, cpu_frequency=result.data,
+    quality={cpu_frequency={status="ok", quality=result.quality}} }
+  local output = Export.snapshot(state)
+  assert(output.cpu_frequency.amd_pstate.preferred_core == false
+    and output.cpu_frequency.policies[1].amd_pstate.preferred_core_ranking == 0)
+  local report = Report.render(output)
+  assert(report:find("AMD P-state references and controls",1,true)
+    and report:find("5.20 GHz",1,true) and report:find("not percentages or watts",1,true)
+    and report:find("0 floor levels means unlimited",1,true))
+  for _, locale in ipairs({"en-US","zh-CN","zh-TW","fr-FR","de-DE","es-ES","pt-BR","ru-RU","ja-JP","ko-KR"}) do
+    local i18n = assert(I18n.new({locale=locale}))
+    local lines = table.concat(TUI.hardware_detail_lines(state,"cpufreq:"..policy.id,i18n),"\n")
+    for _, key in ipairs({"amd_controls","preferred_core","highest_performance","amd_max_frequency",
+      "lowest_nonlinear","hardware_prefcore","prefcore_ranking","floor_frequency","floor_count"}) do
+      assert(lines:find(i18n:t("cpufreq."..key),1,true),locale..": "..key)
+    end
+    assert(i18n:diagnostics().format_errors == 0)
+  end
+  state.quality.cpu_frequency.quality = "stale"
+  local stale = Export.snapshot(state).cpu_frequency
+  assert(stale.amd_pstate.quality == "stale" and stale.policies[1].amd_pstate.quality == "stale")
+  assert(table.concat(TUI.hardware_detail_lines(state,"cpufreq:"..policy.id,
+    assert(I18n.new({locale="en-US"}))),"\n"):find("Stale",1,true))
+  for _, mode in ipairs({"passive","guided"}) do
+    spec.files[amd .. "/status"] = mode .. "\n"
+    for _, name in ipairs({"policy0","policy2","policy3"}) do
+      spec.files[base.."/"..name.."/scaling_driver"] = "amd-pstate\n"
+    end
+    assert(sample().data.policies[1].amd_pstate.quality == "fresh")
+  end
+  spec.files[amd .. "/status"] = "active\n"
+  assert(sample().data.policies[1].amd_pstate.quality == "gap", "mismatched mode and driver")
+  for _, mode in ipairs({"disable", "unexpected"}) do
+    spec.files[amd .. "/status"] = mode .. "\n"
+    local unavailable = sample()
+    assert(unavailable.quality == "partial" and unavailable.data.policies[1].amd_pstate.quality == "gap")
+    if mode == "unexpected" then assert(unavailable.data.amd_pstate.errors.status) end
+  end
+  spec.files[amd .. "/status"] = "guided\n"
+  local saved, status_reads = fs.read, 0
+  fs.read = function(self,path,limit)
+    if path == amd.."/status" then
+      status_reads=status_reads+1
+      return status_reads == 1 and "guided\n" or "active\n"
+    end
+    return saved(self,path,limit)
+  end
+  local changed = sample()
+  assert(changed.quality == "partial" and changed.data.amd_pstate.quality == "gap"
+    and changed.data.policies[1].amd_pstate.quality == "gap")
+  local driver_reads = 0
+  fs.read = function(self,path,limit)
+    if path == base.."/policy0/scaling_driver" then
+      driver_reads=driver_reads+1
+      return driver_reads == 1 and "amd-pstate\n" or "acpi-cpufreq\n"
+    end
+    return saved(self,path,limit)
+  end
+  assert(sample().data.policies[1].amd_pstate.quality == "gap")
+  fs.read = saved
+  local path = base.."/policy0/amd_pstate_"
+  spec.files[path.."max_freq"],spec.files[path.."lowest_nonlinear_freq"]="0\n","0\n"
+  spec.files[path.."highest_perf"],spec.files[path.."prefcore_ranking"]="4294967296\n","-1\n"
+  spec.files[path.."hw_prefcore"],spec.files[amd.."/prefcore"]="invalid\n","invalid\n"
+  local invalid = sample()
+  assert(invalid.quality == "partial" and invalid.data.amd_pstate.errors.preferred_core)
+  local invalid_value = invalid.data.policies[1].amd_pstate
+  assert(invalid_value.maximum_frequency_hz == nil and invalid_value.lowest_nonlinear_frequency_hz == nil
+    and invalid_value.highest_performance == nil and invalid_value.preferred_core_ranking == nil
+    and invalid_value.errors.highest_performance and invalid_value.errors.hardware_preferred_core)
+  spec.files[path.."max_freq"] = nil
+  spec.denied = {[path.."max_freq"]=true}
+  local denied = Cpufreq.new({fs=Fixture.new(spec)}):sample({})
+  assert(denied.data.policies[1].amd_pstate.errors.maximum_frequency.status == "denied")
+  local old = Hardware.cpufreq_policies()
+  for _, name in ipairs({"policy0","policy2","policy3"}) do
+    old.files[base.."/"..name.."/scaling_driver"]="amd-pstate\n"
+  end
+  local absent = Cpufreq.new({fs=Fixture.new(old)}):sample({})
+  assert(absent.data.amd_pstate == nil and absent.data.policies[1].amd_pstate == nil)
+  assert(Cpufreq.new({base_path="/fixture/cpufreq/"}).amd_pstate_path == "/fixture/amd_pstate")
+  local untouched = Fixture.new(Hardware.cpufreq_policies())
+  local read = untouched.read
+  untouched.read = function(self,file,limit)
+    assert(not file:find("amd_pstate",1,true),"unrelated driver must not probe AMD attributes")
+    return read(self,file,limit)
+  end
+  assert(Cpufreq.new({fs=untouched}):sample({}).data.amd_pstate == nil)
+end
+
 -- ---------------------------------------------------------------------------
 -- GPU: two vendors with different sysfs vocabularies, plus a DRM client.
 -- ---------------------------------------------------------------------------

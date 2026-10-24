@@ -238,6 +238,58 @@ local function controls_apply(controls, policy)
     or controls.mode == "passive" and policy.driver == "intel_cpufreq"
 end
 
+local function amd_driver(driver)
+  return driver == "amd-pstate" or driver == "amd-pstate-epp"
+end
+
+local function amd_policy(self, fs, policy, context)
+  if not amd_driver(policy.driver) then return nil end
+  local base, errors = policy.source, {}
+  -- Kernel frequency attributes use kHz. CPPC performance/ranking are
+  -- unitless, and the floor is configuration rather than measured feedback.
+  local reference_frequency = { zero_is_absent = true }
+  local reading = {
+    highest_performance = optional_number(fs, base .. "/amd_pstate_highest_perf", errors, "highest_performance", 4294967295),
+    maximum_frequency_hz = optional_khz(fs, base .. "/amd_pstate_max_freq", errors, "maximum_frequency", self.max_frequency_khz, reference_frequency),
+    lowest_nonlinear_frequency_hz = optional_khz(fs, base .. "/amd_pstate_lowest_nonlinear_freq", errors, "lowest_nonlinear_frequency", self.max_frequency_khz, reference_frequency),
+    hardware_preferred_core = optional_boolean(fs, base .. "/amd_pstate_hw_prefcore", errors, "hardware_preferred_core"),
+    preferred_core_ranking = optional_number(fs, base .. "/amd_pstate_prefcore_ranking", errors, "preferred_core_ranking", 4294967295),
+    floor_frequency_hz = optional_khz(fs, base .. "/amd_pstate_floor_freq", errors, "floor_frequency", self.max_frequency_khz, reference_frequency),
+    floor_level_count = optional_number(fs, base .. "/amd_pstate_floor_count", errors, "floor_level_count", 4294967295),
+  }
+  if not next(reading) and not next(errors) then return nil end
+  local after = optional_text(fs, base .. "/scaling_driver", errors, "driver", 256)
+  reading.consistent = after == policy.driver
+  reading.quality = not reading.consistent and "gap" or next(errors) and "partial" or "fresh"
+  reading.observed_at_ns, reading.source, reading.errors = Common.now_ns(context), base, errors
+  return reading
+end
+
+local function amd_controls(self, fs, before, policies, context)
+  if not before then return nil end
+  local base, errors = self.amd_pstate_path, before.errors
+  local preferred = optional_boolean(fs, base .. "/prefcore", errors, "preferred_core")
+  local after = optional_text(fs, base .. "/status", errors, "status", 256)
+  local mode = before.mode
+  local consistent = mode == after
+  if mode and mode ~= "active" and mode ~= "passive" and mode ~= "guided" and mode ~= "disable" then
+    errors.status = error_record({ kind = "parse_error", message = "invalid_value" }, base .. "/status")
+  end
+  for _, policy in ipairs(policies) do
+    local reading = policy.amd_pstate
+    if reading then
+      local matches = mode == nil or mode == "active" and policy.driver == "amd-pstate-epp"
+        or (mode == "passive" or mode == "guided") and policy.driver == "amd-pstate"
+      if not consistent or not matches or errors.status then reading.consistent, reading.quality = false, "gap" end
+      if reading.quality ~= "fresh" then policy.quality = "partial" end
+    end
+  end
+  if mode == nil and after == nil and preferred == nil and not next(errors) then return nil end
+  return { mode=mode, preferred_core=preferred, consistent=consistent,
+    quality=not consistent and "gap" or next(errors) and "partial" or "fresh",
+    observed_at_ns=Common.now_ns(context), source=base, errors=errors }
+end
+
 function CPUFreq.new(options)
   options = options or {}
   if type(options) ~= "table" then error("CPUFreq options must be a table", 2) end
@@ -250,6 +302,8 @@ function CPUFreq.new(options)
     base_path = base_path,
     intel_pstate_path = Common.absolute_path("intel_pstate_path", options.intel_pstate_path,
       (base_path:gsub("/+$", ""):match("^(.*)/[^/]+$") or "") .. "/intel_pstate"),
+    amd_pstate_path = Common.absolute_path("amd_pstate_path", options.amd_pstate_path,
+      (base_path:gsub("/+$", ""):match("^(.*)/[^/]+$") or "") .. "/amd_pstate"),
     max_policies = bounded_integer("max_policies", options.max_policies, 1024, 1, 65536),
     max_class_entries = bounded_integer(
       "max_class_entries", options.max_class_entries, 4096, 1, 65536),
@@ -328,6 +382,7 @@ function CPUFreq:sample(context)
   local truncated = class_truncated or #entries > self.max_policies
   local any_partial = truncated
   local any_estimated = false
+  local amd_before
 
   for entry_index = 1, math.min(#entries, self.max_policies) do
     local entry = entries[entry_index]
@@ -404,6 +459,14 @@ function CPUFreq:sample(context)
         errors = errors,
         source = path,
       }
+      if amd_driver(policy.driver) then
+        if not amd_before then
+          amd_before = { errors = {} }
+          amd_before.mode = optional_text(fs, self.amd_pstate_path .. "/status",
+            amd_before.errors, "status", 256)
+        end
+        policy.amd_pstate = amd_policy(self, fs, policy, context)
+      end
       if has_entries(errors) then
         policy.quality = "partial"
         any_partial = true
@@ -422,6 +485,11 @@ function CPUFreq:sample(context)
   local boost_enabled = optional_boolean(fs, self.base_path .. "/boost", global_errors, "boost")
   local boost = boost_value(boost_enabled, self.base_path .. "/boost")
   local controls = intel_controls(self, fs, policies, context)
+  local amd = amd_controls(self, fs, amd_before, policies, context)
+  if amd and amd.quality ~= "fresh" then any_partial = true end
+  for _, policy in ipairs(policies) do
+    if policy.amd_pstate and policy.amd_pstate.quality ~= "fresh" then any_partial = true end
+  end
   local all_intel = #policies > 0
   for _, policy in ipairs(policies) do
     local applies = controls_apply(controls, policy)
@@ -443,6 +511,7 @@ function CPUFreq:sample(context)
     by_id = by_id,
     boost = boost,
     intel_pstate = controls,
+    amd_pstate = amd,
     errors = global_errors,
     duplicates_skipped = duplicates_skipped,
     truncated = truncated,

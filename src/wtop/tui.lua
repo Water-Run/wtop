@@ -3169,6 +3169,46 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
                 add("metrics.source", "Source", issue.source)
             end
         end
+        local amd = device.amd_pstate
+        local amd_controls = snapshot.cpu_frequency and snapshot.cpu_frequency.amd_pstate
+        if (amd or amd_controls) and (device.driver == "amd-pstate" or device.driver == "amd-pstate-epp") then
+            lines[#lines + 1] = ""
+            lines[#lines + 1] = translated(i18n, "cpufreq.amd_controls", "AMD P-state references and controls")
+            local current = Quality.current_source(snapshot.quality, "cpu_frequency")
+            if amd_controls then
+                add("cpufreq.driver_mode", "Driver mode", amd_controls.mode)
+                add("cpufreq.preferred_core", "Preferred-core policy", amd_controls.preferred_core)
+                add("inspector.quality", "Quality", Technical.state(i18n,
+                    current and amd_controls.quality or "stale"))
+                add("metrics.source", "Source", amd_controls.source)
+            end
+            if amd then
+                add("cpufreq.highest_performance", "Highest CPPC performance (relative)", amd.highest_performance)
+                add("cpufreq.amd_max_frequency", "AMD maximum frequency reference", amd.maximum_frequency_hz, "hertz")
+                add("cpufreq.lowest_nonlinear", "Lowest nonlinear frequency", amd.lowest_nonlinear_frequency_hz, "hertz")
+                add("cpufreq.hardware_prefcore", "Hardware preferred-core state", amd.hardware_preferred_core)
+                add("cpufreq.prefcore_ranking", "Preferred-core rank (higher preferred)", amd.preferred_core_ranking)
+                if amd.floor_frequency_hz ~= nil then
+                    add("cpufreq.floor_frequency", "Configured frequency floor target", amd.floor_frequency_hz, "hertz")
+                end
+                if amd.floor_level_count ~= nil then
+                    add("cpufreq.floor_count", "Floor levels (0 = unlimited)", amd.floor_level_count)
+                end
+                add("inspector.quality", "Quality", Technical.state(i18n, current and amd.quality or "stale"))
+                add("metrics.source", "Source", amd.source)
+            end
+            for _, observation in ipairs({ amd_controls or {}, amd or {} }) do
+                local fields = {}
+                for field in pairs(observation.errors or {}) do fields[#fields + 1] = field end
+                table.sort(fields)
+                for index = 1, math.min(#fields, 10) do
+                    local field = fields[index]
+                    local issue = observation.errors[field]
+                    add("inspector.reason", "Reason", field .. ": " .. tostring(Technical.state(i18n, issue.status)))
+                    add("metrics.source", "Source", issue.source)
+                end
+            end
+        end
         if node.temperature then
             local scope = node.temperature.scope == "core"
                 and translated(i18n, "cpufreq.temperature_core", "Core")

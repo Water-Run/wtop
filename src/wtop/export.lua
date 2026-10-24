@@ -996,6 +996,15 @@ local function export_cpu_frequency(cpu_frequency, quality)
             exported.related_cpus[cpu_index] = cpu
         end
         exported.frequencies = copy_object(policy.frequencies)
+        if type(policy.amd_pstate) == "table" then
+            exported.amd_pstate = copy_fields(policy.amd_pstate, {
+                "highest_performance", "maximum_frequency_hz", "lowest_nonlinear_frequency_hz",
+                "hardware_preferred_core", "preferred_core_ranking", "floor_frequency_hz",
+                "floor_level_count", "consistent", "quality", "observed_at_ns", "source",
+            })
+            exported.amd_pstate.errors = copy_object(policy.amd_pstate.errors)
+            if not current then exported.amd_pstate.quality = "stale" end
+        end
         if policy.boost then
             exported.boost = copy_object(policy.boost)
             if not current then exported.boost.quality = "stale" end
@@ -1018,6 +1027,13 @@ local function export_cpu_frequency(cpu_frequency, quality)
         end
     end
     result.duplicates_skipped = cpu_frequency and cpu_frequency.duplicates_skipped or 0
+    if cpu_frequency and type(cpu_frequency.amd_pstate) == "table" then
+        result.amd_pstate = copy_fields(cpu_frequency.amd_pstate, {
+            "mode", "preferred_core", "consistent", "quality", "observed_at_ns", "source",
+        })
+        result.amd_pstate.errors = copy_object(cpu_frequency.amd_pstate.errors)
+        if not current then result.amd_pstate.quality = "stale" end
+    end
     result.truncated = cpu_frequency and cpu_frequency.truncated == true or false
     return result
 end
