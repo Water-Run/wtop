@@ -6,6 +6,12 @@ local Snapshot = require("wtop.model.snapshot")
 local TUI = require("wtop.tui")
 local json = require("wtop.format.json")
 
+assert(Export.privilege(nil).mode == "unknown")
+assert(Export.privilege({ mode = "future" }).mode == "unknown")
+assert(Export.snapshot({}).privilege.mode == "unknown",
+    "missing recorded privilege must not borrow the playback host's identity")
+assert(Export.privilege({ mode = "root", root = true }).root == true)
+
 local private_connection_id = "tcp:127.0.0.1:8080:192.0.2.42:54321:01"
 local result = Export.snapshot({
     sequence = 2,

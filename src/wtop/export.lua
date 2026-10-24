@@ -1894,10 +1894,14 @@ function M.capabilities(capabilities)
 end
 
 function M.privilege(privilege)
-    return copy_fields(privilege, {
+    local result = copy_fields(privilege, {
         "mode", "uid", "effective_uid", "original_uid", "root",
         "elevated", "via_sudo", "requested",
     })
+    if result.mode ~= "user" and result.mode ~= "root" and result.mode ~= "unknown" then
+        result.mode = "unknown"
+    end
+    return result
 end
 
 
