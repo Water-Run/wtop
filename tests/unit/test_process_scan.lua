@@ -148,6 +148,54 @@ local ok, failure = xpcall(function()
   assert(second.data.truncated and #second.data.list == 1)
   assert(c.identity_cache[second.data.list[1].id] ~= cached)
 
+  -- All native batch forms must pass the same final identity fence. The
+  -- batch provides the first stat; only the read after schedstat can detect
+  -- replacement between those two lookups.
+  do
+    local real = require("wtop.native")
+    local saved_list, saved_read = FS.default.list, FS.default.read
+    for _, mode in ipairs({ "stat", "stat_parsed", "stat_rows" }) do
+      if mode ~= "stat_rows" or type(real.process_stat_row_fields) == "function" then
+        local replaced, at, stat_reads = false, 1000000000, 0
+        local native_provider = { available = true }
+        if mode ~= "stat" then native_provider.process_stat_fields = Parsers.process_stat end
+        if mode == "stat_rows" then
+          native_provider.process_stat_row_fields = real.process_stat_row_fields
+        end
+        function native_provider.proc_batch(pids, requested)
+          assert(#pids == 1 and pids[1] == 100 and requested == mode)
+          local value = mode == "stat" and original
+            or mode == "stat_rows" and assert(real.process_stat_row_fields(original))
+            or assert(Parsers.process_stat(original))
+          return { value }, {}
+        end
+        FS.default.list = function() return { "100" } end
+        FS.default.read = function(_, path)
+          if path == "/proc/uptime" then return "100 0\n" end
+          if path == "/proc/100/schedstat" then return "1000000000 200000000 10\n" end
+          if path == "/proc/100/stat" then
+            stat_reads = stat_reads + 1
+            return replaced and original:gsub(" 1000 10485760 ", " 2000 10485760 ") or original
+          end
+          return nil, { kind = "missing" }
+        end
+        local scanner = Process.new({ native = native_provider, read_status = false,
+          clock_ticks_per_second = 100, page_size_bytes = 4096 })
+        local scan_context = { now_ns = function() return at end,
+          visible_process_ids = { ["100:1000"] = true } }
+        local valid = scanner:sample(scan_context)
+        assert(valid.data.by_id["100:1000"].scheduler.wait_ns == 200000000)
+        local memo = scanner.sched_memo["pid /proc/100"]
+        replaced, at = true, 2000000000
+        local invalid = scanner:sample(scan_context, valid)
+        assert(#invalid.data.list == 0 and invalid.data.races == 1, mode)
+        assert(scanner.sched_memo["pid /proc/100"] == memo and stat_reads == 2,
+          "native batch scheduler must commit only identity-checked readings: " .. mode)
+      end
+    end
+    FS.default.list, FS.default.read = saved_list, saved_read
+  end
+
   -- The native row path and the older parsed-stat path must publish the same
   -- complete result, including unusual names, counters and rejected races.
   local real_native = require("wtop.native")

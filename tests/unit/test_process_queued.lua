@@ -459,6 +459,65 @@ assert(reused.data.by_id["100:99"].scheduler.quality == "gap"
   and reused.data.by_id["100:99"].scheduler.wait_rate_ns == nil,
   "a reused pid must not inherit a rate from the process that held the id")
 
+-- PID reuse during the schedstat read is different from reuse between two
+-- samples. The post-read identity must fence both the public row and the
+-- private rate baseline, including when a previously valid reading exists.
+for _, replacement in ipairs({
+  stat_line({ pid = 100, starttime = 99 }),
+  stat_line({ pid = 999, starttime = 11 }),
+  stat_line({ pid = 100, starttime = 11 }):gsub("4194304", "2097152", 1),
+  false,
+  "malformed stat\n",
+}) do
+  local race_now, race_stat, trigger = 1000000000,
+    stat_line({ pid = 100, starttime = 11 }), false
+  local race_wait, race_reads = 100000000, {}
+  local race_fs = {
+    list = function() return { "100" } end,
+    read = function(_, path)
+      race_reads[#race_reads + 1] = path
+      if path == "/proc/100/stat" then
+        if race_stat == false then return nil, { kind = "missing" } end
+        return race_stat
+      elseif path == "/proc/100/schedstat" then
+        if trigger then race_stat = replacement end
+        return string.format("1000000000 %d 10\n", race_wait)
+      end
+      return nil, { kind = "missing" }
+    end,
+  }
+  local fenced = Process.new({ fs = race_fs, read_status = false })
+  local race_context = { now_ns = function() return race_now end,
+    visible_process_ids = { ["100:11"] = true } }
+  local valid = fenced:sample(race_context)
+  assert(valid.data.by_id["100:11"].scheduler.wait_ns == 100000000)
+  local memo = fenced.sched_memo["pid /proc/100"]
+  trigger, race_now, race_wait = true, 2000000000, 900000000
+  local discarded = fenced:sample(race_context, valid)
+  assert(discarded.data.by_id["100:11"] == nil
+    and #discarded.data.list == 0
+    and discarded.data.races + discarded.data.parse_errors == 1,
+    "a schedstat-time identity change must not publish a mixed process row")
+  assert(fenced.sched_memo["pid /proc/100"] == memo
+    and memo.at_ns == 1000000000 and memo.wait_ns == 100000000,
+    "a discarded schedstat reading must not replace the rate baseline")
+  trigger, race_now, race_wait = false, 3000000000, 300000000
+  race_stat = stat_line({ pid = 100, starttime = 11 })
+  local recovered = fenced:sample(race_context, discarded)
+  local recovered_rate = recovered.data.by_id["100:11"].scheduler
+  assert(recovered_rate.quality == "fresh"
+    and recovered_rate.interval_ns == 2000000000
+    and recovered_rate.wait_rate_ns == 100000000,
+    "recovery differences only against the last identity-checked reading")
+  local stat_reads, scheduler_reads = 0, 0
+  for _, path in ipairs(race_reads) do
+    if path == "/proc/100/stat" then stat_reads = stat_reads + 1 end
+    if path == "/proc/100/schedstat" then scheduler_reads = scheduler_reads + 1 end
+  end
+  assert(stat_reads == 6 and scheduler_reads == 3,
+    "one final stat read fences each visible scheduler reading")
+end
+
 -- A malformed set is ignored rather than trusted, and a set beyond the bound is
 -- refused outright: the whole point of the bound is that a hostile context
 -- cannot turn a viewport measurement back into a full sweep.

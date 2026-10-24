@@ -1220,24 +1220,16 @@ function Process:sample(context, previous)
           -- would be a second full procfs sweep every tick for a column the
           -- operator cannot see, so the viewport is the bound: what is not on
           -- screen is not measured.
+          local parsed_process_schedstat
           if visible_ids and visible_ids[process.id] then
-            -- Deliberately not marked as a supplemental read.  That flag exists
-            -- to re-verify a row's identity after opening /proc/<pid>/... for
-            -- fields that were already attached to it, and it pays for that by
-            -- re-reading stat and discarding the row on a mismatch -- which for
-            -- a viewport-sized set would mean a second stat read per visible
-            -- process per tick and healthy rows dropped for a window that the
-            -- rate check below already closes.  The schedstat reading is
-            -- protected by its own identity: it is differenced against a
-            -- previous reading only when the starttime still matches, so a
-            -- recycled pid yields no rate instead of another process' figure.
+            -- Separate procfs lookups can observe a recycled PID after the
+            -- initial stat read. Fence this reading like other supplemental
+            -- fields, and update the rate baseline only after that check.
+            supplemental_read = true
             local schedstat_content, schedstat_error = fs:read(base .. "/schedstat", 4096)
             if schedstat_content then
-              local parsed_schedstat = Parsers.thread_schedstat(schedstat_content)
-              if parsed_schedstat then
-                process.scheduler = self:_sched_rate("pid " .. base,
-                  parsed_schedstat, process.starttime_ticks, now)
-              else
+              parsed_process_schedstat = Parsers.thread_schedstat(schedstat_content)
+              if not parsed_process_schedstat then
                 process.scheduler = { status = "parse_error" }
               end
             elseif schedstat_error then
@@ -1277,6 +1269,10 @@ function Process:sample(context, previous)
             end
           end
           if generation_matches then
+            if parsed_process_schedstat then
+              process.scheduler = self:_sched_rate("pid " .. base,
+                parsed_process_schedstat, process.starttime_ticks, now)
+            end
             if bulk_io and process.io
                 and type(process.io.read_bytes) == "number"
                 and type(process.io.write_bytes) == "number" then
