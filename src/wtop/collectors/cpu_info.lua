@@ -124,31 +124,44 @@ local function read_cpu_list(fs, path, issues, field, options)
   return values
 end
 
-local function parse_cpuinfo(content, maximum_sections)
+local function parse_cpuinfo(content, maximum_sections, selected_fields)
   if type(content) ~= "string" then return nil, "expected_cpuinfo_text" end
-  local sections, current = {}, {}
+  -- Filtered-out fields still populate a section and consume its bound.
+  local sections, current, populated = {}, {}, false
   local function finish()
-    if next(current) then
+    if populated then
       if #sections >= maximum_sections then return false end
       sections[#sections + 1] = current
-      current = {}
+      current, populated = {}, false
     end
     return true
   end
   local truncated = false
   for raw_line in (content .. "\n"):gmatch("([^\n]*)\n") do
-    local line = raw_line:gsub("\r$", "")
+    local line = selected_fields and raw_line or raw_line:gsub("\r$", "")
     if line:match("^%s*$") then
       if not finish() then truncated = true; break end
     else
-      local key, value = line:match("^%s*([^:]+)%s*:%s*(.-)%s*$")
-      if key then
-        key = Common.trim(key):lower()
-        if current[key] == nil then current[key] = safe_text(value, 65536) or "" end
+      if selected_fields then
+        local colon = line:find(":", 1, true)
+        if colon and colon > 1 then
+          local key = Common.trim(line:sub(1, colon - 1)):lower()
+          populated = true
+          if selected_fields[key] and current[key] == nil then
+            current[key] = safe_text(Common.trim(line:sub(colon + 1)), 65536) or ""
+          end
+        end
+      else
+        local key, value = line:match("^%s*([^:]+)%s*:%s*(.-)%s*$")
+        if key then
+          key = Common.trim(key):lower()
+          populated = true
+          if current[key] == nil then current[key] = safe_text(value, 65536) or "" end
+        end
       end
     end
   end
-  if not truncated and next(current) then
+  if not truncated and populated then
     if #sections < maximum_sections then sections[#sections + 1] = current else truncated = true end
   end
   if #sections == 0 then return nil, "no_cpuinfo_sections" end

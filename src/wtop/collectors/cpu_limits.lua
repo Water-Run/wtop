@@ -18,6 +18,7 @@ local REASONS = {
     { "pl1", 10 }, { "pl2_pl3", 11 }, { "max_turbo", 12 }, { "turbo_transition", 13 },
 }
 local MASK = 0x3df3
+local ROSTER_FIELDS = { processor=true, vendor_id=true, ["cpu family"]=true, model=true }
 
 local function integer(text)
     text = Common.trim(text)
@@ -54,7 +55,7 @@ local function roster(self, fs)
         path = self.cpu_path .. "/online" } end
     local content, read_error = fs:read(self.cpuinfo_path, 4 * 1024 * 1024)
     if not content then return nil, read_error end
-    local sections, _, cut = CPUInfo.parse_cpuinfo(content, self.max_cpus + 1)
+    local sections, _, cut = CPUInfo.parse_cpuinfo(content, self.max_cpus + 1, ROSTER_FIELDS)
     if not sections then return nil, { kind = "parse_error", message = "invalid_cpuinfo",
         path = self.cpuinfo_path } end
     local by_id, duplicate = {}, {}

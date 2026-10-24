@@ -452,3 +452,30 @@ do
     local coverage = View.cpu_limit_coverage_text({ cpu_limits = mixed.data }, en)
     assert(coverage:find("1/2", 1, true) and coverage:find("1 supported", 1, true))
 end
+
+-- Unknown-only records count towards the same CPUinfo cap. Skipping them could
+-- admit an identity the original bounded roster never established.
+do
+    local base="/sys/devices/system/cpu"
+    local input="ignored: one\n\nignored: two\n\nprocessor: 0\nvendor_id: GenuineIntel\ncpu family: 6\nmodel: 186\n"
+    local data={ [base.."/online"]="0\n", ["/proc/cpuinfo"]=input,
+        [base.."/cpu0/topology/physical_package_id"]="0\n" }
+    local probes=0
+    local limited=CPU.new({fs=fixture(data),max_cpus=1,reader=function()
+        probes=probes+1;return bytes(0,0)
+    end})
+    assert(limited:probe({}).state=="unavailable")
+    assert(limited:sample({}).status=="unavailable" and probes==0)
+    data["/proc/cpuinfo"]=input:gsub("ignored: two\n\n", "", 1)
+    assert(limited:sample({}).data.domains[1].active==false and probes==1)
+
+    -- A model or vendor change during a successful read still invalidates it.
+    for _, replacement in ipairs({"processor: 0\nvendor_id: GenuineIntel\ncpu family: 6\nmodel: 92\n",
+        "processor: 0\nvendor_id: AuthenticAMD\ncpu family: 6\nmodel: 186\n"}) do
+        data["/proc/cpuinfo"]="processor: 0\nvendor_id: GenuineIntel\ncpu family: 6\nmodel: 186\n"
+        limited.reader=function()data["/proc/cpuinfo"]=replacement;return bytes(1<<10,0)end
+        local raced=limited:sample({}).data.domains[1]
+        assert(raced.quality=="gap" and raced.active==nil)
+        for _, reason in ipairs(raced.reasons) do assert(reason.active==nil and reason.logged==nil) end
+    end
+end

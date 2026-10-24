@@ -4499,4 +4499,46 @@ do
     assert(not Decoder.parse(seal(put(blob, 0, 0)) .. string.rep("\0", 512)).complete)
 end
 
+-- Field selection preserves record boundaries, normalized first values and caps.
+do
+    local fields = { processor=true, vendor_id=true, ["cpu family"]=true, model=true }
+    local input = "ignored: metadata\n\nProcessor:\t0\r\nvendor_id: GenuineIntel\r\n"
+        .. "CPU FAMILY: 6\r\nMODEL: 186\r\nmodel: 92\r\nunused: retained in full mode\r\n\r\nprocessor: 1\n"
+    local selected, err, cut = CPUInfo.parse_cpuinfo(input, 2, fields)
+    assert(not err and cut and #selected==2 and next(selected[1])==nil)
+    assert(selected[2].processor=="0" and selected[2].vendor_id=="GenuineIntel"
+        and selected[2]["cpu family"]=="6" and selected[2].model=="186"
+        and selected[2].unused==nil)
+    local full = assert(CPUInfo.parse_cpuinfo(input, 16))
+    assert(#full==3 and full[1].ignored=="metadata" and full[2].unused=="retained in full mode")
+    local empty = assert(CPUInfo.parse_cpuinfo(input, 16, {}))
+    assert(#empty==3 and next(empty[1])==nil and next(empty[2])==nil and next(empty[3])==nil)
+    local zero, why = CPUInfo.parse_cpuinfo(input, 0, fields)
+    assert(zero==nil and why=="no_cpuinfo_sections")
+    local seed = 20261024
+    local function random(n) seed=(seed*1664525+1013904223)%4294967296;return seed%n+1 end
+    local keys={"processor","MODEL","vendor_id","cpu family","flags","","ignored",":bad"}
+    local values={"0","1","186","92","GenuineIntel","","x:y","\0\255"}
+    for _=1,200 do
+        local lines={}
+        for _=1,random(24) do
+            lines[#lines+1]=random(5)==1 and "\r"
+                or (keys[random(#keys)].." : "..values[random(#values)])
+        end
+        local text=table.concat(lines,"\n")
+        for _, maximum in ipairs({1,2,4}) do
+            local all, all_error, all_cut=CPUInfo.parse_cpuinfo(text,maximum)
+            local projected, projected_error, projected_cut=CPUInfo.parse_cpuinfo(text,maximum,fields)
+            assert(all_error==projected_error and all_cut==projected_cut)
+            if all then
+                assert(#all==#projected)
+                for index,row in ipairs(all) do
+                    for key in pairs(fields) do assert(projected[index][key]==row[key]) end
+                    for key in pairs(projected[index]) do assert(fields[key]) end
+                end
+            else assert(projected==nil) end
+        end
+    end
+end
+
 return true
