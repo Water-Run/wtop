@@ -410,6 +410,24 @@ for _, entry in ipairs(RELEASE_EVIDENCE) do
             .. "success.")
 end
 
+-- Expand both platform branches: reading a recipe cannot detect a variable
+-- defined only in Linux, which previously passed --lua '' on macOS.
+for _, platform in ipairs({"Linux", "Darwin"}) do
+    local commands, code = run("make -n -o native -o toolchain -o build-id -o locales -o luainstaller -o resource-check-full HOST_OS=" .. platform .. " test-bundle-dir test-bundle-file")
+    assert(code == 0, "cannot expand " .. platform .. " bundle checks: " .. commands)
+    local count = 0
+    for line in commands:gmatch("[^\n]+") do
+        if line:match("^python3 tests/test_gpu_pcie_tty%.py ") then
+            local interpreter = line:match("%-%-lua '([^']*)'")
+            assert(interpreter and interpreter ~= "",
+                platform .. " bundle PCIe check has no explicit Lua interpreter: " .. line)
+            count = count + 1
+        end
+    end
+    assert(count == 2, platform .. " bundle targets do not both run the PCIe check")
+end
+
+
 -- ---------------------------------------------------------------------------
 -- 4. The contract itself, over the declared set: a complete run succeeds and
 --    says so; an incomplete run fails and says nothing.
@@ -1550,6 +1568,7 @@ assert(absent == nil and absent_refusal ~= nil and absent_refusal:find("%S") ~= 
 assert(not pcall(makefile_api.prerequisites_of, "test-all; false"),
     "prerequisites_of passed a target name containing a shell separator to make "
         .. "instead of refusing it")
+
 
 os.execute("rm -rf " .. scratch)
 return true

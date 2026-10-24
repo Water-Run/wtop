@@ -3,6 +3,8 @@ SHELL := /bin/sh
 HOST_OS := $(shell uname -s 2>/dev/null || echo unknown)
 ifeq ($(HOST_OS),Darwin)
 
+LUA := $(CURDIR)/.tools/lua-5.5.1/bin/lua
+
 .PHONY: all native run snapshot diagnose test-native-inventory test-native-disk test-native-network test-native-displays test-native-smc test-native-hid test-native-gpu test-native-ioreport test-native-cpu test-native-worker
 .NOTPARALLEL: native bundle-dir bundle-file test-bundle-dir test-bundle-file test-bundles
 all: native

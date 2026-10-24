@@ -28,6 +28,8 @@ def main():
         parser.error("--guard instruments source Lua; use the source run separately from the bundle check")
     if args.executable and not args.executable.is_file():
         parser.error("--executable must name an existing bundle entry")
+    if not args.recording and not args.lua.is_file():
+        parser.error("--lua must name an interpreter when no --recording is supplied")
     temporary = tempfile.TemporaryDirectory(prefix="wtop-pcie-replay-")
     output = args.output_dir.resolve() if args.output_dir else Path(temporary.name)
     if args.output_dir:
