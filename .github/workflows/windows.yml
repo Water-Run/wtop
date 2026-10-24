@@ -194,13 +194,14 @@ jobs:
         run: |
           $version = (Get-Content VERSION).Trim()
           foreach ($exe in 'dist/windows-bundle/wtop/wtop.exe', 'dist/windows-bundle/wtop-onefile.exe') {
+            $pcie = Join-Path $PWD ('build/pcie-' + [System.IO.Path]::GetFileNameWithoutExtension($exe))
             python tests/installed_smoke.py --executable $exe --version $version --platform Windows
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             python tests/test_recording_replay.py --executable $exe
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            python tests/test_gpu_pcie_tty.py --lua dist/windows-x86/lua.exe --executable $exe --cli-only
+            python tests/test_gpu_pcie_tty.py --lua dist/windows-x86/lua.exe --executable $exe --cli-only --output-dir $pcie
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            python tests/windows_console_smoke.py --executable $exe --harness build/console_harness.exe
+            python tests/windows_console_smoke.py --executable $exe --harness build/console_harness.exe --gpu-recording (Join-Path $pcie 'pcie.wtop') --gpu-output-dir ($pcie + '-console')
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Archive the complete development packages

@@ -15,6 +15,7 @@
  *   resize:<cols>x<rows>  resize the active buffer and its window
  *   cpu:<ms>            measure child CPU use while waiting
  *   exit:<ms>          wait for the program to exit and print its exit code
+ * WTOP_TEST_CONSOLE_CODEPAGE optionally selects the new console's code page.
  */
 #define WINVER 0x0501
 #define _WIN32_WINNT 0x0501
@@ -320,6 +321,19 @@ int main(int argc, char **argv) {
     if (!AllocConsole()) {
         printf("AllocConsole failed (error %lu)\n", (unsigned long)GetLastError());
         return 4;
+    }
+    {
+        const char *value = getenv("WTOP_TEST_CONSOLE_CODEPAGE");
+        if (value && value[0]) {
+            char *end;
+            unsigned long page = strtoul(value, &end, 10);
+            if (*end || !page || page > 65535
+                    || !SetConsoleCP((UINT)page) || !SetConsoleOutputCP((UINT)page)) {
+                printf("cannot set the test console code page (error %lu)\n",
+                    (unsigned long)GetLastError());
+                return 4;
+            }
+        }
     }
     {
         SECURITY_ATTRIBUTES inherit = {sizeof(inherit), NULL, TRUE};
