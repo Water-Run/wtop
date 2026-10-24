@@ -191,6 +191,22 @@ function M.render(snapshot)
                 quantity(frequencies.current_hz, 1000000000, " GHz", 2),
                 frequencies.current_source }
         end, cpu_frequency)
+    local pstate = object(cpu_frequency.intel_pstate)
+    if next(pstate) then
+        table_section(lines, "Intel P-state controls", { "Field", "Value" }, {
+            { "Driver mode", pstate.mode },
+            { "Turbo prohibited", pstate.no_turbo },
+            { "Min allowed P-state", quantity(pstate.minimum_performance_percent, 1, "%", 0) },
+            { "Max allowed P-state", quantity(pstate.maximum_performance_percent, 1, "%", 0) },
+            { "HWP I/O boost", pstate.hwp_dynamic_boost },
+            { "Energy-efficiency policy", pstate.energy_efficiency },
+            { "Supported P-states", pstate.number_of_pstates },
+            { "Turbo P-state range", quantity(pstate.turbo_range_percent, 1, "%", 0) },
+            { "Quality", pstate.quality }, { "Source", pstate.source },
+        }, function(row) return row end)
+        lines[#lines + 1] = "Configured P-state range, not CPU utilization, measured watts or proof of throttling."
+        lines[#lines + 1] = ""
+    end
 
     local memory_items = {
         { "Installed memory", bytes(memory.total_bytes) },

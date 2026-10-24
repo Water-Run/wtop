@@ -66,7 +66,7 @@ CLI 默认 `--interval 1000`。活动页面使用基准间隔与采集器下限�
 | Linux 网络接收栈 | 每 CPU 已处理/丢弃包和处理预算耗尽累计数；新内核的接收积压队列长度、CPU 身份及按实际间隔计算的速率 | `/proc/net/softnet_stat` | 随网络接口采样，1 s / 3 s |
 | 套接字 | TCP/TCP6/UDP/UDP6/Unix 的端点、状态、队列、UID、inode;可用时的 PID/fd/名称属主,`owner_count` 只在真正执行了查找的地方发布,而不是填零 | `/proc/net/*`, `/proc/<pid>/fd` | 2 s / 10 s |
 | 进程 | `(pid,starttime)`、PPID、状态、CPU、按系统 tick 频率换算的累计 CPU 时间、已运行时间、RSS/VSZ、线程数、优先级/nice/CPU、解析为本地用户名的 UID,以及完整命令行;针对选中线程:线程组、累计及每秒自愿/非自愿上下文切换、被抢占占比、I/O、cgroup 归属、运行队列等待、时间片与调度策略;所属进程的 PSS/USS 与按 NUMA 节点统计的映射页占用 | `/proc/<pid>/stat`, `/proc/uptime`, `status`, `cmdline`, `/proc/<pid>/task/<tid>/{stat,status,io,cgroup,schedstat,sched,wchan}`, `/proc/<pid>/schedstat`, `/proc/<pid>/{smaps_rollup,numa_maps,wchan}`, `/etc/passwd` | 1 s / 5 s;逐线程补充文件只读取选中 TID 的那一个,`/proc/<pid>/schedstat` 只读取视口正在显示的进程行;`numa_maps` 仅打开进程详情时读取,10 秒刷新 |
-| CPUFreq | 策略/CPU 集合、硬件当前值或硬件反馈短时平均值、调频读数、最低/最高频率、来源与质量、驱动、governor、boost/EPP | cpufreq sysfs | 1 s / 5 s |
+| CPUFreq | 策略/CPU 集合、硬件当前值或硬件反馈短时平均值、调频读数、基准/最低/最高/固件限制频率、来源与质量、驱动、governor、boost/EPP、Intel P-state 全局配置 | cpufreq / intel_pstate sysfs | 1 s / 5 s |
 | CPU 热节流 | 每逻辑 CPU 的核心/封装热节流累计次数、相邻样本新增次数、累计与最长持续毫秒数 | `/sys/devices/system/cpu/cpu*/thermal_throttle` | 5 s / 30 s |
 | CPU 空闲态 | 每逻辑 CPU、每状态的使用次数、内核报告时间、进入请求被拒次数、时长短于目标及可选更深状态次数；保留累计值和相邻样本增量、退出延迟与目标驻留时间 | `/sys/devices/system/cpu/cpu*/cpuidle/state*` | 5 s / 30 s |
 | hwmon | 温度、风扇转速、电压、电流、功率、能耗、阈值/告警/故障；独立读取风扇控制设置（输出值/百分比、控制方式、DC/PWM 模式、基准频率和温度选择），不当作 RPM 或已应用输出;识别 `temp1_crit_alarm` 这类带限值的告警形式以及裸 `temp1_alarm` 形式;电压通道从 `in0` 起向上读取;过滤已知的无效哨兵值;恰好为零的阈值,或 u16 温度哨兵值,按“驱动未设置该属性”丢弃,而不是当作一条界限上报;设备的 `device_target` 供视图层把读数归属到 GPU 或磁盘(磁盘标注带型号与挂载点),表与浮层共用同一联接；直接读数记录本次会话最小/最大/采样平均 | `/sys/class/hwmon` | 1 s / 5 s |
@@ -361,6 +361,16 @@ CPUFreq 的 `related_cpus` 包含离线 CPU；缺少它时只使用已知的
 [进程 NUMA 映射格式](https://github.com/torvalds/linux/blob/master/Documentation/filesystems/proc.rst)、
 [NUMA sysfs ABI](https://www.kernel.org/doc/Documentation/ABI/stable/sysfs-devices-node)与
 [CPUFreq 文档](https://docs.kernel.org/admin-guide/pm/cpufreq.html)。
+
+Intel P-state 的睿频许可来自 `no_turbo`，与通用 `boost` 的含义相反。
+频率策略的设备详情和硬件报告同时列出驱动模式、全局最低/最高 P-state
+百分比及可用的 HWP I/O 加速、能效配置、P-state 数量和睿频范围。
+这些百分比相对最高支持的性能级别，不是 CPU 利用率、功率百分比或
+当前撞墙的证据，也不换算成测得频率。全局配置只关联匹配的 Intel
+驱动；缺失的旧内核属性保持未知，模式在读取期间变化时不发布新的
+睿频许可。已有过期数据在详情和导出中保留过期状态。读取均为公开
+sysfs 属性，不修改策略。参见
+[Intel P-state 接口说明](https://docs.kernel.org/admin-guide/pm/intel_pstate.html#global-attributes)。
 
 Linux 另有独立的逐逻辑 CPU `cpu_clocks` 观测：读取只读的
 `IA32_APERF` 与 `IA32_MPERF`，用 APERF 周期增量除以本 CPU 的实际单调

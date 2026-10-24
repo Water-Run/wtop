@@ -978,8 +978,9 @@ local function export_gpus(gpus, quality, now_ns)
     return result
 end
 
-local function export_cpu_frequency(cpu_frequency)
+local function export_cpu_frequency(cpu_frequency, quality)
     local result = json.object({ policies = json.array({}) })
+    local current = Quality.current_source(quality, "cpu_frequency")
     for index, policy in ipairs(cpu_frequency and cpu_frequency.policies or {}) do
         local exported = copy_fields(policy, {
             "id", "policy", "policy_index", "identity_quality", "driver", "governor",
@@ -995,11 +996,26 @@ local function export_cpu_frequency(cpu_frequency)
             exported.related_cpus[cpu_index] = cpu
         end
         exported.frequencies = copy_object(policy.frequencies)
-        if policy.boost then exported.boost = copy_object(policy.boost) end
+        if policy.boost then
+            exported.boost = copy_object(policy.boost)
+            if not current then exported.boost.quality = "stale" end
+        end
         result.policies[index] = exported
     end
     if cpu_frequency and cpu_frequency.boost then
         result.boost = copy_object(cpu_frequency.boost)
+        if not current then result.boost.quality = "stale" end
+    end
+    if cpu_frequency and type(cpu_frequency.intel_pstate) == "table" then
+        local controls = cpu_frequency.intel_pstate
+        result.intel_pstate = copy_fields(controls, { "mode", "no_turbo",
+            "minimum_performance_percent", "maximum_performance_percent",
+            "hwp_dynamic_boost", "energy_efficiency", "number_of_pstates",
+            "turbo_range_percent", "consistent", "quality", "observed_at_ns", "source" })
+        result.intel_pstate.errors = copy_object(controls.errors)
+        if not current then
+            result.intel_pstate.quality = "stale"
+        end
     end
     result.duplicates_skipped = cpu_frequency and cpu_frequency.duplicates_skipped or 0
     result.truncated = cpu_frequency and cpu_frequency.truncated == true or false
@@ -2299,7 +2315,7 @@ function M.snapshot(snapshot, options)
             options.include_remote_addresses == true),
         processes = export_processes(snapshot.processes, options.process_limit),
         gpus = export_gpus(snapshot.gpus, snapshot.quality and snapshot.quality.gpus, snapshot.timestamp_ns),
-        cpu_frequency = export_cpu_frequency(snapshot.cpu_frequency),
+        cpu_frequency = export_cpu_frequency(snapshot.cpu_frequency, snapshot.quality),
         thermal_throttle = export_thermal_throttle(snapshot.thermal_throttle),
         cpuidle = export_cpuidle(snapshot.cpuidle),
         numa = export_numa(snapshot.numa),

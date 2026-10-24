@@ -185,6 +185,132 @@ local denied_policy = find(cpufreq_denied.data.policies,
   function(p) return p.errors and p.errors.scaling_governor ~= nil end)
 assert(denied_policy, "and the policy that could not be read still says so")
 
+-- Intel exposes no_turbo instead of the generic boost file. Its global
+-- performance percentages are configuration, not utilization or watts.
+do
+  local Export = require("wtop.export")
+  local TUI = require("wtop.tui")
+  local I18n = require("wtop.i18n")
+  local Report = require("wtop.report")
+  local base, intel = "/sys/devices/system/cpu/cpufreq", "/sys/devices/system/cpu/intel_pstate"
+  local spec = Hardware.cpufreq_policies()
+  spec.files[base .. "/boost"] = nil
+  local values = { status = "active", no_turbo = "1", min_perf_pct = "0", max_perf_pct = "80",
+    hwp_dynamic_boost = "0", energy_efficiency = "1", num_pstates = "0", turbo_pct = "30" }
+  for key, value in pairs(values) do spec.files[intel .. "/" .. key] = value .. "\n" end
+  spec.files[base .. "/policy0/base_frequency"] = "2400000\n"
+  spec.files[base .. "/policy0/bios_limit"] = "4000000\n"
+  local fs = Fixture.new(spec)
+  local collector = Cpufreq.new({ fs = fs })
+  local function sample() return collector:sample({ now_ns = function() return 1000000000 end }) end
+  local active = sample()
+  local controls = assert(active.data.intel_pstate)
+  assert(controls.mode == "active" and controls.no_turbo == true and controls.quality == "fresh")
+  assert(controls.minimum_performance_percent == 0 and controls.maximum_performance_percent == 80
+    and controls.hwp_dynamic_boost == false and controls.energy_efficiency == true
+    and controls.number_of_pstates == 0 and controls.turbo_range_percent == 30)
+  assert(active.data.boost.enabled == false and active.data.boost.source == intel .. "/no_turbo")
+  for _, policy in ipairs(active.data.policies) do assert(policy.boost.enabled == false) end
+  local policy = active.data.policies[1]
+  assert(policy.frequencies.base_hz == 2400000000 and policy.frequencies.bios_limit_hz == 4000000000)
+  local state = { timestamp_ns = 1000000000, cpu_frequency = active.data,
+    quality = { cpu_frequency = { status = "ok", quality = active.quality } } }
+  local exported = Export.snapshot(state, { host = { sysname = "Linux" } })
+  assert(exported.cpu_frequency.intel_pstate.no_turbo == true
+    and exported.cpu_frequency.intel_pstate.hwp_dynamic_boost == false
+    and exported.cpu_frequency.policies[1].boost.enabled == false)
+  local report = Report.render(exported)
+  assert(report:find("Intel P-state controls", 1, true)
+    and report:find("| Min allowed P-state | 0% |", 1, true)
+    and report:find("| Max allowed P-state | 80% |", 1, true)
+    and report:find("not CPU utilization", 1, true))
+  for _, locale in ipairs({ "en-US", "zh-CN", "zh-TW", "fr-FR", "de-DE", "es-ES", "pt-BR", "ru-RU", "ja-JP", "ko-KR" }) do
+    local i18n = assert(I18n.new({ locale = locale }))
+    local lines = table.concat(TUI.hardware_detail_lines(state, "cpufreq:" .. policy.id, i18n), "\n")
+    assert(lines:find(i18n:t("cpufreq.intel_controls"), 1, true)
+      and lines:find(i18n:t("cpufreq.base_frequency"), 1, true)
+      and lines:find(i18n:t("cpufreq.firmware_limit"), 1, true)
+      and lines:find(i18n:t("status.disabled"), 1, true)
+      and lines:find("80", 1, true), locale)
+    assert(i18n:diagnostics().format_errors == 0)
+  end
+  local enabled = policy.boost.enabled
+  policy.boost.enabled = nil
+  local unknown = table.concat(TUI.hardware_detail_lines(state, "cpufreq:" .. policy.id,
+    assert(I18n.new({ locale = "en-US" }))), "\n")
+  assert(unknown:find("Turbo allowed: Unknown", 1, true))
+  policy.boost.enabled = enabled
+  state.quality.cpu_frequency.quality = "stale"
+  local stale_export = Export.snapshot(state).cpu_frequency
+  assert(stale_export.intel_pstate.quality == "stale"
+    and stale_export.boost.quality == "stale" and stale_export.policies[1].boost.quality == "stale")
+  local stale_lines = table.concat(TUI.hardware_detail_lines(state, "cpufreq:" .. policy.id,
+    assert(I18n.new({ locale = "en-US" }))), "\n")
+  assert(stale_lines:find("Turbo allowed: Unknown", 1, true))
+
+  -- Passive mode has a different driver name. An unrelated ACPI policy must
+  -- not inherit Intel settings even if the global files still exist.
+  spec.files[intel .. "/status"] = "passive\n"
+  spec.files[intel .. "/no_turbo"] = "0\n"
+  for _, name in ipairs({ "policy0", "policy2", "policy3" }) do
+    spec.files[base .. "/" .. name .. "/scaling_driver"] = "intel_cpufreq\n"
+  end
+  local passive = sample()
+  assert(passive.data.boost.enabled == true and passive.data.policies[1].boost.enabled == true)
+  spec.files[base .. "/policy3/scaling_driver"] = "acpi-cpufreq\n"
+  local mixed = sample()
+  assert(mixed.data.boost == nil and mixed.data.policies[3].boost == nil
+    and mixed.data.policies[1].boost.enabled == true)
+  spec.files[intel .. "/status"] = "off\n"
+  assert(sample().data.boost == nil and sample().data.policies[1].boost == nil)
+  spec.files[intel .. "/status"] = nil -- old kernels may omit status
+  spec.files[base .. "/policy3/scaling_driver"] = "intel_cpufreq\n"
+  assert(sample().data.boost.enabled == true)
+
+  spec.files[intel .. "/max_perf_pct"] = "101\n"
+  spec.files[intel .. "/no_turbo"] = "2\n"
+  local invalid = sample()
+  assert(invalid.quality == "partial" and invalid.data.boost == nil
+    and invalid.data.intel_pstate.no_turbo == nil
+    and invalid.data.intel_pstate.maximum_performance_percent == nil
+    and invalid.data.intel_pstate.errors.max_perf_pct)
+  spec.files[intel .. "/max_perf_pct"] = "20\n"
+  spec.files[intel .. "/min_perf_pct"] = "80\n"
+  assert(sample().data.intel_pstate.errors.performance_range)
+
+  local saved = fs.read
+  local status_reads = 0
+  fs.read = function(self, path, limit)
+    if path == intel .. "/status" then
+      status_reads = status_reads + 1
+      return status_reads == 1 and "passive\n" or "active\n"
+    end
+    return saved(self, path, limit)
+  end
+  local changed = sample()
+  assert(changed.data.intel_pstate.consistent == false
+    and changed.data.intel_pstate.quality == "stale" and changed.data.boost == nil)
+  for _, value in ipairs(changed.data.policies) do assert(value.boost == nil) end
+  fs.read = saved
+
+  spec.files[intel .. "/no_turbo"] = nil
+  spec.denied = { [intel .. "/no_turbo"] = true }
+  local denied = Cpufreq.new({ fs = Fixture.new(spec) }):sample({})
+  assert(denied.data.boost == nil and denied.data.intel_pstate.errors.no_turbo.status == "denied")
+  local untouched = Fixture.new(Hardware.cpufreq_policies())
+  assert(Cpufreq.new({ fs = untouched }):sample({}).data.intel_pstate == nil)
+  assert(Cpufreq.new({ base_path = "/fixture/cpufreq/" }).intel_pstate_path == "/fixture/intel_pstate")
+  for _, name in ipairs({ "policy0", "policy2", "policy3" }) do
+    spec.files[base .. "/" .. name .. "/scaling_driver"] = "acpi-cpufreq\n"
+  end
+  fs.read = function(self, path, limit)
+    assert(not path:find("/intel_pstate/", 1, true), "unrelated drivers must not probe Intel controls")
+    return saved(self, path, limit)
+  end
+  assert(sample().data.intel_pstate == nil)
+  fs.read = saved
+end
+
 -- ---------------------------------------------------------------------------
 -- GPU: two vendors with different sysfs vocabularies, plus a DRM client.
 -- ---------------------------------------------------------------------------

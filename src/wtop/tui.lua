@@ -3120,6 +3120,55 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         end
         add("metrics.minimum", "Minimum", frequency.scaling_minimum_hz, "hertz")
         add("metrics.maximum", "Maximum", frequency.scaling_maximum_hz, "hertz")
+        if frequency.base_hz then
+            add("cpufreq.base_frequency", "Base frequency", frequency.base_hz, "hertz")
+        end
+        if frequency.bios_limit_hz then
+            add("cpufreq.firmware_limit", "Firmware frequency limit", frequency.bios_limit_hz, "hertz")
+        end
+        if device.boost then
+            local boost_current = Quality.current_source(snapshot.quality, "cpu_frequency")
+                and device.boost.quality == "fresh" and type(device.boost.enabled) == "boolean"
+            local state = boost_current and (device.boost.enabled and "enabled" or "disabled") or "unknown"
+            add("cpufreq.turbo_allowed", "Turbo allowed", Technical.state(i18n, state))
+            add("metrics.source", "Source", device.boost.source)
+        end
+        local controls = snapshot.cpu_frequency and snapshot.cpu_frequency.intel_pstate
+        if controls and (device.driver == "intel_pstate" or device.driver == "intel_cpufreq") then
+            lines[#lines + 1] = ""
+            lines[#lines + 1] = translated(i18n, "cpufreq.intel_controls", "Intel P-state controls")
+            add("cpufreq.driver_mode", "Driver mode", controls.mode)
+            local current = Quality.current_source(snapshot.quality, "cpu_frequency")
+            add("inspector.quality", "Quality", Technical.state(i18n,
+                current and controls.quality or "stale"))
+            if not device.boost then
+                add("cpufreq.turbo_allowed", "Turbo allowed", Technical.state(i18n, "unknown"))
+            end
+            add("cpufreq.minimum_performance", "Min allowed P-state (%)", controls.minimum_performance_percent)
+            add("cpufreq.maximum_performance", "Max allowed P-state (%)", controls.maximum_performance_percent)
+            if controls.hwp_dynamic_boost ~= nil then
+                add("cpufreq.hwp_boost", "HWP I/O boost", controls.hwp_dynamic_boost)
+            end
+            if controls.energy_efficiency ~= nil then
+                add("cpufreq.energy_efficiency", "Energy-efficiency policy", controls.energy_efficiency)
+            end
+            if controls.number_of_pstates ~= nil then
+                add("cpufreq.pstate_count", "Supported P-states", controls.number_of_pstates)
+            end
+            if controls.turbo_range_percent ~= nil then
+                add("cpufreq.turbo_range", "Turbo P-state range (%)", controls.turbo_range_percent)
+            end
+            add("metrics.source", "Source", controls.source)
+            local fields = {}
+            for field in pairs(controls.errors or {}) do fields[#fields + 1] = field end
+            table.sort(fields)
+            for index = 1, math.min(#fields, 10) do
+                local field = fields[index]
+                local issue = controls.errors[field]
+                add("inspector.reason", "Reason", field .. ": " .. tostring(Technical.state(i18n, issue.status)))
+                add("metrics.source", "Source", issue.source)
+            end
+        end
         if node.temperature then
             local scope = node.temperature.scope == "core"
                 and translated(i18n, "cpufreq.temperature_core", "Core")

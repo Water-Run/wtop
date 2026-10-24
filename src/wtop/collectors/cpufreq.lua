@@ -183,15 +183,73 @@ local function boost_value(enabled, source)
   }
 end
 
+local function intel_driver(driver)
+  return driver == "intel_pstate" or driver == "intel_cpufreq"
+end
+
+local function intel_controls(self, fs, policies, context)
+  local present = false
+  for _, policy in ipairs(policies) do present = present or intel_driver(policy.driver) end
+  if not present then return nil end
+  local base, errors = self.intel_pstate_path, {}
+  local mode = optional_text(fs, base .. "/status", errors, "status", 256)
+  local function flag(name)
+    local value = optional_number(fs, base .. "/" .. name, errors, name, 1)
+    if value ~= nil then return value == 1 end
+  end
+  local controls = {
+    mode = mode,
+    no_turbo = flag("no_turbo"),
+    minimum_performance_percent = optional_number(fs, base .. "/min_perf_pct", errors, "min_perf_pct", 100),
+    maximum_performance_percent = optional_number(fs, base .. "/max_perf_pct", errors, "max_perf_pct", 100),
+    hwp_dynamic_boost = flag("hwp_dynamic_boost"),
+    energy_efficiency = flag("energy_efficiency"),
+    number_of_pstates = optional_number(fs, base .. "/num_pstates", errors, "num_pstates", 255),
+    turbo_range_percent = optional_number(fs, base .. "/turbo_pct", errors, "turbo_pct", 100),
+    source = base,
+    errors = errors,
+  }
+  local after = optional_text(fs, base .. "/status", errors, "status", 256)
+  -- Older kernels may omit status and individual optional attributes. A mode
+  -- change, however, unregisters/re-registers the driver and resets settings;
+  -- do not attach that mixed observation as a current policy boost setting.
+  controls.consistent = mode == after
+  if mode ~= nil and mode ~= "active" and mode ~= "passive" and mode ~= "off" then
+    errors.status = error_record({ kind = "parse_error", message = "invalid_value" }, base .. "/status")
+  end
+  if controls.minimum_performance_percent and controls.maximum_performance_percent
+      and controls.minimum_performance_percent > controls.maximum_performance_percent then
+    errors.performance_range = error_record({ kind = "parse_error", message = "invalid_value" }, base)
+  end
+  controls.observed_at_ns = Common.now_ns(context)
+  controls.quality = not controls.consistent and "stale" or has_entries(errors) and "partial" or "fresh"
+  -- No Intel-specific files on an older/redirected tree is ordinary absence.
+  if mode == nil and after == nil and not has_entries(errors) and controls.no_turbo == nil
+      and controls.minimum_performance_percent == nil and controls.maximum_performance_percent == nil
+      and controls.hwp_dynamic_boost == nil and controls.energy_efficiency == nil
+      and controls.number_of_pstates == nil and controls.turbo_range_percent == nil then return nil end
+  return controls
+end
+
+local function controls_apply(controls, policy)
+  if not controls or not controls.consistent or controls.errors.status then return false end
+  return controls.mode == nil and intel_driver(policy.driver)
+    or controls.mode == "active" and policy.driver == "intel_pstate"
+    or controls.mode == "passive" and policy.driver == "intel_cpufreq"
+end
+
 function CPUFreq.new(options)
   options = options or {}
   if type(options) ~= "table" then error("CPUFreq options must be a table", 2) end
+  local base_path = Common.absolute_path(
+    "base_path", options.base_path, "/sys/devices/system/cpu/cpufreq")
   return setmetatable({
     id = "cpufreq",
     default_interval_ms = Common.positive_integer("interval_ms", options.interval_ms, 1000),
     fs = options.fs or FS.default,
-    base_path = Common.absolute_path(
-      "base_path", options.base_path, "/sys/devices/system/cpu/cpufreq"),
+    base_path = base_path,
+    intel_pstate_path = Common.absolute_path("intel_pstate_path", options.intel_pstate_path,
+      (base_path:gsub("/+$", ""):match("^(.*)/[^/]+$") or "") .. "/intel_pstate"),
     max_policies = bounded_integer("max_policies", options.max_policies, 1024, 1, 65536),
     max_class_entries = bounded_integer(
       "max_class_entries", options.max_class_entries, 4096, 1, 65536),
@@ -304,6 +362,8 @@ function CPUFreq:sample(context)
           "cpuinfo_max_freq", self.max_frequency_khz),
         bios_limit_hz = optional_khz(fs, path .. "/bios_limit", errors,
           "bios_limit", self.max_frequency_khz),
+        base_hz = optional_khz(fs, path .. "/base_frequency", errors,
+          "base_frequency", self.max_frequency_khz, CURRENT_FREQUENCY),
       }
       if frequencies.hardware_current_hz then
         frequencies.current_hz = frequencies.hardware_current_hz
@@ -360,6 +420,20 @@ function CPUFreq:sample(context)
 
   local global_errors = {}
   local boost_enabled = optional_boolean(fs, self.base_path .. "/boost", global_errors, "boost")
+  local boost = boost_value(boost_enabled, self.base_path .. "/boost")
+  local controls = intel_controls(self, fs, policies, context)
+  local all_intel = #policies > 0
+  for _, policy in ipairs(policies) do
+    local applies = controls_apply(controls, policy)
+    all_intel = all_intel and applies
+    if applies and controls.no_turbo ~= nil and not policy.boost then
+      policy.boost = boost_value(not controls.no_turbo, controls.source .. "/no_turbo")
+    end
+  end
+  if not boost and all_intel and controls.no_turbo ~= nil then
+    boost = boost_value(not controls.no_turbo, controls.source .. "/no_turbo")
+  end
+  if controls and controls.quality ~= "fresh" then any_partial = true end
   if has_entries(global_errors) then
     any_partial = true
   end
@@ -367,7 +441,8 @@ function CPUFreq:sample(context)
   return Common.result("ok", finished, {
     policies = policies,
     by_id = by_id,
-    boost = boost_value(boost_enabled, self.base_path .. "/boost"),
+    boost = boost,
+    intel_pstate = controls,
     errors = global_errors,
     duplicates_skipped = duplicates_skipped,
     truncated = truncated,
