@@ -113,7 +113,7 @@ function M:sample(context)
   self.now=now;self.observations:begin(self,now,safe)
   local result=self.base:sample(context)
   if result.status=="ok" and type(result.data)=="table" then self.raw=result end
-  local retained=result.status~="ok" and self.raw~=nil and not result.defer_publish
+  local retained=result.status~="ok" and self.raw~=nil
   local data=self.raw and Observations.copy(self.raw.data, {nodes=Wire.MAX_NODES,bytes=Wire.MAX_BYTES}) or {devices={}}
   if not data then return Common.result("error",now,nil,{reason="gpu_data_incomplete"}) end
   data.devices=data.devices or {}
@@ -127,7 +127,7 @@ function M:sample(context)
   local anchors=Observations.anchors(data.devices)
   self.observations:inventory_frame(anchors,self.raw and (self.raw.value_timestamp_ns or self.raw.timestamp_ns) or now,
     result.status=="ok" and not retained and not data.truncated and not data.partial,Common.now_ns(context))
-  local providers,pending,retry,any_reason,any_retained,warming={}
+  local providers,pending,retry,any_reason,any_retained,warming,live_vendor={}
   local observed=self.raw and (self.raw.value_timestamp_ns or self.raw.timestamp_ns) or nil
   for _,source in ipairs(sources) do
     local state=self.readers[source] or {};self.readers[source]=state
@@ -157,6 +157,7 @@ function M:sample(context)
         local invalid
         merge_data,invalid=self.observations:observe(source,merge_data,association,Common.now_ns(context))
         if merge_data then
+          live_vendor=true
           local before=Observations.before(data.devices)
           if source=="nvml" then
             provider=NVML.merge(data.devices,lookup,merge_data,{used_ids=used,now_ns=now,include_processes=scan})
@@ -190,6 +191,7 @@ function M:sample(context)
     local output=Common.result("unavailable",now,nil,{reason=result.reason or any_reason or "no_display_adapters",
       retry_after_ms=result.retry_after_ms or retry})
     output.sampling_pending=result.sampling_pending or pending
+    output.defer_publish=self.raw~=nil and result.defer_publish and not live_vendor and not any_retained or false
     return output
   end
   local partial=retained or any_retained or data.partial==true
@@ -211,6 +213,10 @@ function M:sample(context)
     reason=partial and "gpu_data_incomplete" or nil,retry_after_ms=result.retry_after_ms or ((pending or warming) and 250 or nil)})
   output.capability=Capability.available({source="windows+nvml+levelzero+adl"})
   output.sampling_pending=result.sampling_pending or pending or warming
+  -- Preserve the base reader's brief publication grace period, while an
+  -- independently received SDK packet or failed vendor retention publishes
+  -- with retained base fields, so neither new data nor a failure is hidden.
+  output.defer_publish=result.defer_publish and not live_vendor and not any_retained or false
   for _,state in pairs(self.readers) do
     if state.pending and now-state.pending<100000000 then output.retry_after_ms=25 end
   end

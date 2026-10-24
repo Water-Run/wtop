@@ -183,3 +183,79 @@ end},{})
 local rejected=overflowed:sample(mixed_context)
 assert(rejected.data.by_id.intel.metrics.power_watts==nil,"overflowed PCI IDs forged a matching identity")
 overflowed:close()
+
+-- A normal base-worker round trip must reach Engine's publication gate.
+-- If a vendor packet arrives independently, publish it with the older base
+-- values explicitly retained, rather than claiming they were sampled again.
+do
+ local Engine=require("wtop.engine")
+ local at,mode,pending_at,sdk_ready=1000000000,"fresh",nil,false
+ local base={probe=function()return {available=true,state="available"}end,close=function()end}
+ function base:sample()
+  if mode=="pending" then
+   return {status="error",quality="stale",reason="hardware_query_pending",timestamp_ns=at,
+    sampling_pending=true,retry_after_ms=25,defer_publish=at-pending_at<100000000}
+  end
+  return {status="ok",quality="fresh",timestamp_ns=at,value_timestamp_ns=at,
+   sample_started_ns=at,sample_finished_ns=at,transport="process",data={devices={{
+    id="windows-pending",pci_bdf="0000:01:00.0",vendor_id="0x10de",device_id="0x1234",
+    identity_quality="fresh",driver="test",metrics={utilization_percent=20},quality={utilization="fresh"}}}}}
+ end
+ local collector=Windows.new(base,{levelzero_provider=false,adl_provider=false,nvml_provider=function()
+  if not sdk_ready then return nil,"nvml_library_not_found"end
+  return {sample_started_ns=at,sample_finished_ns=at,devices={{index=0,pci_bdf="0000:01:00.0",
+   power_watts=25,power_limit_watts=50,power_quality="fresh",power_measurement="device_sample"}}}
+ end},{})
+ local engine=Engine.new({collectors={gpu=collector},clock={now_ns=function()return at end,
+  wall_ns=function()return 1700000000000000000+at end}})
+ engine:probe();local initial=engine:tick(true);local sequence=initial.sequence
+ local history_samples=engine:history_values("gpu").n
+ mode="pending";at=1025000000;pending_at=at
+ local waiting,completed=engine:tick(true)
+ assert(completed.gpu==nil and waiting==initial and waiting.sequence==sequence,
+  "Windows wrapper published a normal base-worker pending poll")
+ assert(engine.pending_collectors.gpu and engine.scheduler:task("gpu").last_result.defer_publish)
+ assert(engine:history_values("gpu").n==history_samples,"a deferred poll appended duplicate GPU history")
+ local retained=engine.scheduler:task("gpu").last_result.data.devices[1]
+ assert(retained.metric_observations.utilization_percent.retained
+  and retained.metric_observations.utilization_percent.observed_at_ns==1000000000)
+ at=1126000000;local stale,published=engine:tick(true)
+ assert(published.gpu and published.gpu.quality=="partial" and not published.gpu.defer_publish)
+ assert(stale.gpus.devices[1].metric_observations.utilization_percent.quality=="stale")
+ assert(stale.gpus.providers.windows.retained and stale.gpus.providers.windows.reason=="hardware_query_pending")
+ assert(Export.agent(stale).metrics.gpu.maximum_utilization_percent==nil)
+ mode="fresh";at=1500000000;local recovered=engine:tick(true)
+ assert(recovered.gpus.devices[1].metric_observations.utilization_percent.quality=="fresh")
+ assert(recovered.gpus.devices[1].metric_observations.utilization_percent.observed_at_ns==at)
+ mode="pending";at=1625000000;pending_at=at;sdk_ready=true
+ local independent,changed=engine:tick(true)
+ assert(changed.gpu and not changed.gpu.defer_publish,"base polling hid an independent vendor packet")
+ local gpu=independent.gpus.devices[1]
+ assert(gpu.metric_observations.utilization_percent.retained
+  and gpu.metric_observations.utilization_percent.quality=="stale"
+  and gpu.metric_observations.utilization_percent.observed_at_ns==1500000000)
+ assert(gpu.metric_observations.power_watts.quality=="fresh"and gpu.metric_observations.power_watts.observed_at_ns==at)
+ assert(Export.snapshot(independent).gpus.devices[1].metrics.power_limit_percent==50)
+ mode="fresh";at=2000000000;engine:tick(true)
+ mode="pending";at=2125000000;pending_at=at;sdk_ready=false
+ local failed,failed_completed=engine:tick(true)
+ assert(failed_completed.gpu and not failed_completed.gpu.defer_publish,
+  "base polling delayed an independent vendor failure")
+ assert(failed.gpus.devices[1].metric_observations.power_watts.retained)
+ assert(Export.snapshot(failed).gpus.devices[1].metrics.power_limit_percent==nil)
+ engine:stop()
+
+ -- The same publication grace applies to a confirmed empty host inventory.
+ at=2000000000;mode="fresh"
+ local empty_base={probe=base.probe,close=base.close,sample=function()
+  if mode=="pending"then return {status="error",reason="hardware_query_pending",timestamp_ns=at,
+   sampling_pending=true,retry_after_ms=25,defer_publish=true}end
+  return {status="ok",timestamp_ns=at,data={devices={}}}
+ end}
+ local empty=Windows.new(empty_base,{nvml_provider=false,levelzero_provider=false,adl_provider=false},{})
+ assert(empty:sample({now_ns=function()return at end}).status=="unavailable")
+ mode="pending";at=2025000000
+ local waiting_empty=empty:sample({now_ns=function()return at end})
+ assert(waiting_empty.defer_publish and waiting_empty.sampling_pending)
+ empty:close()
+end
