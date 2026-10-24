@@ -466,7 +466,9 @@ local function record_rate(node, key, current, previous, elapsed_ns)
     state = "reset"
   else
     state = "fresh"
-    value = (current - previous) * 1000000000 / elapsed_ns
+    -- Subtract integer counters before conversion, then scale in floating
+    -- point so a multi-gigabyte I/O delta cannot overflow the integer product.
+    value = (current - previous + 0.0) * 1000000000 / elapsed_ns
     if value ~= value or value == math.huge or value == -math.huge then
       state, value = "gap", nil
     end
@@ -946,7 +948,16 @@ function Cgroup:sample(context, previous)
   local now = Common.now_ns(context)
   local previous_data = Common.previous_data(previous)
   local previous_by_id = previous_data and previous_data.by_id or {}
-  local elapsed_ns = previous_data and Common.elapsed_ns(now, previous.timestamp_ns) or nil
+  local previous_ns
+  if previous_data then
+    local anchor = previous_data.rate_timestamp_ns
+    if type(anchor) == "number" and anchor >= 0
+        and Common.elapsed_ns(previous.timestamp_ns, anchor) then previous_ns = anchor end
+  end
+  -- Compare the same point in consecutive collections. The result timestamp
+  -- remains the completion time; subtracting it here would remove the entire
+  -- previous traversal from the counter interval and inflate every rate.
+  local elapsed_ns = previous_data and Common.elapsed_ns(now, previous_ns) or nil
   local workloads = {}
   local by_id = {}
   local scan = {
@@ -1122,6 +1133,7 @@ function Cgroup:sample(context, previous)
     schema = SCHEMA,
     mount_path = self.mount_path,
     root = self.root_id,
+    rate_timestamp_ns = now,
     workloads = workloads,
     by_id = by_id,
     summary = summary,

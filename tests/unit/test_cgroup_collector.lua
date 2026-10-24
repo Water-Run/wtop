@@ -675,4 +675,74 @@ do
     and limited_calls.readlink == 0, "the depth budget precedes every metadata query")
 end
 
+-- A collection's finish is not the observation reference for its counters.
+-- Constant read latency must not shrink the following one-second interval.
+do
+  local Fixture = require("support.fixture_fs")
+  local clock = 1000000000
+  local spec = { files={
+    ["/timed/cgroup.procs"]="1\n",
+    ["/timed/cpu.stat"]="usage_usec 1000000\n",
+    ["/timed/memory.events"]="high 4\n",
+    ["/timed/pids.events"]="max 2\n",
+    ["/timed/io.stat"]="8:0 rbytes=100 wbytes=0 rios=1 wios=0\n",
+    ["/timed/cpu.pressure"]="some avg10=0.00 avg60=0.00 avg300=0.00 total=1000\n",
+  } }
+  local timed_fs = Fixture.new(spec)
+  local read = timed_fs.read
+  timed_fs.read = function(self, path, limit)
+    local content, err = read(self, path, limit)
+    clock = clock + 10000000
+    return content, err
+  end
+  local timed = Cgroup.new({ fs=timed_fs, mount_path="/timed" })
+  local ctx = { now_ns=function() return clock end }
+  local previous = timed:sample(ctx)
+  assert(previous.timestamp_ns > 1000000000, "the fixture must consume collection time")
+  clock = 2000000000
+  spec.files["/timed/cpu.stat"]="usage_usec 2000000\n"
+  spec.files["/timed/memory.events"]="high 6\n"
+  spec.files["/timed/pids.events"]="max 5\n"
+  spec.files["/timed/io.stat"]="8:0 rbytes=1100 wbytes=0 rios=2 wios=0\n"
+  spec.files["/timed/cpu.pressure"]="some avg10=0.00 avg60=0.00 avg300=0.00 total=21000\n"
+  local sampled = timed:sample(ctx, previous)
+  local row = assert(sampled.data.by_id["/"])
+  near(row.cpu.utilization_percent, 100)
+  near(row.memory.event_rates.high_per_second, 2)
+  near(row.pids.event_rates.max_per_second, 3)
+  near(row.io.by_id["8:0"].rates.rbytes_per_second, 1000)
+  near(row.pressure.cpu.some.total_usec_per_second, 20000)
+  assert(sampled.timestamp_ns == clock and sampled.duration_ns > 0,
+    "completion time and collection duration must retain their existing meaning")
+
+  -- A fast device can advance by more than 9 GiB between scans. Multiplying
+  -- the integer delta by a billion first overflows Lua's signed integer.
+  clock = 3000000000
+  spec.files["/timed/io.stat"]="8:0 rbytes=20000001100 wbytes=0 rios=3 wios=0\n"
+  local fast = timed:sample(ctx, sampled)
+  near(fast.data.by_id["/"].io.by_id["8:0"].rates.rbytes_per_second, 20000000000)
+  local exported = require("wtop.export").snapshot({ timestamp_ns=fast.timestamp_ns,
+    workloads=fast.data, quality={ workloads={ status="ok", quality="fresh" } } })
+  near(exported.workloads.items[1].io.rates.rbytes_per_second, 20000000000)
+  clock = 4000000000
+  spec.files["/timed/io.stat"]="8:0 rbytes=9007199254740993 wbytes=0 rios=4 wios=0\n"
+  local large = timed:sample(ctx, fast)
+  clock = 5000000000
+  spec.files["/timed/io.stat"]="8:0 rbytes=9007199254740994 wbytes=0 rios=5 wios=0\n"
+  local precise = timed:sample(ctx, large)
+  near(precise.data.by_id["/"].io.by_id["8:0"].rates.rbytes_per_second, 1)
+
+  -- Older or invalid baselines establish a gap, while completion metadata
+  -- continues to report when the collection actually finished.
+  for _, anchor in ipairs({ false, -1, "unknown", precise.timestamp_ns + 1 }) do
+    local earlier = { status="ok", timestamp_ns=precise.timestamp_ns,
+      data={ by_id=precise.data.by_id, rate_timestamp_ns=anchor~=false and anchor or nil } }
+    clock = 6000000000
+    local gap = timed:sample(ctx, earlier)
+    assert(gap.data.by_id["/"].cpu.rates.usage_usec_per_second == nil
+      and gap.data.by_id["/"].rate_quality == "gap",
+      "an unknown observation reference must not turn into a zero rate")
+  end
+end
+
 return true
