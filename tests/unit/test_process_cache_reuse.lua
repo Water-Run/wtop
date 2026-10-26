@@ -41,8 +41,9 @@ local first=assert(sample());local entry=c.identity_cache['100:1000']
 assert(first.command=='first argument'and command_reads==1 and first.io.read_bytes==10)
 local second=assert(sample())
 assert(c.identity_cache['100:1000']==entry,'stable identity rebuilt its private cache record')
-assert(second.command=='first argument'and command_reads==1 and not entry.command_read)
+assert(second.command=='first argument'and command_reads==1 and entry.command_read)
 command,bytes='updated\0argument\0',30
+now=now+6e9
 local third=assert(sample())
 assert(third.command=='updated argument'and command_reads==2 and third.io.read_bytes==30)
 assert(c.identity_cache['100:1000']==entry)
@@ -56,7 +57,8 @@ assert(first.uid==1000 and first.io.read_bytes==10 and first.command=='first arg
 assert(c.identity_cache['100:1000']==entry and entry.command==nil)
 assert(sample().command==nil)
 command='final\0'
-assert(sample().command=='final','ordinary argv stopped refreshing on its existing cadence')
+now=now+6e9
+assert(sample().command=='final','ordinary argv did not refresh after its deadline')
 local valid_entry=c.identity_cache['100:1000'];local valid_command=valid_entry.command
 local valid_read=valid_entry.command_read;race_after_command=true;command='mixed\0'
 sample(true)
@@ -82,4 +84,4 @@ local other={list=fs.list,read=fs.read};uid=3000;command='other-source\0'
 local changed=c:sample({fs=other,now_ns=function()return now end},prior)
 assert(changed.data.by_id['100:2000'].uid==3000 and changed.data.by_id['100:2000'].command=='other-source')
 assert(c.identity_cache['100:2000']~=before)
-print('ok: private cache object reuse, unchanged argv refresh, immutable older snapshots, duplicates and process/filesystem lifecycle')
+print('ok: private cache object reuse, bounded argv refresh, immutable older snapshots, duplicates and process/filesystem lifecycle')

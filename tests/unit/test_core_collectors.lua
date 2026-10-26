@@ -1155,12 +1155,12 @@ do
   ctx.selected_process_ids = nil
   command = "changed\0arguments\0"
   local updated = empty
-  for _ = 1, 3 do
+  for _ = 1, 5 do
     command_now = command_now + 1000000000
     updated = collector:sample(ctx, updated)
   end
   assert(updated.data.by_id["100:1000"].command == "changed arguments",
-    "the empty-value correction must preserve later argv refreshes")
+    "the empty-value correction must preserve bounded argv refreshes")
 end
 
 -- A PID reused between stat and supplemental status reads must be discarded.

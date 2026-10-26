@@ -123,7 +123,7 @@ macOS/Windows 原生采集器、设备和通道均标为 fresh 的直接输入�
 
 历史记录保存的是每个数据源实际完成采样的时间戳,而不是在其他无关采集器完成时重复旧值。每条 sparkline 的终端列覆盖固定的一秒,总计最多 240 秒。更高的速率向每一列贡献更多真实数据点,更低的速率则产生稀疏点,所以切换速率不会改变水平时间尺度。
 
-`/proc/<pid>/cmdline` 在枚举期间读取,这样每一行都能显示真实的命令名;来自 `/proc/<pid>/stat` 的 `comm` 是十五字符截断,仅作回退。`/proc/<pid>/io` 通常只在详情打开时读取；明确按 I/O 排序、使用 I/O 数值过滤或调用 `--snapshot` 时，才对有界的进程集合批量读取。累计量排序和过滤使用 `read_bytes`/`write_bytes`，即存储层字节数，不是系统调用的全部字节。参见 [proc_pid_io(5)](https://man7.org/linux/man-pages/man5/proc_pid_io.5.html)。cgroup 列表只为详情或显式工作负载跳转读取；进程表按 `g` 时只访问所选 PID，并在读取前后核对启动时间。UID 到用户名的解析直接读取 `/etc/passwd` 而不是调用 `getpwuid(3)`,因为在配置了 LDAP 或 SSSD 的主机上,NSS 可能在渲染循环内阻塞数秒。交互式高基数 GPU fdinfo 扫描仅在 GPU 页面上的 `gpu_process_table` 经响应式布局求解获得实际位置时启用。仅仅切到 GPU 页面、显示 GPU 摘要或停留在 Insights 都不够。Overview/后台 GPU 采样仍只读取设备摘要,不枚举 `/proc/<pid>/fdinfo`。非交互式 `--snapshot` 保留完整扫描。
+`/proc/<pid>/cmdline` 在枚举期间按身份缓存，按五秒期限随采样刷新；进程名变化或打开详情时重读。这样每一行都能显示完整命令行；来自 `/proc/<pid>/stat` 的 `comm` 是十五字符截断,仅作回退。`/proc/<pid>/io` 通常只在详情打开时读取；明确按 I/O 排序、使用 I/O 数值过滤或调用 `--snapshot` 时，才对有界的进程集合批量读取。累计量排序和过滤使用 `read_bytes`/`write_bytes`，即存储层字节数，不是系统调用的全部字节。参见 [proc_pid_io(5)](https://man7.org/linux/man-pages/man5/proc_pid_io.5.html)。cgroup 列表只为详情或显式工作负载跳转读取；进程表按 `g` 时只访问所选 PID，并在读取前后核对启动时间。UID 到用户名的解析直接读取 `/etc/passwd` 而不是调用 `getpwuid(3)`,因为在配置了 LDAP 或 SSSD 的主机上,NSS 可能在渲染循环内阻塞数秒。交互式高基数 GPU fdinfo 扫描仅在 GPU 页面上的 `gpu_process_table` 经响应式布局求解获得实际位置时启用。仅仅切到 GPU 页面、显示 GPU 摘要或停留在 Insights 都不够。Overview/后台 GPU 采样仍只读取设备摘要,不枚举 `/proc/<pid>/fdinfo`。非交互式 `--snapshot` 保留完整扫描。
 
 Linux 批量读取器对常规 `/proc/<pid>/stat` 行在原生模块中解析，解析不了的原文仍交给 Lua 解析器判定错误原因。旧原生模块与纯 Lua 5.4 路径继续使用字符串解析。
 

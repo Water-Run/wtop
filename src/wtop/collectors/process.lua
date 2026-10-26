@@ -858,6 +858,7 @@ function Process:sample(context, previous)
           local detail = wants_detail(context, process.id)
           local thread_list = wants_thread_list(context, process.id)
           local command_value = nil
+          local command_attempted = false
           local io_attempted = false
           local cached = prior_cache[process.id]
           if cached and cached.kernel_thread ~= nil and cached.kernel_thread ~= is_kernel_thread then
@@ -923,8 +924,14 @@ function Process:sample(context, previous)
           if is_kernel_thread and not detail then
             process.command = nil
             command_value = false
-          elseif (self.read_cmdline or detail) and (detail or not cached or not cached.command_read) then
+          elseif (self.read_cmdline or detail) and (detail or not cached or not cached.command_read
+            or type(cached.command_attempt_ns) ~= "number"
+            or type(cached.command_next_ns) ~= "number"
+            or now < cached.command_attempt_ns or now >= cached.command_next_ns
+            or cached.command_name ~= process.name) then
+            command_attempted = true
             supplemental_read = true
+            process.command = nil
             local cmdline, cmdline_error = fs:read(base .. "/cmdline", 64 * 1024)
             if cmdline and cmdline ~= "" then
               process.command = sanitize_text(cmdline)
@@ -1323,8 +1330,10 @@ function Process:sample(context, previous)
               -- This cache record is private. Its referenced values can also
               -- belong to older snapshots, so replace fields, not their data.
               entry = unique_pid and cached or {}
-              entry.command_read = false
-              entry.command = nil
+              if entry ~= cached then
+                entry.command_read = false
+                entry.command = nil
+              end
               live_cache[process.id] = entry
             end
             if status_requested then
@@ -1354,7 +1363,17 @@ function Process:sample(context, previous)
             end
             if command_value ~= nil then
               entry.command_read = true
-              if command_value then entry.command = command_value end
+              entry.command = command_value or nil
+              entry.command_name = process.name
+            elseif command_attempted then
+              entry.command_read = false
+              entry.command = nil
+            end
+            if command_attempted then
+              -- Align bounded command refreshes with metadata reads. A PID
+              -- can exec or rewrite argv without changing its start time.
+              entry.command_attempt_ns = now
+              entry.command_next_ns = next_status_refresh(now, process.pid, process.starttime_ticks)
             end
           end
         end

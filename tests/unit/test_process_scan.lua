@@ -61,6 +61,71 @@ local function stat(pid)
   return original:gsub("^100 ", tostring(pid) .. " ")
 end
 
+-- A successful command survives repeated cache reuse. Explicit detail refreshes
+-- still replace it, clear an empty result, retry failures, and fence PID reuse.
+do
+  local Native = require("wtop.native")
+  for _, provider in ipairs({ { available = false }, Native }) do
+    local now, reads, generation = 1e9, 0, 1000
+    local command, denied, race = "first\0argument\0", false, false
+    local comm = "worker"
+    local fs = { list = function() return { "100" } end }
+    function fs:read(path)
+      if path == "/proc/uptime" then return "100 0\n" end
+      if path == "/proc/100/stat" then
+        local body = original:gsub("%b()", "(" .. comm .. ")", 1)
+        local fields = {}; for token in body:gmatch("%S+") do fields[#fields + 1] = token end
+        -- The fixture's comm has no spaces; field 22 is the start time.
+        fields[22] = tostring(generation)
+        return table.concat(fields, " ")
+      end
+      if path == "/proc/100/cmdline" then
+        reads = reads + 1
+        if race then generation = generation + 1; race = false end
+        if denied then return nil, { kind = "denied" } end
+        return command
+      end
+      return nil, { kind = "missing" }
+    end
+    local c = Process.new({ fs = fs, native = provider, read_status = false,
+      read_cmdline = true })
+    local previous
+    local function sample(detail)
+      now = now + 100000000
+      local context = { fs = fs, now_ns = function() return now end }
+      if detail then context.selected_process_ids = { ["100:" .. generation] = true } end
+      previous = c:sample(context, previous)
+      return previous.data.by_pid[100]
+    end
+    local first = assert(sample()); assert(first.command == "first argument")
+    for _ = 1, 8 do assert(sample().command == first.command) end
+    assert(reads == 1, "cached command was periodically re-read")
+    command = "replacement\0"; assert(sample(true).command == "replacement")
+    command = ""; assert(sample(true).command == nil)
+    local empty_reads = reads
+    for _ = 1, 4 do assert(sample().command == nil) end
+    assert(reads == empty_reads, "known empty command was re-read")
+    denied = true; local failed = sample(true)
+    assert(failed.command_status == "denied")
+    denied, command = false, "recovered\0"; assert(sample().command == "recovered")
+    local recovered_reads = reads
+    for _ = 1, 4 do assert(sample().command == "recovered") end
+    assert(reads == recovered_reads, "retried command was not retained")
+    command, now = "rewritten argv\0", now + 6e9
+    assert(sample().command == "rewritten argv", "command cache did not expire")
+    comm, command = "renamed", "same PID exec\0"
+    assert(sample().command == "same PID exec", "changed process name kept old arguments")
+    command, now = "clock reversed\0", now - 1e9
+    assert(sample().command == "clock reversed", "clock reversal kept an invalid deadline")
+    generation, command = generation + 1, "new PID\0"
+    assert(sample().command == "new PID", "reused PID inherited the old command")
+    race, command = true, "raced\0"; assert(sample(true) == nil)
+    assert(previous.data.races == 1 and next(c.identity_cache) == nil)
+    command = "after race\0"; assert(sample().command == "after race")
+    assert(first.command == "first argument", "cache refresh changed an older snapshot")
+  end
+end
+
 -- Enumeration order, noncanonical PIDs, limits and a disappearing PID must
 -- not change native batch alignment or the public numeric PID ordering.
 local entries = { "300", "bad", "030", "200", "3", "0", "-1", "2147483648", "100" }
