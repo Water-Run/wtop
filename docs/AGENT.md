@@ -157,6 +157,11 @@ UUID 与原生设备身份边界，不将 RAPL 图形域归入某块显卡。
 同一批次中未受影响的设备可继续使用。查询完成后的收取时钟用于校验
 捕获时间，输出时间覆盖已接受的读数。
 
+Snapshot 的 Linux `cpu.counter_source` 保留计数文件路径，原生 Windows／macOS
+保留各自的计数接口名。CPUInfo／CPPC 缺失时，硬件树可使用实际计数记录
+中的逻辑 CPU 标识；预热期间仍保留身份，失效来源不会生成新节点。明确的
+在线状态和 Windows 处理器组字段按来源保留，物理核心与插槽保持未知。
+
 `metrics.cpu.frequency` 按各策略已知的在线 CPU 数加权给出平均 Hz；缺少成员列表的策略按一个读数计。它携带来源与 measured/estimated/partial 质量，混用来源时标为 `mixed`。CPUFreq 采集失败或数据过期时不把保留值作为当前频率输出。
 
 Linux 的 ACPI CPPC 参考值位于 Snapshot 的 `cppc.cpus` 和 Agent 的

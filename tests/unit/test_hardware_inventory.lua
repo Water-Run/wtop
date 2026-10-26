@@ -4541,4 +4541,78 @@ do
     end
 end
 
+-- Counter rows can establish logical CPU identities without CPUInfo or CPPC.
+-- A rate warmup is not a missing identity; aggregate counts are not a roster.
+do
+    local Hardware = require("wtop.model.hardware")
+    local TUI = require("wtop.tui")
+    local I18n = require("wtop.i18n")
+    local state = { cpu={cores={{name="cpu0",quality="gap"},{name="cpu4",quality="fresh"}}},
+        quality={cpu={status="ok",quality="gap",source={"/proc/stat","/proc/loadavg"}}} }
+    local graph = Hardware.build(state)
+    local cpu = assert(graph.by_id["cpu:0"], "counter-only CPU must be discoverable")
+    assert(cpu.kind=="thread" and cpu.resource=="cpu" and cpu.resource_id==0 and not cpu.parent_id)
+    assert(cpu.device.source=="/proc/stat" and cpu.device.online_known==false
+        and cpu.device.package_id_known==false and cpu.device.core_id_known==false)
+    assert(#graph.nodes==2 and graph.by_id["cpu:4"] and not graph.by_id["cpu:1"])
+    assert(#Export.snapshot(state).inventory.topology.nodes==2)
+    local provider=require("wtop.collectors.cpu").new({stat_path="/fixture/stat",loadavg_path="/fixture/loadavg",
+        fs=fake_fs({["/fixture/stat"]="cpu 1 0 1 10 0 0 0 0 0 0\ncpu0 1 0 1 10 0 0 0 0 0 0\n",
+            ["/fixture/loadavg"]="0.00 0.00 0.00 1/4 10\n"},{})})
+    local observation=provider:sample({now_ns=function()return 1000000000 end})
+    local sampled=Snapshot.merge(nil,{cpu=observation},1,1000000000)
+    assert(observation.data.counter_source=="/fixture/stat"
+        and Hardware.build(sampled).by_id["cpu:0"].device.source=="/fixture/stat"
+        and Export.snapshot(sampled).cpu.counter_source=="/fixture/stat")
+    for _,locale in ipairs({"en-US","zh-CN","zh-TW","fr-FR","de-DE","es-ES","pt-BR","ru-RU","ja-JP","ko-KR"}) do
+        local lang=assert(I18n.new({locale=locale}))
+        local lines=table.concat(TUI.hardware_detail_lines(state,"cpu:0",lang),"\n")
+        assert(lines:find("/proc/stat",1,true) and lines:find(lang:t("inventory.detail_title",{id="cpu0"}),1,true))
+    end
+    local original=state.cpu.cores
+    for _,tag in ipairs({"stale","error","denied","unavailable","missing","held"}) do
+        state.quality.cpu={status="ok",quality=tag}
+        assert(not Hardware.build(state).by_id["cpu:0"],tag)
+    end
+    state.quality.cpu={status="denied",quality="fresh"}
+    assert(not Hardware.build(state).by_id["cpu:0"])
+    state.quality.cpu={status="ok",quality="fresh",source="fixture"}
+    state.cpu.cores={{id=66,name="cpu66",processor_group=1,logical_processor_index=2,
+        online=true,identity_quality="fresh",source="NtQuerySystemInformationEx",quality="gap"}}
+    cpu=assert(Hardware.build(state).by_id["cpu:66"])
+    assert(cpu.device.processor_group==1 and cpu.device.logical_processor_index==2
+        and cpu.device.online==true and cpu.device.online_known==true and not cpu.parent_id)
+    state.cpu.cores={{id=7,name="cpu7",source="mach:PROCESSOR_CPU_LOAD_INFO",online=false,
+        identity_quality="fresh",quality="unavailable"}}
+    cpu=assert(Hardware.build(state).by_id["cpu:7"])
+    assert(cpu.device.online==false and cpu.device.online_known==true)
+    for _,tag in ipairs({"stale","gap","denied","error","unavailable"}) do
+        state.cpu.cores[1].identity_quality=tag
+        assert(not Hardware.build(state).by_id["cpu:7"],tag)
+    end
+    state.cpu.cores={{id=66,name="cpu66",processor_group=2,logical_processor_index=2,identity_quality="fresh"}}
+    assert(not Hardware.build(state).by_id["cpu:66"],"contradictory processor group identity")
+    state.cpu.cores={{id=1,name="cpu0",quality="fresh"},{id=0,name="cpu0",quality="fresh"},{name="cpu1",quality="fresh"}}
+    graph=Hardware.build(state)
+    assert(not graph.by_id["cpu:0"] and not graph.by_id["cpu:1"] and graph.partial)
+    state.cpu.cores={{name="cpu00"},{name="CPU0"},{name="cpu1x"},{name="cpu"},{id=-1},{id=.5},{id=2147483648},{id=0,name="cpu0",quality="stale"},{name="cpu5",quality="not-a-quality"}}
+    assert(#Hardware.build(state).nodes==0)
+    state.cpu={total={logical_cpus=128}}
+    assert(#Hardware.build(state).nodes==0,"aggregate count must not invent CPU IDs")
+    state.cpu={cores={}}
+    for id=0,512 do state.cpu.cores[#state.cpu.cores+1]={name="cpu"..id} end
+    graph=Hardware.build(state);assert(#graph.nodes==512 and graph.truncated)
+    state.cpu.cores[513]=state.cpu.cores[1]
+    assert(not Hardware.build(state).by_id["cpu:0"],"duplicate outside display prefix")
+    state.cpu.cores=original
+    state.cpu_info={topology={logical_cpus={{id=0,package_id=2,core_id=3,core_key="2:3"}}}}
+    graph=Hardware.build(state)
+    assert(graph.by_id["cpu:0"].resource=="cpu_info" and graph.by_id["cpu:0"].parent_id=="core:2:3")
+    state.cpu_info={}
+    state.cppc={cpus={{id=0,source="/sys/devices/system/cpu/cpu0/acpi_cppc",consistent=true,quality="fresh"}}}
+    state.quality.cppc={status="ok",quality="fresh"}
+    graph=Hardware.build(state)
+    assert(graph.by_id["cpu:0"].resource=="cppc" and graph.by_id["cpu:4"].resource=="cpu")
+end
+
 return true

@@ -123,6 +123,7 @@ function CPU:sample(context, previous)
   -- for one slot.
   local quality = load_partial and "partial" or (any_gap and "gap" or "fresh")
   return Common.result("ok", finished, {
+    counter_source = self.stat_path,
     total = total,
     cores = cores,
     load = load,

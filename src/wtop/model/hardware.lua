@@ -650,6 +650,77 @@ function M.build(snapshot)
       end
     end
   end
+  -- Counter providers also report logical identities. This includes old Linux
+  -- without CPPC and native Windows/Mach slots. Rate warmup does not invalidate
+  -- a newly observed identity; retained observations cannot establish one.
+  local usage = type(snapshot.cpu) == "table" and snapshot.cpu or {}
+  local usage_rows = type(usage.cores) == "table" and usage.cores or nil
+  local usage_state = type(snapshot.quality) == "table" and snapshot.quality.cpu or nil
+  local usage_quality = type(usage_state) == "table" and usage_state.quality or nil
+  if usage_rows and #usage_rows > 0 and Quality.current_source(snapshot.quality, "cpu")
+      and usage_quality ~= "held" and usage_quality ~= "missing" then
+    result.truncated = result.truncated or usage.truncated == true
+    local candidates, reports = {}, {}
+    local function remember(id, row)
+      if id and not cpus[id] then
+        if reports[id] ~= nil then reports[id] = false; result.partial = true
+        elseif #candidates < 512 then
+          candidates[#candidates + 1] = id; reports[id] = row
+        else result.truncated = true end
+      end
+    end
+    for index = 1, math.min(#usage_rows, 8192) do
+      local row = usage_rows[index]
+      if type(row) == "table" then
+        local explicit = numeric_id(row.id)
+        explicit = explicit and math.tointeger(explicit)
+        local token = type(row.name) == "string" and row.name:match("^cpu(%d+)$")
+        local named = token and numeric_id(tonumber(token))
+        named = named and math.tointeger(named)
+        if named and row.name ~= "cpu" .. named then named = nil end
+        local valid = (row.id == nil or explicit ~= nil) and (row.name == nil or named ~= nil)
+          and not (explicit and named and explicit ~= named)
+        local id = explicit or named
+        if valid and id then
+          remember(id, row)
+        else
+          remember(explicit, false); if named ~= explicit then remember(named, false) end
+          result.partial = true
+        end
+      else result.partial = true end
+    end
+    if #usage_rows > 8192 then candidates = {}; result.truncated = true end
+    local count = 0
+    for _ in pairs(cpus) do count = count + 1 end
+    local source = type(usage_state) == "table" and usage_state.source or nil
+    if type(source) == "table" then source = source[1] end
+    for _, id in ipairs(candidates) do
+      local row = reports[id]
+      local identity = row and row.identity_quality
+      local current = row and (identity == "fresh" or identity == "partial"
+        or identity == nil and (row.quality == nil or Quality.VALID_QUALITY[row.quality])
+          and (Quality.current_metric(row.quality) or row.quality == "gap"))
+      if current then
+        local group, number = numeric_id(row.processor_group), numeric_id(row.logical_processor_index)
+        local coherent = (row.processor_group == nil or group and group <= 65535)
+          and (row.logical_processor_index == nil or number and number <= 63)
+          and not (group and number and id ~= group * 64 + number)
+        if coherent then
+          if count >= 512 then result.truncated = true; break end
+          local device = { id=id, source=identifier(row.source) or identifier(usage.counter_source)
+              or identifier(source) or "cpu", identity_quality=identity or "fresh",
+            package_id_known=false, core_id_known=false, online_known=type(row.online) == "boolean",
+            processor_group=group, logical_processor_index=number }
+          if device.online_known then device.online = row.online end
+          local node = add_node("cpu", "cpu" .. id, device, "cpu:" .. id, nil, "cpu", id)
+          if node then
+            node.kind, node.cpu_ids = "thread", { id }
+            cpus[id] = node; count = count + 1
+          end
+        else result.partial = true end
+      end
+    end
+  end
   -- OS cache records carry logical-CPU memberships. Keep those memberships
   -- separate from firmware cache handles, and attach only to a verified
   -- containing core/package. Unknown or stale members leave the cache a root.
