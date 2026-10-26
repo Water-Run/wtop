@@ -42,7 +42,66 @@ assert(row.highest_performance==196 and row.nominal_performance==150
   and result.data.cpus[2].nominal_frequency_hz==2200000000)
 local state=Snapshot.new(1,1000000000)
 state=Snapshot.merge(state,{cppc=result},1,1000000000)
+-- CPPC remains usable when procfs/CPUInfo is absent. Its verified logical
+-- identities create independent roots, with no physical containment implied.
+do
+  local Hardware = require("wtop.model.hardware")
+  local graph = Hardware.build(state)
+  local cpu = assert(graph.by_id["cpu:0"], "CPPC-only CPU must be discoverable")
+  assert(cpu.kind == "thread" and cpu.resource == "cppc" and cpu.resource_id == 0
+    and cpu.parent_id == nil and cpu.package_id == nil and cpu.cpu_ids[1] == 0)
+  assert(cpu.device.package_id_known == false and cpu.device.core_id_known == false)
+  assert(graph.by_id["cpu:2"] and not graph.by_id["package:0"] and #graph.nodes == 2)
+  local exported = Export.snapshot(state).inventory.topology.nodes
+  assert(#exported == 2 and exported[1].resource == "cppc")
+  for _, locale in ipairs({"en-US","zh-CN","zh-TW","fr-FR","de-DE","es-ES","pt-BR","ru-RU","ja-JP","ko-KR"}) do
+    local lang=assert(I18n.new({locale=locale}))
+    local lines=table.concat(TUI.hardware_detail_lines(state,"cpu:0",lang,2000000000),"\n")
+    assert(lines:find(lang:t("cppc.title"),1,true) and lines:find(lang:t("cppc.nominal_frequency"),1,true))
+  end
+  local original, quality = state.cppc.cpus, state.quality.cppc
+  state.cppc.cpus={original[1],original[1],original[2]}
+  local ambiguous=Hardware.build(state)
+  assert(not ambiguous.by_id["cpu:0"] and ambiguous.by_id["cpu:2"] and ambiguous.partial)
+  state.cppc.cpus=original
+  for _, tag in ipairs({"stale","gap","denied","error","unavailable","reset","held","missing"}) do
+    state.quality.cppc={status="ok",quality=tag}
+    assert(not Hardware.build(state).by_id["cpu:0"],tag)
+  end
+  state.quality.cppc={status="denied",quality="fresh"}
+  assert(not Hardware.build(state).by_id["cpu:0"])
+  state.quality.cppc=quality
+  local saved_consistent,saved_quality=original[1].consistent,original[1].quality
+  for _, tag in ipairs({"stale","gap","denied","error","unavailable"}) do
+    original[1].quality=tag
+    assert(not Hardware.build(state).by_id["cpu:0"],tag)
+  end
+  original[1].quality="partial"
+  assert(Hardware.build(state).by_id["cpu:0"],"valid identity survives a partial reference")
+  original[1].consistent=false
+  assert(not Hardware.build(state).by_id["cpu:0"])
+  original[1].consistent,original[1].quality=saved_consistent,saved_quality
+  state.cppc.cpus={}
+  for id=0,512 do state.cppc.cpus[#state.cppc.cpus+1]={id=id,source=base.."/cpu"..id.."/acpi_cppc",consistent=true,quality="fresh"} end
+  local bounded=Hardware.build(state)
+  assert(#bounded.nodes==512 and bounded.truncated)
+  -- A duplicate after the display prefix still invalidates its selected ID.
+  state.cppc.cpus[513]=state.cppc.cpus[1]
+  assert(not Hardware.build(state).by_id["cpu:0"])
+  for index=514,8193 do state.cppc.cpus[index]=original[2] end
+  local oversized=Hardware.build(state)
+  assert(#oversized.nodes==0 and oversized.truncated)
+  state.cppc.cpus={false,{}, {id=-1}, {id=0.5}, {id=1048576}, original[2]}
+  local malformed=Hardware.build(state)
+  assert(malformed.partial and #malformed.nodes==1 and malformed.by_id["cpu:2"])
+  state.cppc.cpus=original
+end
 state.cpu_info={topology={logical_cpus={{id=0,core_id=0,package_id=0,core_key="0:0",source=base.."/cpu0/topology"}}}}
+do
+  local graph=require("wtop.model.hardware").build(state)
+  assert(graph.by_id["cpu:0"].resource=="cpu_info" and graph.by_id["cpu:0"].parent_id=="core:0:0")
+  assert(graph.by_id["cpu:2"].resource=="cppc" and not graph.by_id["cpu:2"].parent_id)
+end
 local output=Export.snapshot(state)
 assert(output.cppc.cpus[1].nominal_frequency_hz==3300000000
   and output.cppc.cpus[1].guaranteed_performance==nil and output.cppc.cpus[1].quality=="fresh")

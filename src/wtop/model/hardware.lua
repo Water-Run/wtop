@@ -609,6 +609,47 @@ function M.build(snapshot)
       end
     end
   end
+  -- CPPC proves logical CPU identities even when procfs/CPUInfo is unavailable.
+  -- It supplies no package/core containment. Keep existing topology and add
+  -- only missing, current identities as independent roots.
+  local cppc = type(snapshot.cppc) == "table" and snapshot.cppc or {}
+  local rows = type(cppc.cpus) == "table" and cppc.cpus or nil
+  local cppc_state = type(snapshot.quality) == "table" and snapshot.quality.cppc or nil
+  if rows and #rows > 0 and Quality.current_source(snapshot.quality, "cppc")
+      and Quality.current_metric(type(cppc_state) == "table" and cppc_state.quality or nil) then
+    result.truncated = result.truncated or cppc.truncated == true
+    local candidates, reports = {}, {}
+    for index = 1, math.min(#rows, 8192) do
+      local row = rows[index]
+      local id = type(row) == "table" and numeric_id(row.id)
+      id = id and id <= 1048575 and math.tointeger(id) or nil
+      if id and not cpus[id] then
+        if reports[id] ~= nil then reports[id] = false; result.partial = true
+        elseif #candidates < 512 then
+          candidates[#candidates + 1] = id; reports[id] = row
+        else result.truncated = true end
+      elseif not id then result.partial = true end
+    end
+    -- The collector caps its source at 8192 CPUs. Beyond that boundary a
+    -- duplicate could be hidden outside this scan, so no fallback is proven.
+    if #rows > 8192 then candidates = {}; result.truncated = true end
+    local count = 0
+    for _ in pairs(cpus) do count = count + 1 end
+    for _, id in ipairs(candidates) do
+      local row = reports[id]
+      if row and row.consistent == true and identifier(row.source)
+          and (row.quality == "fresh" or row.quality == "partial") then
+        if count >= 512 then result.truncated = true; break end
+        local node = add_node("cpu", "cpu" .. id, { id=id, source=row.source,
+            package_id_known=false, core_id_known=false, online_known=false },
+          "cpu:" .. id, nil, "cppc", id)
+        if node then
+          node.kind, node.cpu_ids = "thread", { id }
+          cpus[id] = node; count = count + 1
+        end
+      end
+    end
+  end
   -- OS cache records carry logical-CPU memberships. Keep those memberships
   -- separate from firmware cache handles, and attach only to a verified
   -- containing core/package. Unknown or stale members leave the cache a root.
