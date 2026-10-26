@@ -2,6 +2,13 @@
 
 -- Match the standalone Lua runtime in embedded directory and onefile builds.
 collectgarbage("generational")
+-- Repeated snapshots leave tables alive across minor collections. Keep major
+-- cycles closer together in the shipped runtime to limit retained garbage.
+-- Lua 5.4 uses a different parameter interface and keeps its defaults.
+if _VERSION == "Lua 5.5" then
+    collectgarbage("param", "pause", 120)
+    collectgarbage("param", "minormajor", 20)
+end
 
 local entry_path = tostring(arg and arg[0] or "")
 local entry_dir = entry_path:match("^(.*)[/\\][^/\\]+$")

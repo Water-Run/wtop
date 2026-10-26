@@ -245,6 +245,12 @@ io.write, io.flush, Engine.new, Native.sleep_ms =
 do
     local function entry_mode(initial_mode, reader)
         local previous_mode = collectgarbage(initial_mode)
+        local previous_parameters = {}
+        if _VERSION == "Lua 5.5" then
+            for _, name in ipairs({ "pause", "minormajor" }) do
+                previous_parameters[name] = collectgarbage("param", name)
+            end
+        end
         local previous_arg, previous_exit = arg, os.exit
         local previous_path, previous_cpath = package.path, package.cpath
         local names = { "wtop.native", "wtop.cli", "wtop.core.hardware_worker" }
@@ -274,6 +280,9 @@ do
         package.path, package.cpath = previous_path, previous_cpath
         for _, name in ipairs(names) do package.loaded[name] = previous[name] end
         collectgarbage(previous_mode)
+        for name, value in pairs(previous_parameters) do
+            collectgarbage("param", name, value)
+        end
         assert(not ok and result == stopped, tostring(result))
         assert(exit_code == 0)
         assert((reader and called_reader and not called_cli)
