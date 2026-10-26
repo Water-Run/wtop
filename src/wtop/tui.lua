@@ -2837,6 +2837,39 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
         add("cpuid.initial_apic_id", "Initial APIC ID", string.format("0x%x", device.initial_apic_id))
     end
     if node.kind == "thread" then
+        local cppc, duplicate
+        for _, row in ipairs(snapshot.cppc and snapshot.cppc.cpus or {}) do
+            if type(row) == "table" and row.id == device.id then
+                if cppc then duplicate = true else cppc = row end
+            end
+        end
+        if cppc and not duplicate then
+            lines[#lines + 1] = ""
+            lines[#lines + 1] = translated(i18n, "cppc.title", "ACPI CPPC performance references")
+            local current = Quality.current_source(snapshot.quality, "cppc")
+            add("inspector.quality", "Quality", Technical.state(i18n, current and cppc.quality or "stale"))
+            for _, field in ipairs({
+                {"highest_performance", "cppc.highest", "Highest performance (relative)"},
+                {"nominal_performance", "cppc.nominal", "Nominal performance (relative)"},
+                {"lowest_nonlinear_performance", "cppc.lowest_nonlinear", "Lowest nonlinear performance (relative)"},
+                {"lowest_performance", "cppc.lowest", "Lowest performance (relative)"},
+                {"guaranteed_performance", "cppc.guaranteed", "Guaranteed performance (relative)"},
+                {"reference_performance", "cppc.reference", "Counter reference performance (relative)"},
+                {"nominal_frequency_hz", "cppc.nominal_frequency", "Nominal frequency reference", "hertz"},
+                {"lowest_frequency_hz", "cppc.lowest_frequency", "Lowest frequency reference", "hertz"},
+            }) do
+                add(field[2], field[3], cppc[field[1]], field[4])
+            end
+            add("metrics.source", "Source", cppc.source)
+            add("systemd.sample_age", "Sample age", type(now_ns) == "number" and type(cppc.observed_at_ns) == "number"
+                and math.max(0, now_ns - cppc.observed_at_ns) or nil, "nanoseconds")
+            for _, failure in ipairs(cppc.issues or {}) do
+                add("inspector.reason", "Reason", failure.field .. ": " .. tostring(Technical.state(i18n, failure.status)))
+                add("metrics.source", "Source", failure.source)
+            end
+            lines[#lines + 1] = translated(i18n, "cppc.note",
+                "Firmware performance references, not utilization, measured frequency or watts.")
+        end
         local info = snapshot.cpu_info and snapshot.cpu_info.cpuid
         for _, cpu in ipairs(info and info.logical_cpus or {}) do
             if cpu.id == device.id then
@@ -9207,7 +9240,7 @@ local function run_loop(options, backend, renderer, engine, translator)
                 return hardware_detail_lines(engine.snapshot, hardware_detail.id,
                     translator, engine.clock:now_ns(), #hardware_detail.history)
             end, { inventory = true, displays = true, hwmon = true, disk = true,
-                network = true, mounts = true, cpu_info = true, cpufreq = true, cpu_clocks = true, numa = true,
+                network = true, mounts = true, cpu_info = true, cpufreq = true, cpu_clocks = true, cppc = true, numa = true,
                 memory_devices = true }, hardware_detail)
             dirty = true
         elseif (key == "up" or key == "down" or key == "pageup"

@@ -393,7 +393,7 @@ do
     local clock, opens, closes, available_reply = 100, 0, 0, true
     local fake_native = { available = true }
     function fake_native.hardware_worker_open(id, configuration)
-        assert(id == "spd" or id == "hwmon")
+        assert(id == "spd" or id == "hwmon" or id == "cppc")
         assert(next(Wire.decode(configuration)) == nil)
         opens = opens + 1
         return { id = id, generation = opens }
@@ -447,6 +447,11 @@ do
     assert(continuous:sample(context).status == "ok" and opens == 3 and closes == 2)
     continuous:close()
     assert(closes == 3)
+    local references = Proxy.new({ id = "cppc", default_interval_ms = 30000 })
+    assert(references:sample(context).status == "ok" and opens == 4 and closes == 4)
+    assert(references:sample(context).status == "ok" and opens == 5 and closes == 5)
+    references:close()
+    assert(closes == 5)
     package.loaded["wtop.native"] = old_native
     package.loaded["wtop.collectors.hardware_worker"] = old_proxy
 end

@@ -1,5 +1,31 @@
 # wtop 实现计划与当前状态
 
+## 开发概览（2026-10-26）
+
+Linux 增加独立的 ACPI CPPC 参考值采集，按逻辑 CPU 保留最高、额定、
+最低非线性、最低、可用的保证性能和计数器参考等级，以及内核提供的
+额定／最低频率。CPPC 的 MHz 转为 Hz，相对等级不解释为百分比或瓦数。
+可选保证性能的零值和未提供的零频率保持未知；不连带读取反馈计数器。
+采集运行在隔离进程，间隔下限 30 秒、隐藏时 60 秒，完成后释放空闲
+读取器。CPU 名册或关键参考值在读取中变化时标记缺口，矛盾范围保留
+原值并标记部分质量。设备详情、Snapshot、最多五项的 Agent、录制回放
+和硬件报告沿用同一份数据、来源、时间和质量。
+
+本机 i7-13620H 的 16 个逻辑 CPU 提供了该来源；其中 12 个逻辑 CPU
+报告保证性能 31、额定性能 30，按范围矛盾标记部分质量，另外四个通过
+校验。这是固件参考值的一致性检查，不是对实际限频或传感器精度的判断。
+组件读取约 3.65 ms，不代表整体性能预算。普通 TUI 十秒采到一次隔离
+回复并释放读取器；阻塞夹具验证了前台有界返回、独立 hwmon、过期
+保留、超时回收及恢复。冻结候选的双 Lua 各 174 个文件通过；
+M4／Windows 11／Server 2008 各七个共享文件通过，Linux CPPC 在这些
+宿主上由夹具验证。源码六条禁止实时读取的历史导出及三次终端通过；
+两个实际 Linux 包完成十二条历史导出、六次英／中文／ASCII 终端，
+以及四条实际采集／报告。嵌入源码与冻结源码一致，目录包原生模块与
+构建模块一致。AMD／ARM 实机、实际频率精度、整体性能预算及正式
+交付仍需继续。证据见 `build/cppc-references-20261026/LOCAL-ACCEPTANCE.json`。
+接口依据 [内核 CPPC 文档](https://docs.kernel.org/admin-guide/acpi/cppc_sysfs.html)
+及 [驱动实现](https://github.com/torvalds/linux/blob/master/drivers/acpi/cppc_acpi.c)。
+
 ## 开发概览（2026-10-24）
 
 Linux CPUFreq 增加 AMD P-state 的 active／passive／guided 模式、
@@ -1686,7 +1712,7 @@ make test-bundle-dir
 make checksums
 ```
 
-`make test` 目前包含 173 个 Lua 5.5 单元/夹具测试文件，外加响应式/色深的真实 PTY 矩阵；`make test-54` 检查纯 Lua 5.4 兼容子集。硬件夹具覆盖异构 ARM、混合 x86、RISC-V、大共享 CPU 缓存列表、powercap 增量/回绕/复位/约束和重叠的 `psys`、GPU PCI/fdinfo 行为，以及无效 hwmon 哨兵值，而不需要开发主机真的暴露每台设备。权限和预检测试覆盖 CLI 解析、身份元数据、净化重执行的构造、cgroup v2 限制和输出集成，且不触发交互式密码提示。一套夹具文件系统还会驱动 hwmon、powercap、cpufreq、DRM 和电源采集器跑在记录下的驱动树上，为按需检查器回放真实的 `smartctl --json` 和 `perf stat -x ;` 输出，并演练进程采集上限和 sudo 文件访问策略——这些都不是开发主机自己能触达的。`make test-fuzz` 向真实终端循环抛随机按键、鼠标报告、畸形转义序列、无效 UTF-8 和缩放；因为它按设计既慢又不确定，所以被排除在 `make test` 之外，改为在 CI 中每次推送都运行。
+`make test` 目前包含 174 个 Lua 5.5 单元/夹具测试文件，外加响应式/色深的真实 PTY 矩阵；`make test-54` 检查纯 Lua 5.4 兼容子集。硬件夹具覆盖异构 ARM、混合 x86、RISC-V、大共享 CPU 缓存列表、powercap 增量/回绕/复位/约束和重叠的 `psys`、GPU PCI/fdinfo 行为，以及无效 hwmon 哨兵值，而不需要开发主机真的暴露每台设备。权限和预检测试覆盖 CLI 解析、身份元数据、净化重执行的构造、cgroup v2 限制和输出集成，且不触发交互式密码提示。一套夹具文件系统还会驱动 hwmon、powercap、cpufreq、DRM 和电源采集器跑在记录下的驱动树上，为按需检查器回放真实的 `smartctl --json` 和 `perf stat -x ;` 输出，并演练进程采集上限和 sudo 文件访问策略——这些都不是开发主机自己能触达的。`make test-fuzz` 向真实终端循环抛随机按键、鼠标报告、畸形转义序列、无效 UTF-8 和缩放；因为它按设计既慢又不确定，所以被排除在 `make test` 之外，改为在 CI 中每次推送都运行。
 
 选定的构建和测试 Make 目标会先运行轻量级资源预检，并在编排层保持非并行。`build`、`test` 和 `full` 三种配置检查更严格的主机/cgroup 内存和 Swap 余量、主机/cgroup 内存 PSI 和每 CPU 负载。存在一个显式的环境变量覆盖供操作员有意使用，但正常路径会拒绝在不健康的主机上启动资源密集型工作。
 

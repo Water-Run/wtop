@@ -7,7 +7,7 @@ local Proxy = {}
 Proxy.__index = Proxy
 M.sources = { typec = true, power_supply = true, ram_bandwidth = true, hwmon = true, cpufreq = true, powercap = true, cpu_limits = true,
     thermal_throttle = true, cpuidle = true, thermal_zones = true, smbios_input = true, gpu_drm = true,
-    cpu_clocks = true, cpuid = true, spd = true, disk_health = true, wifi = true, displays = true }
+    cppc = true, cpu_clocks = true, cpuid = true, spd = true, disk_health = true, wifi = true, displays = true }
 
 function M.available(native, source)
     native = native or Native
@@ -78,7 +78,7 @@ function Proxy:_read(context)
         require("wtop.collectors.native_displays").publish(result, self.display_identities)
     end
     -- Stateless, infrequent reads do not need an idle VM between replies.
-    if self.id == "spd" or self.id == "wifi" or self.id == "displays" then
+    if self.id == "spd" or self.id == "wifi" or self.id == "displays" or self.id == "cppc" then
         local session = self.session
         self.session = nil
         Native.hardware_worker_close(session, 0)

@@ -3,7 +3,7 @@ package.path=root.."/src/?.lua;"..root.."/src/?/init.lua;"..package.path
 local native=require("wtop.native")
 local wire=require("wtop.core.worker_wire")
 local sessions={}
-local names={"hwmon","cpufreq","powercap","cpu_limits","thermal_throttle","cpuidle","thermal_zones","smbios_input","gpu_drm","cpu_clocks"}
+local names={"hwmon","cpufreq","powercap","cpu_limits","thermal_throttle","cpuidle","thermal_zones","smbios_input","gpu_drm","cpu_clocks","cppc"}
 if type(native.hardware_worker_sources)=="table" then
     names={};for name in pairs(native.hardware_worker_sources)do names[#names+1]=name end;table.sort(names)
 end

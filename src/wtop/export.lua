@@ -1038,6 +1038,25 @@ local function export_cpu_frequency(cpu_frequency, quality)
     return result
 end
 
+local function export_cppc(cppc, quality, limit)
+    local rows = cppc and cppc.cpus or {}
+    local current = Quality.current_source({ cppc=quality }, "cppc")
+    local result = json.object({ schema=cppc and cppc.schema, source=cppc and cppc.source,
+        consistent=cppc and cppc.consistent, cpus=json.array({}), cpu_count=#rows,
+        truncated=cppc and cppc.truncated == true or (limit and #rows > limit) or false })
+    for index = 1, math.min(#rows, limit or #rows) do
+        local row = rows[index]
+        local output = copy_fields(row, { "id", "highest_performance", "nominal_performance",
+            "lowest_nonlinear_performance", "lowest_performance", "guaranteed_performance",
+            "reference_performance", "nominal_frequency_hz", "lowest_frequency_hz",
+            "consistent", "quality", "observed_at_ns", "source" })
+        output.issues = export_issues(row.issues)
+        if not current then output.quality = "stale" end
+        result.cpus[index] = output
+    end
+    return result
+end
+
 local function export_cpu_clocks(clocks, quality, limit)
     local result=json.object({schema=clocks and clocks.schema,scope="logical_cpu",includes_idle=true,
         source=clocks and clocks.source,supported_cpus=clocks and clocks.supported_cpus or 0,
@@ -2321,6 +2340,7 @@ function M.snapshot(snapshot, options)
         cpu_limits = export_performance_limits(snapshot.cpu_limits, nil, false,
             snapshot.quality and snapshot.quality.cpu_limits),
         cpu_clocks = export_cpu_clocks(snapshot.cpu_clocks,snapshot.quality and snapshot.quality.cpu_clocks),
+        cppc = export_cppc(snapshot.cppc,snapshot.quality and snapshot.quality.cppc),
         memory = export_memory(snapshot.memory),
         pressure = export_pressure(snapshot.pressure),
         disks = export_disks(snapshot.disks, snapshot),
@@ -2875,6 +2895,7 @@ function M.agent(snapshot, options)
                 frequency = frequency_metric,
                 effective_clocks = export_cpu_clocks(full.cpu_clocks,
                     full.quality and full.quality.cpu_clocks,device_limit),
+                cppc = export_cppc(full.cppc, full.quality and full.quality.cppc, device_limit),
                 thermal_throttle = json.object({
                     maximum_core_new_events_per_cpu = thermal_core_max,
                     maximum_package_new_events_per_cpu = thermal_package_max,

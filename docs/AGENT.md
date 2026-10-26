@@ -159,6 +159,12 @@ UUID 与原生设备身份边界，不将 RAPL 图形域归入某块显卡。
 
 `metrics.cpu.frequency` 按各策略已知的在线 CPU 数加权给出平均 Hz；缺少成员列表的策略按一个读数计。它携带来源与 measured/estimated/partial 质量，混用来源时标为 `mixed`。CPUFreq 采集失败或数据过期时不把保留值作为当前频率输出。
 
+Linux 的 ACPI CPPC 参考值位于 Snapshot 的 `cppc.cpus` 和 Agent 的
+`metrics.cpu.cppc.cpus`，按逻辑 CPU 编号区分。性能等级是相对值，频率
+以 Hz 给出；它们不表示利用率、实测时钟或瓦数。每条保留来源、观测时间
+和质量，未知频率省略。可选保证性能为零时也按未知处理。Agent 最多列五个 CPU，并用 `cpu_count` 和
+`truncated` 说明范围；采集失败时保留的参考值标为 `stale`。
+
 `data_quality.value_timestamp_ns` 是该资源当前所持值的单调时钟时间；
 `value_age_ms` 是它距本次捕获的毫秒数。采集失败而保留旧值时，两者继续
 指向旧值；从未成功采到值或来源时间不明时，这两个字段缺席。

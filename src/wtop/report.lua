@@ -146,6 +146,20 @@ function M.render(snapshot)
     }
     table_section(lines, "CPU", { "Field", "Value" }, cpu_items,
         function(row) return row end)
+    local cppc = object(snapshot.cppc)
+    table_section(lines, "ACPI CPPC performance references",
+        { "CPU", "Highest", "Nominal", "Lowest nonlinear", "Lowest", "Guaranteed",
+            "Counter reference", "Nominal frequency", "Lowest frequency", "Quality", "Source" },
+        cppc.cpus, function(row)
+            return { row.id, row.highest_performance, row.nominal_performance,
+                row.lowest_nonlinear_performance, row.lowest_performance, row.guaranteed_performance,
+                row.reference_performance, quantity(row.nominal_frequency_hz, 1000000000, " GHz", 2),
+                quantity(row.lowest_frequency_hz, 1000000000, " GHz", 2), row.quality, row.source }
+        end, cppc)
+    if #list(cppc.cpus) > 0 then
+        lines[#lines + 1] = "Performance levels are relative firmware references, not percentages, measured clocks or watts."
+        lines[#lines + 1] = ""
+    end
     local cpuid = object(cpu_info.cpuid)
     if cpuid.status then
         local comparison=object(cpuid.os_comparison)

@@ -14,6 +14,7 @@ local constructors = {
     powercap = function(o) return require("wtop.collectors.powercap").new(o) end,
     cpu_limits = function(o) return require("wtop.collectors.cpu_limits").new(o) end,
     thermal_throttle = function(o) return require("wtop.collectors.thermal_throttle").new(o) end,
+    cppc = function(o) return require("wtop.collectors.cppc").new(o) end,
     cpuidle = function(o) return require("wtop.collectors.cpuidle").new(o) end,
     thermal_zones = function(o) return require("wtop.collectors.thermal_zones").new(o) end,
     smbios_input = function(o) return require("wtop.collectors.smbios_input").new(o) end,

@@ -75,7 +75,10 @@
       "type": "object",
       "required": ["cpu", "memory", "pressure", "storage", "network", "gpu", "power", "sensors", "processes"],
       "properties": {
-        "cpu": { "$ref": "#/$defs/metricObject" },
+        "cpu": {
+          "type": "object", "additionalProperties": true,
+          "properties": { "cppc": { "$ref": "#/$defs/cppcReferences" } }
+        },
         "memory": { "$ref": "#/$defs/metricObject" },
         "pressure": { "$ref": "#/$defs/metricObject" },
         "storage": { "$ref": "#/$defs/metricObject" },
@@ -610,6 +613,37 @@
     }
   },
   "$defs": {
+    "cppcReferences": {
+      "type": "object", "additionalProperties": true,
+      "required": ["cpus", "cpu_count", "truncated"],
+      "properties": {
+        "cpu_count": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" },
+        "consistent": { "type": "boolean" },
+        "source": { "type": "string" },
+        "cpus": {
+          "type": "array", "maxItems": 5,
+          "items": {
+            "type": "object", "additionalProperties": true,
+            "properties": {
+              "id": { "type": "integer", "minimum": 0 },
+              "highest_performance": { "type": "integer", "minimum": 0 },
+              "nominal_performance": { "type": "integer", "minimum": 0 },
+              "lowest_nonlinear_performance": { "type": "integer", "minimum": 0 },
+              "lowest_performance": { "type": "integer", "minimum": 0 },
+              "guaranteed_performance": { "type": "integer", "minimum": 0 },
+              "reference_performance": { "type": "integer", "minimum": 0 },
+              "nominal_frequency_hz": { "type": "integer", "minimum": 1 },
+              "lowest_frequency_hz": { "type": "integer", "minimum": 1 },
+              "quality": { "type": "string" },
+              "consistent": { "type": "boolean" },
+              "observed_at_ns": { "type": "integer", "minimum": 0 },
+              "source": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
     "boundedString": { "type": "string", "minLength": 1, "maxLength": 256 },
     "metricObject": { "type": "object", "additionalProperties": true }
   },

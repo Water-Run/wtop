@@ -1,6 +1,6 @@
 -- Embed the transitive, literal require graph of the hardware entry point.
 local targets = { "wtop.core.hardware_worker", "wtop.native", "wtop.collectors.hwmon",
-    "wtop.collectors.cpufreq", "wtop.collectors.powercap", "wtop.collectors.cpu_limits",
+    "wtop.collectors.cppc", "wtop.collectors.cpufreq", "wtop.collectors.powercap", "wtop.collectors.cpu_limits",
     "wtop.collectors.thermal_throttle", "wtop.collectors.cpuidle", "wtop.collectors.thermal_zones",
     "wtop.collectors.smbios_input", "wtop.collectors.gpu_drm", "wtop.collectors.cpu_clocks", "wtop.collectors.cpuid",
     "wtop.collectors.portable", "wtop.collectors.linux_nvme", "wtop.platform" }

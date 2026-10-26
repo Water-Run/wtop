@@ -470,6 +470,18 @@ local f=assert(io.open(os.getenv("WTOP_TEST_EDID_OUTPUT"),"wb"));assert(f:write(
                    WTOP_SUPPLY_FIXTURE_ENTERED=str(supply_entered))
         subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/hardware_worker_smoke.lua'),
                         str(ROOT),str(control),str(entered),str(power)],cwd=ROOT,env=env,check=True,timeout=35)
+        cppc_root=directory/'cppc';cppc_cpu=cppc_root/'cpu0/acpi_cppc';cppc_cpu.mkdir(parents=True)
+        (cppc_root/'online').write_text('0\n')
+        for key,value in {'highest_perf':196,'nominal_perf':150,'lowest_nonlinear_perf':80,
+                          'lowest_perf':10,'guaranteed_perf':0,'reference_perf':165,
+                          'nominal_freq':3300,'lowest_freq':0}.items():
+            (cppc_cpu/key).write_text(str(value)+'\n')
+        cppc_control=directory/'cppc-control';cppc_control.write_text('0\n')
+        cppc_entered=directory/'cppc-entered'
+        cppc_env={**env,'WTOP_CPPC_FIXTURE_CONTROL':str(cppc_control),'WTOP_CPPC_FIXTURE_ENTERED':str(cppc_entered)}
+        subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/cppc_worker_smoke.lua'),
+                        str(ROOT),str(cppc_root),str(cppc_control),str(cppc_entered)],
+                       cwd=ROOT,env=cppc_env,check=True,timeout=25)
         typec_env={**env,**typec_fixture(args.lua_prefix,directory)}
         subprocess.run([str(args.lua_prefix.resolve()/'bin/lua'),str(ROOT/'tests/native/typec_worker_smoke.lua'),
                         str(ROOT),typec_env['WTOP_TYPEC_FIXTURE_CONTROL'],typec_env['WTOP_TYPEC_FIXTURE_ENTERED']],

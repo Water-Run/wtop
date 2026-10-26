@@ -8,6 +8,7 @@ local constructors = {
   cpu_clocks = require("wtop.collectors.cpu_clocks"),
   thermal_throttle = require("wtop.collectors.thermal_throttle"),
   cpuidle = require("wtop.collectors.cpuidle"),
+  cppc = require("wtop.collectors.cppc"),
   memory = require("wtop.collectors.memory"),
   numa = require("wtop.collectors.numa"),
   memory_devices = require("wtop.collectors.memory_devices"),

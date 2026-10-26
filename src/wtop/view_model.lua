@@ -2631,6 +2631,7 @@ local COLLECTOR_RESOURCE = {
     edac = "edac", spd = "spd", thermal_throttle = "thermal_throttle", cpu_limits = "cpu_limits",
     cpu_clocks = "cpu_clocks",
     cpuidle = "cpuidle",
+    cppc = "cppc",
     pressure = "pressure",
     disk = "disks", disk_health = "disk_health", network = "network", wifi = "wifi", connections = "connections",
     process = "processes", gpu = "gpus", cpufreq = "cpu_frequency", hwmon = "sensors",
