@@ -291,9 +291,11 @@ function FS:path(path)
     error("path must be a non-empty NUL-free string", 2)
   end
   if #path > 4096 then error("path exceeds 4096 bytes", 2) end
-  for component in path:gmatch("[^/]+") do
-    if component == "." or component == ".." then
-      error("path must not contain dot components", 2)
+  if path:sub(1, 1) == "." or path:find("/.", 1, true) then
+    for component in path:gmatch("[^/]+") do
+      if component == "." or component == ".." then
+        error("path must not contain dot components", 2)
+      end
     end
   end
   if self.root == "" then

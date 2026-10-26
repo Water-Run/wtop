@@ -621,4 +621,58 @@ normal:add({id='normal',probe=function()return{state='available',available=true}
 normal:set_visible('normal',false);normal:probe_all();assert(normal:next_delay_ms()==300000,'ordinary probe forced hidden I/O')
 end
 
+-- Filesystem paths must reach injected I/O unchanged, except for the configured
+-- fixture prefix. Dot components and invalid strings must fail before any I/O.
+do
+  local FS = require("wtop.linux.fs")
+  local operations = {
+    function(fs, path) return fs:read(path) end,
+    function(fs, path) return fs:read_at(path, 0, 1) end,
+    function(fs, path) return fs:list(path) end,
+    function(fs, path) return fs:readlink(path) end,
+    function(fs, path) return fs:kind(path) end,
+    function(fs, path) return fs:usb_interface(path, 1) end,
+  }
+  for _, root in ipairs({ "", "/", "/fixture/" }) do
+    local calls, actual = 0, nil
+    local function capture(path)
+      calls, actual = calls + 1, path
+      return "fixture"
+    end
+    local fs = FS.new({ root = root, read_file = capture, read_file_at = capture,
+      list_dir = capture, read_link = capture, path_type = capture,
+      usb_interface = capture })
+    local function valid(path)
+      local prefix = root == "/fixture/" and "/fixture" or root
+      local expected = prefix == "" and path
+        or (path:sub(1, 1) == "/" and prefix == "/" and path)
+        or prefix .. (path:sub(1, 1) == "/" and "" or "/") .. path
+      equal(fs:path(path), expected, "path prefix")
+      for _, operation in ipairs(operations) do
+        local before = calls
+        operation(fs, path)
+        equal(calls, before + 1, "one injected I/O call")
+        equal(actual, expected, "I/O path")
+      end
+    end
+    for _, path in ipairs({ "/", "//", "proc/stat", "/sys/class/hwmon",
+        ".hidden", "..hidden", "...", "a.b", "/a/.hidden/..hidden/.../b",
+        "a//b/", string.rep("a", 4096) }) do valid(path) end
+    -- Every non-NUL byte is preserved inside a filename, including non-ASCII.
+    for byte = 1, 255 do valid("/a/x" .. string.char(byte) .. "y") end
+    local invalid = { "", "a\0b", string.rep("a", 4097), ".", "..",
+      "./a", "../a", "a/.", "a/..", "/a/./b", "/a/../b",
+      "//.//a", "a//..//b", "a/.hidden/../b", false, 42, {} }
+    for _, path in ipairs(invalid) do
+      local before = calls
+      assert(not pcall(fs.path, fs, path), "invalid path accepted")
+      for _, operation in ipairs(operations) do
+        assert(not pcall(operation, fs, path), "invalid path reached I/O")
+      end
+      equal(calls, before, "invalid path made no I/O call")
+    end
+    assert(not pcall(fs.path, fs, nil))
+  end
+end
+
 return true
