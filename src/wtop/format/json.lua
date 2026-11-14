@@ -58,6 +58,14 @@ local function valid_sequence_length(value, position)
 end
 
 local function sanitize_utf8(value)
+    -- Fast path: a string with no byte >= 0x80 is pure ASCII and therefore
+    -- already valid UTF-8, so it can be returned untouched. One C-level scan
+    -- replaces the per-byte Lua walk for the common case (process names,
+    -- paths, keys and quality words are almost all ASCII). Control characters
+    -- are still escaped later by quote(); this only decides UTF-8 validity.
+    if not value:find("[\128-\255]") then
+        return value
+    end
     local length = #value
     local position = 1
     local chunk_start = 1

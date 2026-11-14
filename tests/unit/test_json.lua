@@ -18,6 +18,19 @@ local sanitized_once = json.encode(malformed)
 assert(sanitized_once == json.encode(malformed), "invalid UTF-8 replacement must be deterministic")
 assert(utf8.len(sanitized_once), "encoded JSON must always be valid UTF-8")
 assert(not sanitized_once:find("\255", 1, true))
+-- The ASCII fast path must return every pure-ASCII string unchanged (control
+-- characters are escaped by quote, not by sanitization), and a single byte at
+-- or above 0x80 must still take the sanitizing walk instead of passing through.
+local ascii_bytes = {}
+for byte = 0, 127 do ascii_bytes[#ascii_bytes + 1] = string.char(byte) end
+local ascii_encoded = json.encode(table.concat(ascii_bytes))
+assert(utf8.len(ascii_encoded), "ASCII fast path must produce valid UTF-8")
+assert(not ascii_encoded:find("[\128-\255]"),
+    "ASCII fast path must not introduce non-ASCII bytes")
+assert(json.encode("abc\128def") == '"abc' .. replacement .. 'def"',
+    "a single non-ASCII byte must disable the ASCII fast path")
+assert(json.encode("\127\128\127") == '"\127' .. replacement .. '\127"',
+    "the byte immediately above the ASCII range must be sanitized")
 assert(json.encode(0 / 0) == "null")
 assert(json.encode(math.huge) == "null")
 assert(json.encode(1787821855685887500) == "1787821855685887500")
