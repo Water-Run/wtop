@@ -453,3 +453,27 @@ for _,native in ipairs({{available=false},Native})do
 end
  print("per-scan UID names: sanitized once, missing preserved, next-scan rename, resolver replacement, exception retry and immutable old snapshots")
 end
+
+-- The collected list is returned in ascending PID order without a second sort:
+-- candidates are sorted before the scan and the loop only ever appends. Unsorted
+-- directory order must still yield a PID-ordered list; this pins the invariant
+-- that let the redundant final table.sort be removed from the sample path.
+do
+ local f=assert(io.open("tests/fixtures/proc/100.stat.1","rb"));local body=f:read("a");assert(f:close())
+ local fs={list=function()return{"300","100","200","50"}end}
+ function fs:read(path)
+  if path=="/proc/uptime"then return"100 0\n"end
+  local pid=tonumber(path:match("/proc/(%d+)/stat$"));if pid then return(body:gsub("^100 ",pid.." "))end
+  return nil,{kind="missing"}
+ end
+ local collector=Process.new({fs=fs,native={available=false},clock_ticks_per_second=100,page_size_bytes=4096})
+ local result=collector:sample({fs=fs,now_ns=function()return 1e9 end})
+ local list=result.data.list
+ assert(#list==4,"expected four processes from the unsorted fixture")
+ for i=2,#list do
+  assert(list[i-1].pid<list[i].pid,"process list must be ascending by PID without a final sort")
+ end
+ assert(list[1].pid==50 and list[2].pid==100 and list[3].pid==200 and list[4].pid==300,
+  "PID order must come from the sorted candidate scan, not directory order")
+ print("ok: process list is PID-ordered from unsorted directory input without a redundant final sort")
+end

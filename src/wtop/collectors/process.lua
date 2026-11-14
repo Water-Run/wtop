@@ -1380,9 +1380,10 @@ function Process:sample(context, previous)
       end
   end
 
-  table.sort(processes, function(left, right)
-    return left.pid < right.pid
-  end)
+  -- The list is already in ascending PID order: candidates is sorted before
+  -- the scan and the loop only ever appends, so a second sort here would be a
+  -- redundant O(n log n) comparator pass over every process each sample. The
+  -- ordering invariant is pinned by tests/unit/test_process_scan.lua.
   local any_fresh, any_process_partial = false, false
   for _, process in ipairs(processes) do
     any_fresh = any_fresh or process.quality == "fresh"
