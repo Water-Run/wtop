@@ -14,6 +14,8 @@ local show = table.concat({
   "Description=Worker", "MainPID=42", "ControlGroup=/system.slice/worker@a.service",
   "MemoryCurrent=1024", "CPUUsageNSec=2000000000", "TasksCurrent=3",
   "MemoryMax=infinity", "TasksMax=100", "CPUQuotaPerSecUSec=2000000",
+  "Requires=basic.target", "Wants=network-online.target",
+  "After=network.target basic.target", "Before=shutdown.target",
   "ExecStart=PRIVATE-COMMAND", "Environment=PRIVATE-SECRET", "\n",
 }, "\n")
 local response = { status = "ok", stdout = show, exit_code = 0 }
@@ -44,6 +46,10 @@ assert(fields.main_pid.value == 42 and fields.memory.value == 1024
   and fields.cpu_time.value == 2000000000 and fields.tasks.value == 3)
 assert(fields.memory_max.value == "unlimited" and fields.tasks_max.value == 100
   and fields.cpu_quota.value == 200)
+assert(fields.requires.value == "basic.target" and fields.wants.value == "network-online.target",
+  "unit dependency lists are read")
+assert(fields.after.value == "network.target basic.target" and fields.before.value == "shutdown.target",
+  "unit ordering lists are read")
 assert(result.entity.relations.main_pid == 42
   and result.entity.relations.workload_id == "/system.slice/worker@a.service")
 local complete_result = result
@@ -51,7 +57,8 @@ for _, locale in ipairs({ "en-US", "zh-CN", "zh-TW", "fr-FR", "ru-RU", "de-DE", 
   local i18n = I18n.new({ lang = locale })
   local text = table.concat(TUI.systemd_unit_lines(result, i18n, 2000000000), "\n")
   assert(text:find("worker@a.service", 1, true) and text:find(i18n:t("systemd.unlimited"), 1, true))
-  for _, key in ipairs({ "systemd.main_pid", "systemd.manager", "systemd.detail_hint", "systemd.sample_age" }) do
+  for _, key in ipairs({ "systemd.main_pid", "systemd.manager", "systemd.detail_hint",
+      "systemd.sample_age", "systemd.requires" }) do
     assert(i18n:t(key) ~= key and text:find(i18n:t(key), 1, true), locale .. " lacks " .. key)
   end
 end

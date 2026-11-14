@@ -24,6 +24,7 @@ local FIELDS = {
   ExecMainCode = "number", ExecMainStatus = "number", Result = "text",
   MemoryCurrent = "counter", CPUUsageNSec = "counter", TasksCurrent = "counter",
   MemoryMax = "limit", TasksMax = "limit", CPUQuotaPerSecUSec = "limit",
+  Requires = "text", Wants = "text", After = "text", Before = "text",
 }
 local PROPERTIES = {}
 for name in pairs(FIELDS) do PROPERTIES[#PROPERTIES + 1] = name end
@@ -292,6 +293,7 @@ function Systemd:inspect(context, selected)
     memory_max = data.MemoryMax, tasks_max = data.TasksMax,
     cpu_quota = type(data.CPUQuotaPerSecUSec) == "number" and data.CPUQuotaPerSecUSec / 10000
       or data.CPUQuotaPerSecUSec,
+    requires = data.Requires, wants = data.Wants, after = data.After, before = data.Before,
   }
   local units = { memory = "bytes", memory_max = "bytes", cpu_time = "nanoseconds",
     tasks = "count", tasks_max = "count", cpu_quota = "percent" }
@@ -299,7 +301,7 @@ function Systemd:inspect(context, selected)
   for _, key in ipairs({ "unit", "description", "unit_type", "manager", "load_state",
       "active_state", "sub_state", "fragment_path", "cgroup", "main_pid", "leader_pid",
       "restarts", "result", "exit_status", "exit_code", "memory", "cpu_time", "tasks",
-      "memory_max", "tasks_max", "cpu_quota" }) do
+      "memory_max", "tasks_max", "cpu_quota", "requires", "wants", "after", "before" }) do
     fields[key] = Model.field(values[key], units[key], { source = source, timestamp_ns = finished })
   end
   local quality = partial and "partial" or "fresh"

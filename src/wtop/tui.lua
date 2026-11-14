@@ -463,6 +463,10 @@ local function systemd_unit_lines(result, i18n, now_ns)
         { "cpu_quota", "systemd.cpu_quota", "Configured CPU quota" },
         { "cgroup", "systemd.cgroup", "Control group" },
         { "fragment_path", "systemd.fragment_path", "Unit file" },
+        { "requires", "systemd.requires", "Requires" },
+        { "wants", "systemd.wants", "Wants" },
+        { "after", "systemd.after", "After" },
+        { "before", "systemd.before", "Before" },
     }) do
         local field = summary[item[1]]
         if field then
