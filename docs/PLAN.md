@@ -1949,7 +1949,7 @@ make checksums
 | P0 | 完成 Linux bin / LuaRocks 双交付 | 修复下载包遗漏，接入上传后下载复验；提供固定源码的版本 rock 和公开安装/下载入口，补齐 rock 原生版本身份；以本页交付表验收 |
 | P1 | 扩展 luainstaller 1.5.0 的平台交付 | Linux 默认打包链已迁移；继续验证 Windows、macOS 的原生打包以及干净目标环境与性能 |
 | P2 | 扩展共享设备关系 | PCI/USB、磁盘/分区、网卡、挂载与 GPU/传感器关联已接入 TUI 和 JSON；CPU 拓扑/频率域、Linux NUMA、SMBIOS Type 4/7/8/9/10/16/17/19/20/22/37/38/39/41/42/43/45、Linux UEFI ESRT、TPM/看门狗/RF 开关/热区与冷却设备、EDAC 与 FPM/EDO/SDR/DDR/DDR2/DDR3/DDR4/DDR5 SPD 已接入；`coretemp` 已连接 CPU 包/核心，逐 CPU 热节流记录已连接 CPU 设备树，`spd5118`/`jc42` 已连接可信 DDR3/DDR4/DDR5 SPD 地址；继续验证旧代 SPD 与 DIMM 槽位归属 |
-| P2 | 补完整 top 的日常使用路径 | 内置标签栏与可混搭控件页面已可编辑和持久化；进程树可折叠，Linux 线程详情可按自身 cgroup 跳到工作负载，线程化子组显示 TID 并按需定位所属进程；Linux systemd unit 已可按管理器/类型搜索，并从工作负载直达，核对后打开主进程或跳回控制组；近期 journal 已按需接入 unit 详情；logind 登录会话与到 scope 的导航已接入，sshd 可读取匹配 PAM 服务的登记会话；日志优先级、OpenSSH 认证文本分类和当前文件配置查询已接入；继续扩展协议事件、守护进程启动覆盖项、服务依赖与跨平台导航，并按平台验证 renice 等新增操作 |
+| P2 | 补完整 top 的日常使用路径 | 内置标签栏与可混搭控件页面已可编辑和持久化；进程树可折叠，Linux 线程详情可按自身 cgroup 跳到工作负载，线程化子组显示 TID 并按需定位所属进程；Linux systemd unit 已可按管理器/类型搜索，并从工作负载直达，核对后打开主进程或跳回控制组；近期 journal 已按需接入 unit 详情；logind 登录会话与到 scope 的导航已接入，sshd 可读取匹配 PAM 服务的登记会话；日志优先级、OpenSSH 认证文本分类和当前文件配置查询已接入；unit 依赖与排序清单（Requires/Wants/After/Before）已接入详情；继续扩展协议事件、守护进程启动覆盖项、依赖导航与跨平台导航，并按平台验证 renice 等新增操作 |
 | P1 | 验证旧系统和异常设备 | XP x86 实际运行；旧 macOS/Intel；Windows 空介质、热插拔和两个无响应设备；专用远程 SSH 场景 |
 | P1 | 校准性能并建立回归门禁 | 基准与显式预算比较器已能测完整帧并拒绝错误主机/负载；仍需在最低与典型硬件上分别测量开发树和发布包，固定预算并接入持续门禁 |
 | P1 | 补齐 GPU 厂商与设备验证 | AMD SMI、Level Zero、AMD/Intel/NVIDIA、无 GPU、多适配器与多时钟域都有可复现的真机结果 |
