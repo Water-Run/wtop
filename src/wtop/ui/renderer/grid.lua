@@ -100,10 +100,12 @@ function Grid:contains(x, y)
 end
 
 function Grid:get(x, y)
-  if not self:contains(x, y) then
+  -- Inlined contains()/_index(): get is on the per-cell hot path (diff, fill,
+  -- widget reads), and two method calls per cell add up across a frame.
+  if x < 1 or x > self.width or y < 1 or y > self.height then
     return nil
   end
-  return self.cells[self:_index(x, y)]
+  return self.cells[(y - 1) * self.width + x]
 end
 
 function Grid:_mark_dirty(x, y)
