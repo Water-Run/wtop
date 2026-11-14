@@ -2,7 +2,7 @@
 
 ## 1. 当前状态
 
-当前开发候选为 `0.2.0`，包含 Lua 5.5.1 引导、C17 原生模块、确定性的语言区域编译、开发与版本 rockspec、源 rock、luainstaller onedir/onefile 及完整归档验证。既有 `v0.1.0` 的验证范围见 `CHANGELOG.md`；0.2.0 的公开发布仍待完成。
+当前开发候选为 `26.a`，包含 Lua 5.5.1 引导、C17 原生模块、确定性的语言区域编译、开发与版本 rockspec、源 rock、luainstaller onedir/onefile 及完整归档验证。版本改用 `年份.字母` 命名（如 `26.a`），取代三段版本号；旧 `v0.1.0`/`v0.2.0` 标签已清理，早期验证范围见 `CHANGELOG.md` 与 Git 历史。26.a 的公开发布仍待完成。
 
 开发目标是同时提供 luainstaller bin 和 LuaRocks 安装。当前两条标准路径均为
 Linux；macOS、Windows 的脚本仍生成开发目录包。开发状态与优先级见
@@ -105,8 +105,8 @@ make test-luarocks
 `make test-luarocks` 引导项目的 Lua 5.5.1，把 rock 安装到 `.tools/wtop-rocks-5.5`，然后通过 LuaRocks 生成的包装脚本运行 `--version`、`--diagnose`、`--snapshot` 和 `--agent`，后两项检查 JSON 契约。该 rock 包含 Lua 模块、`wtop_native.so`、`wtop` 命令，以及许可证、四种语言的 README 和配置示例。`rock-build`/`rock-install` 是 rockspec 后端的入口点，不是面向最终用户的独立安装命令。
 
 源码安装仍需要 Lua 5.5 的配套头文件、C17 编译器和 make；自带解释器的是
-luainstaller 产物。`wtop-0.2.0-1.rockspec` 从开发 spec 和 VERSION 生成，固定
-源码标签 `v0.2.0`。`make source-rock` 输出源 rock、源码 tar 和源码摘要；
+luainstaller 产物。`wtop-26.a-1.rockspec` 从开发 spec 和 VERSION 生成，固定
+源码标签 `v26.a`。`make source-rock` 输出源 rock、源码 tar 和源码摘要；
 `make test-source-rock` 从包内源码安装，`make test-rock-index` 验证本地索引上的
 按名称安装。2026-10-12 的 LuaRocks 公共检索没有 wtop，不能把本地
 `luarocks make` 成功视为已支持公共索引上的 `luarocks install wtop`。

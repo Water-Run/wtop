@@ -1,6 +1,6 @@
 # 当前架构
 
-本文档描述当前开发树的实际结构。0.1.0 标签和 LuaRocks 包仅 Linux，macOS、Windows 是源码开发构建。已交付的 PCI/USB 拓扑与后续硬件扩展分别说明，产品方向见 [实现计划](PLAN.md)。
+本文档描述当前开发树的实际结构。发布（当前 `26.a`）和 LuaRocks 包仅 Linux，macOS、Windows 是源码开发构建。已交付的 PCI/USB 拓扑与后续硬件扩展分别说明，产品方向见 [实现计划](PLAN.md)。
 
 ## 1. 数据流
 

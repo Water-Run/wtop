@@ -29,7 +29,7 @@ Les enregistrements conservent les heures de mesure d’origine. Pendant la rele
 
 | Système | État |
 |---|---|
-| Linux (x86_64) | Version 0.1.0 publiée, installable avec LuaRocks |
+| Linux (x86_64) | Version 26.a publiée, installable avec LuaRocks |
 | Windows, version 32 bits | En développement. Testé sur Windows Server 2008 et un Windows actuel ; compilé pour XP |
 | macOS (Apple silicon, Intel) | En développement. Fonctionne sur macOS 26 (Apple silicon) |
 
@@ -40,7 +40,7 @@ vraie machine XP.
 
 > [!NOTE]
 > Pour l'instant, les versions Windows et macOS se compilent depuis les
-> sources. La version 0.1.0 et le paquet LuaRocks sont réservés à Linux.
+> sources. La version 26.a et le paquet LuaRocks sont réservés à Linux.
 
 ## Pensé pour le vieux matériel
 

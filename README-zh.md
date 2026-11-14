@@ -26,7 +26,7 @@ wtop --diagnose     # 查看本机可读取的数据源
 
 | 系统 | 状态 |
 |---|---|
-| Linux (x86_64) | 已发布 0.1.0，可通过 LuaRocks 安装 |
+| Linux (x86_64) | 已发布 26.a，可通过 LuaRocks 安装 |
 | Windows 32 位构建 | 开发中。已在 Windows Server 2008 和当前版本的 Windows 上测试；面向 XP 构建 |
 | macOS (Apple silicon、Intel) | 开发中。可在 macOS 26 (Apple silicon) 上运行 |
 
@@ -35,7 +35,7 @@ Windows 构建是一个 32 位包，目标覆盖从 XP 到 Windows 11 的所有�
 但尚未在真实的 XP 机器上测试过。
 
 > [!NOTE]
-> Windows 和 macOS 构建目前直接来自源码树。0.1.0 版本和 LuaRocks
+> Windows 和 macOS 构建目前直接来自源码树。26.a 版本和 LuaRocks
 > 包仅支持 Linux。
 
 ## 为旧硬件而生

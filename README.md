@@ -28,7 +28,7 @@ Recordings retain the original measurement times. In replay, Space plays or paus
 
 | System | Status |
 |---|---|
-| Linux (x86_64) | Released as 0.1.0, installable with LuaRocks |
+| Linux (x86_64) | Released as 26.a, installable with LuaRocks |
 | Windows, 32-bit build | In development. Tested on Windows Server 2008 and current Windows; built for XP |
 | macOS (Apple silicon, Intel) | In development. Runs on macOS 26 (Apple silicon) |
 
@@ -37,7 +37,7 @@ Windows 11. It monitors Windows itself, not a Linux layer on top. XP is a
 build target but hasn't been tested on a real XP machine yet.
 
 > [!NOTE]
-> Windows and macOS builds come from the source tree for now. The 0.1.0
+> Windows and macOS builds come from the source tree for now. The 26.a
 > release and the LuaRocks package are Linux-only.
 
 ## Built for old hardware

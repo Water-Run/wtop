@@ -1,9 +1,11 @@
 # Changelog
 
-All notable changes to wtop are recorded here. This project follows
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html); until 1.0.0 the
-minor version may carry breaking changes to the JSON contracts, the layout
-file format, and the configuration schema.
+All notable changes to wtop are recorded here. Versions are named
+`year.letter` — the two-digit year followed by a single lowercase letter,
+for example `26.a`. The letter advances with each release in that year
+(`26.a`, `26.b`, … `26.z`, then `27.a`). A new release may carry breaking
+changes to the JSON contracts, the layout file format, and the configuration
+schema; Git history is the detailed log.
 
 ## 0.1.0 — 2026-09-13
 

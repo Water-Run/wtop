@@ -18,8 +18,11 @@ import zipfile
 
 def generate_rockspec(root: Path) -> tuple[str, Path]:
     version = (root / "VERSION").read_text().strip()
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?", version):
-        raise ValueError("VERSION must be a release version")
+    # Release versions are year.letter (e.g. 26.a): a numeric year followed by a
+    # single lowercase letter. LuaRocks orders the letter by its byte value, so
+    # 26.a < 26.b < ... < 26.z < 27.a holds without any extra scheme.
+    if not re.fullmatch(r"[0-9]+\.[a-z]", version):
+        raise ValueError("VERSION must be a release version like 26.a (year.letter)")
     source = (root / "wtop-scm-1.rockspec").read_text()
     source, count = re.subn(r'^version = "scm-1"$', 'version = "%s-1"' % version,
                             source, flags=re.MULTILINE)

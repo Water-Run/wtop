@@ -1,11 +1,11 @@
 -- Generated from wtop-scm-1.rockspec and VERSION; DO NOT EDIT.
 rockspec_format = "3.0"
 package = "wtop"
-version = "0.2.0-1"
+version = "26.a-1"
 
 source = {
     url = "git+https://github.com/Water-Run/wtop.git",
-    tag = "v0.2.0",
+    tag = "v26.a",
     dir = "wtop",
 }
 

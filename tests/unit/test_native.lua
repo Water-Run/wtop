@@ -242,7 +242,9 @@ assert(type(assert(native.readfile("/proc/self/stat", 65536))) == "string")
 assert(type(assert(native.readfile("/sys/devices/system/cpu/online", 256))) == "string",
     "bounded reader must use generated sysfs content instead of its synthetic st_size")
 assert(native.readfile_at("VERSION", 0, 3) == declared_version:sub(1, 3))
-assert(native.readfile_at("VERSION", 3, 2) == declared_version:sub(4, 5))
+-- Ranged reads must stay inside the version bytes: the year.letter form is
+-- short, so a read past its end would pick up the trailing newline instead.
+assert(native.readfile_at("VERSION", 1, 2) == declared_version:sub(2, 3))
 assert(not pcall(native.readfile_at, "VERSION", -1, 1))
 assert(not pcall(native.readfile_at, "VERSION", 0, 4097))
 local ranged_special, _, ranged_special_errno = native.readfile_at("/dev/null", 0, 16)

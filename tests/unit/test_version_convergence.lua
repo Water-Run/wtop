@@ -41,8 +41,8 @@ end
 local declared = read_file("VERSION"):gsub("%s+", "")
 assert(declared ~= "" and declared ~= nil,
     "VERSION is empty; there is no version for the program to report")
-assert(declared:match("^%d+%.%d+") ~= nil,
-    "VERSION holds " .. declared .. ", which does not start like a version number")
+assert(declared:match("^%d+%.%l") ~= nil,
+    "VERSION holds " .. declared .. ", which is not a year.letter version like 26.a")
 
 -- The generator must refuse a VERSION it cannot make sense of, rather than
 -- writing that string into a C header and a Lua module.  A header is compiled:
