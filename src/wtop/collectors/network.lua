@@ -275,6 +275,8 @@ local function queue_config(fs, base, rx_ids, tx_ids, budget)
     { "xps_cpus", "xps_cpus", queue_mask },
     { "xps_rxqs", "xps_rxqs", queue_mask },
     { "tx_maxrate", "maxrate_mbps", queue_integer },
+    { "byte_queue_limits/limit", "bql_limit_bytes", queue_integer },
+    { "byte_queue_limits/inflight", "bql_inflight_bytes", queue_integer },
   })
   config.status = partial and "partial" or values > 0 and "ok" or "unavailable"
   return config

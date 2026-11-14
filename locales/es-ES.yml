@@ -1148,6 +1148,7 @@ messages:
   inventory.net_rps_queues: "Colas RX con RPS"
   inventory.net_xps_queues: "Colas TX con XPS"
   inventory.net_capped_queues: "Colas TX con límite de tasa"
+  inventory.net_bql_queues: "Colas TX con BQL"
   inventory.net_config_status: "Estado de configuración de colas"
   inventory.net_config_more: "Más problemas de colas"
   inventory.msi_title: "Vectores de interrupción MSI"

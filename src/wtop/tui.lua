@@ -4570,7 +4570,7 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
                 local function enabled(mask)
                     return type(mask) == "string" and mask:find("[1-9a-f]") ~= nil
                 end
-                local rps, xps, capped = 0, 0, 0
+                local rps, xps, capped, bql = 0, 0, 0, 0
                 for _, row in ipairs(queues.rx_details or {}) do
                     if enabled(row.rps_cpus) then rps = rps + 1 end
                 end
@@ -4579,10 +4579,14 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
                         xps = xps + 1
                     end
                     if row.rate_limit_enabled == true then capped = capped + 1 end
+                    if type(row.bql_limit_bytes) == "number" and row.bql_limit_bytes > 0 then
+                        bql = bql + 1
+                    end
                 end
                 add("inventory.net_rps_queues", "RPS-enabled RX queues", rps)
                 add("inventory.net_xps_queues", "XPS-enabled TX queues", xps)
                 add("inventory.net_capped_queues", "Rate-capped TX queues", capped)
+                add("inventory.net_bql_queues", "BQL-enabled TX queues", bql)
             end
             if queues.config_status and queues.config_status ~= "ok" then
                 add("inventory.net_config_status", "Queue configuration status",

@@ -1136,6 +1136,7 @@ messages:
   inventory.net_rps_queues: "RPS 사용 수신 큐"
   inventory.net_xps_queues: "XPS 사용 송신 큐"
   inventory.net_capped_queues: "속도 제한 송신 큐"
+  inventory.net_bql_queues: "BQL 활성화 송신 큐"
   inventory.net_config_status: "큐 설정 상태"
   inventory.net_config_more: "추가 큐 문제"
   inventory.msi_title: "MSI 인터럽트 벡터"

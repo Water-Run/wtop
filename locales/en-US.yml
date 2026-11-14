@@ -1141,6 +1141,7 @@ messages:
   inventory.net_rps_queues: "RPS-enabled RX queues"
   inventory.net_xps_queues: "XPS-enabled TX queues"
   inventory.net_capped_queues: "Rate-capped TX queues"
+  inventory.net_bql_queues: "BQL-enabled TX queues"
   inventory.net_config_status: "Queue configuration status"
   inventory.net_config_more: "More queue issues"
   inventory.msi_title: "MSI interrupt vectors"

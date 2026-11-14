@@ -1142,6 +1142,7 @@ messages:
   inventory.net_rps_queues: "RX-Warteschlangen mit RPS"
   inventory.net_xps_queues: "TX-Warteschlangen mit XPS"
   inventory.net_capped_queues: "TX-Warteschlangen mit Ratenlimit"
+  inventory.net_bql_queues: "TX-Warteschlangen mit BQL"
   inventory.net_config_status: "Status der Warteschlangenkonfiguration"
   inventory.net_config_more: "Weitere Warteschlangenprobleme"
   inventory.msi_title: "MSI-Interruptvektoren"

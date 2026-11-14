@@ -577,7 +577,8 @@ local function export_network(network)
             for _, specification in ipairs({
                 { "rx_details", { "id", "rps_cpus", "rps_flow_count" } },
                 { "tx_details", { "id", "xps_cpus", "xps_rxqs",
-                    "maxrate_mbps", "rate_limit_enabled" } },
+                    "maxrate_mbps", "rate_limit_enabled",
+                    "bql_limit_bytes", "bql_inflight_bytes" } },
             }) do
                 local source = interface.queues[specification[1]]
                 if type(source) == "table" then

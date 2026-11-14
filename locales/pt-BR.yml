@@ -1148,6 +1148,7 @@ messages:
   inventory.net_rps_queues: "Filas RX com RPS"
   inventory.net_xps_queues: "Filas TX com XPS"
   inventory.net_capped_queues: "Filas TX com limite de taxa"
+  inventory.net_bql_queues: "Filas TX com BQL"
   inventory.net_config_status: "Estado da configuração das filas"
   inventory.net_config_more: "Mais problemas nas filas"
   inventory.msi_title: "Vetores de interrupção MSI"

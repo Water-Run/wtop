@@ -1148,6 +1148,7 @@ messages:
   inventory.net_rps_queues: "Files RX avec RPS"
   inventory.net_xps_queues: "Files TX avec XPS"
   inventory.net_capped_queues: "Files TX à débit limité"
+  inventory.net_bql_queues: "Files TX avec BQL"
   inventory.net_config_status: "État de la configuration des files"
   inventory.net_config_more: "Autres problèmes de files"
   inventory.msi_title: "Vecteurs d'interruption MSI"

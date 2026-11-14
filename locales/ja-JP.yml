@@ -1136,6 +1136,7 @@ messages:
   inventory.net_rps_queues: "RPS 有効の受信キュー"
   inventory.net_xps_queues: "XPS 有効の送信キュー"
   inventory.net_capped_queues: "レート制限付き送信キュー"
+  inventory.net_bql_queues: "BQL 有効な送信キュー"
   inventory.net_config_status: "キュー設定の状態"
   inventory.net_config_more: "その他のキューの問題"
   inventory.msi_title: "MSI 割り込みベクター"

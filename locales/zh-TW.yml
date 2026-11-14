@@ -1136,6 +1136,7 @@ messages:
   inventory.net_rps_queues: "啟用 RPS 的接收佇列"
   inventory.net_xps_queues: "啟用 XPS 的傳送佇列"
   inventory.net_capped_queues: "受限速的傳送佇列"
+  inventory.net_bql_queues: "啟用 BQL 的傳送佇列"
   inventory.net_config_status: "佇列設定狀態"
   inventory.net_config_more: "其他佇列問題"
   inventory.msi_title: "MSI 中斷向量"

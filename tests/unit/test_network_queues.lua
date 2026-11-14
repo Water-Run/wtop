@@ -53,6 +53,8 @@ local files = {
   ["/sys/class/net/eth0/queues/tx-0/xps_cpus"] = "0003\n",
   ["/sys/class/net/eth0/queues/tx-0/xps_rxqs"] = "0\n",
   ["/sys/class/net/eth0/queues/tx-0/tx_maxrate"] = "1000\n",
+  ["/sys/class/net/eth0/queues/tx-0/byte_queue_limits/limit"] = "131072\n",
+  ["/sys/class/net/eth0/queues/tx-0/byte_queue_limits/inflight"] = "4096\n",
 }
 local directories = {
   ["/sys/class/net/lo/queues"] = { "rx-0", "tx-0" },
@@ -127,6 +129,10 @@ equal(interface.queues.tx_details[1].maxrate_mbps, 1000,
   "TX max rate retains its Mbps unit")
 equal(interface.queues.tx_details[1].rate_limit_enabled, true,
   "a positive TX max rate is an enabled limit")
+equal(interface.queues.tx_details[1].bql_limit_bytes, 131072,
+  "BQL limit is read per TX queue in bytes")
+equal(interface.queues.tx_details[1].bql_inflight_bytes, 4096,
+  "BQL inflight is read per TX queue in bytes")
 local snapshot = { network = first.data, quality = {} }
 local exported = Export.snapshot(snapshot).network.interfaces
 local exported_eth0
@@ -141,6 +147,10 @@ equal(exported_eth0.queues.rx_details[1].rps_flow_count, 64,
   "RPS queue detail reaches JSON")
 equal(exported_eth0.queues.tx_details[1].maxrate_mbps, 1000,
   "XPS and rate-cap detail reaches JSON")
+equal(exported_eth0.queues.tx_details[1].bql_limit_bytes, 131072,
+  "BQL limit detail reaches JSON")
+equal(exported_eth0.queues.tx_details[1].bql_inflight_bytes, 4096,
+  "BQL inflight detail reaches JSON")
 equal(exported_eth0.queues.scanned_ns, nil, "internal refresh time stays out of JSON")
 equal(exported_eth0.link_events.changes_total, 4,
   "carrier transitions reach Snapshot without borrowing interface packet drops")
@@ -396,6 +406,8 @@ files["/sys/class/net/eth0/queues/rx-0/rps_flow_cnt"] = nil
 files["/sys/class/net/eth0/queues/tx-0/xps_cpus"] = nil
 files["/sys/class/net/eth0/queues/tx-0/xps_rxqs"] = nil
 files["/sys/class/net/eth0/queues/tx-0/tx_maxrate"] = nil
+files["/sys/class/net/eth0/queues/tx-0/byte_queue_limits/limit"] = nil
+files["/sys/class/net/eth0/queues/tx-0/byte_queue_limits/inflight"] = nil
 now = now + 30000000000
 local no_config = collector:sample(context, denied_config)
 equal(eth0(no_config).queues.config_status, "unavailable",

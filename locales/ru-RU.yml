@@ -1154,6 +1154,7 @@ messages:
   inventory.net_rps_queues: "Очереди RX с RPS"
   inventory.net_xps_queues: "Очереди TX с XPS"
   inventory.net_capped_queues: "Очереди TX с ограничением скорости"
+  inventory.net_bql_queues: "Очереди TX с BQL"
   inventory.net_config_status: "Состояние настройки очередей"
   inventory.net_config_more: "Другие проблемы очередей"
   inventory.msi_title: "Векторы прерываний MSI"
