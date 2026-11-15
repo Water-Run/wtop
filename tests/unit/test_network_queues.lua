@@ -567,4 +567,29 @@ equal(by_name.vnic256.link_events.status, "ok",
 equal(by_name.vnic257.link_events.status, "truncated",
   "an interface beyond the budget reports missing coverage")
 
+-- Negotiated link settings come from the native ethtool reader; the kernel
+-- link-mode masks decode to names, and unsupported interfaces stay unavailable.
+local link_native = { read_link_settings = function(name)
+  if name ~= "eth0" then return nil, "ethtool unsupported" end
+  return { speed_mbps = 1000, duplex = 1, autoneg = true, port = 0,
+    supported = { 0x3F, 0, 0, 0 }, advertised = { 0x20, 0, 0, 0 },
+    lp_advertised = { 0, 0, 0, 0 } }
+end }
+local link_sample = Network.new({ fs = fs, native = link_native })
+  :sample({ fs = fs, now_ns = function() return now + 60000000000 end })
+local link_eth0, link_lo
+for _, row in ipairs(link_sample.data.interfaces) do
+  if row.name == "eth0" then link_eth0 = row elseif row.name == "lo" then link_lo = row end
+end
+equal(link_eth0.link_settings.status, "ok", "negotiated link settings are read via ethtool")
+equal(link_eth0.link_settings.autoneg, true, "auto-negotiation state is exposed")
+equal(link_eth0.link_settings.supported_modes[1], "10baseT/Half",
+  "supported link-mode masks decode to names")
+equal(link_eth0.link_settings.supported_modes[6], "1000baseT/Full",
+  "each set bit decodes in order")
+equal(link_eth0.link_settings.advertised_modes[1], "1000baseT/Full",
+  "advertised link-mode masks decode to names")
+equal(link_lo.link_settings.status, "unavailable",
+  "an interface without ethtool support stays unavailable")
+
 print("ok: network queues, softnet and bounded link transitions")

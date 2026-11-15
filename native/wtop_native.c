@@ -60,6 +60,8 @@
 #include <locale.h>
 #include <limits.h>
 #include <net/if.h>
+#include <linux/ethtool.h>
+#include <linux/sockios.h>
 #include <netinet/in.h>
 #include <netpacket/packet.h>
 #include <poll.h>
@@ -1559,6 +1561,64 @@ static int l_read_wifi_link(lua_State *L) {
     return 1;
 }
 
+/* Read-only ethtool negotiated link settings. The GLINKSETTINGS handshake first
+ * reports the kernel's link-mode mask length as a negative value; the second
+ * call fills the masks. A fixed word cap keeps the buffer bounded. */
+#define WTOP_LINK_MASK_WORDS_MAX 16
+static int l_read_link_settings(lua_State *L) {
+    const char *name = check_path(L, 1, NULL);
+    luaL_argcheck(L, strlen(name) > 0 && strlen(name) < IFNAMSIZ
+        && !strchr(name, '/'), 1, "expected a network interface name");
+    io_guard *guard = push_io_guard(L);
+    guard->descriptor = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (guard->descriptor < 0) return push_errno(L, "open ethtool socket");
+    struct {
+        struct ethtool_link_settings settings;
+        uint32_t masks[3 * WTOP_LINK_MASK_WORDS_MAX];
+    } request;
+    memset(&request, 0, sizeof(request));
+    request.settings.cmd = ETHTOOL_GLINKSETTINGS;
+    request.settings.link_mode_masks_nwords = 0;
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    (void)snprintf(ifr.ifr_name, IFNAMSIZ, "%s", name);
+    ifr.ifr_data = (caddr_t)&request.settings;
+    if (ioctl(guard->descriptor, SIOCETHTOOL, &ifr) != 0) {
+        return push_errno(L, "ethtool link settings");
+    }
+    int words = -(int)request.settings.link_mode_masks_nwords;
+    if (words <= 0 || words > WTOP_LINK_MASK_WORDS_MAX) {
+        errno = EOVERFLOW;
+        return push_errno(L, "ethtool link mode mask length");
+    }
+    request.settings.link_mode_masks_nwords = (__s8)words;
+    if (ioctl(guard->descriptor, SIOCETHTOOL, &ifr) != 0) {
+        return push_errno(L, "ethtool link settings");
+    }
+    lua_createtable(L, 0, 7);
+    lua_pushinteger(L, request.settings.speed == (__u32)SPEED_UNKNOWN
+        ? -1 : (lua_Integer)request.settings.speed);
+    lua_setfield(L, -2, "speed_mbps");
+    lua_pushinteger(L, (lua_Integer)request.settings.duplex);
+    lua_setfield(L, -2, "duplex");
+    lua_pushboolean(L, request.settings.autoneg == AUTONEG_ENABLE);
+    lua_setfield(L, -2, "autoneg");
+    lua_pushinteger(L, (lua_Integer)request.settings.port);
+    lua_setfield(L, -2, "port");
+    const uint32_t *masks = request.settings.link_mode_masks;
+    const char *mask_names[3] = { "supported", "advertised", "lp_advertised" };
+    for (int m = 0; m < 3; ++m) {
+        lua_createtable(L, words, 0);
+        for (int w = 0; w < words; ++w) {
+            lua_pushinteger(L, (lua_Integer)masks[m * words + w]);
+            lua_rawseti(L, -2, (lua_Integer)w + 1);
+        }
+        lua_setfield(L, -2, mask_names[m]);
+    }
+    lua_pushliteral(L, "ethtool"); lua_setfield(L, -2, "source");
+    return 1;
+}
+
 static int l_read_nvme_health(lua_State *L) {
     const char *name = check_path(L, 1, NULL);
     lua_Integer device_major = luaL_checkinteger(L, 2), device_minor = luaL_checkinteger(L, 3);
@@ -2371,6 +2431,7 @@ static const luaL_Reg functions[] = {
     {"read_drm_mode", wtop_linux_read_drm_mode},
     {"read_usb_interface", wtop_linux_read_usb_interface},
     {"read_wifi_link", l_read_wifi_link},
+    {"read_link_settings", l_read_link_settings},
     {"read_cpu_clock_counters", l_read_cpu_clock_counters},
     {"proc_batch", l_proc_batch},
     {"process_stat_fields", l_process_stat_fields},

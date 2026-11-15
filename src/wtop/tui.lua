@@ -4561,6 +4561,20 @@ local function hardware_detail_lines(snapshot, id, i18n, now_ns, history_count)
                     Technical.state(i18n, link.status))
             end
         end
+        local settings = type(device.link_settings) == "table" and device.link_settings or nil
+        if settings and settings.status == "ok" then
+            lines[#lines + 1] = ""
+            lines[#lines + 1] = translated(i18n, "inventory.net_link_settings_title", "Negotiated link")
+            add("inventory.net_autoneg", "Auto-negotiation",
+                settings.autoneg and translated(i18n, "inventory.net_autoneg_on", "on")
+                or translated(i18n, "inventory.net_autoneg_off", "off"))
+            if type(settings.supported_modes) == "table" and #settings.supported_modes > 0 then
+                add_list("inventory.net_supported_modes", "Supported modes", settings.supported_modes)
+            end
+            if type(settings.advertised_modes) == "table" and #settings.advertised_modes > 0 then
+                add_list("inventory.net_advertised_modes", "Advertised modes", settings.advertised_modes)
+            end
+        end
         local queues = type(device.queues) == "table" and device.queues or nil
         if queues then
             lines[#lines + 1] = ""

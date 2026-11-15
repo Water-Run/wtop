@@ -570,6 +570,19 @@ local function export_network(network)
                 "components_quality",
             })
         end
+        if type(interface.link_settings) == "table" then
+            exported.link_settings = copy_fields(interface.link_settings, {
+                "status", "autoneg", "port", "speed_mbps",
+            })
+            for _, key in ipairs({ "supported_modes", "advertised_modes" }) do
+                local modes = interface.link_settings[key]
+                if type(modes) == "table" then
+                    local array = json.array({})
+                    for index, mode in ipairs(modes) do array[index] = mode end
+                    exported.link_settings[key] = array
+                end
+            end
+        end
         if type(interface.queues) == "table" then
             exported.queues = copy_fields(interface.queues,
                 { "rx_count", "tx_count", "status",

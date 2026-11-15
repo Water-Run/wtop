@@ -26,6 +26,79 @@ local MAX_QUEUE_CONFIG_READS = 512
 local MAX_CONFIG_QUEUES_PER_DIRECTION = 128
 local MAX_CARRIER_READS = 768
 local ROUTE_DETAIL_REFRESH_NS = 10 * 1000000000
+local LINK_SETTINGS_SCAN_NS = 30 * 1000000000
+
+-- ethtool link-mode bit indices (linux/ethtool.h). Only the names are needed to
+-- render the negotiated capability masks the kernel returns.
+local LINK_MODE_NAMES = {
+  [0] = "10baseT/Half", [1] = "10baseT/Full",
+  [2] = "100baseT/Half", [3] = "100baseT/Full",
+  [4] = "1000baseT/Half", [5] = "1000baseT/Full",
+  [6] = "Autoneg", [7] = "TP", [8] = "AUI", [9] = "BNC",
+  [10] = "MII", [11] = "FIBRE", [12] = "10000baseT/Full",
+  [13] = "Pause", [14] = "Asym_Pause", [15] = "2500baseX/Full",
+  [16] = "Backplane", [17] = "1000baseKX/Full", [18] = "10000baseKX4/Full",
+  [19] = "10000baseKR/Full", [20] = "10000baseR_FEC",
+  [21] = "20000baseMLD2/Full", [22] = "20000baseKR2/Full",
+  [23] = "40000baseKR4/Full", [24] = "40000baseCR4/Full",
+  [25] = "40000baseSR4/Full", [26] = "40000baseLR4/Full",
+  [27] = "56000baseKR4/Full", [28] = "56000baseCR4/Full",
+  [29] = "56000baseSR4/Full", [30] = "56000baseLR4/Full",
+  [31] = "25000baseCR/Full", [32] = "25000baseKR/Full",
+  [33] = "25000baseSR/Full", [34] = "50000baseCR2/Full",
+  [35] = "50000baseKR2/Full", [36] = "100000baseKR4/Full",
+  [37] = "100000baseSR4/Full", [38] = "100000baseCR4/Full",
+  [39] = "100000baseLR4_ER4/Full", [40] = "50000baseSR2/Full",
+  [41] = "1000baseX/Full", [42] = "10000baseCR/Full",
+  [43] = "10000baseSR/Full", [44] = "10000baseLR/Full",
+  [45] = "10000baseLRM/Full", [46] = "10000baseER/Full",
+  [47] = "2500baseT/Full", [48] = "5000baseT/Full",
+  [49] = "FEC_NONE", [50] = "FEC_RS", [51] = "FEC_BASER",
+  [52] = "50000baseKR/Full", [53] = "50000baseSR/Full",
+  [54] = "50000baseCR/Full", [55] = "50000baseLR_ER_FR/Full",
+  [56] = "50000baseDR/Full", [57] = "100000baseKR2/Full",
+  [58] = "100000baseSR2/Full", [59] = "100000baseCR2/Full",
+  [60] = "100000baseLR2_ER2_FR2/Full", [61] = "100000baseDR2/Full",
+  [62] = "200000baseKR4/Full", [63] = "200000baseSR4/Full",
+  [64] = "200000baseCR4/Full",
+}
+
+local function decode_link_modes(masks)
+  if type(masks) ~= "table" then return nil end
+  local modes = {}
+  for word_index, word in ipairs(masks) do
+    if type(word) == "number" and word % 1 == 0 and word >= 0 then
+      for bit = 0, 31 do
+        if word & (1 << bit) ~= 0 then
+          local name = LINK_MODE_NAMES[(word_index - 1) * 32 + bit]
+          modes[#modes + 1] = name or ("bit" .. ((word_index - 1) * 32 + bit))
+        end
+      end
+    end
+  end
+  return modes
+end
+
+local function link_settings(native, name, now, previous)
+  if previous and type(previous.scanned_ns) == "number" and now >= previous.scanned_ns
+      and now - previous.scanned_ns < LINK_SETTINGS_SCAN_NS then
+    return previous
+  end
+  local result = { scanned_ns = now, status = "unavailable" }
+  if type(native) ~= "table" or type(native.read_link_settings) ~= "function" then
+    return result
+  end
+  local ok, settings = pcall(native.read_link_settings, name)
+  if not ok or type(settings) ~= "table" then return result end
+  result.status = "ok"
+  result.autoneg = settings.autoneg == true
+  result.port = settings.port
+  result.speed_mbps = type(settings.speed_mbps) == "number" and settings.speed_mbps > 0
+    and settings.speed_mbps or nil
+  result.supported_modes = decode_link_modes(settings.supported)
+  result.advertised_modes = decode_link_modes(settings.advertised)
+  return result
+end
 
 local function same_default_routes(left, right)
   for name, route in pairs(left or {}) do
@@ -566,6 +639,9 @@ function Network:sample(context, previous)
       and now >= old_queues.scanned_ns
       and now - old_queues.scanned_ns < QUEUE_SCAN_NS and old_queues
       or queue_topology(fs, base, now, timeout_budget, config_budget, old_queues)
+    local old_link = old_interface and old_interface.name == current.name
+      and old_interface.device_path == device_path and old_interface.link_settings or nil
+    local link = link_settings(self.native, current.name, now, old_link)
     local interface = {
       id = ifindex or current.name,
       ifindex = ifindex,
@@ -586,6 +662,7 @@ function Network:sample(context, previous)
       addresses = addresses_by_name and addresses_by_name[current.name] or nil,
       default_route = routes[current.name],
       queues = queues,
+      link_settings = link,
       link_events = link_events,
       aggregate = aggregate,
       counters = current,
