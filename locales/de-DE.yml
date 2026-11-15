@@ -489,6 +489,7 @@ messages:
   systemd.active_state: "Aktivitätszustand"
   systemd.sub_state: "Unterzustand"
   systemd.unit_file_state: "Unit-Datei-Status"
+  systemd.active_enter_timestamp: "Aktiv seit"
   systemd.main_pid: "Haupt-PID"
   systemd.leader_pid: "PID des Scope-Leiters"
   systemd.restarts: "Neustarts"

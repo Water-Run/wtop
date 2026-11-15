@@ -489,6 +489,7 @@ messages:
   systemd.active_state: "활성 상태"
   systemd.sub_state: "하위 상태"
   systemd.unit_file_state: "유닛 파일 상태"
+  systemd.active_enter_timestamp: "활성화 시각"
   systemd.main_pid: "주 PID"
   systemd.leader_pid: "범위 리더 PID"
   systemd.restarts: "재시작 수"

@@ -450,6 +450,7 @@ local function systemd_unit_lines(result, i18n, now_ns)
         { "active_state", "systemd.active_state", "Active state" },
         { "sub_state", "systemd.sub_state", "Substate" },
         { "unit_file_state", "systemd.unit_file_state", "Unit file state" },
+        { "active_enter_timestamp", "systemd.active_enter_timestamp", "Active since" },
         { "main_pid", "systemd.main_pid", "Main PID" },
         { "leader_pid", "systemd.leader_pid", "Scope leader PID" },
         { "restarts", "systemd.restarts", "Restarts" },

@@ -17,6 +17,7 @@ local show = table.concat({
   "Requires=basic.target", "Wants=network-online.target",
   "After=network.target basic.target", "Before=shutdown.target",
   "UnitFileState=enabled",
+  "ActiveEnterTimestamp=Wed 2026-11-11 22:00:30 UTC",
   "ExecStart=PRIVATE-COMMAND", "Environment=PRIVATE-SECRET", "\n",
 }, "\n")
 local response = { status = "ok", stdout = show, exit_code = 0 }
@@ -52,6 +53,8 @@ assert(fields.requires.value == "basic.target" and fields.wants.value == "networ
 assert(fields.after.value == "network.target basic.target" and fields.before.value == "shutdown.target",
   "unit ordering lists are read")
 assert(fields.unit_file_state.value == "enabled", "unit enablement state is read")
+assert(fields.active_enter_timestamp.value == "Wed 2026-11-11 22:00:30 UTC",
+  "unit active-enter timestamp is read")
 assert(result.entity.relations.main_pid == 42
   and result.entity.relations.workload_id == "/system.slice/worker@a.service")
 local complete_result = result
@@ -60,7 +63,8 @@ for _, locale in ipairs({ "en-US", "zh-CN", "zh-TW", "fr-FR", "ru-RU", "de-DE", 
   local text = table.concat(TUI.systemd_unit_lines(result, i18n, 2000000000), "\n")
   assert(text:find("worker@a.service", 1, true) and text:find(i18n:t("systemd.unlimited"), 1, true))
   for _, key in ipairs({ "systemd.main_pid", "systemd.manager", "systemd.detail_hint",
-      "systemd.sample_age", "systemd.requires", "systemd.unit_file_state" }) do
+      "systemd.sample_age", "systemd.requires", "systemd.unit_file_state",
+      "systemd.active_enter_timestamp" }) do
     assert(i18n:t(key) ~= key and text:find(i18n:t(key), 1, true), locale .. " lacks " .. key)
   end
 end
