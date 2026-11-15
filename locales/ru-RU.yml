@@ -488,6 +488,7 @@ messages:
   systemd.load_state: "Состояние загрузки"
   systemd.active_state: "Активное состояние"
   systemd.sub_state: "Подсостояние"
+  systemd.unit_file_state: "Состояние файла юнита"
   systemd.main_pid: "Основной PID"
   systemd.leader_pid: "PID лидера области"
   systemd.restarts: "Перезапуски"

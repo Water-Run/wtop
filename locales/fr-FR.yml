@@ -488,6 +488,7 @@ messages:
   systemd.load_state: "État de chargement"
   systemd.active_state: "État actif"
   systemd.sub_state: "Sous-état"
+  systemd.unit_file_state: "État du fichier d’unité"
   systemd.main_pid: "PID principal"
   systemd.leader_pid: "PID du chef de portée"
   systemd.restarts: "Redémarrages"

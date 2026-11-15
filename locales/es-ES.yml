@@ -488,6 +488,7 @@ messages:
   systemd.load_state: "Estado de carga"
   systemd.active_state: "Estado activo"
   systemd.sub_state: "Subestado"
+  systemd.unit_file_state: "Estado del archivo de unidad"
   systemd.main_pid: "PID principal"
   systemd.leader_pid: "PID líder del ámbito"
   systemd.restarts: "Reinicios"

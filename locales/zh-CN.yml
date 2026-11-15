@@ -488,6 +488,7 @@ messages:
   systemd.load_state: "加载状态"
   systemd.active_state: "活动状态"
   systemd.sub_state: "子状态"
+  systemd.unit_file_state: "单元文件状态"
   systemd.main_pid: "主进程 PID"
   systemd.leader_pid: "作用域首进程 PID"
   systemd.restarts: "重启次数"

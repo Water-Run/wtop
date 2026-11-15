@@ -488,6 +488,7 @@ messages:
   systemd.load_state: "読み込み状態"
   systemd.active_state: "稼働状態"
   systemd.sub_state: "詳細状態"
+  systemd.unit_file_state: "ユニットファイル状態"
   systemd.main_pid: "メイン PID"
   systemd.leader_pid: "スコープリーダー PID"
   systemd.restarts: "再起動回数"
