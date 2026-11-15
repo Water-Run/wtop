@@ -102,7 +102,7 @@ make rockspec-check
 make test-luarocks
 ```
 
-`make test-luarocks` 引导项目的 Lua 5.5.1，把 rock 安装到 `.tools/wtop-rocks-5.5`，然后通过 LuaRocks 生成的包装脚本运行 `--version`、`--diagnose`、`--snapshot` 和 `--agent`，后两项检查 JSON 契约。该 rock 包含 Lua 模块、`wtop_native.so`、`wtop` 命令，以及许可证、四种语言的 README 和配置示例。`rock-build`/`rock-install` 是 rockspec 后端的入口点，不是面向最终用户的独立安装命令。
+`make test-luarocks` 引导项目的 Lua 5.5.1，把 rock 安装到 `.tools/wtop-rocks-5.5`，然后通过 LuaRocks 生成的包装脚本运行 `--version`、`--diagnose`、`--snapshot` 和 `--agent`，后两项检查 JSON 契约。该 rock 包含 Lua 模块、`wtop_native.so`、`wtop` 命令，以及许可证、中英双语的 `README.txt` 和配置示例。`rock-build`/`rock-install` 是 rockspec 后端的入口点，不是面向最终用户的独立安装命令。
 
 源码安装仍需要 Lua 5.5 的配套头文件、C17 编译器和 make；自带解释器的是
 luainstaller 产物。`wtop-26.a-1.rockspec` 从开发 spec 和 VERSION 生成，固定
