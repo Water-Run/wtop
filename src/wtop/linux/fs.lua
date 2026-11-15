@@ -291,7 +291,9 @@ function FS:path(path)
     error("path must be a non-empty NUL-free string", 2)
   end
   if #path > 4096 then error("path exceeds 4096 bytes", 2) end
-  if path:sub(1, 1) == "." or path:find("/.", 1, true) then
+  -- byte(1) avoids a substring allocation per read; the non-empty test above
+  -- guarantees it returns a number. Same first-character comparison.
+  if path:byte(1) == 46 or path:find("/.", 1, true) then
     for component in path:gmatch("[^/]+") do
       if component == "." or component == ".." then
         error("path must not contain dot components", 2)
@@ -301,7 +303,7 @@ function FS:path(path)
   if self.root == "" then
     return path
   end
-  if path:sub(1, 1) == "/" then
+  if path:byte(1) == 47 then
     if self.root == "/" then return path end
     return self.root .. path
   end
