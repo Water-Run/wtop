@@ -41,6 +41,71 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
    启动 TUI 及结构化输出命令。Windows XP 兼容性是代码和构建目标;在没有
    XP 运行时测试的情况下,它仍未验证,不得作为经过测试的发布承诺对外呈现。
 
+## 旧设备开发情况与缺口（2026-11-16 汇总）
+
+本节把散落在各期的旧设备证据收拢到一处。判定口径是「能不能在老机器上真的
+跑起来」，不是「代码里有没有这条路径」；范围是老硬件、XP 与 Server 2008、
+无 ANSI 的经典控制台、32 位旧内核 Linux,以及由此带来的采样预算。硬件设备
+树自身的覆盖差距见 [实现计划](PLAN.md#phase-b硬件测绘与监控)。
+
+### 四条主线的状态
+
+| 主线 | 状态 | 已有证据 |
+| --- | --- | --- |
+| 经典控制台（cmd.exe，无 ANSI/VT） | 已实现,真机有记录 | 终端能力探测后改走 Windows 控制台 API 绘制,转义码不落屏;80x25 无 ANSI、四页切换、窗口缩放与干净退出在 Server 2008 与现代 Windows 上留有真实运行记录;CI 在 windows-2022 用 `console_harness` 驱动活程序（Overview/Processes/Network/System）,并对 437／936 代码页的 zh-CN 回放断言输出中没有 `\x1b` |
+| Windows XP 构建目标 | 已实现,真机待验 | `tools/build_windows_x86.sh` 在 Linux 上交叉构建 XP 目标的 Lua 与原生模块;静态链接 GCC 运行时,Lua 解释器、Lua DLL 与原生模块共 3 个 PE32 文件通过依赖闭包检查;PE 镜像门禁在 CI 执行 |
+| XP 专属信息补齐 | 已实现,真机待验 | `GetTickCount64` 是 Vista+ API,XP 上改用 `NtQuerySystemInformation`（SystemTimeOfDayInformation）回退取启动时刻;Windows 进程 I/O 速率与完整命令行一并补齐;夹具覆盖现代／XP／查询失败／零启动时刻／未来启动时刻／短回复／epoch 边界,以及身份复用与句柄配平 |
+| 32 位旧内核 Linux | 已实现（虚拟环境） | CI `linux-i686` 在 ubuntu-22.04 上构建 ELF32 并启动固定的 Debian Linux 3.2 i386 内核,Pentium III 虚拟 CPU 不含 SSE2,覆盖 CLI、记录、历史回放、大整数与真实终端切页 |
+| 旧 libc 基线 | 已实现 | 产物按 ELF 实测下限,多文件取最大值,缺 ELF 是硬错误;manylinux2014 容器量得 2.17,发布承诺为 2.38（`tools/baseline.conf`）,两者都是测量值而非估计 |
+| 老设备采样预算 | 未达标 | 见下节 |
+
+### 采样预算
+
+[实现计划](PLAN.md#8-性能目标)的目标（1000 进程 @1 秒采样平均 CPU 低于单核
+2%、空闲 RSS 低于 60 MiB）尚未在目标硬件上校准,本机实测也未达标。逐采集器
+测量显示 cgroup 约 54.7 ms 一轮（1 Hz 折合 5.5%,默认 2 秒间隔约 2.7%）,单这
+一项就超出 2% 预算;connections 约 11.7 ms、process 约 6.8 ms、hwmon 约
+2.6 ms、network 约 1.9 ms,其余更低。
+
+已做的微优化都有实测支撑:JSON 消毒对纯 ASCII 走单次 C 级扫描快路径,
+`--stream` 同六帧样本约降 44%;进程采集去掉冗余的末尾 PID 排序;grid 单元格
+读取内联边界与索引;cgroup 逐条目安全检查与 `FS:path` 路径守卫由 `sub(1,1)`
+改为 `byte(1)`,ABBA 复测约 5% 与再约 2%。同一份源码上,两处纯 Lua 替换
+（plain NUL 查找、字节循环版 `parse_uint`）实测无明确收益,已按「收益不足即弃」
+还原。cgroup 的用户态 profiling 显示开销集中在 Lua 模式匹配、表查找、字符串
+驻留与 malloc/GC,而不是 syscall 本身。
+
+因此闭合这道门不是继续微优化的问题:要么把 cgroup 采集改成原生批量解析,要么
+降低它的采集范围或频率——后者与信息级别直接冲突,需要先定下信息取舍。本机
+测量是单宿主当次结果,不构成跨硬件结论。
+
+### 缺口清单
+
+| 编号 | 缺口 | 影响的旧设备场景 | 完成条件 |
+| --- | --- | --- | --- |
+| D1 | `main` 的 clang 门禁为红 | 全部平台的编译器可移植性 | `native/wtop_native.c` 的 ethtool 链接设置结构体里,含柔性数组成员的 `struct ethtool_link_settings` 后面还跟着别的成员;clang 18 以 `-Wgnu-variable-sized-type-not-at-end` 拒绝,gcc 接受为 GNU 扩展。改为单独分配掩码缓冲并让 `settings.link_mode_masks` 指向它,使两种编译器都通过 |
+| D2 | XP 没有真机运行记录 | XP 上的 TUI、CLI、快照与经典控制台 | 在真实 XP 机器上跑出与 Server 2008 同规格的记录:五项 CLI、JSON 契约、经典控制台绘制与退出 |
+| D3 | 当前没有可达的 Server 2008 宿主 | 经典控制台与老 Windows 的复验 | 2026-11-14 的探测里 evader84-win 可达但其实是 Windows 11,win104 与 wintaf 连接失败;宿主恢复或另行指定后,用同一份产物重跑 |
+| D4 | 1000 进程 2% 单核预算未闭合 | 老机器上的常驻占用 | 见「采样预算」一节:原生批量解析或采集范围取舍,并在目标硬件上测得 |
+| D5 | 最低与典型硬件的预算未校准,也未接入持续门禁 | 整个旧设备主张 | 在最低与典型主机上分别测开发树与发布包,固定预算并接入持续检查 |
+| D6 | 936 中文经典控制台只有现代 Windows CI 覆盖 | 中文老 Windows 用户 | CI 已跑 437／936 与 zh-CN,但宿主是 windows-2022;需在 Server 2008 或 XP 的 936 控制台上复跑 |
+| D7 | Windows 进程完整命令行的成功路径只能真机验 | XP/2008 上区分同名进程 | `ProcessCommandLineInformation` 是 Vista+ 且 Wine 未实现 class 60,夹具只验证解析逻辑;需在真实 Windows 上确认含参数的成功路径 |
+| D8 | musl 目标没有独立构建与测试 | musl 的旧 Linux 发行版 | 每个计划中的 musl 目标独立构建、跑完整套件并留下证据 |
+| D9 | 硬件真机池不足 | 老设备上的传感器与 GPU 读数 | AMD SMI、Level Zero、NVIDIA／AMD／Intel 与无 GPU 的冒烟矩阵有可复现真机结果;跨平台传感器统计目前只有夹具验证 |
+| D10 | 公开交付入口未闭合 | 拿到包就能装 | 公开 Release 与 LuaRocks 公共索引按名称安装（需配置 `LUAROCKS_API_KEY`）、按架构与 libc 命名的 bin 下载;macOS 与 Windows 的原生打包入口 |
+
+### 仓库与分支状态
+
+仓库只保留 `main` 一个分支:本地与 `origin` 都只有 `main`,无标签、无暂存
+改动、无未推送提交,工作区干净。三个工作流都监听 `main`;`windows.yml` 对
+`docs/**`、`README.txt`、`AGENTS.md` 做了路径忽略,所以纯文档提交不触发
+Windows 构建。
+
+`main` 最近两次 CI（run 43724750661、43668557388）失败在同一个作业:
+`native module / clang on ubuntu-24.04`。同一次运行里 `Linux i686 development
+runtime` 与 `Windows development bundles` 都是绿的——旧设备相关的门禁本身是
+通的,红的是编译器可移植性门禁,对应上表的 D1。
+
 ## cgroup 采集热路径微优化（2026-11-15）
 
 profiling 定位(指令计数采样,204 节点单样本约 54ms):最热为逐条目安全检查
