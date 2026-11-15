@@ -279,6 +279,55 @@ local reused_first = reused:sample(at(0))
 local reused_second = reused:sample(at(1000000000), reused_first)
 equal(reused_second.data.by_pid[20].quality, "gap", "a reused PID starts without a delta")
 
+-- Windows publishes cumulative per-process I/O counters. The dispatcher
+-- differences them like the Linux collector: first sample is a gap, adjacent
+-- samples produce rates, a backwards counter is a reset, and a reused PID
+-- does not inherit the old process's counters. A platform without counters
+-- (macOS) gets no io_rate at all.
+do
+  local function row(read, write, start)
+    return { pid = 40, starttime_ticks = start or 7, cpu_ticks = 100,
+      io_read_bytes = read, io_write_bytes = write }
+  end
+  local source = collectors(fake_native({ collect_process = {
+    { list = { row(1000, 500) } },
+    { list = { row(3000, 1500) } },
+    { list = { row(2000, 1600) } },
+    { list = { row(50, 50, 8) } },
+  } })).process
+  local first = source:sample(at(0))
+  local io_first = first.data.by_pid[40].io_rate
+  equal(io_first.quality, "gap", "first I/O sample has no rate")
+  equal(io_first.reason, "first_sample", "first I/O sample reason")
+  equal(io_first.read_bytes_per_second, nil, "no rate is fabricated on the first sample")
+  local second = source:sample(at(1000000000), first)
+  local io_second = second.data.by_pid[40].io_rate
+  equal(io_second.quality, "fresh", "adjacent I/O samples produce a rate")
+  close(io_second.read_bytes_per_second, 2000, 1e-9, "I/O read rate")
+  close(io_second.write_bytes_per_second, 1000, 1e-9, "I/O write rate")
+  equal(io_second.interval_ns, 1000000000, "the rate keeps its interval")
+  local exported = require("wtop.export").snapshot({ processes = second.data })
+  close(exported.processes.top[1].io_rate.read_bytes_per_second, 2000, 1e-9,
+    "the snapshot exports the I/O rate")
+  local third = source:sample(at(2000000000), second)
+  local io_third = third.data.by_pid[40].io_rate
+  equal(io_third.quality, "reset", "a backwards read counter is a reset")
+  equal(io_third.reason, "counter_reset", "reset reason")
+  equal(io_third.read_bytes_per_second, nil, "a reset publishes no rate")
+  local fourth = source:sample(at(3000000000), third)
+  equal(fourth.data.by_pid[40].io_rate.reason, "first_sample",
+    "a reused PID does not difference against the old process's I/O")
+
+  local mac = collectors(fake_native({ collect_process = {
+    { list = { { pid = 41, starttime_ticks = 7, cpu_ticks = 100 } } },
+    { list = { { pid = 41, starttime_ticks = 7, cpu_ticks = 150 } } },
+  } })).process
+  local mac_first = mac:sample(at(0))
+  equal(mac_first.data.by_pid[41].io_rate, nil, "no counters means no io_rate")
+  local mac_second = mac:sample(at(1000000000), mac_first)
+  equal(mac_second.data.by_pid[41].io_rate, nil, "still no io_rate without counters")
+end
+
 -- ---------------------------------------------------------------------------
 -- Network: 32-bit XP counters wrap; 64-bit counters do not pretend to.
 -- ---------------------------------------------------------------------------
@@ -857,6 +906,35 @@ do
   local warm=source:sample(at(2000000000),cold)
   assert(warm.quality=="partial" and warm.reason=="platform_data_partial" and not warm.sampling_pending)
   assert(warm.data.policies[1].affected_cpus[1]==64)
+end
+
+-- The Windows system-info payload carries uptime from the tick counter on
+-- Vista+ and from the boot-time query on XP, plus the boot time itself. The
+-- dispatcher must pass both through untouched and must not fabricate either
+-- when the native side could not read them.
+do
+  local payload = {
+    host = { hostname = "LEGACY", architecture = "x86" },
+    distribution = { name = "Windows", pretty_name = "Windows NT 5.1.2600" },
+    kernel = { type = "Windows NT", release = "5.1.2600" },
+    uptime_seconds = 3600, boot_time_unix = 1700000000,
+  }
+  local source = collectors(fake_native({ collect_system_info = { payload } })).system_info
+  local result = source:sample(at(1000000000))
+  equal(result.status, "ok", "system info status")
+  equal(result.quality, "fresh", "system info quality")
+  equal(result.reason, nil, "a complete system identity carries no reason")
+  equal(result.data.uptime_seconds, 3600, "XP boot-time uptime survives the dispatcher")
+  equal(result.data.boot_time_unix, 1700000000, "boot time survives the dispatcher")
+  local exported = require("wtop.export").snapshot({ system = result.data })
+  equal(exported.system.uptime_seconds, 3600, "snapshot keeps the uptime")
+  equal(exported.system.boot_time_unix, 1700000000, "snapshot keeps the boot time")
+
+  local bare = collectors(fake_native({ collect_system_info = { {
+    host = { hostname = "LEGACY" },
+  } } })).system_info:sample(at(1000000000))
+  equal(bare.data.uptime_seconds, nil, "an unreadable uptime is not fabricated")
+  equal(bare.data.boot_time_unix, nil, "an unreadable boot time is not fabricated")
 end
 
 return true

@@ -1321,13 +1321,28 @@ local function process_with_io_detail(process)
     if type(process) ~= "table" then return nil end
     if type(process.io_read_bytes) == "number"
         or type(process.io_write_bytes) == "number" then
-        return setmetatable({
+        local overlay = {
             io = {
                 read_bytes = process.io_read_bytes,
                 write_bytes = process.io_write_bytes,
                 source = "SystemProcessInformation",
             },
-        }, { __index = process })
+        }
+        -- The Windows bulk scan only gives the image path; the full command
+        -- line is an on-demand, identity-verified read like the Linux cmdline.
+        -- Where it is unavailable (XP, denied) the image path stays.
+        if type(native.collect_process_command_line) == "function"
+            and type(process.pid) == "number"
+            and type(process.starttime_ticks) == "number" then
+            local ok, detail = pcall(native.collect_process_command_line,
+                process.pid, process.starttime_ticks)
+            if ok and type(detail) == "table"
+                and type(detail.command_line) == "string"
+                and detail.command_line ~= "" then
+                overlay.command = detail.command_line
+            end
+        end
+        return setmetatable(overlay, { __index = process })
     end
     if type(native.collect_process_io) ~= "function"
         or type(process.pid) ~= "number"

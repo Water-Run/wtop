@@ -198,6 +198,37 @@ local function process_data(data, previous, timestamp_ns, realtime_ns)
     else
       process.quality = "gap"
     end
+    -- Windows publishes cumulative per-process I/O counters; macOS does not.
+    -- Where they exist, difference them against the same identity-matched
+    -- previous sample the CPU rate uses, with the Linux collector's reason
+    -- vocabulary. A platform without counters gets no io_rate at all rather
+    -- than a zero one.
+    if type(process.io_read_bytes) == "number"
+        and type(process.io_write_bytes) == "number" then
+      local io_rate = { quality = "gap", observed_ns = timestamp_ns }
+      if not old then
+        io_rate.reason = "first_sample"
+      elseif not elapsed_ns or elapsed_ns <= 0 then
+        io_rate.reason = "invalid_interval"
+      else
+        io_rate.interval_ns = elapsed_ns
+        local read, read_error = Common.rate(process.io_read_bytes,
+          old.io_read_bytes, elapsed_ns)
+        local write, write_error = Common.rate(process.io_write_bytes,
+          old.io_write_bytes, elapsed_ns)
+        if read and write then
+          io_rate.quality = "fresh"
+          io_rate.read_bytes_per_second = read
+          io_rate.write_bytes_per_second = write
+        elseif read_error == "reset" or write_error == "reset" then
+          io_rate.quality = "reset"
+          io_rate.reason = "counter_reset"
+        else
+          io_rate.reason = read_error or write_error
+        end
+      end
+      process.io_rate = io_rate
+    end
     any_partial = any_partial or process.partial == true
     if process.id then by_id[process.id] = process end
     if process.pid then by_pid[process.pid] = process end

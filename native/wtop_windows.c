@@ -1365,6 +1365,83 @@ static int l_collect_process_io(lua_State *L) {
     return 1;
 }
 
+/* A selected row only: the bulk scan publishes the image path, while the full
+ * command line (with arguments) is an on-demand detail, mirroring the Linux
+ * cmdline read. ProcessCommandLineInformation is Vista+; where the query is
+ * absent (XP) or fails, the caller keeps the image path. The creation-time
+ * re-verification closes the PID-reuse window exactly like the I/O detail. */
+static int l_collect_process_command_line(lua_State *L) {
+    lua_Integer pid_value = luaL_checkinteger(L, 1);
+    lua_Integer expected_start = luaL_checkinteger(L, 2);
+    HANDLE process;
+    FILETIME created, exited, kernel, user;
+    HMODULE ntdll;
+    typedef LONG (WINAPI *query_information_function)(HANDLE, ULONG, PVOID,
+        ULONG, PULONG);
+    query_information_function query_information;
+    /* UNICODE_STRING header followed by the string, plus room for the NUL.
+     * Bounded well below the 32767-byte UNICODE_STRING maximum. */
+    unsigned char buffer[sizeof(UNICODE_STRING) + 2 * 8192 + sizeof(WCHAR)];
+    ULONG returned = 0;
+    LONG status;
+    USHORT length;
+    WCHAR *text;
+    DWORD code;
+    luaL_argcheck(L, pid_value > 0 && pid_value <= 2147483647, 1,
+        "invalid process ID");
+    luaL_argcheck(L, expected_start > 0, 2, "invalid process start time");
+    process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, (DWORD)pid_value);
+    if (!process) process = OpenProcess(0x1000, FALSE, (DWORD)pid_value);
+    if (!process) return push_windows_error(L, "OpenProcess");
+    if (!GetProcessTimes(process, &created, &exited, &kernel, &user)) {
+        code = GetLastError();
+        CloseHandle(process);
+        SetLastError(code);
+        return push_windows_error(L, "GetProcessTimes");
+    }
+    if ((lua_Integer)filetime_value(created) != expected_start) {
+        CloseHandle(process);
+        lua_pushnil(L);
+        lua_pushliteral(L, "process_identity_changed");
+        return 2;
+    }
+    ntdll = GetModuleHandleA("ntdll.dll");
+    query_information = ntdll
+        ? (query_information_function)(void *)GetProcAddress(ntdll,
+            "NtQueryInformationProcess") : NULL;
+    if (!query_information) {
+        CloseHandle(process);
+        lua_pushnil(L);
+        lua_pushliteral(L, "command_line_unsupported");
+        return 2;
+    }
+    memset(buffer, 0, sizeof(buffer));
+    /* ProcessCommandLineInformation = 60. On success the buffer holds a
+     * UNICODE_STRING whose string data follows the header; the Length member
+     * is the byte count, so the string is read from a fixed offset rather than
+     * trusting the returned Buffer pointer. */
+    status = query_information(process, 60, buffer, (ULONG)sizeof(buffer),
+        &returned);
+    CloseHandle(process);
+    if (status < 0) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "command_line_unavailable");
+        return 2;
+    }
+    memcpy(&length, buffer, sizeof(length));
+    if (length == 0 || length > 2 * 8192 || (length & 1)) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "command_line_unavailable");
+        return 2;
+    }
+    text = (WCHAR *)(buffer + sizeof(UNICODE_STRING));
+    text[length / 2] = 0;
+    lua_createtable(L, 0, 2);
+    utf8_field(L, "command_line", text);
+    string_field(L, "source", "NtQueryInformationProcess");
+    return 1;
+}
+
 static int process_path(HANDLE process, int can_read_memory, WCHAR *path,
     DWORD characters) {
     static int resolved = 0;
@@ -2129,6 +2206,41 @@ static int l_collect_network(lua_State *L) {
     return 1;
 }
 
+/* SystemTimeOfDayInformation (class 3) exists since XP and reports the boot
+ * time as a FILETIME. GetTickCount64 is Vista+, so on the oldest supported
+ * Windows this query is the only uptime source. Only the first two fields
+ * are read, which every version keeps stable. The exact structure size is
+ * passed rather than an oversized buffer: Windows checks a lower bound, but
+ * measured under Wine the call rejects any length above its own 48-byte
+ * layout, so 48 is tried first and the 32-byte XP layout second. */
+static int timeofday_boot(uint64_t *boot_filetime, uint64_t *uptime_seconds) {
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    system_query_function query = ntdll
+        ? (system_query_function)(void *)GetProcAddress(ntdll,
+            "NtQuerySystemInformation") : NULL;
+    static const ULONG sizes[2] = {48, 32};
+    unsigned char buffer[48];
+    ULONG returned = 0;
+    LONG status = -1;
+    uint64_t boot, current;
+    unsigned attempt;
+    if (!query) return 0;
+    for (attempt = 0; attempt < 2; ++attempt) {
+        memset(buffer, 0, sizeof(buffer));
+        returned = 0;
+        status = query(3, buffer, sizes[attempt], &returned);
+        if (status >= 0) break;
+        if ((uint32_t)status != 0xC0000004U) return 0;
+    }
+    if (status < 0 || returned < 16) return 0;
+    memcpy(&boot, buffer, sizeof(boot));
+    memcpy(&current, buffer + 8, sizeof(current));
+    if (boot == 0 || current < boot) return 0;
+    *boot_filetime = boot;
+    *uptime_seconds = (current - boot) / 10000000ULL;
+    return 1;
+}
+
 static int l_collect_system_info(lua_State *L) {
     OSVERSIONINFOEXW version;
     SYSTEM_INFO system;
@@ -2138,7 +2250,8 @@ static int l_collect_system_info(lua_State *L) {
     HMODULE kernel;
     typedef ULONGLONG (WINAPI *tick64_function)(void);
     tick64_function tick64;
-    uint64_t uptime = 0;
+    uint64_t uptime = 0, boot_filetime = 0, boot_uptime = 0;
+    int have_timeofday;
     if (!windows_version(&version))
         return push_windows_error(L, "GetVersionExW");
     {
@@ -2158,8 +2271,10 @@ static int l_collect_system_info(lua_State *L) {
     kernel = GetModuleHandleA("kernel32.dll");
     tick64 = kernel ? (tick64_function)(void *)GetProcAddress(kernel,
         "GetTickCount64") : NULL;
+    have_timeofday = timeofday_boot(&boot_filetime, &boot_uptime);
     if (tick64) uptime = (uint64_t)tick64() / 1000ULL;
-    lua_createtable(L, 0, 5);
+    else if (have_timeofday) uptime = boot_uptime;
+    lua_createtable(L, 0, 6);
     lua_createtable(L, 0, 2);
     if (GetComputerNameW(hostname, &host_length))
         utf8_field(L, "hostname", hostname);
@@ -2178,7 +2293,11 @@ static int l_collect_system_info(lua_State *L) {
     string_field(L, "release", release);
     string_field(L, "version", release);
     lua_setfield(L, -2, "kernel");
-    if (tick64) number_field(L, "uptime_seconds", (lua_Number)uptime);
+    if (tick64 || have_timeofday)
+        number_field(L, "uptime_seconds", (lua_Number)uptime);
+    if (have_timeofday && boot_filetime > UNIX_FILETIME_TICKS)
+        number_field(L, "boot_time_unix",
+            (lua_Number)((boot_filetime - UNIX_FILETIME_TICKS) / 10000000ULL));
     return 1;
 }
 
@@ -2237,6 +2356,7 @@ static const luaL_Reg functions[] = {
     {"collect_memory", l_collect_memory},
     {"collect_process", l_collect_process},
     {"collect_process_io", l_collect_process_io},
+    {"collect_process_command_line", l_collect_process_command_line},
     {"collect_disk", wtop_collect_disk},
     {"collect_disk_health", wtop_collect_disk_health},
     {"collect_mounts", l_collect_mounts},

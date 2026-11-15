@@ -41,6 +41,46 @@ Snapshot/TUI 代码。下文给出了这些构建在真实主机上的冒烟证�
    启动 TUI 及结构化输出命令。Windows XP 兼容性是代码和构建目标;在没有
    XP 运行时测试的情况下,它仍未验证,不得作为经过测试的发布承诺对外呈现。
 
+## 旧 Windows 信息补齐与 Wine 本地验证（2026-11-15）
+
+三项信息级缺口修复,均经变异自检与 Lua 5.5 全套 174 文件复核:
+
+1. **XP 运行时间与启动时刻。** `GetTickCount64` 是 Vista+ API,此前 XP/2003
+   上 `uptime_seconds` 静默缺失。现以 `NtQuerySystemInformation`
+   (SystemTimeOfDayInformation,XP 起可用)的 BootTime 作为回退,并在所有
+   Windows 版本新增 `boot_time_unix`(系统页"Booted"行与快照契约自动获得)。
+   实测发现 Wine 拒绝大于其自身 48 字节布局的缓冲(真实 Windows 只查下限),
+   故按 48→32 两次精确尺寸尝试。新夹具 `tests/native/windows_system_info.c`
+   覆盖现代/XP/查询失败/零启动时刻/未来启动时刻/短回复/epoch 边界,已接入
+   windows.yml;两处变异(移除 XP 回退、epoch 换算除以 1e6)均被抓获。
+2. **Windows 进程 I/O 速率。** 原生载荷早已提供每进程累计 I/O 计数,但
+   portable 调度器未派生速率,进程表 `ioreadps`/`iowriteps` 列与详情
+   "Read rate/Write rate"在 Windows 上恒空。现按 Linux 同一身份匹配与原因码
+   词汇派生 `io_rate`(首样 gap、相邻 fresh、回绕 reset、无计数平台不伪造)。
+   移除 reset 分支的变异被测试抓获。
+3. **Windows 进程完整命令行。** 批量扫描只给出映像路径,同名进程(如多个
+   svchost.exe)在详情里无法区分;Linux 详情则显示含参数的完整 cmdline。现新增
+   按需、身份复核的 `collect_process_command_line`(ProcessCommandLineInformation,
+   Vista+),沿用 I/O 详情的创建时间重验证堵 PID 复用窗口,详情打开时覆盖
+   `command`;XP/拒绝/失败保留映像路径。新夹具
+   `tests/native/windows_process_command_line.c` 覆盖解析/XP/失败/空/超长/奇数
+   长度/身份复用/句柄配平,已接入 windows.yml;两处变异(解析偏移 +2、禁用身份
+   守卫)均被抓获。**验证边界**:Wine 未实现 class 60(返回
+   STATUS_INVALID_INFO_CLASS),故含参数的成功路径只能由真实 Windows 验证,
+   此处仅夹具验证解析逻辑、Wine 验证注册/身份守卫/详情回退不崩溃;与 XP 同属
+   "已实现、真机待验"。
+
+Wine 11.20 本地证据(非真机,不替代 Server 2008/XP 验收):重建后的 x86 包
+通过 `console_harness` 经典控制台场景——80x25 无 ANSI 绘制、四页切换、
+100x30 缩放、零转义码残留、干净退出;系统页可见新增 Uptime/Booted 行;
+`--snapshot`/`--stream` 含 `boot_time_unix` 与进程 `io_rate`。Wine 控制台
+缓冲区对 CJK 的存储有缺陷(写入"主机"读回乱码,独立 WideCharToMultiByte
+转换正常),故 936 中文截屏不作为证据,中文经典控制台路径仍由真实 Windows
+CI 覆盖。LuaRocks 安装冒烟通过,`README.txt` 进入 rock 文档目录。
+
+README 合并为单一 `README.txt`(上英下中),定位老旧设备兼容、尤其老
+Windows CMD;四份旧 README.md 移除,Makefile/CI 过滤/AGENTS.md 同步。
+
 ## 26.a 版本迁移与旧设备 CI 验收（2026-11-14）
 
 版本改用 `年份.字母` 命名,当前开发候选为 `26.a`;旧 `v0.1.0`/`v0.2.0` 标签已
