@@ -647,11 +647,14 @@ local function populate_metrics(fs, node, scan, present, previous_node, elapsed_
 end
 
 local function is_safe_entry(entry)
+  -- byte(1) avoids the substring allocation of sub(1,1); the non-empty test
+  -- above guarantees it returns a number. A plain find for NUL is cheaper than
+  -- the %z pattern and rejects exactly the same entries.
   return type(entry) == "string"
     and entry ~= ""
-    and entry:sub(1, 1) ~= "."
+    and entry:byte(1) ~= 46
     and not entry:find("/", 1, true)
-    and not entry:find("%z")
+    and not entry:find("\0", 1, true)
 end
 
 local function error_message_contains(err, fragment)
@@ -682,7 +685,7 @@ end
 
 local function directory_candidate(hints, index, entry)
   return hints:byte(index) ~= 102 or type(entry) ~= "string"
-    or entry:sub(1, 1) == "." or not is_safe_entry(entry)
+    or entry:byte(1) == 46 or not is_safe_entry(entry)
 end
 
 local function discover_children(fs, item, node, queue, scan, max_depth, max_nodes)
@@ -723,7 +726,7 @@ local function discover_children(fs, item, node, queue, scan, max_depth, max_nod
   end)
 
   for _, entry in ipairs(entries) do
-    if type(entry) == "string" and entry:sub(1, 1) == "." then
+    if type(entry) == "string" and entry:byte(1) == 46 then
       scan.skipped_dot_entries = scan.skipped_dot_entries + 1
     elseif not is_safe_entry(entry) then
       scan.skipped_unsafe_entries = scan.skipped_unsafe_entries + 1
